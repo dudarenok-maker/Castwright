@@ -1582,9 +1582,9 @@ paths:
             text/event-stream:
               schema:
                 type: object
-                description: 'A `data:` frame — one of splice_start / chapter_assembling / warning / splice_complete / chapter_failed.'
+                description: 'A `data:` frame — one of splice_start / progress / chapter_assembling / warning / splice_complete / chapter_failed.'
                 properties:
-                  type: { type: string, enum: [splice_start, chapter_assembling, warning, splice_complete, chapter_failed] }
+                  type: { type: string, enum: [splice_start, progress, chapter_assembling, warning, splice_complete, chapter_failed] }
                   chapterId: { type: integer }
                   characterId: { type: string }
                   mode: { type: string, enum: [remix, rerecord] }

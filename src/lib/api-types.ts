@@ -6899,7 +6899,7 @@ export interface operations {
                 content: {
                     "text/event-stream": {
                         /** @enum {string} */
-                        type?: "splice_start" | "chapter_assembling" | "warning" | "splice_complete" | "chapter_failed";
+                        type?: "splice_start" | "progress" | "chapter_assembling" | "warning" | "splice_complete" | "chapter_failed";
                         chapterId?: number;
                         characterId?: string;
                         /** @enum {string} */
