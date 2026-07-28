@@ -790,3 +790,92 @@ history at cut time.
   'dynamic'`, whose absence is meaningful (single-pass output, a failed second-pass JSON parse, or
   a `scripts/relufs-existing.mjs` rewrite) rather than a bug. Plan:
   [`docs/features/272-golden-assembly-comparison.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/272-golden-assembly-comparison.md).
+- **fs-38 Wave 3c GATE 2 fix lane — an independent review's Critical/Important
+  findings, closed** (refs #624). Landed after the follow-up campaign entry
+  above.
+  - **A wholesale cast write can no longer damage a cloned voice.**
+    `PUT /api/books/:bookId {slice:'cast'}` used to accept a cast payload
+    that simply omitted a character's cloned engine slot, silently dropping
+    it — and it accepted a payload that swapped the clone for a different
+    value outright. `preserveClonedSlotsOnCastWrite` now restores the
+    stored slot when it's merely missing from the incoming write (204), and
+    refuses the whole write (409) when the incoming value actually differs
+    from what's on disk — a client that wants to *replace* a cloned slot
+    has to go through the dedicated unassign/reassign routes instead.
+  - **A voice reachable under a differently-cased key can no longer survive
+    revoke while it reports complete success.** `POST /:voiceUuid/sample`
+    (the profile-drawer audition route) resolved a voice-library entry
+    case-insensitively but the audition cache and the sidecar's own latents
+    lookup keyed off the raw, case-sensitive string — so `xtts-<uuid>` and
+    `XTTS-<UUID>` could each accumulate their own cached audition/latents
+    for what a purge treats as a single artifact, leaving one playable
+    after a revoke that reported everything gone. The route now refuses a
+    non-canonical spelling of a voice's own key (400) instead of resolving
+    and rendering it.
+  - **A bulk "Design full cast" no longer retargets a cloned character off
+    its clone**, and designing a single already-cloned character is refused
+    with a reason instead of a hollow success. Both `applyOverrideToCastFiles`
+    callers pinned `ttsEngine` to Qwen unconditionally, so a character
+    already carrying a Coqui-cloned voice caught in a design sweep kept its
+    clone marker on disk but silently rendered off it. The bulk sweep now
+    skips a cloned character and names it in the run's terminal summary
+    ("already cloned: Anna, Viktor"); a single "first design" on an
+    already-cloned character refuses outright (409) before any GPU work
+    runs, rather than reporting a design that was never safe to persist.
+  - **A consent refusal on a cast save now reads as a refusal, not a server
+    error** — the wholesale-cast-write consent guards above now answer
+    `409` instead of falling through to a generic `500`, so a client (or a
+    person watching the network tab) can tell "this was refused" from
+    "this broke".
+  - **Assigning a voice from the library panel now tells you when only
+    part of the assign landed.** The panel's "My voices" assign action
+    only ever showed an error on an outright rejection; a 200 that wrote
+    fewer engine slots than the character actually needs (e.g. a designed
+    entry with no retained clip, assigned to a Coqui-routed character) closed
+    the popover with no notice at all and no reflection in the cast state.
+    It now reconciles against the slots the server actually wrote and shows
+    the same partial-success notice the profile drawer already had.
+  - **Preview now plays the voice the book will actually render.** Setting
+    a character's voice override used to keep a stale `libraryUuid`/
+    `provenance` pair on the client even when the server had already
+    dropped it (because the *previous* slot wasn't actually a clone) — so
+    the profile drawer could preview a "cloned" voice the server no longer
+    considers cloned. The client now mirrors the server's own rule exactly:
+    those markers only carry forward when the slot being replaced was
+    itself cloned.
+  - **A background QA repair (and a splice) can no longer stamp the wrong
+    book's chapter.** Both runner middlewares dispatched their
+    chapter-updated action keyed only by chapter id — which repeats across
+    every book — with no check that the user was still looking at the book
+    the repair/splice belonged to. A repair or splice finishing after a
+    book switch could mark a different book's same-numbered chapter as
+    freshly rendered. Both now guard on the currently-open book before
+    dispatching.
+  - **A failed background QA repair no longer strands the spinner running
+    forever.** An unexpected error during the repair stream (a network
+    drop, a bad frame) used to reject past the cleanup step entirely,
+    leaving `Repairing…` showing with no way back short of a reload. The
+    stream call is now wrapped so any failure still runs the same cleanup
+    and summary toast a normal finish does.
+  - **The QA-repair control now meets the 44 px touch target on tablets.**
+    It collapsed to 32 px at `md:` widths — squarely the tablet range —
+    same class of gap the mobile-testing protocol exists to catch.
+  - **Operator-visible: a voice-clone derive that collided with an idle
+    eviction or an explicit Stop used to crash with an opaque 500.** The
+    sidecar's `clone_voice` never marked itself "in flight" the way
+    `synthesize()` does, so an idle-driven evict or a manual unload landing
+    mid-derive dropped the model out from under it and hit a bare assertion.
+    It now re-ensures the model is loaded across the same gap `synthesize()`
+    already guards, and the one residual window an explicit unload can still
+    win now raises a clear "model was unloaded — retry" error instead of an
+    assertion failure.
+
+  Two known-limitation items were opened rather than fixed here, both
+  fail-closed (nothing unsafe ships either way): consolidating the two
+  Coqui VRAM-eviction mechanisms this wave's earlier entry already
+  describes as deliberately separate
+  ([#1932](https://github.com/dudarenok-maker/Castwright/issues/1932)), and
+  the assign readiness gate checking only Qwen's slot status even when a
+  cloned entry would actually route to Coqui — an over-block, not an
+  under-block
+  ([#1933](https://github.com/dudarenok-maker/Castwright/issues/1933)).

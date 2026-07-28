@@ -57,15 +57,18 @@ all three plans:
   which is now fixed, not a known limitation; a re-derive is no longer a
   silent dead pause. (3) the manual override-link consent hole and the
   invisible sidecar-evict-on-revoke failure — see §6 KL-q.
-- **Two consent-bypass gaps — one is now partially fixed, one appears fixed
-  in source but its issue is still open. Verify the SHA under test before
-  trusting either as closed.** A manual cast-link route bypass
+- **Two consent-bypass gaps — both now appear fixed in source, but both
+  issues are still open. Verify the SHA under test before trusting either as
+  closed.** A manual cast-link route bypass
   ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885), §6
-  KL-p) covers TWO routes; only one is fixed as of this source read —
-  `cast-link-prior.ts` now refuses to denormalise a cloned voice onto/from
-  either side of a manual link, but `workspace/series-reuse-link.ts` has no
-  equivalent guard yet, so the gap #1885 describes is still live there. A
-  wholesale cast-write route with no consent check
+  KL-p) covered TWO routes; both are now guarded as of this source read —
+  `cast-link-prior.ts` refuses to denormalise a cloned voice onto/from
+  either side of a manual link, and `workspace/series-reuse-link.ts`'s
+  `clearStaleLink` (the destructive half — it unconditionally wiped a stale
+  link's voice fields) now preserves a cloned character's voice fields
+  instead of erasing them, via the same fail-safe `characterHasClonedSlot`
+  guard the sibling denormalise path already used. A wholesale cast-write
+  route with no consent check
   ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), §6
   KL-r) now appears closed in source (`preserve-cast-voices.ts`'s
   `rejectForeignCloneKeys`, wired into `routes/book-state.ts`) — but the
@@ -2512,7 +2515,7 @@ it, tick "seen" and move on. **Do not open a defect for these.**
 | **KL-m** | ~~Cloning on **XTTS/Coqui** is nowhere to be found.~~ **Shipped in 3c** — see Section E. | Historical row, kept for context. | — (superseded) | ☐ |
 | **KL-n** | `mint_variant` (emotion-variant `.pt`) still uses a **bare `torch.save`**, not the atomic write. | Explicitly out of scope for 268 Invariant 6 — it is off the resolver's re-derive path. Do not test it here. | — (out of scope) | ☐ |
 | ~~KL-o~~ | ~~The **My-voices card's** Play button auditions the **Qwen** artifact even for a Coqui-only or Coqui-primary card — E-05's caveat.~~ **Fixed** — `POST /:voiceUuid/sample` became engine-aware in Task 27 (#1887, closed), and the remaining gap — the card's own `playSample()` always sending `modelKeyForEngineChoice('qwen', …)` regardless of readiness — is now closed too (GATE 1 F2): `voice-library-card.tsx` computes `previewEngine` from `entry.engines.qwen?.status`/`entry.engines.xtts?.status`, playing Qwen when ready, else Coqui when ready, else falling back to Qwen's existing loud 409. The **cast-row** audition (`cast.tsx:496`) was already unaffected — it requests the character's routed engine directly (Task 25, #773d4eaa). Confirm the new behaviour in **E-05**: a Qwen-stale/Coqui-ready card should now play Coqui, not 409. | [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) (closed — route and card caller both fixed) | ☐ |
-| **KL-p** | A cloned voice's coqui slot can, in principle, be reachable through a route this sheet does not exercise (the manual cast-link routes), copying a cloned voice onto a character in a book that never had consent captured for it. | **Half-fixed as of this source read.** `cast-link-prior.ts` now has a `sourceIsCloned`/`targetIsCloned` fail-safe guard (`characterHasClonedSlot`) that refuses to denormalise a cloned voice's slot across a manual link in either direction — that half of the gap is closed. `workspace/series-reuse-link.ts` has **no** equivalent guard yet, so the bypass #1885 describes is still live there specifically. Not directly exercisable from this sheet's normal flows — recorded here so a tester who notices anomalous consent state on a linked/series book knows this is the known (partially fixed) cause, not a new defect. | [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885) (open — half-fixed in source, `series-reuse-link.ts` side remains) | ☐ |
+| **KL-p** | A cloned voice's coqui slot can, in principle, be reachable through a route this sheet does not exercise (the manual cast-link routes), copying a cloned voice onto a character in a book that never had consent captured for it. | **Appears fixed in source, issue still open — verify the SHA under test.** `cast-link-prior.ts` has a `sourceIsCloned`/`targetIsCloned` fail-safe guard (`characterHasClonedSlot`) that refuses to denormalise a cloned voice's slot across a manual link in either direction. `workspace/series-reuse-link.ts`'s `clearStaleLink` now carries the same guard on its destructive half: a stale-linked character with a cloned slot keeps its `overrideTtsVoices`/`voiceStyle`/`ttsEngine`/`voiceUuid` instead of having them wiped (the dead link's `matchedFrom`/`matchFactors` are still cleared either way — only the voice fields are protected). If your SHA predates this, the gap is exactly as originally described. Not directly exercisable from this sheet's normal flows — recorded here so a tester who notices anomalous consent state on a linked/series book knows this is the known (now-fixed-in-source) cause, not a new defect. | [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885) (open — fix appears present in source) | ☐ |
 | ~~KL-q~~ | ~~A revoke's `200` could mask a silently-failed sidecar evict.~~ **Fixed** — a failed/timed-out sidecar evict now surfaces via `artifactPurgeFailedPaths` instead of a bare swallowed `catch {}`. Watch **E-02/E-03** for the (separately tracked, non-blocking) residual: a **stopped** sidecar currently reports the same signal as a genuine failure, even though it has no in-process cache to leak from. | — (fixed) | ☐ |
 | **KL-r** | A wholesale `PUT /api/books/:bookId {slice:'cast'}` can, in principle, let a client restamp a character's `voiceUuid` and matching engine-slot name directly, with no consent check on this route at all. | **Appears fixed in source, issue still open — verify the SHA under test.** `preserve-cast-voices.ts` now (a) always keeps `voiceUuid` server-owned (the incoming value is ignored whenever an on-disk character already exists) and (b) exports `rejectForeignCloneKeys`, which throws — refusing the whole wholesale write — if any incoming clone-capable engine slot's `libraryUuid`/reserved-prefixed `name` doesn't already match what's on disk for that character. Both are wired into `routes/book-state.ts`'s `PUT` handler. If your SHA predates this, the gap is exactly as originally described: `voiceUuid` was never in `PRESERVED_DESIGN_FIELDS` and nothing rejected a foreign clone key. | [#1899](https://github.com/dudarenok-maker/Castwright/issues/1899) (open — fix appears present in source) | ☐ |
 

@@ -331,19 +331,22 @@ against:
   slots; the read-modify-write window stays hoisted above the async work so
   it does not reopen the cast.json clobber class Task 14 closed.
 - Playwright e2e (`e2e/voice-library.spec.ts` / a Coqui cast/audition spec,
-  Task 30) — **covers the assign-time rejection path, not a successful
-  Coqui assign.** The mock layer rejects a cloned-voice assign to any
-  non-qwen engine, so this spec asserts the real `/assign` guard order
-  (revoked → not-ready → wrong-engine) against the mock's now-failure-capable
-  responses (Task 29) — nothing in this spec exercises an assign
-  *succeeding* on Coqui. That gap is exactly this wave's own signature
-  defect class ("an artifact asserts what its source no longer says")
-  reproduced inside its own plan on a first draft of this line — corrected
-  here rather than left standing. A cloned-voice-cast-on-Coqui **success**
-  path is covered at the integration level by the Vitest suites above
-  (`clone-voice-resolver.test.ts`, `synthesise-chapter-cloned-resolver.test.ts`),
-  not by this e2e spec; a real browser-level success walkthrough is what
-  Section E's E-01 (on-box) exists to close.
+  Task 30, headline case added Task 41) — **covers both the assign-time
+  rejection path AND a successful Coqui assign.** `_mockAssignGuardError`
+  (`src/lib/api.ts`) was re-mirrored against the real `/assign` route's
+  current guard order (revoked → not-ready → wrong-*non-clone-capable*-
+  engine) — it rejects only an engine that is neither Qwen nor Coqui, so a
+  cloned voice with a ready `xtts` slot now assigns cleanly to a
+  Coqui-routed character in the mock. Step 7 drives exactly that: it selects
+  Coqui as the character's engine, assigns `lib-cloned-demo` (the fixture
+  Task 29 gave a ready `xtts` slot specifically for this), and asserts the
+  assign succeeds with no error surfaced — the headline "assigns on Coqui
+  and succeeds" case. This bullet itself used to claim the opposite (no
+  Coqui-success coverage existed) — that was exactly this wave's own
+  signature defect class ("an artifact asserts what its source no longer
+  says") reproduced inside its own plan; corrected here rather than left
+  standing. A real browser-level walkthrough on live hardware (not the mock)
+  is still what Section E's E-01 (on-box) exists to close.
 - Pytest sidecar golden gate (`server/tts-sidecar/tests/golden/test_cross_engine_sanity.py`,
   Task 31) — `test_coqui_sanity` now actually runs on a Coqui-only box (an
   `import TTS` probe replaces a Kokoro-shaped weights-path check that never
@@ -473,7 +476,8 @@ CLAUDE.md's Before-shipping checklist step 3.
     `libraryUuid` or clone-engine-prefixed `name` that doesn't match what
     this exact character already owns on disk — both wired into
     `book-state.ts`'s cast-write handler. Filed as
-    [#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), closed.
+    [#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), fixed
+    on this branch — closes when this PR merges.
   - **Task 14a landed** (`1bed9ed8`) — a failed/timed-out sidecar evict on
     revoke is no longer invisible: `artifactPurgeFailedPaths` now reports it
     instead of the old bare `catch {}`.
@@ -527,27 +531,29 @@ CLAUDE.md's Before-shipping checklist step 3.
   that folds a repaired line back into a chapter's segment list. Filed as
   [#1888](https://github.com/dudarenok-maker/Castwright/issues/1888).
 - **(h) The manual cast-link consent bypass (copy direction) is closed;
-  a destructive-path gap in the same file is not.** `[ADV-M4]` The two
-  copy-direction bypasses this item originally described are both fixed:
-  `cast-link-prior.ts:193-197` now carries a `sourceIsCloned`/`targetIsCloned`
-  fail-safe guard (`characterHasClonedSlot`) refusing to denormalise a cloned
-  slot across a manual link in either direction, and `series-reuse-link.ts`'s
-  own denormalise call (via `resolveReusedVoiceFields`,
-  `hydrate-reused-voice.ts:107/147/179`) now guards both the starting
-  character and the terminal chain source the same way. Adjacent to but
-  distinct from Task 6a's force-to-Qwen fix (that closed a different
-  interaction on the same file). Filed as
-  [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885), closed.
-  **But a separate, destructive-direction gap in the same file is still
-  open**: `series-reuse-link.ts:198-209`'s `clearStaleLink` unconditionally
-  deletes `overrideTtsVoices`/`voiceStyle`/`ttsEngine`/`voiceUuid` on any
-  `voiceState: 'reused'` character when its link goes stale, with no
+  the destructive-path gap in the same file is now closed too.** `[ADV-M4]`
+  The two copy-direction bypasses this item originally described are both
+  fixed: `cast-link-prior.ts:193-197` now carries a
+  `sourceIsCloned`/`targetIsCloned` fail-safe guard (`characterHasClonedSlot`)
+  refusing to denormalise a cloned slot across a manual link in either
+  direction, and `series-reuse-link.ts`'s own denormalise call (via
+  `resolveReusedVoiceFields`, `hydrate-reused-voice.ts:107/147/179`) now
+  guards both the starting character and the terminal chain source the same
+  way. Adjacent to but distinct from Task 6a's force-to-Qwen fix (that closed
+  a different interaction on the same file). Filed as
+  [#1885](https://github.com/dudarenok-maker/Castwright/issues/1885), fixed
+  on this branch — closes when this PR merges.
+  **The separate, destructive-direction gap in the same file is now closed
+  too**: `series-reuse-link.ts`'s `clearStaleLink` used to unconditionally
+  delete `overrideTtsVoices`/`voiceStyle`/`ttsEngine`/`voiceUuid` on any
+  `voiceState: 'reused'` character when its link went stale, with no
   `characterHasClonedSlot` guard — so a user's own cloned assignment onto a
   `reused`-state row (e.g. via `POST /:voiceUuid/assign`, which never touches
-  `voiceState`) is silently erased the next time `pruneStaleReuseLinks` finds
-  the link stale, and the character reverts to an ordinary designed voice.
-  This is being addressed in this same round by another lane; not yet landed
-  as of this doc's most recent read of source.
+  `voiceState`) was silently erased the next time `pruneStaleReuseLinks` found
+  the link stale, and the character reverted to an ordinary designed voice.
+  `clearStaleLink` now carries the same `characterHasClonedSlot` guard: it
+  still clears the dead link's `matchedFrom`/`matchFactors`, but preserves a
+  cloned character's voice fields instead of erasing them.
 - **(i) `spawn-sidecar.ts`'s `XTTS_VOICES_DIR`/`QWEN_VOICES_DIR` now route
   through `paths.ts`'s helpers — closed.** (`920bed07`, "route sidecar
   voice-dir env vars through the paths helpers".) They used to be literal
@@ -555,7 +561,8 @@ CLAUDE.md's Before-shipping checklist step 3.
   silently diverge from them over time — now they call `qwenVoicesDir()`/
   `xttsVoicesDir()` directly, so a future change to either path helper
   can't leave the sidecar writing artifacts purge cannot reach. Filed as
-  [#1890](https://github.com/dudarenok-maker/Castwright/issues/1890), closed.
+  [#1890](https://github.com/dudarenok-maker/Castwright/issues/1890), fixed
+  on this branch — closes when this PR merges.
 - **(j) A legacy qwen slot with a `libraryUuid` and no `provenance` field
   is now revocation-checked; this was a real gap, now closed.**
   `characterHasClonedSlot`'s pre-pass filter correctly requires
@@ -568,7 +575,8 @@ CLAUDE.md's Before-shipping checklist step 3.
   same resolver the cloned pre-pass already uses, reading the raw
   `libraryUuid` the way `pickVoiceForEngine`'s qwen branch does — scoped to
   qwen only, since Coqui's branch has no equivalent bare-uuid exemption to
-  close. Filed as [#1891](https://github.com/dudarenok-maker/Castwright/issues/1891), closed.
+  close. Filed as [#1891](https://github.com/dudarenok-maker/Castwright/issues/1891),
+  fixed on this branch — closes when this PR merges.
 - **(k) `npm run test:golden-audio:sidecar` crashes on this dev box**, in a
   sox/PowerShell-stderr interaction on the untouched Qwen probe line —
   reproduces identically on unmodified `main`. The gate is opt-in so nothing
@@ -620,7 +628,8 @@ CLAUDE.md's Before-shipping checklist step 3.
   `assignVoice(...).unwrap().catch(...)` chain sets a
   `myVoicesAssignError` state and renders it inline, the same class of fix
   Task 29 applied elsewhere. Filed as
-  [#1896](https://github.com/dudarenok-maker/Castwright/issues/1896), closed.
+  [#1896](https://github.com/dudarenok-maker/Castwright/issues/1896), fixed
+  on this branch — closes when this PR merges.
 - **(o) An explicit stock-voice pick over a cloned slot still renders the
   clone — the user's choice is ignored, and a real person's voice plays
   instead** `[DELTA-I5]` — **now closed.** The "unassign a library voice"
@@ -647,6 +656,16 @@ CLAUDE.md's Before-shipping checklist step 3.
   regression — nothing evicted for either case before this wave — but both
   are the honest boundary of what Task 22 actually closes, not an
   oversight to be surprised by later.
+- **(q) The assign readiness gate is Qwen-only and over-blocks a
+  Coqui-routed assign.** `POST /:voiceUuid/assign` refuses a cloned entry
+  whose **Qwen** slot isn't `ready`, even when the character would actually
+  route to Coqui and that slot already is. Fail-closed — nothing unsafe
+  ships, it just refuses some assigns it could safely allow. Fixing it
+  correctly means checking the *routed* engine's readiness rather than
+  Qwen's unconditionally, which needs the routed engine resolved before the
+  gate runs (currently computed later, once the cast is read) — a per-engine
+  readiness rule, not a one-line fix. Filed as
+  [#1933](https://github.com/dudarenok-maker/Castwright/issues/1933).
 
 ## Out of scope
 

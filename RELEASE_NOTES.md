@@ -86,8 +86,8 @@
 - **Cloned and designed voices now work on the second speech engine too, not just the first.**
   Until now a cloned voice only worked reliably on one of Castwright's two speech engines —
   cast it on a book that used the other one and you'd either hit a wall or, worse, quietly get
-  a stand-in voice instead. Both are covered now, with the same promise either way: it renders
-  as the real voice, or it tells you it can't — never a silent swap.
+  a stand-in voice instead. Both are covered now — for a cloned voice, the same promise holds
+  either way: it renders as the real voice, or it tells you it can't — never a silent swap.
 - **Your consent record for a cloned voice is now enforced everywhere it applies.** Revoking a
   clone was already final — Castwright stopped rendering it and erased what it could be rebuilt
   from. That same check now reaches a couple of paths inside your own install that hadn't been
@@ -152,6 +152,32 @@
 - Chapter loudness figures on the Listen view are now measured from the finished audio. The
   loudness-range and true-peak numbers were previously reported by the normaliser rather than
   measured, so they could be well off — the integrated loudness reading was always right.
+- **A cast save can no longer quietly damage a cloned voice.** Saving your whole cast used to
+  accept a save that simply left out a cloned character's engine assignment — and silently drop
+  it. A save that leaves one out now restores it instead; one that tries to swap it for something
+  else is refused, and refused as a plain refusal, not a crash.
+- **Designing your whole cast at once no longer knocks a cloned character off their clone.** A
+  bulk "Design full cast" used to be able to retarget an already-cloned character onto a fresh,
+  uncloned voice without telling you. It now skips them and names who, right in the summary —
+  and designing a single already-cloned character on its own is refused with a reason instead of
+  quietly doing the wrong thing.
+- **Assigning a voice from My voices now tells you when only part of it landed.** A voice that
+  could only be written to one of your book's two engines used to close the panel with no notice
+  at all, leaving the assignment half-done with nothing on screen to say so.
+- **Previewing a voice now always matches what the book will actually render**, even right after
+  you've picked a different voice over a clone.
+- **A background repair or splice can no longer mark the wrong book as done.** Finishing one
+  while you'd already switched books could stamp another book's same-numbered chapter as freshly
+  rendered. And a repair that hits an unexpected error no longer leaves its spinner running
+  forever — it now fails cleanly, the same way a normal finish does.
+- **The audio-repair button is now a proper tap target on tablets**, instead of shrinking below
+  the size your thumb needs.
+- Revoking a cloned voice is airtight even under an unusual spelling of its own key — Castwright
+  now refuses to play a voice under anything but its own canonical name, closing a corner where a
+  copy could keep working after a revoke reported everything erased.
+- A voice-clone build that collided with Castwright freeing up graphics-card memory used to fail
+  with an unhelpful error. It now either recovers on its own or tells you plainly that the model
+  was unloaded and to try again.
 
 # Castwright 1.14.0
 

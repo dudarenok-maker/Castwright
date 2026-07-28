@@ -116,7 +116,7 @@ C-08 and C-12 deliberately kill the sidecar mid-write — nothing else in flight
 D-01 deliberately runs two concurrent book renders sharing one cloned voice.
 E-03 deliberately races a revoke against an in-flight Coqui derive.
 
-*Also needs:* Whisper weights, ECAPA `/embed`, `voices.library.enabled=true`, the
+*Also needs:* Whisper weights, ECAPA `/embed`, the
 Coalfall fixture with ≥2 speaking characters/chapter, the 9 audio fixtures in §4,
 and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
 book fixture that actually routes to Coqui.
