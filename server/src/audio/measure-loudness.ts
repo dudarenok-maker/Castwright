@@ -26,26 +26,51 @@ export interface MeasuredLoudness {
 
 /** Parse ffmpeg's `ebur128` end-of-run Summary block.
  *
+ *  Prior art: `scripts/relufs-existing.mjs` (plan 71) parses this exact same
+ *  Summary block for its standalone re-measurement script. Both parsers must
+ *  stay compatible with the same log shapes — deliberately UNANCHORED and
+ *  label-tolerant: ffmpeg prefixes every summary line with
+ *  `[Parsed_ebur128_0 @ 0x...]` (so `^...$`-anchored patterns never match),
+ *  and reports the peak label as either `dBFS` or `dBTP` depending on
+ *  build/version. Don't narrow these patterns again without checking
+ *  relufs-existing.mjs stays in sync.
+ *
  *  Returns null unless all three fields are present AND finite — `-inf` on
  *  silent input yields null rather than an Infinity that would poison the
  *  sidecar and the UI that renders it. */
 export function parseEbur128Summary(stderr: string): MeasuredLoudness | null {
-  const num = (re: RegExp): number | null => {
-    const m = re.exec(stderr);
+  const num = (re: RegExp, source: string): number | null => {
+    const m = re.exec(source);
     if (!m) return null;
     const v = Number(m[1]);
     return Number.isFinite(v) ? v : null;
   };
-  const i = num(/^\s*I:\s*(-?[\d.]+|-inf)\s*LUFS/m);
-  const lra = num(/^\s*LRA:\s*(-?[\d.]+|-inf)\s*LU\s*$/m);
-  const tp = num(/^\s*Peak:\s*(-?[\d.]+|-inf)\s*dBFS/m);
+  const i = num(/\bI:\s*(-?[\d.]+|-?inf)\s*LUFS/, stderr);
+  const lra = num(/\bLRA:\s*(-?[\d.]+|-?inf)\s*LU\b/, stderr);
+  /* Scope the peak match to the `True peak:` section so a future
+     `peak=sample+true` doesn't silently start reporting the sample peak
+     instead — today's `peak=true` arg emits only the true-peak block, so an
+     unscoped match is currently equivalent, but scoping now costs nothing
+     and forecloses the drift. Falls back to the whole string if the
+     `True peak:` header isn't present, so an unexpected log shape still
+     degrades to "try the unscoped match" rather than an unconditional null. */
+  const truePeakIdx = stderr.lastIndexOf('True peak:');
+  const peakSource = truePeakIdx >= 0 ? stderr.slice(truePeakIdx) : stderr;
+  const tp = num(/\bPeak:\s*(-?[\d.]+|-?inf)\s*dB(?:TP|FS)/, peakSource);
   if (i === null || lra === null || tp === null) return null;
   return { i, lra, tp };
 }
 
+/* This spawn runs AFTER `input.onEncoded()` fires — the chapter's audio is
+   already safely on disk, so a wedged ffmpeg here buys nothing but a stuck
+   promise. 120 s is ~80x headroom over the ~1.5 s/10-min measured cost, so
+   it should never trip on a healthy process; it exists purely to bound a
+   hang. */
+const MEASURE_TIMEOUT_MS = 120_000;
+
 /** Run one `ebur128` analysis pass over `path`. ~1.5 s per 10 minutes of
  *  audio — about 9 % of the encode step, against a pipeline dominated by
- *  synthesis. Resolves null on any failure. */
+ *  synthesis. Resolves null on any failure, including a timeout. */
 export async function measureLoudnessFile(path: string): Promise<MeasuredLoudness | null> {
   return new Promise<MeasuredLoudness | null>((resolve) => {
     const child = spawn(
@@ -53,12 +78,23 @@ export async function measureLoudnessFile(path: string): Promise<MeasuredLoudnes
       ['-nostats', '-i', path, '-af', 'ebur128=peak=true:framelog=quiet', '-f', 'null', '-'],
       { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true },
     );
+    let settled = false;
+    const settle = (value: MeasuredLoudness | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      settle(null);
+    }, MEASURE_TIMEOUT_MS);
     const chunks: Buffer[] = [];
     child.stderr.on('data', (c) => chunks.push(c));
-    child.on('error', () => resolve(null));
+    child.on('error', () => settle(null));
     child.on('close', (code) => {
-      if (code !== 0) return resolve(null);
-      resolve(parseEbur128Summary(Buffer.concat(chunks).toString('utf8')));
+      if (code !== 0) return settle(null);
+      settle(parseEbur128Summary(Buffer.concat(chunks).toString('utf8')));
     });
   });
 }
