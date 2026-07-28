@@ -58,7 +58,10 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import { DEFAULT_NARRATOR_CREDIT } from '../export/narrator-credit.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
-import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
+import {
+  preserveDesignedVoicesOnCastWrite,
+  rejectForeignCloneKeys,
+} from '../workspace/preserve-cast-voices.js';
 import {
   collectRenderedFallbackEngines,
   collectRenderedInstructHashesByChapter,
@@ -124,6 +127,10 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
     castJsonPath(bookDir),
   );
   const existingChars = existing?.characters ?? [];
+  /* [#1899] — reject a foreign clone storage key before merging; throws,
+     propagating to this route's outer catch (the same handling every other
+     unexpected failure in this handler already gets). */
+  rejectForeignCloneKeys(existingChars, cast.characters);
   const characters = preserveDesignedVoicesOnCastWrite(existingChars, cast.characters);
   return { ...cast, characters };
 }

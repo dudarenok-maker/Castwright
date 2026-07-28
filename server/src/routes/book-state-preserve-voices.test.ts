@@ -116,6 +116,45 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
     expect(berrin.voiceStyle).toBe('a wry, steady woman');
   });
 
+  /* [#1899] — a wholesale cast PUT must never let a client restamp
+     voiceUuid or plant a foreign clone-engine storage key with no consent
+     check. Berrin has no clone/library voice at all on disk today; the
+     attack tries to both restamp her voiceUuid AND assign a coqui slot
+     shaped like a real cloned voice's storage key in one request. */
+  it('[#1899] rejects a wholesale write that restamps voiceUuid and plants a foreign coqui clone key', async () => {
+    const incoming = {
+      slice: 'cast',
+      patch: {
+        characters: [
+          {
+            id: 'berrin',
+            name: 'Berrin',
+            role: 'minor',
+            color: '#abc',
+            voiceState: 'generated',
+            voiceUuid: 'attacker-supplied-uuid',
+            overrideTtsVoices: {
+              qwen: { name: 'qwen-berrin' },
+              coqui: { name: 'xtts-victim-uuid', libraryUuid: 'victim-uuid', provenance: 'cloned' },
+            },
+          },
+        ],
+      },
+    };
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send(incoming);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/doesn't match/);
+
+    /* Nothing was written — Berrin's on-disk record is untouched, no
+       voiceUuid and no foreign coqui slot. */
+    const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
+    expect(berrin.voiceUuid).toBeUndefined();
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
+  });
+
   it('lets a deliberate re-design overwrite the on-disk voice (incoming wins)', async () => {
     const incoming = {
       slice: 'cast',
