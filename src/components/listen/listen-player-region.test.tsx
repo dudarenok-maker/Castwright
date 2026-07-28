@@ -438,4 +438,23 @@ describe('ListenPlayerRegion — audio-QA repair affordance (plan 179)', () => {
     /* A different chapter's in-flight repair must not disable this one. */
     expect(store.getState().qaRepair.running['test-book:2']).toBeUndefined();
   });
+
+  /* GATE 2 C-4 — `md:w-8 md:h-8` collapses the target to 32px across the
+     WHOLE tablet range (>=768px is exactly where `md:` kicks in), which is
+     the same failure the mobile-testing-protocol calls out for a `sm:`-gated
+     size. The mandated pattern is `min-h-[44px] min-w-[44px]
+     fine-pointer:min-h-0 fine-pointer:min-w-0` (see profile-drawer.tsx's
+     "Remove voice" control) — present on ANY pointer, dropped only for a
+     fine (mouse) one, so a tablet's coarse pointer always gets the full 44px
+     target regardless of viewport width. */
+  it('[C-4] keeps a 44px touch target at any width — no md:-gated shrink', () => {
+    renderWithStore(makeQaStore(), [suspect(1)]);
+    const btn = screen.getByTestId('chapter-row-1-qa-repair');
+    expect(btn.className).toContain('min-h-[44px]');
+    expect(btn.className).toContain('min-w-[44px]');
+    expect(btn.className).toContain('fine-pointer:min-h-0');
+    expect(btn.className).toContain('fine-pointer:min-w-0');
+    expect(btn.className).not.toMatch(/\bmd:w-\d/);
+    expect(btn.className).not.toMatch(/\bmd:h-\d/);
+  });
 });
