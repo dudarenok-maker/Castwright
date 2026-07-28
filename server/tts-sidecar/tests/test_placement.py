@@ -91,7 +91,7 @@ def test_heavy_no_room_no_evict_reports_no_capacity_with_analyzer_hint():
 def test_idle_evict_then_place():
     devices = [dev(free=8000)]
     ledger = main.ReservationLedger()
-    tok = ledger.hold("cuda:0", 6000)
+    tok = ledger.hold("cuda:0", 6000, "qwen")
     fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
     pc = main.PlacementController(
         probe=lambda: devices,
@@ -110,10 +110,18 @@ def test_starved_qwen_admits_after_coqui_is_evicted():
     retry logic at the `admit()` seam anyway (decide-without-hold, same
     retry shape); `test_starved_qwen_reservation_admits_after_coqui_is_evicted`
     below is the real end-to-end proof, driven through the actual
-    production entry point."""
-    devices = [dev(free=8000)]
+    production entry point.
+
+    An idle-but-resident Coqui holds NO reservation in production — its
+    token is released the moment `reservation()` exits (#1920B). So the
+    "Coqui is occupying VRAM" fact is modelled here as low `freeMb` in the
+    probe (5192, matching a device with 3000 MB used by the resident
+    weights), not as a ledger hold; the injected evict raises `freeMb` back
+    to 8000 once Coqui is unloaded, mirroring what the real GPU probe would
+    report."""
+    state = {"free": 5192}
+    devices = lambda: [dev(free=state["free"])]
     ledger = main.ReservationLedger()
-    coqui_hold = ledger.hold("cuda:0", 3000)
     fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
     evicted = []
 
@@ -121,11 +129,11 @@ def test_starved_qwen_admits_after_coqui_is_evicted():
         if engine == "coqui":
             return False
         evicted.append((device_key, engine))
-        ledger.release(coqui_hold)
+        state["free"] = 8000
         return True
 
     pc = main.PlacementController(
-        probe=lambda: devices,
+        probe=devices,
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
@@ -140,10 +148,12 @@ def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
     """#1894 end to end at the ACTUAL production seam: every real call site
     uses `reservation()` (a @contextmanager), not `admit()` (see the note on
     the sibling test above). A starved qwen op is admitted once the idle
-    Coqui hold is released by the injected `idle_evict`."""
-    devices = [dev(free=8000)]
+    Coqui occupying the device's VRAM is evicted by the injected
+    `idle_evict` (modelled as low `freeMb`, not a ledger hold — see the note
+    on the sibling test above)."""
+    state = {"free": 5192}
+    devices = lambda: [dev(free=state["free"])]
     ledger = main.ReservationLedger()
-    coqui_hold = ledger.hold("cuda:0", 3000)
     fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
     evicted = []
 
@@ -151,11 +161,11 @@ def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
         if engine == "coqui":
             return False
         evicted.append((device_key, engine))
-        ledger.release(coqui_hold)
+        state["free"] = 8000
         return True
 
     pc = main.PlacementController(
-        probe=lambda: devices,
+        probe=devices,
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
@@ -184,7 +194,7 @@ def test_try_hold_is_atomic_under_concurrency():
 
     def worker():
         barrier.wait()  # release all 16 at once to maximise the race
-        tok = ledger.try_hold(candidates, 5600, 768)
+        tok = ledger.try_hold(candidates, 5600, 768, "qwen")
         if tok is not None:
             with lock:
                 granted.append(tok)
@@ -308,3 +318,27 @@ def test_engine_env_pin_indexed_cuda_returns_concrete_key(monkeypatch):
 def test_engine_env_pin_cuda_without_index_returns_none(monkeypatch):
     monkeypatch.setenv("QWEN_DEVICE", "cuda")
     assert main._engine_env_pin("qwen") is None
+
+
+# --- engine attribution on the reservation ledger (#1920B) ------------------
+
+
+def test_ledger_reports_which_engines_hold_a_device():
+    """Fails against the wrong implementation: a ledger that stores only
+    (token -> mb) has no engine to report, so this cannot even be written."""
+    ledger = main.ReservationLedger()
+    a = ledger.hold("cuda:0", 3000, "coqui")
+    ledger.hold("cuda:0", 400, "asr")
+    ledger.hold("cuda:1", 6000, "qwen")
+    assert ledger.engines_holding("cuda:0") == {"coqui", "asr"}
+    assert ledger.engines_holding("cuda:1") == {"qwen"}
+    ledger.release(a)
+    assert ledger.engines_holding("cuda:0") == {"asr"}
+    assert ledger.engines_holding("cuda:2") == set()
+
+
+def test_try_hold_records_the_admitting_engine():
+    ledger = main.ReservationLedger()
+    tok = ledger.try_hold([("cuda:0", 8000, 8000)], 3000, 768, "coqui")
+    assert tok is not None
+    assert ledger.engines_holding("cuda:0") == {"coqui"}

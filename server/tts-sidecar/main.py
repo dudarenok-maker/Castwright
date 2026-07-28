@@ -2493,26 +2493,39 @@ class ReservationLedger:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._by_device: dict[str, dict[int, int]] = {}
+        self._by_device: dict[str, dict[int, tuple[int, str]]] = {}
         self._next_token_id = 1
 
     def reserved_mb(self, device_key: str) -> int:
         with self._lock:
-            return sum(self._by_device.get(device_key, {}).values())
+            return sum(mb for mb, _ in self._by_device.get(device_key, {}).values())
 
-    def hold(self, device_key: str, mb: int) -> tuple[str, int]:
-        """Reserve `mb` on `device_key`; returns an opaque token (which
-        encodes the device) that `release` needs to give it back."""
+    def hold(self, device_key: str, mb: int, engine: str) -> tuple[str, int]:
+        """Reserve `mb` on `device_key` for `engine`; returns an opaque token
+        (which encodes the device) that `release` needs to give it back."""
         with self._lock:
             token_id = self._next_token_id
             self._next_token_id += 1
-            self._by_device.setdefault(device_key, {})[token_id] = mb
+            self._by_device.setdefault(device_key, {})[token_id] = (mb, engine)
             return (device_key, token_id)
 
     def release(self, token: tuple[str, int]) -> None:
         device_key, token_id = token
         with self._lock:
             self._by_device.get(device_key, {}).pop(token_id, None)
+
+    def engines_holding(self, device_key: str) -> set[str]:
+        """Engine keys with a live reservation on `device_key`.
+
+        The authority for "this engine's operation is already admitted" (#1920B).
+        A reservation spans the WHOLE op — taken before the handler offloads to a
+        worker thread, released after it returns — whereas the engine's in-flight
+        counter only covers the forward itself. The gap between the two is
+        exactly the window in which an admission-path evict could throw away a
+        model whose op was already admitted.
+        """
+        with self._lock:
+            return {engine for _, engine in self._by_device.get(device_key, {}).values()}
 
     def _headroom(self, key: str, free_mb: int, total_mb: int, reserve_cap: int) -> int:
         """Available headroom for `key` given its live free/total and the
@@ -2521,17 +2534,17 @@ class ReservationLedger:
         this device's own VRAM capped at `reserve_cap` — not a flat number
         applied to every candidate regardless of size. Caller MUST hold
         `self._lock`."""
-        reserved = sum(self._by_device.get(key, {}).values())
+        reserved = sum(mb for mb, _ in self._by_device.get(key, {}).values())
         return min(free_mb, total_mb - reserved) - _device_reserve_mb(total_mb, reserve_cap)
 
     def try_hold(
-        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int, engine: str
     ) -> Optional[tuple[str, int]]:
-        """Atomically pick the roomiest candidate that fits `peak` and hold it.
-        `candidates` = [(device_key, freeMb, totalMb), ...]. `reserve_cap` is
-        the GPU_RESERVE_MB ceiling — each candidate's actual reserve is
-        computed per-device from its own totalMb (see `_headroom`). Returns
-        the token or None if none fit. The fit-check AND the hold happen
+        """Atomically pick the roomiest candidate that fits `peak` and hold it
+        for `engine`. `candidates` = [(device_key, freeMb, totalMb), ...].
+        `reserve_cap` is the GPU_RESERVE_MB ceiling — each candidate's actual
+        reserve is computed per-device from its own totalMb (see `_headroom`).
+        Returns the token or None if none fit. The fit-check AND the hold happen
         under a SINGLE lock acquisition, so two concurrent admits can't both
         pass the check and double-book the same VRAM — the TOCTOU the per-op
         reservation exists to prevent (decide+hold atomic, per the design)."""
@@ -2546,7 +2559,7 @@ class ReservationLedger:
                 return None
             token_id = self._next_token_id
             self._next_token_id += 1
-            self._by_device.setdefault(best_key, {})[token_id] = peak
+            self._by_device.setdefault(best_key, {})[token_id] = (peak, engine)
             return (best_key, token_id)
 
     def best_fit(
@@ -2739,13 +2752,13 @@ class PlacementController:
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        held = self.ledger.try_hold(candidates, peak, reserve_cap)
+        held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
             if worst is not None and self.idle_evict(worst, engine):
                 devices = self.probe()
                 candidates = self._gpu_candidates(devices, constraint)
-                held = self.ledger.try_hold(candidates, peak, reserve_cap)
+                held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
 
         if held is not None:
             admission: dict = {"device": held[0]}
