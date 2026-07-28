@@ -1407,3 +1407,518 @@ def test_evict_re_check_reads_epoch_after_acquiring_synth_lock_not_before(
     )
     assert isinstance(outcome["error"], main.VoiceNotDesignedError)
     assert tts_model.infer_calls == [], "the GPU forward must never run once the evict landed"
+
+
+# -- GATE 1 fix round: sidecar findings MIN-1..MIN-6 -----------------------
+#
+# Each test below pins ONE of the whole-branch review's sidecar findings.
+# Every one was verified by reverting its fix and watching it fail for the
+# stated reason before being kept (the fix report records the observed
+# output) - this branch has already shipped ten placebo tests, so "it
+# passes" was not accepted as evidence for any of them.
+
+
+def test_load_voice_latents_uses_the_safe_unpickler(monkeypatch, tmp_path) -> None:
+    """MIN-1 - the persisted artifact is `{"gpt_cond_latent": tensor,
+    "speaker_embedding": tensor}`, plain tensors the safe loader handles, and
+    `pt_path` is derived from a CALLER-SUPPLIED `voice` field. Loading it with
+    `weights_only=False` makes any file that lands at
+    `voices/xtts/<sanitised>.pt` execute arbitrary code at load time. Assert
+    the flag actually reaching `torch.load`, not merely that the load
+    succeeded - a wrong flag loads these tensors perfectly happily, so a
+    round-trip assertion would be a placebo."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-weights1")
+
+    real_torch = sys.modules["torch"]
+    load_kwargs: list[dict[str, Any]] = []
+
+    def _recording_load(path: str, **kwargs: Any) -> Any:
+        load_kwargs.append(kwargs)
+        return real_torch.load(path, **kwargs)
+
+    recording_torch = types.ModuleType("torch")
+    recording_torch.save = real_torch.save  # type: ignore[attr-defined]
+    recording_torch.load = _recording_load  # type: ignore[attr-defined]
+    recording_torch.cuda = real_torch.cuda  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", recording_torch)
+
+    eng._load_voice_latents("xtts-weights1")
+
+    assert len(load_kwargs) == 1
+    assert load_kwargs[0]["weights_only"] is True
+    # map_location stays 'cpu' - latents are persisted as CUDA tensors on
+    # whichever card derived them (`_load_voice_latents`'s own docstring).
+    assert load_kwargs[0]["map_location"] == "cpu"
+
+
+class _TtsReadSpyEngine(main.CoquiEngine):
+    """Counts `self._tts` reads taken while `_synth_lock` is NOT held.
+
+    That set is exactly the set a racing `POST /unload` can observe as None:
+    `unload()` acquires `_synth_lock` before nulling `self._tts`, so a read
+    taken under that lock is safe by construction and a read taken outside it
+    is not. The backing store is a separate attribute so the property can
+    intercept every get without changing what `__init__`/`_ensure_loaded`
+    store."""
+
+    _tts_backing: Any = None
+
+    def __init__(self) -> None:
+        self.unlocked_tts_reads = 0
+        super().__init__()
+
+    @property  # type: ignore[override]
+    def _tts(self) -> Any:
+        if not self._synth_lock.locked():
+            self.unlocked_tts_reads += 1
+        return self._tts_backing
+
+    @_tts.setter
+    def _tts(self, value: Any) -> None:
+        self._tts_backing = value
+
+
+def _make_spy_engine(monkeypatch, tmp_path: Path) -> tuple[_TtsReadSpyEngine, _FakeTTS]:
+    monkeypatch.setenv("XTTS_VOICES_DIR", str(tmp_path / "xtts"))
+    tts_instance = _install_fake_coqui_runtime(monkeypatch)
+    return _TtsReadSpyEngine(), tts_instance
+
+
+def test_cloned_branch_reads_tts_once_outside_the_synth_lock(monkeypatch, tmp_path) -> None:
+    """MIN-2 - the cloned branch ran `assert self._tts is not None` and then
+    `config = self._tts.synthesizer.tts_model.config`: TWO separate reads,
+    both after `_ensure_loaded` released `_synth_lock` and both before the
+    branch's own `with self._synth_lock:`. A `/unload` landing between them
+    (Stop button, or the Analysing screen auto-evicting Coqui for the
+    analyzer LLM) makes the second read None - an `AttributeError` on
+    `'NoneType' object has no attribute 'synthesizer'` under `python -O`,
+    where the guarding assert is stripped.
+
+    Counting reads is the assertion that actually discriminates: the fix is a
+    single local capture, so any regression that re-introduces a second
+    unguarded read fails here even when no unload ever races it. The counter
+    is reset after `_ensure_loaded` so only the branch's own reads are
+    measured - `_ensure_loaded`'s early-return read is not this finding's
+    subject."""
+    eng, tts_instance = _make_spy_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-lockread1")
+    tts_instance.synthesizer.tts_model.infer_calls.clear()
+
+    real_ensure = eng._ensure_loaded
+
+    def _ensure_then_reset(*args: Any, **kwargs: Any) -> None:
+        real_ensure(*args, **kwargs)
+        eng.unlocked_tts_reads = 0
+
+    monkeypatch.setattr(eng, "_ensure_loaded", _ensure_then_reset)
+
+    result = eng.synthesize("xtts_v2", "xtts-lockread1", "hello there")
+
+    assert result.substituted_from is None
+    assert len(tts_instance.synthesizer.tts_model.infer_calls) == 1
+    assert eng.unlocked_tts_reads == 1, (
+        "the cloned branch must read self._tts exactly once outside _synth_lock "
+        f"(a racing unload can null it between reads); saw {eng.unlocked_tts_reads}"
+    )
+
+
+def test_cloned_branch_unloaded_model_fails_with_a_clear_error(monkeypatch, tmp_path) -> None:
+    """MIN-2, the other half - when the racing unload DOES win (the single
+    read yields None), the branch must fail with an explicit, actionable
+    error rather than a bare `assert` (an `AssertionError`, or nothing at all
+    under `python -O`, which degrades into an `AttributeError` one line
+    later). `_ensure_loaded` is stubbed to a no-op so the branch is entered
+    with `self._tts` genuinely None - the state a completed `/unload` leaves
+    behind."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-unloaded1")
+    eng.unload()
+    assert eng._tts is None
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError, match="unloaded") as excinfo:
+        eng.synthesize("xtts_v2", "xtts-unloaded1", "hello there")
+
+    # Specifically NOT an AssertionError (stripped under -O) and NOT an
+    # AttributeError on None - both were the pre-fix outcomes.
+    assert not isinstance(excinfo.value, AssertionError)
+    assert not isinstance(excinfo.value, AttributeError)
+
+
+def test_unsupported_language_raises_its_own_error_type(monkeypatch, tmp_path) -> None:
+    """MIN-4 - the language gate raised a bare `VoiceNotDesignedError`, which
+    /synthesize maps to "has not been designed yet". The voice IS cloned; the
+    loaded model just does not list the language, so that remedy (clone it
+    again) can never work. The new type must still be a
+    `VoiceNotDesignedError` subclass: every other handler treats it as the
+    fail-loud, no-fallback condition it is (Property 1), and collapsing that
+    would be a regression."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-lang1")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()
+
+    with pytest.raises(main.VoiceLanguageUnsupportedError) as excinfo:
+        eng.synthesize("xtts_v2", "xtts-lang1", "hello there", language="xx")
+
+    assert isinstance(excinfo.value, main.VoiceNotDesignedError)
+    assert "xx" in str(excinfo.value)
+    assert tts_model.infer_calls == []
+
+
+def test_missing_latents_is_not_the_language_error_type(monkeypatch, tmp_path) -> None:
+    """MIN-4's companion - the two conditions must stay distinguishable. A
+    genuinely never-cloned voice keeps raising the PLAIN
+    `VoiceNotDesignedError`, so /synthesize keeps answering
+    `voice_not_designed` for it. Without this, "give the language failure its
+    own type" could have been satisfied by widening both to the new one."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+
+    with pytest.raises(main.VoiceNotDesignedError) as excinfo:
+        eng.synthesize("xtts_v2", "xtts-never-cloned-lang", "hello there")
+
+    assert not isinstance(excinfo.value, main.VoiceLanguageUnsupportedError)
+
+
+def test_synthesize_route_reports_unsupported_language_not_not_designed(
+    monkeypatch, tmp_path
+) -> None:
+    """MIN-4 over the wire. The user-visible symptom was a Russian book on a
+    cloned Coqui voice being told "Voice 'xtts-...' has not been designed
+    yet" - so the assertion that matters is on the RESPONSE BODY, not on the
+    exception type: the code must not be `voice_not_designed`, and the detail
+    must name the language and the model's supported set instead of implying
+    a re-clone."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-lang-http1")
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/synthesize",
+        json={
+            "engine": "coqui", "model": "xtts_v2",
+            "voice": "xtts-lang-http1", "text": "hello there", "language": "ru",
+        },
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["code"] == "voice_language_unsupported"
+    assert body["code"] != "voice_not_designed"
+    assert "has not been designed yet" not in body["detail"]
+    assert "ru" in body["detail"]
+    # The fake's config.languages - the actionable part of the message.
+    assert "en" in body["detail"]
+
+
+def test_synthesize_route_still_reports_voice_not_designed_for_a_missing_pt(
+    monkeypatch, tmp_path
+) -> None:
+    """MIN-4 regression guard at the route: adding the narrower handler must
+    not shadow the existing one. A never-cloned voice keeps its #1063 409
+    `voice_not_designed` contract, which Node's voice-sample.ts and
+    voice-library.ts both match on."""
+    _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/synthesize",
+        json={"engine": "coqui", "model": "xtts_v2", "voice": "xtts-absent1", "text": "hello"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "voice_not_designed"
+
+
+def test_bump_evict_epoch_reports_whether_it_dropped_an_entry(monkeypatch, tmp_path) -> None:
+    """MIN-3 - the `evicted` flag's source of truth. `_bump_evict_epoch` now
+    returns the pop's own result, computed inside the same `_latents_lock`
+    critical section as the pop, so the two can never disagree."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-flag1")
+    eng._load_voice_latents("xtts-flag1")
+    assert "xtts-flag1" in eng._latents_cache
+
+    assert eng._bump_evict_epoch("xtts-flag1") is True
+    # Idempotent: a second call has nothing left to drop.
+    assert eng._bump_evict_epoch("xtts-flag1") is False
+    assert eng._bump_evict_epoch("xtts-never-cached") is False
+
+
+class _AcquisitionCountingLock:
+    """Wraps a real lock and counts `with` entries. Every `_latents_lock` use
+    in main.py is a context-manager use, so this observes all of them."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.acquisitions = 0
+
+    def __enter__(self) -> Any:
+        self.acquisitions += 1
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._inner.__exit__(*exc)
+
+    def locked(self) -> bool:
+        return self._inner.locked()
+
+
+def test_evict_voice_route_reads_and_pops_in_one_critical_section(monkeypatch, tmp_path) -> None:
+    """MIN-3 - the route read `stripped_id in coqui._latents_cache` under its
+    OWN `_latents_lock` acquisition and then popped under a second one inside
+    `_bump_evict_epoch`. A `_load_voice_latents` installing that voice in the
+    gap made the response say `evicted: false` for a call that did in fact
+    evict an entry - `/qwen/evict-voice` has always done both in one section.
+
+    Counting acquisitions is what discriminates: asserting the flag alone
+    passes on the two-section version too (the gap is empty in a
+    single-threaded test), which is exactly the placebo shape this branch
+    keeps producing. Two acquisitions == the gap exists."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-atomic-evict1")
+    eng._load_voice_latents("xtts-atomic-evict1")
+    assert "xtts-atomic-evict1" in eng._latents_cache
+
+    counting = _AcquisitionCountingLock(eng._latents_lock)
+    monkeypatch.setattr(eng, "_latents_lock", counting)
+    client = TestClient(main.app)
+
+    resp = client.post("/xtts/evict-voice", json={"voiceId": "xtts-atomic-evict1"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "evicted": True}
+    assert counting.acquisitions == 1, (
+        "the membership read and the pop must share ONE _latents_lock critical "
+        f"section; saw {counting.acquisitions} acquisitions"
+    )
+
+
+def test_manifest_write_is_atomic_a_failed_write_leaves_the_previous_one_intact(
+    monkeypatch, tmp_path
+) -> None:
+    """MIN-5 / M7 - `clone_voice` persisted the `.pt` atomically and then
+    wrote the sibling `.json` with a plain `open(json_path, "w")`, the exact
+    non-atomic call its own D-C rationale rejected. `open(..., "w")`
+    truncates FIRST, so a serialiser failure (or a `taskkill /T /F`, which is
+    how `npm start` tears the sidecar down on Windows) part-way through left
+    a TRUNCATED manifest where a valid one had been.
+
+    The stimulus is a real failure, not a patched writer: an unserialisable
+    `coquiVersion` makes `json.dump` emit the first two keys and then raise,
+    while `json.dumps` raises having touched no file at all. So the pre-fix
+    code corrupts the target and the post-fix code cannot. Asserting the file
+    merely EXISTS afterwards would pass on both."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, coqui_version="1.2.3-fake")
+    _clone(eng, "xtts-atomic-json1")
+    _pt_path, json_path = eng._voice_paths("xtts-atomic-json1")
+    good = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    assert good["coquiVersion"] == "1.2.3-fake"
+
+    # A non-string version - `getattr(TTS, "__version__")` is read verbatim
+    # into the manifest, so this reaches the serialiser as a real TypeError
+    # part-way through the document.
+    monkeypatch.setattr(sys.modules["TTS"], "__version__", object())
+
+    with pytest.raises(TypeError):
+        _clone(eng, "xtts-atomic-json1")
+
+    survived = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    assert survived == good, "a failed manifest write must leave the previous manifest intact"
+    assert not os.path.isfile(f"{json_path}.tmp"), "the temp sibling must be cleaned up"
+
+
+def test_manifest_temp_sibling_has_a_deterministic_purgeable_name(monkeypatch, tmp_path) -> None:
+    """M7's naming constraint. The GATE 1 Critical is that
+    `_atomic_torch_save`/`_atomic_wav_save` strand RANDOMLY named `mkstemp`
+    siblings that `purgeCloneArtifacts` - a fixed path list with no directory
+    sweep - can never reach, so a hard kill leaves the conditioning latents
+    and the raw human reference clip behind forever (Property 2). The
+    manifest's atomic write must not add a third unreachable name: its temp
+    is `<target>.tmp`, derivable from the target, so a fixed-path purge can
+    delete it."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    _pt_path, json_path = eng._voice_paths("xtts-atomic-json2")
+
+    replaces: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def _recording_replace(src: Any, dst: Any) -> None:
+        replaces.append((str(src), str(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(main.os, "replace", _recording_replace)
+    _clone(eng, "xtts-atomic-json2")
+
+    manifest_replaces = [r for r in replaces if r[1] == json_path]
+    assert len(manifest_replaces) == 1, "the manifest must land via a single os.replace"
+    assert manifest_replaces[0][0] == f"{json_path}.tmp"
+
+
+def test_clone_voice_route_rejects_a_non_prefixed_voice_id(monkeypatch, tmp_path) -> None:
+    """MIN-6 - `/xtts/clone-voice` accepted any non-empty `X-Voice-Id`, while
+    `synthesize()` enters its cloned branch ONLY for ids starting with
+    `XTTS_KEY_PREFIX`. A clone stored under a non-prefixed id therefore
+    succeeded (200, `.pt` + `.json` written, audition returned) and then, at
+    render time, fell through to the catalogue substitution path - a
+    successful clone whose renders are silently swapped for a stock speaker,
+    Property 1's exact shape. Assert no artifact is written, not just the
+    status: a 400 that still persisted the `.pt` would leave the trap armed."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "not-prefixed-uuid"},
+    )
+
+    assert resp.status_code == 400
+    assert main.CoquiEngine.XTTS_KEY_PREFIX in resp.json()["detail"]
+    pt_path, json_path = eng._voice_paths("not-prefixed-uuid")
+    assert not os.path.isfile(pt_path)
+    assert not os.path.isfile(json_path)
+
+
+def test_clone_voice_route_still_accepts_the_prefixed_id(monkeypatch, tmp_path) -> None:
+    """MIN-6 regression guard - the shipped producer
+    (`derive-engine-artifact.ts`, which always sends
+    `cloneStorageKey(engine, voiceUuid)`) must be unaffected by the new
+    boundary check."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-prefixed-ok"},
+    )
+
+    assert resp.status_code == 200
+    pt_path, _json_path = eng._voice_paths("xtts-prefixed-ok")
+    assert os.path.isfile(pt_path)
+
+
+def _engine_with_live_manifest(monkeypatch, tmp_path: Path) -> tuple[main.CoquiEngine, _FakeTTS]:
+    """An engine whose `_speakers` manifest is POPULATED, so the fail-soft
+    catalogue substitution path is actually live. With the default fake
+    (`_speakers` empty) that path is permissive and never substitutes, so a
+    test built on it could not observe a substitution even if one happened —
+    the placebo shape `test_synthesize_cloned_voice_renders_with_no_
+    substitution` already calls out."""
+    tts_model = _FakeXttsModel(config=_FakeXttsConfig())
+    tts_model.speaker_manager = types.SimpleNamespace(
+        name_to_id={main.CoquiEngine.FALLBACK_SPEAKER: 0, "Some Other Speaker": 1}
+    )
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    return eng, tts_instance
+
+
+def test_case_varied_clone_key_never_reaches_catalogue_substitution(
+    monkeypatch, tmp_path
+) -> None:
+    """GATE 1 sweep, third instance of the un-folded-clone-key class (Task 10a
+    fixed the first, the C4 fix the second).
+
+    `XTTS-<uuid>` did not start with the lower-case `XTTS_KEY_PREFIX`, so it
+    skipped the cloned-voice branch entirely and fell through to the fail-soft
+    catalogue path, which substituted a stock speaker. The Node-side fail-loud
+    guard that exists to catch exactly that (`tts/sidecar.ts`'s
+    `substitutedFrom.startsWith('xtts-')`) was case-sensitive too, so it
+    missed the identical input — a matched blind spot across both layers.
+
+    NTFS/APFS resolve case-insensitively, so `XTTS-<uuid>` reaches the very
+    same `.pt` the victim consented to; the string comparison disagreeing with
+    the filesystem is the whole bug.
+
+    The assertion spies on `self._tts.tts()` — the REAL substitution call —
+    rather than on `tts_model.inference()`, for the reason
+    `test_synthesize_missing_latents_never_falls_back_to_real_tts_call`
+    documents: asserting on `tts_model.*` can never observe a fallback."""
+    eng, tts_instance = _engine_with_live_manifest(monkeypatch, tmp_path)
+    _clone(eng, "xtts-case1")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()
+    tts_instance.tts_calls.clear()
+
+    with pytest.raises(main.VoiceNotDesignedError) as excinfo:
+        eng.synthesize("xtts_v2", "XTTS-case1", "hello there")
+
+    # Fail LOUD, and specifically not by rendering someone else's voice.
+    assert tts_instance.tts_calls == [], (
+        "a case-varied clone key must never reach the catalogue substitution "
+        f"path; it rendered {tts_instance.tts_calls!r}"
+    )
+    assert tts_model.infer_calls == []
+    assert "case-sensitive" in str(excinfo.value)
+
+
+def test_canonical_clone_key_with_a_mixed_case_uuid_still_renders(monkeypatch, tmp_path) -> None:
+    """The fold must reject a case-varied PREFIX without normalising the whole
+    key: the uuid segment's casing is Node's to choose, and the sidecar reads
+    and writes at the path Node's own `cloneStorageKey` derives. Lower-casing
+    the entire id would make the sidecar look for a file Node never wrote on
+    any case-SENSITIVE filesystem, and leave `purgeCloneArtifacts` deleting a
+    path the in-memory cache no longer matches. A canonical prefix with an
+    upper-case uuid is a normal, renderable voice."""
+    eng, tts_instance = _engine_with_live_manifest(monkeypatch, tmp_path)
+    _clone(eng, "xtts-MixedCaseUuid")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()
+    tts_instance.tts_calls.clear()
+
+    result = eng.synthesize("xtts_v2", "xtts-MixedCaseUuid", "hello there")
+
+    assert result.substituted_from is None
+    assert len(tts_model.infer_calls) == 1
+    assert tts_instance.tts_calls == []
+    # The cache/epoch key is the raw id, byte-identical to Node's key.
+    assert "xtts-MixedCaseUuid" in eng._latents_cache
+
+
+def test_synthesize_route_case_varied_clone_key_is_409_not_a_substituted_200(
+    monkeypatch, tmp_path
+) -> None:
+    """The wire-level shape of the same defect. Before the fold this returned
+    200 with `X-Voice-Substituted-From: XTTS-<uuid>` — audio of a stranger's
+    voice, which the Node guard then failed to reject. The user-visible
+    contract is a loud 409 and no audio at all."""
+    eng, _tts_instance = _engine_with_live_manifest(monkeypatch, tmp_path)
+    monkeypatch.setitem(main.ENGINES, "coqui", eng)
+    _clone(eng, "xtts-case-http1")
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/synthesize",
+        json={
+            "engine": "coqui", "model": "xtts_v2",
+            "voice": "XTTS-case-http1", "text": "hello there",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert "X-Voice-Substituted-From" not in resp.headers
+
+
+def test_clone_voice_route_rejects_a_case_varied_prefix(monkeypatch, tmp_path) -> None:
+    """The write side of the same rule. `/xtts/clone-voice` requires the exact
+    canonical prefix, so an artifact can never be persisted under a key
+    `synthesize` will later refuse — the two boundaries agree on one spelling
+    rather than one accepting what the other rejects."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "XTTS-case-write1"},
+    )
+
+    assert resp.status_code == 400
+    pt_path, _json_path = eng._voice_paths("XTTS-case-write1")
+    assert not os.path.isfile(pt_path)

@@ -247,6 +247,45 @@ def _atomic_wav_save(pcm: bytes, sample_rate: int, wav_path: str) -> None:
         raise
 
 
+def _atomic_json_write(text: str, json_path: str) -> None:
+    """Write `text` to json_path atomically: temp sibling -> flush -> fsync ->
+    `os.replace`. Same three-step shape as `_atomic_torch_save` /
+    `_atomic_wav_save` above (same directory, so `os.replace` is a
+    same-filesystem rename — atomic on POSIX *and* Windows, which matters
+    because this project's primary dev box is Windows), with two deliberate
+    differences:
+
+    1. The temp name is DETERMINISTIC (`<target>.tmp`), not a `mkstemp`
+       random suffix. A crash between create and replace strands the temp
+       file, and the Node-side purge (`purgeCloneArtifacts`) erases a fixed
+       path list with no directory sweep — a randomly-named leftover is
+       therefore unreachable by it forever, which is precisely the Property 2
+       retention hole GATE 1 raised against the two mkstemp helpers above.
+       A name derived from the target stays reachable by a fixed-path purge.
+       (Those two helpers keep their mkstemp naming here; changing it is the
+       purge lane's call, not this one's.) The `.json.tmp` name is also safe
+       on Windows — it is neither dot-leading nor extension-less, the shape
+       real torch's PyTorchFileWriter rejects.
+    2. It `fsync`s before the replace, so a power loss can't leave the
+       renamed file with unflushed (zero-filled) contents.
+
+    A same-named leftover from a previous crashed write is simply truncated
+    and rewritten, so this never accumulates more than one temp per target."""
+    tmp = f"{json_path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, json_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 _CODEC_TIMING: dict = {"total_ms": 0.0, "calls": 0}
 
 
@@ -1487,7 +1526,7 @@ class CoquiEngine(Engine):
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model unloaded.")
 
-    def _bump_evict_epoch(self, voice_id: str) -> None:
+    def _bump_evict_epoch(self, voice_id: str) -> bool:
         """Invalidate any cached (or in-flight) latents load for `voice_id`
         (fs-38 Wave 3c, Task 10's cache-epoch contract). Task 11 wires an
         HTTP route to this, mirroring `/qwen/evict-voice` — called on a
@@ -1498,10 +1537,23 @@ class CoquiEngine(Engine):
         before reading the .pt and re-checks it under `_latents_lock`
         immediately before installing — bumping it here mid-load means that
         load discards its result instead of caching it. Idempotent/cheap —
-        safe to call for a voice_id with no cached entry."""
+        safe to call for a voice_id with no cached entry.
+
+        Returns True iff a resident cache entry was actually dropped by THIS
+        call (GATE 1 MIN-3). The return value is computed inside the same
+        `_latents_lock` critical section as the pop so it cannot disagree with
+        it: `/xtts/evict-voice` used to read membership in one acquisition and
+        pop in a second, so a `_load_voice_latents` installing this voice in
+        the gap made the route answer `evicted: false` for a call that did in
+        fact evict an entry. `/qwen/evict-voice` has always done the pop and
+        the flag in one critical section; this now matches. Callers that only
+        want the invalidation (e.g. `clone_voice`'s re-clone path) may ignore
+        it. Lock discipline unchanged: this still takes `_latents_lock` ALONE
+        and never nests it under `_synth_lock`, preserving the sidecar's
+        established `_synth_lock` -> `_latents_lock` ordering."""
         with self._latents_lock:
             self._evict_epoch[voice_id] = self._evict_epoch.get(voice_id, 0) + 1
-            self._latents_cache.pop(voice_id, None)
+            return self._latents_cache.pop(voice_id, None) is not None
 
     def _load_voice_latents(self, voice_id: str) -> tuple[Any, Any, int]:
         """Return (gpt_cond_latent, speaker_embedding, epoch) for a cloned
@@ -1559,7 +1611,19 @@ class CoquiEngine(Engine):
         # that may not even have that card. `inference()` moves both
         # tensors to `self.device` anyway (xtts.py:505-506), so loading onto
         # cpu first costs nothing extra `[AC-I1]`.
-        saved = torch.load(pt_path, map_location="cpu", weights_only=False)
+        #
+        # weights_only=True is CHOSEN, not inherited (GATE 1 MIN-1): what
+        # `clone_voice` persists here is `{"gpt_cond_latent": tensor,
+        # "speaker_embedding": tensor}` (see `_atomic_torch_save`'s call site)
+        # — plain tensors in a plain dict, which the safe unpickler loads
+        # verbatim. Contrast `QwenEngine`'s `weights_only=False` uses, which
+        # carry an explicit reason (the cached prompt is a qwen_tts
+        # `VoiceClonePromptItem`, a custom class the safe loader rejects). No
+        # such reason exists here, and `pt_path` is derived from a
+        # CALLER-SUPPLIED `voice` field, so leaving the arbitrary-code-
+        # execution unpickler enabled would make any file that lands at
+        # `voices/xtts/<sanitised>.pt` executable at load time.
+        saved = torch.load(pt_path, map_location="cpu", weights_only=True)
         latents = (saved["gpt_cond_latent"], saved["speaker_embedding"])
 
         with self._latents_lock:
@@ -1607,9 +1671,77 @@ class CoquiEngine(Engine):
         # non-`xtts-`-prefixed request (a baked catalog speaker name, or any
         # other id) skips this branch entirely and falls through to the
         # existing fail-soft substitution logic, unchanged.
-        if voice.startswith(self.XTTS_KEY_PREFIX):
-            assert self._tts is not None
-            config = self._tts.synthesizer.tts_model.config
+        #
+        # The prefix test is CASE-FOLDED (GATE 1 sweep — third instance of
+        # this class: Task 10a fixed the first in voice-override-linked.ts,
+        # the C4 fix the second). `_voice_paths` builds `f"{safe}.pt"` and
+        # `_load_voice_latents` does `os.path.isfile` on it, and NTFS/APFS
+        # resolve paths case-insensitively — so on this project's primary dev
+        # box `XTTS-<uuid>` IS `xtts-<uuid>.pt` on disk. A case-SENSITIVE gate
+        # sent `XTTS-<uuid>` straight past this branch into the catalogue
+        # substitution path below, and the Node-side fail-loud guard
+        # (`tts/sidecar.ts`'s `substitutedFrom.startsWith('xtts-')`) missed it
+        # for the identical reason — both layers blind to the same input,
+        # which is precisely what defence-in-depth must not do.
+        #
+        # A case-varied PREFIX is then rejected outright rather than
+        # normalised, and the raw `voice` stays the key for every downstream
+        # lookup. Both halves of that are deliberate:
+        #   - Normalising (`_load_voice_latents(voice.lower())`) would lower
+        #     the UUID too, and a mixed-case uuid is legitimate — Node derives
+        #     the path from its OWN `cloneStorageKey`, so on a case-SENSITIVE
+        #     filesystem the sidecar would look for a file Node never wrote,
+        #     and `purgeCloneArtifacts` would delete a path the cache no
+        #     longer matches. Writing and reading must agree byte-for-byte
+        #     with Node's key.
+        #   - Folding only the TEST and then caching under the raw string
+        #     would key `_latents_cache`/`_evict_epoch` by `XTTS-<uuid>`,
+        #     so a render warmed that way would survive a revoke of
+        #     `xtts-<uuid>` — trading a substitution hole for a Property 2
+        #     one.
+        # Failing loud costs nothing real: the only shipped producer
+        # (`derive-engine-artifact.ts` / `cloneStorageKey`) always emits the
+        # canonical lower-case prefix, and `/xtts/clone-voice` requires it on
+        # the write side for the same reason.
+        if voice.lower().startswith(self.XTTS_KEY_PREFIX):
+            if not voice.startswith(self.XTTS_KEY_PREFIX):
+                raise VoiceNotDesignedError(
+                    f"Voice '{voice}' is not a canonical cloned-voice key — the "
+                    f"'{self.XTTS_KEY_PREFIX}' prefix is case-sensitive. Refusing rather than "
+                    "falling through to catalogue substitution."
+                )
+            # GATE 1 MIN-2 — this runs AFTER `_ensure_loaded` released
+            # `_synth_lock` and BEFORE the `with self._synth_lock:` below, so a
+            # racing `POST /unload` (Stop button, or the Analysing screen
+            # auto-evicting Coqui for the analyzer LLM) can null `self._tts`
+            # exactly here. Reading `self._tts` TWICE — once for the assert,
+            # once for the deref — meant the second read could see None: an
+            # `AssertionError`, or under `python -O` (asserts stripped) an
+            # `AttributeError: 'NoneType' object has no attribute
+            # 'synthesizer'`, either way a generic 500 mid-render.
+            #
+            # Fixed with a single local capture rather than by taking
+            # `_synth_lock`: holding the lock here would serialise this read
+            # behind any in-flight multi-second forward and so delay the
+            # `_load_voice_latents` disk read below, which that method's own
+            # docstring deliberately keeps OFF the lock. The capture is
+            # atomic under the GIL, and keeping our own reference means the
+            # model object cannot be torn out from under the deref.
+            #
+            # `del tts` is load-bearing, not tidiness: a local reference held
+            # across the (seconds-long) latents load + forward would keep the
+            # OLD model alive past `unload()`'s `self._tts = None`, so its
+            # `gc.collect()` + `empty_cache()` could not reclaim that VRAM and
+            # the next idempotent `/load` would allocate a SECOND copy — the
+            # exact leak `unload()`'s docstring describes. Only the extracted
+            # list of language codes outlives this block.
+            tts = self._tts
+            if tts is None:
+                raise RuntimeError(
+                    "Coqui model was unloaded before this render started — reload it and retry."
+                )
+            supported_languages = list(tts.synthesizer.tts_model.config.get("languages", []))
+            del tts
             # Config-faithful language gate `[AC-C3]` — mirrors `Xtts.synthesize`'s
             # own guard (xtts.py:422-423) EXACTLY, quirk included: that upstream
             # assert is `"zh-cn" if language == "zh" else language in
@@ -1621,12 +1753,21 @@ class CoquiEngine(Engine):
             # unsupported language would reach deep into the GPT forward before
             # failing, instead of failing loud with an actionable error now.
             language_ok = (
-                True if effective_language == "zh" else effective_language in config.get("languages", [])
+                True if effective_language == "zh" else effective_language in supported_languages
             )
             if not language_ok:
-                raise VoiceNotDesignedError(
+                # GATE 1 MIN-4 — a DISTINCT error type, not a bare
+                # `VoiceNotDesignedError`: /synthesize maps the latter to
+                # "Voice '<v>' has not been designed yet", whose implied remedy
+                # (clone it again) is wrong and cannot help — the voice IS
+                # cloned, the loaded model just can't speak this language.
+                # Subclasses `VoiceNotDesignedError` so every OTHER handler
+                # keeps treating it exactly as before (fail loud, no
+                # catalogue fallback — Property 1); only /synthesize, which
+                # catches this narrower type first, reports the real reason.
+                raise VoiceLanguageUnsupportedError(
                     f"Voice '{voice}' cannot render in language '{effective_language}' — "
-                    f"not supported by the loaded XTTS model (supported: {config.get('languages', [])})."
+                    f"not supported by the loaded XTTS model (supported: {supported_languages})."
                 )
             gpt_cond_latent, speaker_embedding, latents_epoch = self._load_voice_latents(voice)
             # `_infer_from_latents` must be called under `_synth_lock` (its own
@@ -1890,16 +2031,26 @@ class CoquiEngine(Engine):
 
             import json as _json  # noqa: PLC0415
 
-            with open(json_path, "w", encoding="utf-8") as fh:
-                _json.dump(
+            # GATE 1 MIN-5 — atomic, matching the `.pt` beside it. D-C above
+            # rejected Coqui's `CloningMixin` partly because "a crash mid-write
+            # would leave a corrupt artifact", then wrote this sibling manifest
+            # with exactly the plain `open(..., "w")` it rejected: a kill
+            # between truncate and write left a TRUNCATED manifest where a
+            # valid one had been. Serialise to a string first so `_json.dump`
+            # can never half-write the target — only a fully-formed document
+            # is ever `os.replace`d into place.
+            _atomic_json_write(
+                _json.dumps(
                     {
                         "voiceId": voice_id,
                         "clone": True,
                         "coquiVersion": coqui_version,
                         "modelId": model_id,
                     },
-                    fh, ensure_ascii=False, indent=2,
-                )
+                    ensure_ascii=False, indent=2,
+                ),
+                json_path,
+            )
 
             # Audition preview — via the shared low-level inference helper
             # Task 10's cached-latents synth branch will also call, so both
@@ -3234,6 +3385,17 @@ def _resample24k(wav: Any, sr: int) -> "np.ndarray":
 
 class VoiceNotDesignedError(RuntimeError):
     """Base voice has no cached .pt — design it before minting a variant."""
+
+
+class VoiceLanguageUnsupportedError(VoiceNotDesignedError):
+    """The voice EXISTS and its artifact loaded fine — the loaded model just
+    doesn't list the requested language (GATE 1 MIN-4). Deliberately a
+    SUBCLASS of `VoiceNotDesignedError`: both are fail-loud, no-fallback
+    conditions (Property 1), so every existing `except VoiceNotDesignedError`
+    keeps its current behaviour unchanged. The split exists only so
+    /synthesize can report the actual reason instead of "has not been
+    designed yet", whose implied remedy (re-clone the voice) is wrong here —
+    re-cloning cannot add a language to the model's config."""
 
 
 class Base17UnavailableError(Exception):
@@ -7906,6 +8068,26 @@ async def xtts_clone_voice(req: Request) -> Response:
     voice_id = (req.headers.get("X-Voice-Id") or "").strip()
     if not voice_id:
         raise HTTPException(status_code=400, detail="X-Voice-Id header is required.")
+    # GATE 1 MIN-6 — enforce at the boundary that WRITES the artifact the
+    # invariant `synthesize()` later relies on. That method enters its
+    # cloned-voice branch ONLY for `voice.startswith(XTTS_KEY_PREFIX)`; a
+    # clone accepted under a non-prefixed id would persist a perfectly good
+    # `.pt`, return a 200 + audition, and then at render time fall through to
+    # the catalogue substitution path — a successful clone whose renders are
+    # silently swapped for a stock speaker (Property 1's exact shape). The
+    # only shipped producer of this header (derive-engine-artifact.ts) always
+    # sends `cloneStorageKey(engine, voiceUuid)`, so this is defence in depth
+    # — but the invariant was asserted only in a comment and never checked.
+    if not voice_id.startswith(CoquiEngine.XTTS_KEY_PREFIX):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"X-Voice-Id must be a cloned-voice storage key starting with "
+                f"'{CoquiEngine.XTTS_KEY_PREFIX}' — /synthesize routes cloned voices on that "
+                "prefix, so a clone stored under any other id would render as a "
+                "substituted catalogue speaker."
+            ),
+        )
 
     coqui = ENGINES.get("coqui")
     if not isinstance(coqui, CoquiEngine):
@@ -8049,10 +8231,21 @@ async def xtts_evict_voice(req: Request) -> Response:
     coqui = ENGINES.get("coqui")
     evicted = False
     if isinstance(coqui, CoquiEngine):
-        stripped_id = voice_id.strip()
-        with coqui._latents_lock:
-            evicted = stripped_id in coqui._latents_cache
-        coqui._bump_evict_epoch(stripped_id)
+        # GATE 1 MIN-3 — ONE critical section for the membership read and the
+        # pop (`_bump_evict_epoch` returns whether it dropped an entry), so
+        # the reported flag can never disagree with what was actually
+        # evicted. The previous shape read membership under its own
+        # `_latents_lock` acquisition and popped under a second one, which let
+        # a `_load_voice_latents` install this voice in the gap and be
+        # silently dropped while the response still said `evicted: false`.
+        #
+        # NOT case-folded, deliberately: `synthesize` keys `_latents_cache`/
+        # `_evict_epoch` by the RAW voice id (see its cloned branch — it
+        # refuses a case-varied prefix outright rather than normalising, so
+        # the only keys that can ever be cached are byte-identical to Node's
+        # own `cloneStorageKey`). Folding here would look up a key that can
+        # never exist and silently evict nothing.
+        evicted = coqui._bump_evict_epoch(voice_id.strip())
     return JSONResponse({"ok": True, "evicted": evicted})
 
 
@@ -8161,6 +8354,24 @@ async def synthesize(req: Request) -> Response:
                 result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
         else:
             result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+    except VoiceLanguageUnsupportedError as exc:
+        # GATE 1 MIN-4 — MUST precede the `VoiceNotDesignedError` arm below
+        # (this is a subclass of it, so the broader arm would otherwise
+        # swallow it). The voice is cloned and its artifact loaded; the loaded
+        # XTTS model simply doesn't list this language. Reporting that as
+        # `voice_not_designed` told the user to clone the voice again — a
+        # remedy that cannot work. `str(exc)` is safe to echo: the message is
+        # built entirely from the requested voice/language and the model's own
+        # config language list (see `CoquiEngine.synthesize`), never from a
+        # traceback or a third-party exception string.
+        log.warning(
+            "/synthesize: language unsupported — engine=%s voice=%s: %s",
+            engine_id, voice, exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "voice_language_unsupported"},
+            status_code=409,
+        )
     except VoiceNotDesignedError as exc:
         # #1063 — the requested voice/variant has no cached embedding on disk.
         # That's a bad-input condition (design the voice/variant first), not an
