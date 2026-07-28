@@ -44,9 +44,12 @@ discuss a change before sending a PR.
 
 ## Branching model
 
-Trunk-based with short-lived feature branches, isolated per agent via worktrees.
+Trunk-based with short-lived feature branches, **each in its own worktree**.
 One branch is one cohesive change — small enough to hold in your head, isolated
-enough that a parallel run can't trip over it.
+enough that a parallel run can't trip over it. Worktrees are not just for
+parallel work: every piece of work gets one, so the primary checkout stays clean
+and concurrent sessions can't steal each other's HEAD. Only changes clearing the
+[trivial bar](CLAUDE.md#the-trivial-bar) go direct to `main`.
 
 ### Branch naming
 
@@ -70,10 +73,12 @@ slug does NOT have to mirror the eventual commit subject.
   easier to bisect by scope tag).
 - Delete the branch after merge.
 
-### Worktrees for parallel work
+### Worktrees
 
-When two or more agents (or you + an agent) need to work in parallel, use
-`git worktree` so each has its own working copy off the shared `.git`:
+Every branch gets its own working copy off the shared `.git`. The one-command
+path is `node scripts/wt-new.mjs <branch>` (below) — it also assigns
+non-clashing ports and installs deps, which activates the husky hooks. The raw
+form:
 
 ```powershell
 # From the repo root:
@@ -86,6 +91,10 @@ git worktree remove ../wt-server-retry
 
 The Agent tool's `isolation: "worktree"` setting does exactly this for you when
 delegating work — prefer it over running multiple agents on the same checkout.
+Note it creates the tree **only**: no deps, and no active git hooks (`.husky/_`
+is git-ignored, so git silently runs none). Run `npx husky` plus both
+`node_modules` junctions in such a tree before trusting a commit — see
+[CLAUDE.md "Worktree setup"](CLAUDE.md#worktree-setup-do-this-before-the-first-commit).
 
 ### Scope discipline > merge magic
 

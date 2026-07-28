@@ -48,15 +48,26 @@ Minimum code that solves the problem — nothing speculative. (Reinforces
 
 ### Surgical changes
 
-Touch only what you must; clean up only your own mess. (Reinforces the
+**Fix what's broken; don't restyle what works.** (Reinforces the
 one-branch-one-cohesive-change rule under "Branching workflow".)
 
-- Don't "improve" adjacent code, comments, or formatting; don't refactor
-  what isn't broken. Match existing style even if you'd do it differently
-  (see "Conventions worth preserving").
-- Remove imports/variables/functions that YOUR changes orphaned — but
-  leave pre-existing dead code alone; mention it rather than deleting it.
-- The test: every changed line traces directly to the user's request.
+The seam is defect vs. taste, not near vs. far:
+
+- **Taste is off-limits.** Don't "improve" adjacent code, comments, or
+  formatting; don't refactor, rename, or reorganise what isn't broken. Match
+  existing style even if you'd do it differently (see "Conventions worth
+  preserving"). "I'd have written it another way" is never a reason to touch
+  a line.
+- **Defects in code you're already touching get fixed** — not noted, not
+  deferred, not left for a cleanup pass — provided they clear the fix-now bar
+  in [Execution model → Incidental
+  findings](#incidental-findings-report-judge-dispatch). A defect that needs
+  judgement or design is filed instead, and the ticket is the deliverable.
+- **Remove what YOUR changes orphaned** (imports, variables, functions).
+  Pre-existing dead code is a finding, not a licence: route it through the
+  same report-judge-dispatch path rather than deleting it on sight.
+- The test: every changed line traces to the user's request **or to a defect
+  that request exposed** — and the PR body says which.
 
 ### Goal-driven execution
 
@@ -71,8 +82,30 @@ Define success criteria, then loop until verified.
 
 ## Execution model (default for all non-trivial work)
 
-All substantial work runs **sub-agent-driven, with design and implementation
-as SEPARATE threads.** Three phases, each with a clean handoff:
+**All work is sub-agent-executed by default.** The main thread coordinates,
+curates context, and **judges**; it does not produce. Writing code a subagent
+could write is a violation of this section, not a shortcut through it — the
+only work that stays inline is work that clears [the trivial
+bar](#the-trivial-bar) below, plus validation, which is inherently the main
+thread's job because it holds the session's accumulated context and the
+subagents don't.
+
+**Dispatch fresh agents, not forks.** Execution subagents start cold and are
+briefed from the ticket: the issue's implementation-brief comment plus the plan
+doc it links. A fork inherits this session's context, which defeats the point —
+it re-pollutes the thread the split exists to keep clean, and it ignores [Model
+routing](#model-routing) (forks always inherit the dispatching model). Forks
+remain correct for **read-only** work where inheriting context IS the point —
+mid-task "search this and report back" fan-out — never for producing a diff.
+
+**The brief is the contract.** A fresh agent knows only what it is told, so the
+issue comment + plan doc must be self-sufficient. That is what phase 1 exists to
+produce. Practically it means the fork in the road is **trivial, or ticketed** —
+if there is no ticket to brief from and the work isn't trivial, the missing
+ticket is the first task, not an excuse to type the code yourself.
+
+Substantial work additionally splits **design and implementation into SEPARATE
+threads.** Three phases, each with a clean handoff:
 
 **1. Design & brainstorming — its own thread.** Use `superpowers:brainstorming`
 → `superpowers:writing-plans` to produce the spec/plan. Non-trivial specs/plans
@@ -90,12 +123,13 @@ spec-approved and plan-approved checkpoints.
 **2. Implementation — a separate thread.** Picks up the ticket + its
 implementation-brief comment as the sole source of requirements. Runs
 `superpowers:subagent-driven-development` as the **primary** mode: cut the
-branch, then dispatch a fresh implementer subagent per task, a task-review
-subagent (spec + quality) after each, and a broad whole-branch `code-review`
-at the end — models chosen per the Model-routing table. The controlling thread
-coordinates and curates context; it does **not** hand-write task code a
-subagent could do. Keep the progress ledger (`.superpowers/sdd/progress.md`) so
-the run survives compaction.
+worktree + branch (per Branching workflow), then dispatch a fresh implementer
+subagent per task, a task-review subagent (spec + quality) after each, and a
+broad whole-branch `code-review` at the end — models chosen per the
+Model-routing table. The controlling thread coordinates and curates context; it
+does **not** hand-write task code a subagent could do. Keep the progress ledger
+(`.superpowers/sdd/progress.md`) so the run survives compaction — including
+every incidental finding and its disposition, per below.
 
 **3. Ship.** PR with `Closes #NN`, the mandatory `code-review` gate, merge —
 per the Before-shipping checklist and Branching workflow.
@@ -104,9 +138,74 @@ per the Before-shipping checklist and Branching workflow.
 thread pollutes both. The issue-comment handoff lets an implementation thread
 (or a teammate) execute cold from the ticket alone.
 
-**When to skip:** trivial, immediately-shipped fixes (typo, one-line doc/config
-tweak) run inline — no design thread, no per-task subagent. Same "trivial" bar
-as the Branching workflow's direct-to-`main` carve-out.
+### The trivial bar
+
+**One definition, three uses.** Clearing this bar is what lets a change skip the
+worktree + branch, skip the subagent, and skip the design thread. Nothing else
+does.
+
+A change is trivial when **nothing can break and nothing needs review**:
+
+- no runtime code, no config, no test, no CI, no dependency;
+- the correct fix is unarguable — one right answer, nothing to weigh;
+- no regression test is owed, because there is no behaviour to regress.
+
+In practice that is a typo, a dead comment, a single-line doc tweak, and very
+little else. **If you would want a `code-review` pass on it, it is not
+trivial.** If a reviewer could reasonably ask "why this way?", it is not
+trivial. **When in doubt, it is not trivial** — an unnecessary branch costs
+thirty seconds; an unreviewed change on `main` costs whatever it costs.
+
+Invoking the bar is **announced, not silent**: say so in the end-of-turn summary
+so the shortcut can be redirected. It should be rare. A run in which several
+changes were "trivial" is a run that mis-scoped the work.
+
+### Incidental findings: report, judge, dispatch
+
+Long-running agent work turns up defects in passing — in code being touched, in
+code next door. These are **fixed as found, not accumulated into a cleanup pass
+after the fact.** The accumulation is the failure mode: it converts a day of
+agent work into a day of human janitorial work.
+
+The subagent's behaviour is unchanged — **it reports, it does not
+opportunistically fix.** Judgement stays in the main thread:
+
+1. **The subagent reports the finding** in its return value (implementer or
+   task-review agent alike). It does not widen its own diff to fix it.
+2. **The main thread judges it** against the fix-now bar, **at the task boundary
+   where it surfaced** — not at the end of the branch. Deferring the triage
+   recreates the pile with extra steps.
+3. **Clears the bar → dispatch a dedicated fix agent immediately.** Fresh,
+   narrowly scoped: one finding, one fix, one paired test, briefed from the
+   report. Not "and while you're there."
+4. **Doesn't clear it → file it** and move on: a GitHub issue in the same round,
+   plus the thin `docs/BACKLOG.md` row, per "The backlog". A finding parked only
+   in a plan's "suggested follow-ups" is a finding being lost.
+
+**The fix-now bar.** All four must hold:
+
+- the defect is in code the branch already touches, or directly adjacent to it;
+- the fix is **obvious** — one defensible answer, no options to weigh;
+- it needs no interface, contract, or behaviour decision;
+- it is coverable by a test in this same PR, and needs no regression plan of
+  its own.
+
+Anything else — two defensible fixes, a changed signature, widened blast radius
+— is design work, and design work goes through phase 1.
+
+**Cost is not an objection.** A finding that clears the bar is by definition the
+Model-routing table's "single well-specified bug fix with a clear repro and no
+design decisions" — **Cheap tier**. The judgement is yours and stays cheap; the
+typing is Haiku's. More dispatches is the intended outcome, not a side effect.
+
+**Nothing is dropped silently.** Every finding lands in the progress ledger as
+either fixed-here (with the fix agent's SHA) or deferred-with-issue-number. A
+finding that is neither is the exact leak this protocol closes. Incidental
+fixes are also **declared in the PR body** ("Also fixed, found in passing: …")
+— an unannounced fix reads as scope creep to a reviewer.
+
+This is the operative half of "Surgical changes": *fix what's broken, don't
+restyle what works.*
 
 ## Model routing
 
@@ -275,7 +374,7 @@ not replace them.
   router/redux/layout seams (Vitest+jsdom can lie about layout, focus, and
   hashchange timing). One Playwright spec per feature surface is the bar.
 - **Flaky tests** route through `quarantinedIt` (`server/src/test-utils/quarantine.ts`) into the non-gating lane (`npm run test:quarantine`); each is logged in `docs/testing/flaky-register.md`. Never add a raw `it.skipIf(process.env.CI)`.
-- **Behaviour only real hardware can prove** — a live GPU, a real sidecar, a real analyzer, a real book — is logged in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) when it cannot be verified inside its own PR. Complex work routinely cannot be accepted at PR time, so **owed acceptance never blocks a merge — it converts into a row there.** The add/remove rule is Before-shipping checklist step 3.
+- **Behaviour only real hardware can prove** — a live GPU, a real sidecar, a real analyzer, a real book — is logged in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) when it cannot be verified inside its own PR. Complex work routinely cannot be accepted at PR time, so **owed acceptance never blocks a merge — it converts into a row there.** *Recording* that debt does block: the register, the per-feature run sheet, and the live HTML register linked from the register's header all move in the shipping PR. The add/remove rule is Before-shipping checklist step 3.
 
 Harnesses (five tiers):
 
@@ -351,7 +450,14 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 
 1. **Update or create the regression plan** under `docs/features/` — _for substantial/cross-cutting work._ New feature → new file from `TEMPLATE.md` (and tag the issue `needs-plan`). Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`). Small/localized items skip the plan doc — the issue body + paired test is the spec.
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
-3. **Record any owed on-box acceptance** in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md). If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — and you did not prove it here, **add a row in this PR.** Not "later", not in a follow-up: later is when it gets lost. Say what to observe (concretely, not "verify it works"), the hardware prerequisites, and where the criteria live. Group it with whatever shares its setup. **This is not a merge blocker** — complex work often cannot be accepted at PR time, and a PR must not sit open waiting for a contended box. A row **comes out** only when (a) the acceptance was run on the box and the result recorded, or (b) the repo owner explicitly confirms it was exercised on a live book or books; either way record what was observed, by whom, and when. "Tests pass, so it's presumably fine" never removes a row.
+3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
+   - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
+   - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
+   - **the live HTML register linked from the register's own header** — updated via the `url` recorded there, never re-published from scratch. Publishing without that URL mints a *second* register and is the most likely way this rule gets silently broken. Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over.
+
+   **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
+
+   When adding a row, say what to observe (concretely, not "verify it works"), the hardware prerequisites, and where the criteria live. A row **comes out** only when (a) the acceptance was run on the box and the result recorded, or (b) the repo owner explicitly confirms it was exercised on a live book or books; either way record what was observed, by whom, and when — an outcome, not a deletion. "Tests pass, so it's presumably fine" never removes a row.
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
 6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [Model routing → PR-gate issue verification](.claude/skills/model-routing/SKILL.md#pr-gate-issue-verification)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
@@ -570,22 +676,91 @@ multi-scope syntax, worktrees for parallel agent work) are documented in
 
 ## Branching workflow (REQUIRED for every non-trivial change)
 
-Before starting any non-trivial work — new feature, bug fix, refactor, plan
-implementation — cut a branch from `main` rather than committing directly:
+**Every piece of work gets its own worktree AND its own branch. Never ride
+`main`.** This holds for solo, sequential work as much as for parallel agents —
+worktrees are not a parallelism device here, they are the isolation boundary
+that keeps the primary checkout clean and keeps concurrent sessions from
+stealing each other's HEAD.
 
-1. **Cut the branch first.** `git switch -c <type>/<scope>-<slug>` off the
-   latest `main`. `<type>` and `<scope>` come from the
+Before starting any non-trivial work — new feature, bug fix, refactor, plan
+implementation:
+
+1. **Create the worktree and branch first, off the latest `main`.** The branch
+   is `<type>/<scope>-<slug>`, with `<type>` and `<scope>` from the
    [commit-convention vocabulary](CONTRIBUTING.md#commit-convention). Examples:
    `feat/server-batch-retry`, `fix/frontend-voice-swatch-click`,
-   `docs/docs-plan-39`.
-2. **Land all commits for that piece of work on the branch.** Do not mix
-   unrelated work on the same branch — one branch = one cohesive change.
-3. **Surface the branch name in your end-of-turn summary**, along with the
-   commit SHAs, so the user can review the diff and decide when to merge.
-4. **Direct-to-`main` is only for trivial, immediately-shipped fixes** (typo,
-   dead-comment removal, single-line doc tweak). Even then, call out the
-   shortcut explicitly in the end-of-turn summary so the user can redirect
-   to a branch if they disagree.
+   `docs/docs-plan-39`. A worktree created with an auto-generated name gets
+   its branch renamed to that shape immediately, not at merge time.
+2. **Make the worktree real before trusting it** — see the setup checklist
+   below. A fresh worktree's hooks silently no-op, so an unprepared one gives
+   you the *appearance* of a gate with none of the enforcement.
+3. **Land all commits for that piece of work on that branch.** Do not mix
+   unrelated work on one branch — one branch = one cohesive change.
+4. **Surface the worktree path and branch name in your end-of-turn summary**,
+   along with the commit SHAs, so the user can review the diff and decide when
+   to merge.
+5. **Tear the worktree down deliberately** once merged — junctions first, then
+   the worktree. See the teardown recipe below.
+
+### Worktree setup (do this before the first commit)
+
+**Preferred: `node scripts/wt-new.mjs <type>/<scope>-<slug>`.** One command for
+branch + worktree + non-clashing port assignment + both `npm install`s — and the
+root install activates husky via `prepare`, so the tree is gated from its first
+commit. See [CONTRIBUTING.md "Running multiple Claude Code
+conversations"](CONTRIBUTING.md#running-multiple-claude-code-conversations).
+
+**A tool-created worktree is NOT set up for you.** `EnterWorktree` and the Agent
+tool's `isolation: "worktree"` create the tree and nothing else — no
+dependencies and, critically, **no active git hooks**. `core.hooksPath` is
+inherited but resolves per-worktree, and `.husky/_` is git-ignored, so a fresh
+checkout never carries it. Git finds no hook and runs none, **silently**:
+invalid commit messages sail through, pre-push verify never fires. In that case:
+
+1. **`npx husky`** in the worktree — regenerates `.husky/_`. This is the fix.
+   Junctioning `node_modules` does **not** activate hooks. `npm install` does
+   (via `prepare`) but is heavy, and *replaces* an existing junction with a real
+   directory, which changes teardown.
+2. **Junction `node_modules` AND `server/node_modules`** from the primary
+   checkout — the cheap alternative to installing. Frontend tooling resolves via
+   root alone, so `server/` is easy to forget and fails the server test legs
+   with "vitest not found".
+3. **Verify both.** `ls -d .husky/_ && git config core.hooksPath`, and
+   `fsutil reparsepoint query <link>` (or `(Get-Item $p -Force).LinkTarget`) for
+   each junction — a relative `..` target resolves against the shell's CWD at
+   creation time, not the link's own directory, so an off-by-one silently points
+   at nothing while `ls` still looks plausible.
+4. **Never treat hook output as proof of verification in a worktree.** Hook
+   output has been observed looking entirely genuine — real timings, real test
+   counts — while gating nothing. If it matters, run
+   `npm run verify:fast:branch` by hand.
+
+### Worktree teardown
+
+Drop the reparse points **first**, then remove the worktree — `git worktree
+remove` / `Remove-Item -Recurse` can follow a junction and delete the *real*
+`node_modules` in the primary checkout. Use
+`[System.IO.Directory]::Delete($p, $false)` or `(Get-Item $j -Force).Delete()`;
+both remove the link only. `cmd /c rmdir` from the Bash tool **silently no-ops
+and returns 0**, so verify removal with `Test-Path` on both the junction and its
+target rather than trusting an exit code. If a path was converted to a real
+directory by an `npm install`, that one needs `Remove-Item -Recurse -Force`.
+
+### The two carve-outs
+
+**Trivial changes may go direct to `main`** — same [trivial
+bar](#the-trivial-bar) as the Execution model's, no separate definition. Nothing
+can break, nothing needs review, and you would not want a `code-review` pass on
+it. **Announce it in the end-of-turn summary** so the user can redirect to a
+branch if they disagree. This should be rare; when in doubt, branch.
+
+**Git-ignored artifacts are produced in the primary checkout, not a worktree.**
+`brand/`, `mockups/`, marketing captures, and anything else outside version
+control do not travel with the branch and are **destroyed by worktree
+teardown**. Capture pipelines also write relative to their own checkout, so
+running them from a worktree scatters output somewhere nobody will look. Do that
+work in the primary checkout and say so; the committed result (e.g. rendered
+PNGs under `public/`) still lands via a normal worktree + branch.
 
 ### Opening the PR
 
@@ -626,11 +801,15 @@ and [215](docs/features/215-ci-label-gated-verify.md); current design:
 
 ### Parallel agents
 
-When spawning implementation agents via the Agent tool for work that can run
-in parallel:
+Worktrees are mandatory for all work, not just parallel work (see above). What
+parallelism adds is that each agent needs its **own** one, and that scopes must
+not overlap. When spawning implementation agents via the Agent tool for work
+that can run in parallel:
 
 - Use `isolation: "worktree"` so each agent gets its own working tree off the
   shared `.git`. Two agents on the same checkout will trip over each other.
+  Each of those trees needs the same setup as any other — `npx husky` and both
+  `node_modules` junctions — or the agent commits ungated.
 - Give each agent a non-overlapping scope per the [scope discipline table](CONTRIBUTING.md#scope-discipline--merge-magic).
   Two agents in `frontend/src/components/` will collide; one in `frontend` +
   one in `sidecar` will not.
@@ -657,9 +836,10 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
 ### Planning agents
 
 Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,
-so they don't need their own branch. But the implementation work that follows
-a plan does — when you act on a plan, step 1 is cutting the branch named after
-the plan number (e.g. `feat/frontend-plan-38`). This is the phase-1→phase-2
+so they don't need their own worktree or branch. But the implementation work
+that follows a plan does — when you act on a plan, step 1 is cutting the
+worktree + branch named after the plan number (e.g.
+`feat/frontend-plan-38`). This is the phase-1→phase-2
 boundary of the [Execution model](#execution-model-default-for-all-non-trivial-work):
 the design thread ends at the ticket + handover-brief comment, and cutting the
 branch is the implementation thread's first act.
