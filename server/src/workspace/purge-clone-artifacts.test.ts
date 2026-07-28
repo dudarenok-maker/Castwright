@@ -248,6 +248,67 @@ describe('purgeCloneArtifacts', () => {
     warnSpy.mockRestore();
   });
 
+  /* GATE 1 fix (C5) — the sidecar's `_atomic_torch_save`/`_atomic_wav_save`
+     stage through `tempfile.mkstemp(prefix=f"{basename}.", suffix=".tmp")`
+     and only unlink in an `except BaseException` handler, which a hard kill
+     (`taskkill /T /F`, an OOM kill mid-derive) skips. The names are RANDOM,
+     so a fixed path list cannot reach them — revoke reported clean erasure
+     while the latents AND the raw human reference clip survived. */
+  it('GATE 1 C5: erases crash-orphaned <key>.<rand>.tmp siblings a fixed path list cannot name', async () => {
+    // Exactly the two shapes main.py can strand in voices/xtts.
+    const strandedPt = join(paths.xttsVoicesDir(), 'xtts-u1.pt.a1b2c3.tmp');
+    const strandedWav = join(
+      paths.xttsVoicesDir(),
+      'xtts-u1.derive-src.tmp.wav.d4e5f6.tmp', // the real person's source audio
+    );
+    // ...and the qwen equivalents, whose writes use the same helpers.
+    const strandedQwenPt = join(paths.qwenVoicesDir(), 'qwen-u1.pt.9z8y7x.tmp');
+    const strandedQwen17b = join(paths.qwenVoicesDir(), 'qwen-u1__1.7b.pt.5w4v3u.tmp');
+    const strandedQwenMasterWav = join(paths.qwenVoicesDir(), 'qwen-u1__master.wav.2t1s0r.tmp');
+    for (const f of [
+      strandedPt,
+      strandedWav,
+      strandedQwenPt,
+      strandedQwen17b,
+      strandedQwenMasterWav,
+    ]) {
+      writeFileSync(f, 'orphaned-bytes');
+    }
+
+    const result = await purge.purgeCloneArtifacts('u1');
+
+    for (const f of [
+      strandedPt,
+      strandedWav,
+      strandedQwenPt,
+      strandedQwen17b,
+      strandedQwenMasterWav,
+    ]) {
+      expect(existsSync(f)).toBe(false);
+    }
+    expect(result.failed).toEqual([]);
+  });
+
+  /* The anchoring half of the same fix. uuids come from randomUUID()/nanoid(),
+     so one voice's key is readily a string-prefix of another's — an
+     unanchored `startsWith(key)` sweep would erase a DIFFERENT person's
+     consented voice, turning a Property 2 fix into a data-loss bug. */
+  it('GATE 1 C5: the sweep is anchored — a longer uuid sharing the prefix is untouched', async () => {
+    const victimPt = seedXtts('xtts-u1234', 'pt'); // 'u1' is a prefix of 'u1234'
+    const victimTmp = join(paths.xttsVoicesDir(), 'xtts-u1234.pt.aaaaaa.tmp');
+    writeFileSync(victimTmp, 'other-voice-bytes');
+    const victimQwenPt = seed('qwen-u1234', 'pt');
+    // Same uuid, an artifact key that merely SHARES the base — must survive.
+    const ownTarget = seedXtts('xtts-u1', 'pt');
+
+    await purge.purgeCloneArtifacts('u1');
+
+    expect(existsSync(ownTarget)).toBe(false); // its own artifact still goes
+    expect(existsSync(victimPt)).toBe(true); // ...but not the other voice's
+    expect(existsSync(victimTmp)).toBe(true);
+    expect(existsSync(victimQwenPt)).toBe(true);
+  });
+
   it('removes the entry dir only when deleteEntryDir is set', async () => {
     await purge.purgeCloneArtifacts('u1');
     expect(removeEntryDir).not.toHaveBeenCalled();

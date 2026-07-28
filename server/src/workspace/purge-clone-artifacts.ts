@@ -10,8 +10,8 @@
    round risks the sidecar lazily reloading a "deleted" voice from disk
    between the evict and the unlink. */
 
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, rm } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 // Review I5 — qwenVoicePtPath now comes from paths.js, its actual home
 // (alongside its qwenVoiceSidecarPath/qwenVoiceWavPath siblings), not from
 // routes/qwen-voice.js. That route module re-exports it only for its own
@@ -22,9 +22,11 @@ import {
   qwenVoicePtPath,
   qwenVoiceSidecarPath,
   qwenVoiceWavPath,
+  qwenVoicesDir,
   xttsVoiceDeriveSrcTmpWavPath,
   xttsVoiceLatentsPath,
   xttsVoiceSidecarPath,
+  xttsVoicesDir,
 } from './paths.js';
 import { entryDir, removeEntryDir, updateEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
@@ -56,6 +58,77 @@ async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Pr
       err,
     );
     return false;
+  }
+}
+
+/** GATE 1 fix (C5) — erase every file in `dir` that belongs to one of this
+    voice's artifact keys, instead of only the fixed, deterministic paths the
+    `files` list below names.
+
+    Why a sweep is required: the sidecar's `_atomic_torch_save` /
+    `_atomic_wav_save` (main.py) stage each write through
+    `tempfile.mkstemp(dir=…, prefix=f"{basename}.", suffix=".tmp")` and only
+    unlink that sibling in an `except BaseException` handler — which a hard
+    kill skips entirely. `npm start` tears the sidecar down with
+    `taskkill /T /F` on Windows, and an OOM kill mid-derive on an 8 GB card is
+    a scenario this project has already hit. The leftovers are RANDOMLY named
+    (`xtts-<uuid>.pt.<rand>.tmp`, `xtts-<uuid>.derive-src.tmp.wav.<rand>.tmp`,
+    and the qwen equivalents), so no addition to a fixed path list can reach
+    them: revoke reported clean erasure while the conditioning latents — and
+    the real person's raw reference clip — survived on disk indefinitely.
+    Property 2 says every artifact the voice can be rebuilt or rendered from
+    is destroyed; a stranded `.pt.<rand>.tmp` renames straight back into a
+    loadable artifact.
+
+    Matching is ANCHORED on a full artifact key plus a `.` boundary: a name
+    either IS the key or begins with `key + '.'`. That is deliberately not a
+    bare `startsWith(key)` — uuids are `randomUUID()`/`nanoid()`, so
+    `qwen-<uuidA>` can be a genuine prefix of `qwen-<uuidB>`, and an unanchored
+    match would erase another person's voice. Keys never contain `.`, so the
+    boundary is unambiguous. Each key's own basename is derived FROM the path
+    helper (`basename(qwenVoicePtPath(k), '.pt')`) rather than re-sanitised
+    here, so the sweep can never drift from the filenames those helpers
+    actually produce.
+
+    Exact-case, matching how the fixed paths are computed: the sidecar is only
+    ever handed the canonical lower-case key (`cloneStorageKey`), so a
+    case-varied temp sibling is not a state it can produce.
+
+    `alreadyAttempted` holds the basenames the caller's fixed `files` list has
+    already tried, and they are skipped here. The sweep is strictly ADDITIVE:
+    without this, a canonical path whose unlink just failed (EBUSY) would be
+    retried by the sweep, and a second attempt that happened to succeed would
+    leave the path recorded in `failed` while the file is in fact gone —
+    reporting incomplete erasure that did complete, the mirror image of the
+    mis-report this module exists to prevent. */
+async function sweepKeyPrefixedFiles(
+  dir: string,
+  keyBasenames: string[],
+  voiceUuid: string,
+  failed: string[],
+  alreadyAttempted: ReadonlySet<string>,
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (err) {
+    // No voices dir yet — nothing was ever derived, so nothing to erase.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+    // Anything else (EPERM, EACCES) means we cannot PROVE the directory is
+    // clean. Report it rather than letting an unreadable dir read as total
+    // erasure — that is the exact mis-report this fix exists to prevent.
+    failed.push(`sweep:${dir}`);
+    console.warn(
+      `[purge-clone-artifacts] could not scan "${dir}" for stray artifacts of voice ` +
+        `"${voiceUuid}" — crash-orphaned temp files may still be on disk:`,
+      err,
+    );
+    return;
+  }
+  for (const name of names) {
+    if (alreadyAttempted.has(name)) continue;
+    if (!keyBasenames.some((b) => name === b || name.startsWith(`${b}.`))) continue;
+    await unlinkTracked(join(dir, name), voiceUuid, failed);
   }
 }
 
@@ -224,6 +297,44 @@ export async function purgeCloneArtifacts(
   ];
   const failed: string[] = [];
   for (const f of files) await unlinkTracked(f, voiceUuid, failed);
+  /* GATE 1 fix (C5) — then sweep both voices dirs for anything else carrying
+     one of this voice's artifact keys, which is how the sidecar's randomly
+     named `<basename>.<rand>.tmp` staging siblings get erased (see
+     `sweepKeyPrefixedFiles`). The fixed `files` list above is KEPT rather
+     than replaced by the sweep: it is what reports the canonical,
+     consent-critical paths into `failed` by name even when the directory
+     itself cannot be read.
+
+     Both engines, not just xtts: `_atomic_torch_save`/`_atomic_wav_save` back
+     the qwen design/clone writes too (main.py), so the qwen dir has the
+     identical hole. Fixing only the engine the finding was reported against
+     is the exact "applied where found, never swept across its siblings"
+     mistake that produced C4.
+
+     Each base is the artifact key's real on-disk basename, taken from the
+     path helper so the sanitisation can never drift. */
+  const attempted = new Set(files.map((f) => basename(f)));
+  await sweepKeyPrefixedFiles(
+    qwenVoicesDir(),
+    [
+      key,
+      `${key}__1.7b`,
+      `${key}-preview`,
+      `${key}-preview__1.7b`,
+      `${key}__master`,
+      `${key}-preview__master`,
+    ].map((k) => basename(qwenVoicePtPath(k), '.pt')),
+    voiceUuid,
+    failed,
+    attempted,
+  );
+  await sweepKeyPrefixedFiles(
+    xttsVoicesDir(),
+    [basename(xttsVoiceLatentsPath(xttsKey), '.pt')],
+    voiceUuid,
+    failed,
+    attempted,
+  );
   // fs-38 Wave 3c, Task 2 — sweep every audition-cache scope this voice
   // could have been rendered under, not just the canonical `qwen-<uuid>`
   // scope. Two independent gaps closed here:
