@@ -54,7 +54,7 @@ def make(devices, peak, reserve_cap=768, idle_evict=None, resident=None):
         footprints=fp,
         ledger=main.ReservationLedger(),
         reserve_mb=lambda: reserve_cap,
-        idle_evict=idle_evict or (lambda dk: False),
+        idle_evict=idle_evict or (lambda dk, eng: False),
         is_resident=resident or (lambda e: None),
     )
 
@@ -98,10 +98,73 @@ def test_idle_evict_then_place():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk: (ledger.release(tok) or True),
+        idle_evict=lambda dk, eng: (ledger.release(tok) or True),
         is_resident=lambda e: None,
     )
     assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
+
+
+def test_starved_qwen_admits_after_coqui_is_evicted():
+    """`admit()` has NO production caller — every real call site (10+ in
+    main.py) goes through `reservation()` instead. This test pins the
+    retry logic at the `admit()` seam anyway (decide-without-hold, same
+    retry shape); `test_starved_qwen_reservation_admits_after_coqui_is_evicted`
+    below is the real end-to-end proof, driven through the actual
+    production entry point."""
+    devices = [dev(free=8000)]
+    ledger = main.ReservationLedger()
+    coqui_hold = ledger.hold("cuda:0", 3000)
+    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+    evicted = []
+
+    def evict(device_key, engine):
+        if engine == "coqui":
+            return False
+        evicted.append((device_key, engine))
+        ledger.release(coqui_hold)
+        return True
+
+    pc = main.PlacementController(
+        probe=lambda: devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict=evict,
+        is_resident=lambda e: None,
+    )
+    assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
+    assert evicted == [("cuda:0", "qwen")]
+
+
+def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
+    """#1894 end to end at the ACTUAL production seam: every real call site
+    uses `reservation()` (a @contextmanager), not `admit()` (see the note on
+    the sibling test above). A starved qwen op is admitted once the idle
+    Coqui hold is released by the injected `idle_evict`."""
+    devices = [dev(free=8000)]
+    ledger = main.ReservationLedger()
+    coqui_hold = ledger.hold("cuda:0", 3000)
+    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+    evicted = []
+
+    def evict(device_key, engine):
+        if engine == "coqui":
+            return False
+        evicted.append((device_key, engine))
+        ledger.release(coqui_hold)
+        return True
+
+    pc = main.PlacementController(
+        probe=lambda: devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict=evict,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert evicted == [("cuda:0", "qwen")]
 
 
 def test_try_hold_is_atomic_under_concurrency():
@@ -176,7 +239,7 @@ def test_resident_reservation_holds_on_its_device():
         footprints=fp,
         ledger=ledger,
         reserve_mb=lambda: 768,
-        idle_evict=lambda dk: False,
+        idle_evict=lambda dk, eng: False,
         is_resident=lambda e: "cuda:0",
     )
     with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a:

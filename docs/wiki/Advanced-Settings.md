@@ -274,6 +274,7 @@ mismatches) — the table's risk column shows each correctly.
 | Qwen 1.7B-Base idle TTL (s) | Idle secs before freeing resident 1.7B-Base (~3.4GB) | 120 | integer, min 0 | restart · sidecar | high |
 | ASR (Whisper) idle TTL (s) | Idle secs before freeing Whisper model | 120 | integer, min 0 | restart · sidecar | high |
 | Speaker-embed (ECAPA) idle TTL (s) | Idle secs before freeing ECAPA model | 120 | integer, min 0 | restart · sidecar | high |
+| Coqui (XTTS) idle TTL (s) | Idle secs before a VRAM-starved op may reclaim resident XTTS (~3GB); no watchdog | 30 | integer, min 0 | restart · sidecar | high |
 | Disable torch MKLDNN | Curb variable-shape CPU host-RAM leak; no-op on CUDA | `false` | boolean | restart · sidecar | high |
 | Soft recycle threshold (MB committed RAM) | Clean chapter-boundary recycle trigger; 0 disables | 0 | integer, min 0 | restart · sidecar | high |
 | Hard restart threshold (MB committed RAM) | Sidecar self-exits at this RAM; 0 = auto (70% of total) | 0 | integer, min 0 | restart · sidecar | high |

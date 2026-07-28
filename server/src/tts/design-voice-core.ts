@@ -172,8 +172,8 @@ export async function postDesignAndCacheAudition(
     } catch (e) {
       if (e instanceof NoCapacityError) {
         /* Carry the error's own message through — it names the blocking
-           model + remedy (e.g. "Coqui XTTS is loaded — Use its Stop button,
-           at the top of the window.") when describeVramBlockers can
+           model + remedy (e.g. "Kokoro is loaded — Turn off \"Preload Kokoro
+           at startup\" in settings.") when describeVramBlockers can
            identify one, rather than the
            generic fallback that used to replace it unconditionally
            (#1839 finding 4). Still surfaced as a SidecarDesignError, the

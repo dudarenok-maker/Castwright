@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 19 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 20 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**35 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**36 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -337,6 +337,49 @@ sitting costs barely more than either alone.
 `/unload` fail. *Criteria:* #1898; the fail-soft rationale is in the comment at the call
 site in `server/src/tts/synthesise-chapter.ts`, and plan 249's accepted limitation #4
 records what it weakened. *Cost:* short.
+
+### A20 · Idle Coqui is reclaimed under VRAM pressure ([#1894](https://github.com/dudarenok-maker/Castwright/issues/1894)) · **single 8 GB card**
+
+The sidecar's admission path now frees a resident-but-idle XTTS before reporting
+`noCapacity`. Unit tests prove the branch fires and that it never evicts for a Coqui
+op; what they cannot reach is whether reclaiming ~3 GB actually admits the blocked
+operation on real hardware, and whether the 30 s TTL is tuned for real chapter gaps.
+
+- **Run pinned to ONE card** — `CUDA_VISIBLE_DEVICES=0`. This box is dual-GPU
+  (`cuda:0` 4070 8 GB, `cuda:1` 5070Ti 16 GB) and `_worst_device_key` picks the card
+  with the **most** headroom, so an unpinned run calls `idle_evict("cuda:1")` while
+  Coqui sits on `cuda:0`, `_same_card` declines, and the row passes or fails for
+  entirely the wrong reason.
+- Load Coqui from the UI, then start a Qwen-only render that would not otherwise fit.
+  Confirm the render **proceeds** and the sidecar log carries `Coqui model unloaded.`
+  Record whether the reclaimed ~3 GB actually admitted the op, or was immediately
+  taken by something else.
+- Then render a mixed Qwen+Coqui book and watch the chapter boundaries. **An
+  evict→reload cycle repeating across chapters means `COQUI_IDLE_TTL` is too short**
+  (each reload costs ~90 s); a render that still fails `NoCapacityError` with an idle
+  Coqui resident means it is too long. Record which, with the observed interval
+  between the evict and the next Coqui use, so the default can be moved off 30 s with
+  evidence rather than a guess.
+- Also confirm the Stop-button crash fix: press **Stop** on Coqui while a chapter is rendering
+  through it. The chapter must continue to completion — before #1894 this could kill
+  it with `AttributeError: 'NoneType' object has no attribute 'tts'`. Also record
+  what the **Stop control itself** reports: `CoquiEngine.unload()` now acquires
+  `_synth_lock` before dropping the model, so it blocks for the length of the
+  in-flight forward — tens of seconds to minutes — while `POST /api/sidecar/unload`'s
+  probe budget is only 2 s. The expected symptom is the Stop control showing a
+  timeout/failure toast even though the unload (and the chapter) both complete fine
+  a little later; this row is where that trade-off would actually be observed on
+  real hardware, so note whether the toast fired and how long the eventual unload
+  actually took.
+
+**Run this with A19 and A5** — same card, same mixed-cast book, and A19 already stages
+the Qwen+Coqui co-residency this row's first bullet needs.
+
+*Needs:* the 8 GB card only, pinned via `CUDA_VISIBLE_DEVICES=0`, and a mixed-cast
+non-English book. *Criteria:* the spec at
+`docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` §6; the TTL
+rationale is in the comment on `_COQUI_IDLE_TTL_DEFAULT` in `tts-sidecar/main.py`.
+*Cost:* short.
 
 ---
 
