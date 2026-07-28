@@ -258,6 +258,26 @@ Modelled on `QwenEngine.maybe_free_idle_design` (`:3752-3789`):
 Requires a `_last_used` monotonic stamp refreshed in `synthesize()`, and an
 in-flight counter — both mirroring the Qwen fields.
 
+**Deviation from the approved plan, recorded here rather than silently
+absorbed:** the plan specified stamping `_last_used` at the *end* of
+`_ensure_loaded`, after the rest of that method's bookkeeping. That placement is
+racy — the model is published (`self._tts = tts`) roughly 20 lines earlier, with
+no lock held across the tail of the method, so `_ensure_loaded` runs on a worker
+thread while the event loop is free to run `maybe_free_idle` concurrently. An
+evict landing in that window sees a live `_tts` with a **stale** `_last_used`
+(`0.0` on a first load, or the pre-evict timestamp on a reload), fires, and calls
+`_drop_model_locked()` — which resets `self._device` back to
+`self._requested_device` — only for the still-running `_ensure_loaded` call to
+then overwrite `self._device` right back to the just-admitted card a few lines
+later. That reverts the #1730 gap-3 fix this same method exists to preserve
+(§4.2 above) and pins the engine to a placement decision that has already been
+undone. The stamp was moved to immediately *before* the publish
+(`server/tts-sidecar/main.py:1307-1324`) instead: any thread that observes
+`self._tts is not None` therefore necessarily observes a fresh timestamp, and
+while `_ensure_loaded` is still running, `_tts` is `None` so `maybe_free_idle`'s
+own fast-out already declines. Intent unchanged from the plan; only the
+position within the method was corrected.
+
 **It must NOT null `self._tts` inline, the way Qwen's method does.** Qwen gets
 away with a bare `self._design = None` because `_design` carries no paired
 state. Coqui's `unload()` resets five more fields (`:1336-1344`), and one of them
@@ -434,3 +454,44 @@ Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
 - **Recalibrating `ENGINE_VRAM_COST`** — plan 249's accepted limitation #1.
 - **Making `evictQwenForCoquiPhase` per-book** — plan 249's accepted
   limitation #2.
+
+### Known limitations
+
+- **Multi-GPU: only the highest-headroom card is ever asked.**
+  `_worst_device_key` (§6) returns the card with the **most** headroom, and
+  that is the only card `_idle_evict` is ever asked about — it calls
+  `idle_evict(device_key)` for that one card alone. So on a multi-GPU box, an
+  idle Coqui resident on a *different* card is skipped and the starved
+  operation still fails, even when freeing that Coqui would have admitted it.
+  This is pre-existing behaviour shared by every sibling engine branch since
+  #1721, not something this design introduces, and it's irrelevant to the
+  single-GPU case #1894 is about — but it belongs here as a known limitation
+  in its own right, not only as the acceptance-scoping note §6 already
+  carries.
+- **Kokoro is not a beneficiary of this reclaim.** Kokoro is CPU-capable, so a
+  starved Kokoro operation is placed on CPU *before* `idle_evict` is ever
+  consulted (§1). This design's real beneficiaries are Qwen (synth, design,
+  clone, mint), ASR, and speaker-embedding — never Kokoro. That is intended:
+  CPU Kokoro beats a ~90 s XTTS reload. Stated explicitly here because,
+  unstated, it reads like a miss rather than a deliberate exclusion.
+
+### Follow-up issues filed
+
+Three follow-ups were filed while verifying this design, none folded in here
+because each needs its own scoped fix and review:
+
+- **[#1917](https://github.com/dudarenok-maker/Castwright/issues/1917)** — the
+  sidecar's in-flight counters (`_synth_in_flight` and its ASR/SPK/Qwen
+  equivalents) are non-atomic and can wedge idle-eviction off permanently.
+  Pattern-level, affecting all three sibling engines, not specific to Coqui.
+- **[#1918](https://github.com/dudarenok-maker/Castwright/issues/1918)** —
+  `CoquiEngine._ensure_loaded` still publishes its model without the synth
+  lock, so a user-initiated Stop can interleave with a cold load. #1894 closes
+  the **automatic** variant of this race (the stamp-ordering fix above);
+  `unload()` ignores the timestamp entirely, so the user-initiated race stays
+  open.
+- **[#1919](https://github.com/dudarenok-maker/Castwright/issues/1919)** — an
+  idle-evict that loses the race to a starting forward blocks the sidecar's
+  event loop. #1894 fixed the wrong-eviction half of this (§4.3's
+  engine-aware skip when the admitting op is itself Coqui), not the blocking
+  half.
