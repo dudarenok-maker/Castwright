@@ -519,7 +519,41 @@ describe('fs-38 Wave 3c Task 17 — substituted cloned coqui voice is fatal [EX-
     expect(err).not.toBeNull();
     expect(err.message).toMatch(/xtts-1111-2222-3333/);
     expect(err.message).toMatch(/substitut/i);
-    expect(err.transient).toBeUndefined();
+    /* GATE 1 M-6 — an `expect(err.transient).toBeUndefined()` line used to
+       sit here. It was vacuous: this guard throws a plain `new Error`, which
+       never carries `.transient` at all, so the assertion passed with the
+       feature reverted. Replaced with the discriminating check it was
+       presumably reaching for — the throw came from the substitution guard,
+       NOT from `throwForResponse`'s status classification (which only ever
+       runs on a non-2xx, and this response is a 200). */
+    expect(err.status).toBeUndefined();
+    expect(err.message).toMatch(/XTTS_KEY_PREFIX/);
+  });
+
+  /* GATE 1 — the case-varied sibling. This is the THIRD site of the
+     un-folded-clone-key defect class on this branch (Task 10a fixed
+     `voice-override-linked.ts`, C4 fixed `voice-sample.ts`); each fix
+     landed only where it was found. The sidecar sanitises voice ids with a
+     case-PRESERVING `re.sub(r"[^A-Za-z0-9_.-]", "_", …)` and then a
+     case-INSENSITIVE `os.path.isfile`, so on NTFS/APFS `XTTS-<uuid>.pt`
+     opens the real `xtts-<uuid>.pt`. Un-folded, a case-varied key missed
+     BOTH the sidecar's latents branch (a stock speaker gets substituted)
+     and this guard (the one meant to catch that substitution). Deliberately
+     NOT overstated: C4 closed the reachable entry point, so this is
+     defence-in-depth — but the fold is free and the blind spot was real. */
+  it('GATE 1: the fatal-substitution guard is case-folded — `XTTS-<uuid>` must not slip past it', async () => {
+    stubFetch(async () => substitutionResponse('XTTS-1111-2222-3333'));
+
+    const err = await makeProvider()
+      .synthesize(SYNTH_INPUT)
+      .then(
+        () => null,
+        (e) => e,
+      );
+
+    expect(err).not.toBeNull();
+    expect(err.message).toMatch(/XTTS-1111-2222-3333/);
+    expect(err.message).toMatch(/substitut/i);
   });
 
   it('still only warns when the substituted voice is a plain catalog name', async () => {

@@ -209,13 +209,34 @@ export class SidecarTtsProvider implements TtsProvider {
            BOTH (server/src/tts/clone-engines.ts `libraryVoiceForEngine`),
            and the sidecar's gate doesn't distinguish them either. D-F's
            fail-soft guarantee for designed voices is NOT enforced here — it
-           lives in the Task 20/20a pre-pass that reverts a designed
-           character to a catalogue voice before synth ever runs. Do NOT
-           extend this to the `qwen-` prefix: that prefix is also qwen's
-           storage key for designed voices, and gating there would turn
-           substitution of a designed qwen voice into a new hard failure,
-           which D-F forbids. */
-        if (substitutedFrom.startsWith(`${manifestSlotFor('coqui')}-`)) {
+           lives in the Task 20/20a pre-pass, which reverts a designed
+           character to a catalogue voice before synth ever runs whenever it
+           cannot back the slot with an artifact. Two deliberate exceptions
+           to that, so this comment doesn't overclaim (GATE 1 I-3): the
+           pre-pass keeps a stale-but-PRESENT artifact rather than
+           downgrading it, and it keeps the slot when the voice-library entry
+           reads `cloned` (soft-removing a real person's slot would be a
+           Property-1 substitution, so D-F's fail-LOUD arm applies instead).
+           Do NOT extend this to the `qwen-` prefix: that prefix is also
+           qwen's storage key for designed voices, and gating there would
+           turn substitution of a designed qwen voice into a new hard
+           failure, which D-F forbids.
+
+           GATE 1 — the prefix test is CASE-FOLDED, the third instance of a
+           defect class already fixed at `routes/voice-override-linked.ts`
+           (Task 10a) and `routes/voice-sample.ts` (C4) and never swept.
+           `manifestSlotFor` returns lower-case, but `substitutedFrom` is
+           whatever the sidecar echoes back, and the sidecar sanitises voice
+           ids with a case-PRESERVING `re.sub` before a case-INSENSITIVE
+           `os.path.isfile` — so on NTFS/APFS `XTTS-<uuid>.pt` opens the real
+           `xtts-<uuid>.pt`. Un-folded, a case-varied key missed the
+           latents branch (stock speaker substituted) AND missed this guard
+           meant to catch exactly that. No live entry point today (C4 closed
+           the reachable one), so this is defence-in-depth like the rest of
+           the branch — but the fold costs nothing and the blind spot was
+           real. Only the PREFIX is folded; nothing here slices the uuid
+           tail, so mixed-case uuids are unaffected. */
+        if (substitutedFrom.toLowerCase().startsWith(`${manifestSlotFor('coqui')}-`)) {
           throw new Error(
             `Sidecar substituted a cloned Coqui voice: requested "${substitutedFrom}" was not ` +
               `found in the XTTS v2 manifest and a stock speaker was rendered instead. This ` +
