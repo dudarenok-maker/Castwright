@@ -616,6 +616,18 @@ export interface SynthesiseChapterOpts {
       SPK pass. The route wires it to the no-progress watchdog so a long
       CPU-bound embed pass keeps the chapter alive (sibling of #1029). */
   onEmbedProgress?: () => void;
+  /** #1813 — fired by the cloned/designed voice resolver pre-pass
+      (clone-voice-resolver.ts) immediately before it starts re-deriving a
+      Repairable cloned voice, or self-healing a missing/stale designed
+      voice `.pt` — both a real, multi-second sidecar clone-distil round
+      trip that ran with NO UI signal before this (known-limitation KL-f):
+      `reportProgress` was wired `undefined` in both `buildDefault*Deps`
+      below because no typed channel existed. Threaded into
+      `buildDefaultCloneResolverDeps`/`buildDefaultDesignedResolverDeps` as
+      `onVoicePrepare`, and re-fired on the `groupHeartbeatMs` cadence
+      (`withVoicePrepareHeartbeat` below) while a derive is in flight, the
+      same "stall detector" concern `onGroupStart`'s heartbeat exists for. */
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void;
   /** Optional abort signal — checked between groups and forwarded to the
       provider so an in-flight TTS call can be cancelled mid-call. Used by
       the per-bookId server mutex to stop a stale generation handler when a
@@ -1064,7 +1076,10 @@ function withDerivedUpdateEntry<
    per-request; generalising that is Task 20's job), so nothing else
    exercises this function's coqui arm. Mirrors defaultPtExists's own
    Task-18-fix-wave export for the identical reason. */
-export function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): ResolveChapterDeps {
+export function buildDefaultCloneResolverDeps(
+  signal: AbortSignal | undefined,
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void,
+): ResolveChapterDeps {
   return {
     readEntry,
     writeEntry,
@@ -1088,12 +1103,9 @@ export function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): 
     currentArtifactVersion: (engine) =>
       engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
     purgeCloneArtifacts,
-    /* No free-text progress channel exists on SynthesiseChapterOpts today —
-       only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).
-       Forcing a "Preparing voice…" message through one of those would misuse
-       a differently-shaped callback, so this stays unwired (undefined) until
-       a real channel exists. */
-    reportProgress: undefined,
+    /* #1813 — retires the old `reportProgress: undefined` placeholder: see
+       `SynthesiseChapterOpts.onVoicePrepare`'s doc comment for the chain. */
+    onVoicePrepare,
     signal,
   };
 }
@@ -1178,6 +1190,7 @@ async function writeSidecarManifestDefault(
    `buildDefaultCloneResolverDeps` above. */
 function buildDefaultDesignedResolverDeps(
   signal: AbortSignal | undefined,
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void,
 ): ResolveDesignedVoiceDeps {
   return {
     ptExists: defaultPtExists,
@@ -1193,7 +1206,9 @@ function buildDefaultDesignedResolverDeps(
        independently drift on what "current" means per engine. */
     currentArtifactVersion: (engine) =>
       engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
-    reportProgress: undefined,
+    /* #1813 — retires the old `reportProgress: undefined` placeholder: see
+       `SynthesiseChapterOpts.onVoicePrepare`'s doc comment for the chain. */
+    onVoicePrepare,
     signal,
   };
 }
@@ -1217,6 +1232,7 @@ export async function synthesiseChapter(
     onGroupRetry,
     onBatchComplete,
     onEmbedProgress,
+    onVoicePrepare,
     signal,
     chapterTitleNarration,
     narratorCharacterId = 'narrator',
@@ -1459,6 +1475,9 @@ export async function synthesiseChapter(
       const engine = clonedEngineFor(c, routedEngine);
       return {
         characterName: c.name ?? c.id,
+        // #1813 — carried through to onVoicePrepare's payload; see
+        // ClonedVoiceRequest's doc comment.
+        characterId: c.id,
         /* fs-38 Wave 3c, Task 20 [ADV-C1] — Property-1 hole (Task 16 review):
            extracted through `libraryVoiceForEngine`, the SAME RESOLUTION
            predicate `pickVoiceForEngine` (voice-mapping.ts) gates the actual
@@ -1519,6 +1538,7 @@ export async function synthesiseChapter(
     })
     .map((c) => ({
       characterName: c.name ?? c.id,
+      characterId: c.id,
       libraryUuid: c.overrideTtsVoices!.qwen!.libraryUuid as string,
       engine: 'qwen' as CloneEngine,
       wrongEngine: routeFor(c).engine !== 'qwen',
@@ -1558,6 +1578,7 @@ export async function synthesiseChapter(
       .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
       .map((c) => ({
         characterName: c.name ?? c.id,
+        characterId: c.id,
         libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
         engine: 'qwen' as const,
       })),
@@ -1566,7 +1587,14 @@ export async function synthesiseChapter(
       .flatMap((c) => {
         const lib = libraryVoiceForEngine(c, 'coqui');
         if (lib?.provenance !== 'designed') return [];
-        return [{ characterName: c.name ?? c.id, libraryUuid: lib.libraryUuid, engine: 'coqui' as const }];
+        return [
+          {
+            characterName: c.name ?? c.id,
+            characterId: c.id,
+            libraryUuid: lib.libraryUuid,
+            engine: 'coqui' as const,
+          },
+        ];
       }),
   ];
   /* fs-38 Wave 3c, Task 22 [AC-C4][FAB-I2][DELTA-C3] — partition BOTH derive
@@ -1712,11 +1740,51 @@ export async function synthesiseChapter(
     return qwenEvict.promise;
   };
 
+  /* #1813 — the LAST onVoicePrepare payload either resolver reported, tracked
+     here so `withVoicePrepareHeartbeat` (below) can re-fire it on the
+     `groupHeartbeatMs` cadence while a repair/self-heal derive is in flight —
+     a derive can pull the VoiceDesign model in cold (~4-5 GB), which can
+     exceed the client's 30s STALL_THRESHOLD_MS, and without a re-fire this
+     tick would trip the exact "Worker has gone quiet" false stall this
+     feature exists to prevent (same rationale as chapter_recovering's own
+     10s heartbeat). `fireVoicePrepare`, not the raw `onVoicePrepare` opt, is
+     what gets threaded into both deps builders below, so every onVoicePrepare
+     call — from either arm, on either engine — updates this. */
+  let lastVoicePrepare: { characterId: string; characterName: string } | undefined;
+  const fireVoicePrepare = onVoicePrepare
+    ? (e: { characterId: string; characterName: string }): void => {
+        lastVoicePrepare = e;
+        onVoicePrepare(e);
+      }
+    : undefined;
+  /* Mirrors withHeartbeat's up-front-then-interval shape (below, ~synth
+     phase), but the payload isn't known up front here — it's whatever the
+     resolver's own onVoicePrepare callback last reported, which may be
+     nothing at all (every request healthy) — so this only starts re-firing
+     once at least one has, rather than firing immediately like withHeartbeat
+     does for a group tick. Wraps EACH resolver call (both arms, both
+     engines) independently; never merges cloned's fail-loud propagation with
+     designed's fail-soft return — `fn`'s rejection/resolution passes through
+     untouched. */
+  async function withVoicePrepareHeartbeat<T>(fn: () => Promise<T>): Promise<T> {
+    if (!onVoicePrepare || groupHeartbeatMs <= 0) return fn();
+    const refire = (): void => {
+      if (lastVoicePrepare) onVoicePrepare(lastVoicePrepare);
+    };
+    const heartbeat = setInterval(refire, groupHeartbeatMs);
+    heartbeat.unref?.();
+    try {
+      return await fn();
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
   const cloneResolverDeps =
     clonedVoiceRequests.length > 0
       ? withDerivedUpdateEntry<ResolveChapterDeps>(
           {
-            ...buildDefaultCloneResolverDeps(signal),
+            ...buildDefaultCloneResolverDeps(signal, fireVoicePrepare),
             beforeFirstDerive: beforeFirstCoquiDerive,
             beforeFirstQwenDerive,
             ...cloneResolverDepsOverride, // an explicit test override still wins, same shallow-merge contract as every other field.
@@ -1728,7 +1796,7 @@ export async function synthesiseChapter(
     designedVoiceRequests.length > 0
       ? withDerivedUpdateEntry<ResolveDesignedVoiceDeps>(
           {
-            ...buildDefaultDesignedResolverDeps(signal),
+            ...buildDefaultDesignedResolverDeps(signal, fireVoicePrepare),
             beforeFirstDerive: beforeFirstCoquiDerive,
             beforeFirstQwenDerive,
             ...designedResolverDepsOverride, // ditto.
@@ -1768,7 +1836,9 @@ export async function synthesiseChapter(
   };
 
   if (clonedCoquiRequests.length > 0) {
-    await resolveClonedVoicesForChapter(clonedCoquiRequests, cloneResolverDeps!);
+    await withVoicePrepareHeartbeat(() =>
+      resolveClonedVoicesForChapter(clonedCoquiRequests, cloneResolverDeps!),
+    );
   }
   if (designedCoquiRequests.length > 0) {
     /* M-1 (review, carried over) — a paused/cancelled run must stop here
@@ -1776,9 +1846,8 @@ export async function synthesiseChapter(
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const { softFailedUuids } = await resolveDesignedVoicesForChapter(
-      designedCoquiRequests,
-      designedResolverDeps!,
+    const { softFailedUuids } = await withVoicePrepareHeartbeat(() =>
+      resolveDesignedVoicesForChapter(designedCoquiRequests, designedResolverDeps!),
     );
     applyDesignedSoftFailures(softFailedUuids);
   }
@@ -1845,16 +1914,17 @@ export async function synthesiseChapter(
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    await resolveClonedVoicesForChapter(clonedQwenRequests, cloneResolverDeps!);
+    await withVoicePrepareHeartbeat(() =>
+      resolveClonedVoicesForChapter(clonedQwenRequests, cloneResolverDeps!),
+    );
   }
   if (designedQwenRequests.length > 0) {
     /* M-1 (review, carried over) — see the identical check above. */
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const { softFailedUuids } = await resolveDesignedVoicesForChapter(
-      designedQwenRequests,
-      designedResolverDeps!,
+    const { softFailedUuids } = await withVoicePrepareHeartbeat(() =>
+      resolveDesignedVoicesForChapter(designedQwenRequests, designedResolverDeps!),
     );
     applyDesignedSoftFailures(softFailedUuids);
   }

@@ -1595,6 +1595,29 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           totalLines,
         });
       };
+      /* #1813 — the cloned/designed voice resolver pre-pass (clone-voice-
+         resolver.ts) can re-derive a Repairable cloned voice, or self-heal a
+         missing/stale designed voice .pt, before any synth call fires —
+         a real, multi-second sidecar clone-distil round trip that showed no
+         UI signal at all before this (known-limitation KL-f): the SSE went
+         silent and the row looked idle. Mirrors emitVerifying/emitRecovering:
+         bumps the no-progress watchdog and holds the bar at the last real
+         tick's progress/currentLine (never resets it — a repair can start at
+         any point in the chapter). synthesise-chapter.ts's own
+         `withVoicePrepareHeartbeat` re-fires the underlying `onVoicePrepare`
+         call (and so this) on the groupHeartbeatMs cadence while a derive is
+         in flight, so no separate interval is needed here. */
+      const emitPreparingVoice = (characterId: string) => {
+        bumpProgress();
+        broadcast(job, {
+          type: 'chapter_preparing_voice',
+          chapterId: chapter.id,
+          characterId,
+          progress: job.lastProgressTick?.progress ?? 0,
+          currentLine: job.lastProgressTick?.currentLine ?? 0,
+          totalLines,
+        });
+      };
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
@@ -1698,6 +1721,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            tick of its own; feed the no-progress watchdog per embed so a long
            pass (many groups) can't be killed mid-flight (sibling of #1029). */
         onEmbedProgress: bumpProgress,
+        /* #1813 — see emitPreparingVoice's own doc comment above. */
+        onVoicePrepare: ({ characterId }) => emitPreparingVoice(characterId),
         /* Pre-assembly per-sentence QA gate (segment-qa.ts): re-record a
            sentence whose rendered PCM is dead/silent, has a long internal
            silence run, or drifts far from its text-predicted length, BEFORE

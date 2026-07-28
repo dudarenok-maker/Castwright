@@ -512,6 +512,24 @@ export const chaptersSlice = createSlice({
         return;
       }
 
+      if (ev.type === 'chapter_preparing_voice') {
+        /* #1813 — the cloned/designed voice resolver pre-pass is re-deriving
+           a Repairable cloned voice or self-healing a missing/stale designed
+           one before synth starts. Mirror chapter_recovering: hold the row
+           in_progress with a distinct phase so the view shows "Preparing
+           voice …" instead of a frozen caption / stall banner. Keep the
+           existing progress when the tick omits it so the bar stays where it
+           was — a repair can start at any point in the chapter. Stash the
+           named character so the view can resolve its display name. */
+        ch.phase = 'preparing-voice';
+        ch.state = 'in_progress';
+        ch.progress = ev.progress ?? ch.progress;
+        if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+        if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+        ch.preparingVoiceCharacterId = ev.characterId ?? null;
+        return;
+      }
+
       if (ev.type === 'chapter_complete') {
         ch.state = 'done';
         ch.progress = 1;

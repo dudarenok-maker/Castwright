@@ -453,7 +453,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -465,7 +465,7 @@ describe('resolveClonedVoicesForChapter', () => {
     // coincidental throw from something else).
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
       throw new Error('expected rejection');
@@ -498,7 +498,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).resolves.toBeUndefined();
@@ -547,7 +547,7 @@ describe('resolveClonedVoicesForChapter', () => {
     });
 
     await resolveClonedVoicesForChapter(
-      [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+      [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
       deps,
     );
 
@@ -576,7 +576,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       await expect(
         resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         ),
       ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -597,7 +597,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -618,7 +618,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -654,8 +654,8 @@ describe('resolveClonedVoicesForChapter', () => {
     try {
       await resolveClonedVoicesForChapter(
         [
-          { characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
-          { characterName: 'Reeve', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+          { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+          { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
         ],
         deps,
       );
@@ -674,7 +674,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: undefined, engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: undefined, engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -691,7 +691,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -699,6 +699,69 @@ describe('resolveClonedVoicesForChapter', () => {
     }
     expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'misconfigured' }]);
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  /* --- #1813: onVoicePrepare fires for a Repairable re-derive, never for a
+     healthy voice --- */
+
+  describe('onVoicePrepare (#1813)', () => {
+    it('fires with { characterId, characterName } for a Repairable voice, before the derive', async () => {
+      const entry = baseEntry({ master: MASTER });
+      const onVoicePrepare = vi.fn();
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false), // .pt missing -> repairable (master present)
+        onVoicePrepare,
+      });
+
+      await resolveClonedVoicesForChapter(
+        [
+          {
+            characterName: 'Marlow',
+            characterId: 'marlow',
+            libraryUuid: 'u1',
+            engine: 'qwen' as const,
+            wrongEngine: false,
+            engineUnavailable: false,
+          },
+        ],
+        deps,
+      );
+
+      expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+      expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'marlow', characterName: 'Marlow' });
+      // Fired BEFORE the derive, not after.
+      expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+        deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('does NOT fire for a healthy voice (no derive needed)', async () => {
+      const entry = baseEntry(); // no master needed — ptExists true + current version.
+      const onVoicePrepare = vi.fn();
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        onVoicePrepare,
+      });
+
+      await resolveClonedVoicesForChapter(
+        [
+          {
+            characterName: 'Marlow',
+            characterId: 'marlow',
+            libraryUuid: 'u1',
+            engine: 'qwen' as const,
+            wrongEngine: false,
+            engineUnavailable: false,
+          },
+        ],
+        deps,
+      );
+
+      expect(onVoicePrepare).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
   });
 
   /* --- review C-1: revoke landing mid-derive is a lost-update, not a re-vivify --- */
@@ -737,7 +800,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -766,7 +829,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -798,7 +861,7 @@ describe('resolveClonedVoicesForChapter', () => {
       const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => true), currentArtifactVersion: () => 'qwen3-new' });
 
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
 
@@ -836,7 +899,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -879,7 +942,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -914,8 +977,8 @@ describe('resolveClonedVoicesForChapter', () => {
       await expect(
         resolveClonedVoicesForChapter(
           [
-            { characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
-            { characterName: 'Second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', characterId: 'second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
           ],
           deps,
         ),
@@ -955,7 +1018,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let rejection: unknown;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
         throw new Error('expected rejection');
@@ -979,8 +1042,8 @@ describe('resolveClonedVoicesForChapter', () => {
       try {
         await resolveClonedVoicesForChapter(
           [
-            { characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
-            { characterName: 'Second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', characterId: 'second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
           ],
           deps,
         );
@@ -1021,7 +1084,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -1066,7 +1129,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       await expect(
         resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
           deps,
         ),
       ).resolves.toBeUndefined();
@@ -1118,7 +1181,7 @@ describe('resolveClonedVoicesForChapter', () => {
       });
 
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
         deps,
       );
 
@@ -1145,7 +1208,7 @@ describe('resolveClonedVoicesForChapter', () => {
       });
 
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
         deps,
       );
 
@@ -1165,7 +1228,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -1192,7 +1255,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: true }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: true }],
           deps,
         );
       } catch (e) {
@@ -1214,8 +1277,8 @@ describe('resolveClonedVoicesForChapter', () => {
       try {
         await resolveClonedVoicesForChapter(
           [
-            { characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true },
-            { characterName: 'Reeve', libraryUuid: 'u2', engine: 'coqui', wrongEngine: false, engineUnavailable: true },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true },
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'coqui', wrongEngine: false, engineUnavailable: true },
           ],
           deps,
         );
@@ -1233,7 +1296,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true }],
           deps,
         );
       } catch (e) {
@@ -1331,7 +1394,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1356,7 +1419,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1372,7 +1435,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1390,7 +1453,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1414,7 +1477,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1431,7 +1494,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps();
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: undefined, engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: undefined, engine: 'qwen' as const }],
       deps,
     );
 
@@ -1476,7 +1539,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1511,7 +1574,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1533,7 +1596,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1553,7 +1616,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1596,7 +1659,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1645,7 +1708,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1697,7 +1760,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       writeEntry,
     });
 
-    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }], deps);
+    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }], deps);
 
     expect(writeEntry).toHaveBeenCalledTimes(1);
     const written = writeEntry.mock.calls[0][0];
@@ -1722,7 +1785,7 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
     ).resolves.toEqual({ softFailedUuids: [] });
@@ -1752,8 +1815,8 @@ describe('resolveDesignedVoicesForChapter', () => {
     await expect(
       resolveDesignedVoicesForChapter(
         [
-          { characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
-          { characterName: 'Second', libraryUuid: 'lib-second', engine: 'qwen' as const },
+          { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
+          { characterName: 'Second', characterId: 'second', libraryUuid: 'lib-second', engine: 'qwen' as const },
         ],
         deps,
       ),
@@ -1803,7 +1866,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1847,7 +1910,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1870,7 +1933,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1899,7 +1962,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Wren', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Wren', characterId: 'wren', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1919,7 +1982,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1951,7 +2014,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -1988,7 +2051,7 @@ describe('resolveDesignedVoicesForChapter', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         const result = await resolveDesignedVoicesForChapter(
-          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
           deps,
         );
 
@@ -2014,7 +2077,7 @@ describe('resolveDesignedVoicesForChapter', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         const result = await resolveDesignedVoicesForChapter(
-          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
           deps,
         );
 
@@ -2045,7 +2108,7 @@ describe('resolveDesignedVoicesForChapter', () => {
         });
 
         const result = await resolveDesignedVoicesForChapter(
-          [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
           deps,
         );
 
@@ -2064,7 +2127,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       });
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -2082,7 +2145,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const result = await resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
         deps,
       );
 
@@ -2102,8 +2165,8 @@ describe('resolveDesignedVoicesForChapter', () => {
 
       const result = await resolveDesignedVoicesForChapter(
         [
-          { characterName: 'Orin', libraryUuid: 'lib-designed', engine: 'qwen' },
-          { characterName: 'Wren', libraryUuid: 'lib-coqui', engine: 'coqui' },
+          { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' },
+          { characterName: 'Wren', characterId: 'wren', libraryUuid: 'lib-coqui', engine: 'coqui' },
         ],
         deps,
       );
@@ -2114,5 +2177,106 @@ describe('resolveDesignedVoicesForChapter', () => {
       // policies never bleed into each other.
       expect(result).toEqual({ softFailedUuids: ['lib-coqui'] });
     });
+  });
+});
+
+/* --- #1813: onVoicePrepare fires for a designed-voice self-heal, on EITHER
+   arm, and never for an already-healthy (.pt present) voice. Both arms share
+   this loop but never their failure policy (see the module-level note above
+   `resolveClonedVoicesForChapter` in clone-voice-resolver.ts) — these tests
+   drive each arm independently to prove onVoicePrepare doesn't blur that
+   boundary either. */
+describe('resolveDesignedVoicesForChapter — onVoicePrepare (#1813)', () => {
+  function designedEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntry {
+    return {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  it('the QWEN arm fires with { characterId, characterName } when the .pt is missing (self-heal), before the derive', async () => {
+    const onVoicePrepare = vi.fn();
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: 'A calibration line.',
+        manifest: { voiceId: 'qwen-lib-designed', refText: 'A calibration line.' },
+      })),
+      onVoicePrepare,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      deps,
+    );
+
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'orin', characterName: 'Orin' });
+    expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('the COQUI arm fires with { characterId, characterName } when the .pt is missing (self-heal), before the derive', async () => {
+    const onVoicePrepare = vi.fn();
+    const entry = designedEntry();
+    const deps = makeDesignedDeps({
+      readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: '', // DELTA-M1 — a coqui derive never needs refText.
+        manifest: {},
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        coquiVersion: 'v2.0.5',
+      })),
+      onVoicePrepare,
+    });
+
+    const result = await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' as const }],
+      deps,
+    );
+
+    expect(result).toEqual({ softFailedUuids: [] });
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'orin', characterName: 'Orin' });
+    expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does NOT fire on either arm when the .pt already exists (healthy, no self-heal)', async () => {
+    const onVoicePrepare = vi.fn();
+    const entry = designedEntry();
+    const deps = makeDesignedDeps({
+      readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+      ptExists: vi.fn(async () => true),
+      onVoicePrepare,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [
+        { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
+        { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' as const },
+      ],
+      deps,
+    );
+
+    expect(onVoicePrepare).not.toHaveBeenCalled();
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
   });
 });

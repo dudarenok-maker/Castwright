@@ -236,7 +236,12 @@ export interface ResolveChapterDeps {
       (workspace/purge-clone-artifacts.ts) — injected here, not imported
       directly, to keep this module's dependency-injection pattern intact. */
   purgeCloneArtifacts: typeof purgeCloneArtifacts;
-  reportProgress?(msg: string): void;
+  /** #1813 — fired immediately before a Repairable voice's re-derive starts
+      (the multi-second sidecar clone-distil round trip), so the caller can
+      surface a "Preparing voice" UI phase instead of the SSE going silent.
+      Typed payload, no caption string built here — see synthesise-chapter.ts's
+      `SynthesiseChapterOpts.onVoicePrepare` doc comment for the full chain. */
+  onVoicePrepare?(e: { characterId: string; characterName: string }): void;
   signal?: AbortSignal;
   /** fs-38 Wave 3c, Task 22 fix round 1 (F1/F3) — invoked immediately before
       the FIRST real coqui derive this call issues (never for a healthy or
@@ -263,6 +268,11 @@ export interface ResolveChapterDeps {
 
 export interface ClonedVoiceRequest {
   characterName: string;
+  /** #1813 — the cast character id this request resolves for (both request
+      lists synthesise-chapter.ts builds are already derived from
+      `CastCharacter`, so this is `c.id`). Carried through to
+      `onVoicePrepare`'s payload; never used for classification. */
+  characterId: string;
   libraryUuid: string | undefined;
   /** fs-38 Wave 3c, Task 18 — which clone-capable engine this request is
       being resolved on this run. */
@@ -370,7 +380,7 @@ export async function resolveClonedVoicesForChapter(
       throw abortRejection(undefined, deps);
     }
 
-    const { characterName, libraryUuid, engine, wrongEngine, engineUnavailable } = request;
+    const { characterName, characterId, libraryUuid, engine, wrongEngine, engineUnavailable } = request;
 
     if (!libraryUuid) {
       broken.push({ name: characterName, reason: 'misconfigured' });
@@ -410,7 +420,7 @@ export async function resolveClonedVoicesForChapter(
     }
 
     // repairable — re-derive from the retained master.wav.
-    deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+    deps.onVoicePrepare?.({ characterId, characterName });
     try {
       /* Task 22 fix round 1 (F1/F3) + round 2 (NEW-CRITICAL) — fires exactly
          once we KNOW a real derive is about to happen, on WHICHEVER side
@@ -535,6 +545,11 @@ export async function resolveClonedVoicesForChapter(
 
 export interface DesignedVoiceRequest {
   characterName: string;
+  /** #1813 — the cast character id this request resolves for (both request
+      lists synthesise-chapter.ts builds are already derived from
+      `CastCharacter`, so this is `c.id`). Carried through to
+      `onVoicePrepare`'s payload; never used for classification. */
+  characterId: string;
   libraryUuid: string | undefined;
   /** fs-38 Wave 3c, Task 20a — which clone-capable engine this self-heal
       request targets. 'qwen' preserves the pre-3c self-heal BYTE-FOR-BYTE:
@@ -655,7 +670,11 @@ export interface ResolveDesignedVoiceDeps {
       reads `''` before the sidecar's first reachable /health poll. The
       qwen arm never calls this — presence-only, unchanged (`[DELTA-I3]`). */
   currentArtifactVersion(engine: CloneEngine): string;
-  reportProgress?(msg: string): void;
+  /** #1813 — mirrors `ResolveChapterDeps.onVoicePrepare`: fired immediately
+      before a self-heal derive starts (either arm), so the caller can
+      surface a "Preparing voice" UI phase for a designed-voice self-heal
+      too, not just a cloned-voice repair. */
+  onVoicePrepare?(e: { characterId: string; characterName: string }): void;
   signal?: AbortSignal;
   /** fs-38 Wave 3c, Task 22 fix round 1 (F1/F3) — same contract as
       `ResolveChapterDeps.beforeFirstDerive`: fires once, immediately before
@@ -701,7 +720,7 @@ export async function resolveDesignedVoicesForChapter(
 ): Promise<ResolveDesignedVoicesResult> {
   const softFailedUuids = new Set<string>();
 
-  for (const { characterName, libraryUuid, engine } of requests) {
+  for (const { characterName, characterId, libraryUuid, engine } of requests) {
     if (!libraryUuid) continue;
 
     /* Task 20a fix round 1 (F1) — set from inside the coqui branch below the
@@ -772,7 +791,7 @@ export async function resolveDesignedVoicesForChapter(
           continue;
         }
 
-        deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+        deps.onVoicePrepare?.({ characterId, characterName });
         /* Task 22 fix round 1 (F1/F3) — same hook as the cloned resolver's
            coqui branch, still inside this per-voice try (I-1 above), so a
            failed evict is caught by the shared catch below exactly like any
@@ -830,7 +849,7 @@ export async function resolveDesignedVoicesForChapter(
       const master = await deps.readDesignedMasterPcm(libraryUuid, 'qwen');
       if (!master) continue; // no retained clip / no ref_text — fall through to today's behaviour.
 
-      deps.reportProgress?.(`Preparing voice "${characterName}"…`);
+      deps.onVoicePrepare?.({ characterId, characterName });
       /* Task 22 fix round 2 [NEW-CRITICAL] — mirror of the coqui arm's
          `beforeFirstDerive` call. Still inside the shared I-1 try, so a
          failed evict is caught by the shared catch below exactly like any

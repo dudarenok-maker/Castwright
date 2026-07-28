@@ -435,6 +435,52 @@ describe('chaptersSlice — applyGenerationTick', () => {
     });
   });
 
+  describe('chapter_preparing_voice (#1813)', () => {
+    it('holds the row in_progress with phase=preparing-voice, carries progress, and stashes the characterId', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.4 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_preparing_voice', chapterId: 3, characterId: 'halloran', progress: 0.4 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe('preparing-voice');
+      expect(next.chapters[0].state).toBe('in_progress');
+      expect(next.chapters[0].progress).toBeCloseTo(0.4);
+      expect(next.chapters[0].preparingVoiceCharacterId).toBe('halloran');
+    });
+
+    it('keeps the existing progress when the tick omits it', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.55 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_preparing_voice', chapterId: 3, characterId: 'eliza' }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe('preparing-voice');
+      expect(next.chapters[0].progress).toBeCloseTo(0.55);
+    });
+
+    it('is cleared by a subsequent chapter_complete', () => {
+      const start = baseState([
+        makeChapter(3, {
+          state: 'in_progress',
+          phase: 'preparing-voice',
+          preparingVoiceCharacterId: 'halloran',
+        }),
+      ]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 10 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe(null);
+      expect(next.chapters[0].state).toBe('done');
+    });
+  });
+
   describe('chapter_complete', () => {
     it('flips state to done, progress to 1, and all non-skipped characters to done', () => {
       const start = baseState([

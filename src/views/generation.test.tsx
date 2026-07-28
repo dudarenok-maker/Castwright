@@ -462,6 +462,60 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
   });
 
+  it('shows the preparing-voice caption, resolving the character name via findChar (#1813)', () => {
+    const preparingVoice: Chapter = {
+      ...chapter1,
+      state: 'in_progress',
+      phase: 'preparing-voice',
+      preparingVoiceCharacterId: 'marlow',
+      progress: 0.4,
+    };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([preparingVoice, ch2Queued]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [preparingVoice, ch2Queued],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[preparingVoice, ch2Queued]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    // Row pill.
+    expect(screen.getByText('Preparing voice…')).toBeInTheDocument();
+    // Live caption names the character, resolved via findChar.
+    expect(screen.getByText('Preparing voice — Marlow…')).toBeInTheDocument();
+    // The frozen synthesising caption must NOT show for the preparing-voice row.
+    expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
+  });
+
   it('suppresses the stale "Active:" line when a chapter is in the verifying phase', () => {
     const verifying: Chapter = {
       ...chapter1,

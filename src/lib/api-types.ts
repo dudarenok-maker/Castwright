@@ -3321,6 +3321,16 @@ export interface components {
              *     on a 10 s heartbeat so the client's 30 s stall detector stays fed, and
              *     surfaces a "Recovering …" phase so the row reads as healthy recovery
              *     rather than a silent stall.
+             *     `chapter_preparing_voice` (#1813) is emitted while the cloned/designed
+             *     voice resolver pre-pass re-derives a Repairable cloned voice, or
+             *     self-heals a missing/stale designed voice, before any synth call for
+             *     the chapter fires — another real, multi-second sidecar round trip
+             *     that previously showed no UI signal at all (known-limitation KL-f).
+             *     `characterId` names the character whose voice is being prepared
+             *     (reusing the field above, never null on this tick type). Holds
+             *     `progress`/`currentLine` at their last real value rather than
+             *     resetting them, and re-fires on the same 10 s heartbeat as
+             *     `chapter_recovering` for the identical stall-detector reason.
              *     `resume_from` is emitted as the FIRST event on every new subscriber
              *     (cold connect AND reconnect after `tsx watch` restart or server
              *     bounce) and carries a snapshot of completed chapter ids for the
@@ -3346,7 +3356,7 @@ export interface components {
              *     needed — same as every other tick type here).
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm" | "scoring_started" | "scoring_progress" | "scoring_complete";
+            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_preparing_voice" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm" | "scoring_started" | "scoring_progress" | "scoring_complete";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;

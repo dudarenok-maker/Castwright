@@ -204,6 +204,85 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
+  /* #1813 heartbeat — mirrors the GPU-FIFO false-stall guard's own
+     re-fire-on-interval test (describe block below, onGroupStart): a derive
+     can pull the VoiceDesign model in cold, which can exceed the client's
+     30 s stall threshold, so the LAST onVoicePrepare payload must keep
+     re-firing on the groupHeartbeatMs cadence while the derive is pending —
+     never the group-heartbeat's own onGroupStart channel, which hasn't
+     started yet (the resolver pre-pass runs before any group synth). */
+  it('re-fires the last onVoicePrepare payload on the groupHeartbeatMs cadence while a repair derive is pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = makeProvider();
+      const repairableEntry = baseEntry({
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24000,
+          durationSeconds: 8,
+          transcript: 'A retained reference clip.',
+          transcriptSource: 'whisper',
+          captureMethod: 'upload',
+        },
+      });
+      const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-clone' ? repairableEntry : null));
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const readMasterPcm = vi.fn(async (_uuid: string, _entry: VoiceLibraryEntry) => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: 'A retained reference clip.',
+      }));
+      let releaseDerive: (out: { previewPcm: Buffer; sampleRate: number; baseModel: string }) => void =
+        () => {};
+      const deriveEngineArtifact = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            releaseDerive = resolve;
+          }),
+      );
+
+      const events: Array<{ characterId: string; characterName: string }> = [];
+      const promise = synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast: clonedCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        groupHeartbeatMs: 1_000,
+        onVoicePrepare: (e) => events.push(e),
+        cloneResolverDepsOverride: {
+          readEntry,
+          writeEntry,
+          ptExists: async () => false,
+          readMasterPcm,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+          currentArtifactVersion: () => 'qwen3-tts-0.6b',
+        },
+      });
+
+      /* One immediate fire before the (pending) derive call. */
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual([{ characterId: 'wren', characterName: 'Wren' }]);
+
+      /* Advance across 3 heartbeat intervals while the derive stays pending —
+         each re-fires the SAME last payload. */
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(events.length).toBeGreaterThan(1);
+      expect(events.every((e) => e.characterId === 'wren')).toBe(true);
+
+      /* Release the derive → heartbeat stops; finish the chapter. */
+      releaseDerive({ previewPcm: Buffer.alloc(10), sampleRate: 24000, baseModel: 'qwen3-tts-0.6b' });
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const countAfterRelease = events.length;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(events.length).toBe(countAfterRelease); // no further heartbeats once settled.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('Task 6b: a cloned character routed to a non-qwen engine (book default) rejects as wrong-engine, with ZERO synth calls', async () => {
     // 'wren' carries no per-character `ttsEngine`, so she rides the run's
     // default engine — here that's 'kokoro', NOT 'qwen'. Her cloned qwen

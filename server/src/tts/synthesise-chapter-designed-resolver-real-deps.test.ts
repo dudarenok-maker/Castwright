@@ -285,4 +285,50 @@ describe('synthesise-chapter designed-voice self-heal — REAL readDesignedMaste
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
     expect(provider.calls.length).toBeGreaterThan(0); // falls through, chapter still renders.
   });
+
+  /* #1813, placebo trap (design doc's own "Wiring" test) — mirrors the cloned
+     resolver's real-deps wiring test: a hand-built ResolveDesignedVoiceDeps
+     could pass `onVoicePrepare` straight through and prove nothing about
+     production, since the actual bug was `reportProgress: undefined` baked
+     into `buildDefaultDesignedResolverDeps` itself. Drives the SAME
+     COQUI self-heal derive as the test above through `synthesiseChapter` with
+     `onVoicePrepare` on `opts` and NO override touching it. */
+  it('opts.onVoicePrepare fires through the REAL buildDefaultDesignedResolverDeps wiring for a COQUI self-heal derive', async () => {
+    const storageKey = `qwen-${COQUI_UUID}`;
+    writeFileSync(
+      paths.qwenVoiceSidecarPath(storageKey),
+      JSON.stringify({ voiceId: storageKey, refText: '' }),
+    );
+    writeFileSync(paths.qwenVoiceWavPath(`${storageKey}__master`), Buffer.from('not really a wav'));
+    spawnMock.mockImplementation(() => fakeSucceedingFfmpegChild());
+    vi.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    const provider = makeProvider();
+    const entry = designedEntry(COQUI_UUID);
+    const onVoicePrepare = vi.fn();
+    const deriveEngineArtifact = vi.fn(async (..._args: unknown[]) => ({
+      previewPcm: Buffer.alloc(0),
+      sampleRate: 24000,
+      coquiVersion: 'v2.0.5',
+    }));
+
+    await mod.synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      onVoicePrepare,
+      designedResolverDepsOverride: {
+        readEntry: (async (uuid: string) =>
+          uuid === COQUI_UUID ? entry : null) as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists: (async () => false) as unknown as ResolveDesignedVoiceDeps['ptExists'],
+        currentArtifactVersion: (() => '') as unknown as ResolveDesignedVoiceDeps['currentArtifactVersion'],
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'orin', characterName: 'Orin' });
+  });
 });

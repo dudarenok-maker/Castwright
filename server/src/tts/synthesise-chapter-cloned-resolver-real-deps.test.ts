@@ -201,6 +201,61 @@ describe('synthesise-chapter cloned-voice resolver pre-pass — REAL production 
     expect(provider.calls.length).toBeGreaterThan(0); // then the chapter synthesises normally
     expect(result.segments.length).toBeGreaterThan(0);
   });
+
+  /* #1813, placebo trap (design doc's own "Wiring" test) — a hand-built
+     ResolveChapterDeps could pass `onVoicePrepare` straight through and prove
+     nothing about production: the actual bug was `reportProgress: undefined`
+     baked into `buildDefaultCloneResolverDeps` itself. This drives the SAME
+     repairable-derive scenario as the case above through `synthesiseChapter`
+     with `onVoicePrepare` on `opts` and NO `cloneResolverDepsOverride` touching
+     it, so the only way this can pass is if `synthesiseChapter` really threads
+     `opts.onVoicePrepare` into the real `buildDefaultCloneResolverDeps`. */
+  it('opts.onVoicePrepare fires through the REAL buildDefaultCloneResolverDeps wiring for a repairable derive', async () => {
+    const pcm = sine(1.0, 24000);
+    const wav = encodePcmToWav(pcm, 24000);
+    const dirForEntry = voiceLibrary.entryDir(UUID);
+    mkdirSync(dirForEntry, { recursive: true });
+    writeFileSync(join(dirForEntry, 'master.wav'), wav);
+    await voiceLibrary.writeEntry(
+      baseEntry({
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24000,
+          durationSeconds: 1,
+          transcript: 'A retained reference clip.',
+          transcriptSource: 'whisper',
+          captureMethod: 'upload',
+        },
+      }),
+    );
+    // No .pt written — ptExists() resolves false -> repairable.
+
+    const provider = makeProvider();
+    const onVoicePrepare = vi.fn();
+    const deriveEngineArtifact = vi.fn(async (..._args: unknown[]) => ({
+      previewPcm: Buffer.alloc(10),
+      sampleRate: 24000,
+      baseModel: 'qwen3-tts-0.6b',
+    }));
+
+    await mod.synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast: clonedCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      onVoicePrepare,
+      // Only the sidecar-calling derive step is overridden — onVoicePrepare
+      // itself is NOT overridden via cloneResolverDepsOverride, so it can
+      // only reach the resolver through the real buildDefaultCloneResolverDeps.
+      cloneResolverDepsOverride: {
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'wren', characterName: 'Wren' });
+  });
 });
 
 /* fix wave (Task 18 review, CRITICAL-1) — `defaultPtExists` must resolve a
