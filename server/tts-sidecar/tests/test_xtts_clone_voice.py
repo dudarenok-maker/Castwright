@@ -380,6 +380,90 @@ def test_clone_voice_cleans_up_temp_wav_on_derive_exception(monkeypatch, tmp_pat
     assert not os.path.isfile(pt_path)
 
 
+def test_clone_voice_survives_idle_evict_landing_in_the_ensure_lock_gap(
+    monkeypatch, tmp_path
+) -> None:
+    """GATE 2 A-1 — `clone_voice` used to have NEITHER of `synthesize()`'s two
+    TOCTOU guards: it never claimed `_synth_in_flight`, never refreshed
+    `_last_used`, and re-checked the model with a bare `assert` after
+    re-acquiring `_synth_lock`. An admission-time idle evict
+    (`_idle_evict` -> `maybe_free_idle`) landing between the initial
+    `_ensure_loaded` call and the `with self._synth_lock:` acquisition
+    dropped the model out from under the derive and crashed at the bare
+    assert with an `AssertionError`.
+
+    Reproduced deterministically (no threads needed): wrap `_ensure_loaded`
+    so the FIRST call — the one `clone_voice` makes before it can claim
+    `_synth_in_flight` — evicts the model it just loaded via the real
+    `maybe_free_idle(0)`, exactly mirroring `_idle_evict`'s admission-path
+    call. Before the fix, `clone_voice` never calls `_ensure_loaded` a
+    second time, so it proceeds straight into the bare assert and crashes.
+    After the fix, the claim + re-ensure closes the window: the second
+    `_ensure_loaded` call (the re-ensure) reloads the model, and the derive
+    succeeds."""
+    eng, _voices_dir, _tts_instance = _make_engine(monkeypatch, tmp_path)
+
+    real_ensure = eng._ensure_loaded
+    calls = {"n": 0}
+
+    def _ensure_then_evict_once(model: str, device: Any = None) -> None:
+        calls["n"] += 1
+        real_ensure(model, device=device)
+        if calls["n"] == 1:
+            # Force "infinitely idle" rather than relying on ttl=0 racing
+            # timer resolution — the point is only that the evict lands,
+            # not exactly how idle it looks.
+            eng._last_used = 0.0
+            assert eng.maybe_free_idle(0) is True, "the simulated idle evict must actually land"
+
+    monkeypatch.setattr(eng, "_ensure_loaded", _ensure_then_evict_once)
+
+    result = eng.clone_voice("xtts-race-idle-evict", _ref_audio(), 24000, "an audition line")
+
+    assert isinstance(result, main.SynthResult)
+    assert calls["n"] == 2, (
+        "the re-ensure must have run a second time to recover from the evict "
+        f"that landed after the first — saw {calls['n']} call(s)"
+    )
+
+
+def test_clone_voice_raises_loud_error_not_assertionerror_when_unload_wins_final_gap(
+    monkeypatch, tmp_path
+) -> None:
+    """GATE 2 A-1 — the claim + re-ensure closes the admission-evict window
+    (see the test above), but an explicit `/unload` (Stop button / analyzer
+    auto-evict) doesn't check `_synth_in_flight` at all, only `_synth_lock`
+    — so it can still win the narrow gap between the re-ensure and
+    `clone_voice`'s own `with self._synth_lock:` acquisition. Before the fix
+    that gap's re-check was a bare `assert self._tts is not None`, which
+    crashes with `AssertionError` (or, under `python -O`, an
+    `AttributeError` on the next line) — a programmer-error shape for a
+    reachable runtime race. After the fix it must raise a loud, actionable
+    `RuntimeError` instead, matching how `synthesize()` reports the same
+    lost-model race."""
+    eng, _voices_dir, _tts_instance = _make_engine(monkeypatch, tmp_path)
+
+    real_ensure = eng._ensure_loaded
+
+    def _ensure_then_unload_every_time(model: str, device: Any = None) -> None:
+        real_ensure(model, device=device)
+        # An explicit /unload wins the race every time this runs — so even
+        # the re-ensure's own reload is undone before `clone_voice` reaches
+        # its `with self._synth_lock:` acquisition.
+        with eng._synth_lock:
+            eng._drop_model_locked()
+
+    monkeypatch.setattr(eng, "_ensure_loaded", _ensure_then_unload_every_time)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        eng.clone_voice("xtts-race-unload", _ref_audio(), 24000, "an audition line")
+
+    assert not isinstance(exc_info.value, AssertionError), (
+        f"must be a loud RuntimeError, not a bare assert: {exc_info.value!r}"
+    )
+    assert "unloaded" in str(exc_info.value)
+
+
 def test_clone_voice_and_synthesize_never_interleave_on_shared_model(
     monkeypatch, tmp_path
 ) -> None:

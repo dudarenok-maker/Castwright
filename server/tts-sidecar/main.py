@@ -1616,9 +1616,13 @@ class CoquiEngine(Engine):
         fact evict an entry. `/qwen/evict-voice` has always done the pop and
         the flag in one critical section; this now matches. Callers that only
         want the invalidation (e.g. `clone_voice`'s re-clone path) may ignore
-        it. Lock discipline unchanged: this still takes `_latents_lock` ALONE
-        and never nests it under `_synth_lock`, preserving the sidecar's
-        established `_synth_lock` -> `_latents_lock` ordering."""
+        it. Lock discipline (GATE 2 A-2 — corrected; this used to claim the
+        opposite): this takes `_latents_lock` alone when called from the
+        `/xtts/evict-voice` route, but `clone_voice`'s re-clone path calls it
+        from INSIDE `with self._synth_lock:` — nested, not standalone. Either
+        way the sidecar's established `_synth_lock` -> `_latents_lock`
+        ordering holds; `_latents_lock` is never held while acquiring
+        `_synth_lock`, so there is no inversion and no deadlock."""
         with self._latents_lock:
             self._evict_epoch[voice_id] = self._evict_epoch.get(voice_id, 0) + 1
             return self._latents_cache.pop(voice_id, None) is not None
@@ -2149,119 +2153,154 @@ class CoquiEngine(Engine):
         import TTS as _tts_pkg  # noqa: PLC0415
 
         self._ensure_loaded(model, device=device)
-        effective_language = (language or self._language).strip() or self._language
+        # Claim BEFORE the acquire -- mirrors `synthesize()`'s TOCTOU guard
+        # (GATE 2 A-1): the counter alone is not enough and neither is the
+        # timestamp on its own. Without this, a warm-idle admission evict
+        # (`_idle_evict` -> `maybe_free_idle`) or an explicit `/unload` landing
+        # in the gap between the ensure above and the `with self._synth_lock:`
+        # below drops the model out from under this derive -- `maybe_free_idle`
+        # declines while `_synth_in_flight > 0` (both its lock-free fast-out
+        # and its re-validation under the lock), and a fresh `_last_used`
+        # stops it reading a stale idle timestamp. Decremented in the finally
+        # so a failed derive can't leave the guard stuck.
+        self._synth_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            # Re-ensure AFTER the claim -- see `synthesize()`'s identical
+            # comment: an idle evict can still free the model in the narrow
+            # gap between the ensure above and the claim just taken. No-op on
+            # the warm path (`_ensure_loaded` early-returns when `self._tts`
+            # is set).
+            self._ensure_loaded(model, device=device)
+            effective_language = (language or self._language).strip() or self._language
 
-        # Serialise the derive AND the audition forward under the SAME lock
-        # `synthesize()` uses (`_synth_lock` in __init__) — both touch the
-        # shared `self._tts` model, and Task 8's over-serialization verdict
-        # is intentional/spec-mandated (see `_synth_lock`'s docstring): a
-        # concurrent /synthesize must never interleave with a derive-in-
-        # flight against the same model object. Mirrors QwenEngine.clone_voice,
-        # which holds `_synth_lock` across its own distil+persist+audition.
-        with self._synth_lock:
-            assert self._tts is not None
-            tts_model = self._tts.synthesizer.tts_model
-            config = tts_model.config
+            # Serialise the derive AND the audition forward under the SAME lock
+            # `synthesize()` uses (`_synth_lock` in __init__) — both touch the
+            # shared `self._tts` model, and Task 8's over-serialization verdict
+            # is intentional/spec-mandated (see `_synth_lock`'s docstring): a
+            # concurrent /synthesize must never interleave with a derive-in-
+            # flight against the same model object. Mirrors QwenEngine.clone_voice,
+            # which holds `_synth_lock` across its own distil+persist+audition.
+            with self._synth_lock:
+                # A loud guard, not `assert self._tts is not None` (GATE 2
+                # A-1): the claim above closes the admission-evict window, but
+                # an explicit `/unload` (Stop button / analyzer auto-evict)
+                # doesn't check `_synth_in_flight` at all -- only `_synth_lock`
+                # -- so it can still win the gap between the re-ensure above and
+                # this acquisition. A bare assert here is the same GATE 1
+                # MIN-2 shape already fixed on `synthesize()`'s two branches:
+                # compiled out under `-O`, and even live it reads as a
+                # programmer error rather than a reachable runtime race.
+                tts = self._tts
+                if tts is None:
+                    raise RuntimeError(
+                        "Coqui model was unloaded before this clone finished -- reload it and retry."
+                    )
+                tts_model = tts.synthesizer.tts_model
+                config = tts_model.config
 
-            # Trap 1: config-faithful get_conditioning_latents kwargs. A bare
-            # call defaults to gpt_cond_len=6 — LOWER fidelity than the
-            # engine's own tts()/synthesize() path. Mirror `Xtts.synthesize`'s
-            # own kwarg build (`xtts.py:425-431`) exactly: pull each key from
-            # the loaded model's config, falling back to
-            # get_conditioning_latents' OWN signature default only when the
-            # config lacks it.
-            import inspect  # noqa: PLC0415
+                # Trap 1: config-faithful get_conditioning_latents kwargs. A bare
+                # call defaults to gpt_cond_len=6 — LOWER fidelity than the
+                # engine's own tts()/synthesize() path. Mirror `Xtts.synthesize`'s
+                # own kwarg build (`xtts.py:425-431`) exactly: pull each key from
+                # the loaded model's config, falling back to
+                # get_conditioning_latents' OWN signature default only when the
+                # config lacks it.
+                import inspect  # noqa: PLC0415
 
-            sig = inspect.signature(tts_model.get_conditioning_latents)
+                sig = inspect.signature(tts_model.get_conditioning_latents)
 
-            def _cfg(config_key: str, param_name: str) -> Any:
-                return config.get(config_key, sig.parameters[param_name].default)
+                def _cfg(config_key: str, param_name: str) -> Any:
+                    return config.get(config_key, sig.parameters[param_name].default)
 
-            derive_kwargs = {
-                "gpt_cond_len": _cfg("gpt_cond_len", "gpt_cond_len"),
-                "gpt_cond_chunk_len": _cfg("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
-                "max_ref_length": _cfg("max_ref_len", "max_ref_length"),
-                "sound_norm_refs": _cfg("sound_norm_refs", "sound_norm_refs"),
-            }
+                derive_kwargs = {
+                    "gpt_cond_len": _cfg("gpt_cond_len", "gpt_cond_len"),
+                    "gpt_cond_chunk_len": _cfg("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
+                    "max_ref_length": _cfg("max_ref_len", "max_ref_length"),
+                    "sound_norm_refs": _cfg("sound_norm_refs", "sound_norm_refs"),
+                }
 
-            os.makedirs(self._voices_dir, exist_ok=True)
-            pt_path, json_path = self._voice_paths(voice_id)
+                os.makedirs(self._voices_dir, exist_ok=True)
+                pt_path, json_path = self._voice_paths(voice_id)
 
-            # Trap 2: get_conditioning_latents takes an audio PATH, not an
-            # array (`xtts.py:331`) — write the normalised PCM to a temp WAV
-            # beside the artifact, derive, then ALWAYS delete it (including
-            # on a derive exception — it's scratch, never a durable
-            # artifact, so `os.remove` runs in a `finally`).
-            tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
-            _atomic_wav_save(_float_audio_to_int16_le(ref_audio), int(ref_sr), tmp_wav_path)
-            try:
-                gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
-                    audio_path=tmp_wav_path, **derive_kwargs
-                )
-            finally:
+                # Trap 2: get_conditioning_latents takes an audio PATH, not an
+                # array (`xtts.py:331`) — write the normalised PCM to a temp WAV
+                # beside the artifact, derive, then ALWAYS delete it (including
+                # on a derive exception — it's scratch, never a durable
+                # artifact, so `os.remove` runs in a `finally`).
+                tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
+                _atomic_wav_save(_float_audio_to_int16_le(ref_audio), int(ref_sr), tmp_wav_path)
                 try:
-                    os.remove(tmp_wav_path)
-                except OSError:
-                    pass
+                    gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
+                        audio_path=tmp_wav_path, **derive_kwargs
+                    )
+                finally:
+                    try:
+                        os.remove(tmp_wav_path)
+                    except OSError:
+                        pass
 
-            _atomic_torch_save(
-                torch,
-                {"gpt_cond_latent": gpt_cond_latent, "speaker_embedding": speaker_embedding},
-                pt_path,
-            )
+                _atomic_torch_save(
+                    torch,
+                    {"gpt_cond_latent": gpt_cond_latent, "speaker_embedding": speaker_embedding},
+                    pt_path,
+                )
 
-            # A re-clone of the SAME voice_id (repair/re-derive from fresh
-            # reference audio — the same pattern already shipped for Qwen via
-            # `resolveClonedVoicesForChapter`'s re-derive branch,
-            # clone-voice-resolver.ts:301-334) must invalidate any latents
-            # for this voice already resident in `_latents_cache` from an
-            # earlier synth. Without this, `_load_voice_latents` would keep
-            # serving the OLD tensors on a cache hit — indefinitely, with
-            # `substituted_from` staying None — which is exactly Property 1's
-            # silent-substitution shape, just via a stale cache instead of a
-            # stale file. `_bump_evict_epoch` is idempotent/cheap when
-            # nothing is cached yet (the common first-clone case).
-            self._bump_evict_epoch(voice_id)
+                # A re-clone of the SAME voice_id (repair/re-derive from fresh
+                # reference audio — the same pattern already shipped for Qwen via
+                # `resolveClonedVoicesForChapter`'s re-derive branch,
+                # clone-voice-resolver.ts:301-334) must invalidate any latents
+                # for this voice already resident in `_latents_cache` from an
+                # earlier synth. Without this, `_load_voice_latents` would keep
+                # serving the OLD tensors on a cache hit — indefinitely, with
+                # `substituted_from` staying None — which is exactly Property 1's
+                # silent-substitution shape, just via a stale cache instead of a
+                # stale file. `_bump_evict_epoch` is idempotent/cheap when
+                # nothing is cached yet (the common first-clone case).
+                self._bump_evict_epoch(voice_id)
 
-            # model_id resolution mirrors `_ensure_loaded`'s own mapping.
-            model_id = {
-                "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
-            }.get(model, model)
-            coqui_version = getattr(_tts_pkg, "__version__", "unknown")
+                # model_id resolution mirrors `_ensure_loaded`'s own mapping.
+                model_id = {
+                    "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
+                }.get(model, model)
+                coqui_version = getattr(_tts_pkg, "__version__", "unknown")
 
-            import json as _json  # noqa: PLC0415
+                import json as _json  # noqa: PLC0415
 
-            # GATE 1 MIN-5 — atomic, matching the `.pt` beside it. D-C above
-            # rejected Coqui's `CloningMixin` partly because "a crash mid-write
-            # would leave a corrupt artifact", then wrote this sibling manifest
-            # with exactly the plain `open(..., "w")` it rejected: a kill
-            # between truncate and write left a TRUNCATED manifest where a
-            # valid one had been. Serialise to a string first so `_json.dump`
-            # can never half-write the target — only a fully-formed document
-            # is ever `os.replace`d into place.
-            _atomic_json_write(
-                _json.dumps(
-                    {
-                        "voiceId": voice_id,
-                        "clone": True,
-                        "coquiVersion": coqui_version,
-                        "modelId": model_id,
-                    },
-                    ensure_ascii=False, indent=2,
-                ),
-                json_path,
-            )
+                # GATE 1 MIN-5 — atomic, matching the `.pt` beside it. D-C above
+                # rejected Coqui's `CloningMixin` partly because "a crash mid-write
+                # would leave a corrupt artifact", then wrote this sibling manifest
+                # with exactly the plain `open(..., "w")` it rejected: a kill
+                # between truncate and write left a TRUNCATED manifest where a
+                # valid one had been. Serialise to a string first so `_json.dump`
+                # can never half-write the target — only a fully-formed document
+                # is ever `os.replace`d into place.
+                _atomic_json_write(
+                    _json.dumps(
+                        {
+                            "voiceId": voice_id,
+                            "clone": True,
+                            "coquiVersion": coqui_version,
+                            "modelId": model_id,
+                        },
+                        ensure_ascii=False, indent=2,
+                    ),
+                    json_path,
+                )
 
-            # Audition preview — via the shared low-level inference helper
-            # Task 10's cached-latents synth branch will also call, so both
-            # paths render a cloned voice identically instead of hitting
-            # XTTS's raw low-fidelity low-level `inference()` defaults.
-            audio, sample_rate = self._infer_from_latents(
-                gpt_cond_latent, speaker_embedding, audition_text, effective_language
-            )
+                # Audition preview — via the shared low-level inference helper
+                # Task 10's cached-latents synth branch will also call, so both
+                # paths render a cloned voice identically instead of hitting
+                # XTTS's raw low-fidelity low-level `inference()` defaults.
+                audio, sample_rate = self._infer_from_latents(
+                    gpt_cond_latent, speaker_embedding, audition_text, effective_language
+                )
 
-        log.info("Cloned + cached Coqui voice '%s' from caller clip.", voice_id)
-        return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=sample_rate)
+            log.info("Cloned + cached Coqui voice '%s' from caller clip.", voice_id)
+            return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=sample_rate)
+        finally:
+            self._synth_in_flight -= 1
+            self._last_used = time.monotonic()
 
 
 class KokoroEngine(Engine):
@@ -7151,6 +7190,21 @@ def _coqui_installed_version() -> Optional[str]:
     pip install these agree (coqui-tts sets `__version__` from its own
     package metadata at build time), but they are not the SAME READ and can
     diverge for an editable/dev install or a hand-patched `__version__`.
+
+    GATE 2 A-3 — a divergence is not a one-off: every healthy coqui-cloned
+    voice classifies stale on EVERY chapter while it persists, each
+    re-derive is a real GPU round trip, and the re-derive re-stamps the
+    SAME `__version__` into the manifest, so the stored side never
+    converges back to this one. Deliberately left as two separate reads
+    rather than unified onto one source: `clone_voice` stamping
+    `importlib.metadata.version("coqui-tts")` instead of `__version__`
+    would change what a hand-patched `__version__` does to a cloned
+    voice's manifest, a behaviour
+    `test_manifest_write_is_atomic_a_failed_write_leaves_the_previous_one_intact`
+    (test_xtts_clone_voice.py) exercises on purpose. Normal pip installs
+    never see the loop (hence Minor); an editable/dev install is the
+    realistic trigger.
+
     None (not "unknown") on any failure — the Node side's staleness
     predicate treats an empty/missing current version as "not stale", the
     same fail-safe posture as an unset stored version."""
