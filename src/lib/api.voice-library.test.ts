@@ -13,6 +13,7 @@ import {
   mockAssignLibraryVoice,
   mockRevokeVoiceLibraryEntry,
   _mockAssignGuardError,
+  _mockAssignWrittenSlots,
   _resetMockVoiceLibrary,
 } from './api';
 import { MOCK_VOICE_LIBRARY_ENTRIES, type VoiceLibraryEntry } from '../mocks/voice-library';
@@ -170,7 +171,8 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       characterId: 'c1',
       modelKey: 'qwen3-tts-0.6b',
     });
-    expect(result).toEqual({ updated: 1 });
+    /* `lib-cloned-demo` is CLONED, so both clone-capable slots are written. */
+    expect(result).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
   });
 
   /* fs-38 Wave 3c, Task 41 — this test used to pin the OLD "deliberate lag"
@@ -190,12 +192,64 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       characterId: 'c1',
       modelKey: 'coqui-xtts-v2',
     });
-    expect(result).toEqual({ updated: 1 });
+    expect(result).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
   });
 
   it('mockAssignLibraryVoice 409s the real lib-cloned-revoked fixture', async () => {
     await expect(
       mockAssignLibraryVoice('lib-cloned-revoked', { bookId: 'b1', characterId: 'c1' }),
     ).rejects.toThrow('Consent for this voice has been revoked.');
+  });
+
+  /* GATE 1 [F1] — the mock's mirror of the route's `shouldWriteCoquiSlot`.
+     The point of mirroring it at all is that mock mode must be able to
+     produce the DECLINED-coqui response, or no mock-mode surface (including
+     the e2e spec) can exercise the reconciliation the finding is about. */
+  describe('_mockAssignWrittenSlots — which slots the mock reports written', () => {
+    it('reports both slots for a cloned entry (always clone-capable on both)', () => {
+      expect(_mockAssignWrittenSlots(makeCloned())).toEqual(['qwen', 'coqui']);
+    });
+
+    it('reports qwen ONLY for a designed entry with no coqui artifact', () => {
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({ provenance: 'designed', engines: { qwen: { status: 'ready' } } }),
+        ),
+      ).toEqual(['qwen']);
+    });
+
+    it('reports both slots for a designed entry that already carries an xtts artifact', () => {
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({
+            provenance: 'designed',
+            engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+          }),
+        ),
+      ).toEqual(['qwen', 'coqui']);
+    });
+
+    it('reports qwen ONLY for an imported entry, even with an xtts artifact present', () => {
+      /* Discriminating against the proxy: `imported` never qualifies on the
+         real route regardless of what it has derived, so the xtts check must
+         not be reached for it. */
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({
+            provenance: 'imported',
+            consent: undefined,
+            engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+          }),
+        ),
+      ).toEqual(['qwen']);
+    });
+
+    it('every designed fixture in MOCK_VOICE_LIBRARY_ENTRIES is qwen-only, so mock mode can reach the declined-coqui path', () => {
+      const designed = MOCK_VOICE_LIBRARY_ENTRIES.filter((e) => e.provenance === 'designed');
+      expect(designed.length).toBeGreaterThan(0);
+      for (const entry of designed) {
+        expect(_mockAssignWrittenSlots(entry)).toEqual(['qwen']);
+      }
+    });
   });
 });

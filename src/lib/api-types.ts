@@ -1546,7 +1546,21 @@ export interface paths {
         put?: never;
         /** Assign a library voice to a character */
         post: operations["assignVoiceLibraryEntry"];
-        delete?: never;
+        /**
+         * Remove a library voice's assignment from one character
+         * @description The inverse of the assign above: drops every `overrideTtsVoices` slot on
+         *     that ONE character in that ONE book whose `libraryUuid` is this voice,
+         *     returning the character to "no voice assigned" (the engine's ordinary
+         *     catalogue/attribute inference takes over).
+         *
+         *     Never refuses — unassigning destroys no artifact, so it works even for a
+         *     revoked or already-deleted library entry, which is precisely when a
+         *     character is most likely to be stuck holding a dangling assignment. It is
+         *     also the only way off a cloned slot: `PUT /api/voices/{voiceId}/override`
+         *     preserves cloned provenance by design, so a stock-voice pick over a clone
+         *     still renders the clone.
+         */
+        delete: operations["unassignVoiceLibraryEntry"];
         options?: never;
         head?: never;
         patch?: never;
@@ -7274,15 +7288,29 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Entry deleted */
+            /**
+             * @description Two outcomes, discriminated by `deleted` (fs-38 Wave 3c).
+             *
+             *     `deleted: true` — the artifact purge was clean and the manifest
+             *     entry is gone.
+             *
+             *     `deleted: false` + `artifactPurgeIncomplete: true` — at least one
+             *     derived artifact could NOT be erased, so the manifest entry is
+             *     deliberately RETAINED: the consent gates key off that entry, and
+             *     dropping it would leave the surviving artifact LESS gated than it
+             *     was before the delete. The client should keep showing the entry
+             *     and let the user retry. `deleted: false` is literal, not an error
+             *     code — the request itself succeeded.
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        /** @enum {boolean} */
-                        deleted: true;
+                        deleted: boolean;
+                        artifactPurgeIncomplete?: boolean;
+                        artifactPurgeFailedPaths?: string[];
                     };
                 };
             };
@@ -7578,7 +7606,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Character's overrideTtsVoices slot updated */
+            /** @description Character's overrideTtsVoices slot(s) updated */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7586,6 +7614,17 @@ export interface operations {
                 content: {
                     "application/json": {
                         updated: number;
+                        /**
+                         * @description The engine slots this assign actually PERSISTED (fs-38 Wave 3c).
+                         *     `qwen` is always written; `coqui` only when the entry is
+                         *     clone-capable there too (a cloned entry always is; a designed
+                         *     entry only while it still has its retained reference clip on
+                         *     disk; an imported entry never). Clients that mirror the assign
+                         *     into local state MUST reconcile against this rather than
+                         *     assuming the engine they asked for was written — otherwise the
+                         *     UI shows an assignment the server declined to make.
+                         */
+                        written: ("qwen" | "coqui")[];
                     };
                 };
             };
@@ -7610,6 +7649,50 @@ export interface operations {
                         error: string;
                     };
                 };
+            };
+        };
+    };
+    unassignVoiceLibraryEntry: {
+        parameters: {
+            query: {
+                bookId: string;
+                characterId: string;
+            };
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description Slots cleared. `cleared: []` means the character was not carrying this
+             *     voice — the requested end state already held, which is not an error.
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        cleared: ("qwen" | "coqui")[];
+                    };
+                };
+            };
+            /** @description bookId or characterId missing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No book or character matching the request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

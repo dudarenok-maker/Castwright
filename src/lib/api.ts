@@ -59,7 +59,7 @@ import type {
   AnalyzerDeviceResponse,
   BookQaReport,
 } from './types';
-import type { components as ApiComponents } from './api-types';
+import type { components as ApiComponents, paths as ApiPaths } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
@@ -9415,6 +9415,30 @@ export interface VoiceLibraryPatch {
   pinned?: boolean;
   persona?: string;
 }
+/* fs-38 Wave 3c — DELETE /api/voice-library/:voiceUuid no longer always
+   erases. When the artifact purge leaves anything behind, the route KEEPS the
+   manifest entry (the consent gates key off it — dropping it would leave the
+   surviving artifact less gated than before the delete) and answers
+   `deleted: false` + `artifactPurgeIncomplete`. So `deleted` is a real
+   boolean, not the `enum: [true]` the contract used to pin; see the
+   openapi.yaml description on that response. */
+export interface VoiceLibraryDeleteResult {
+  deleted: boolean;
+  artifactPurgeIncomplete?: boolean;
+  artifactPurgeFailedPaths?: string[];
+}
+/* fs-38 Wave 3c GATE 1 [F1] — the assign response now names the engine slots
+   the server ACTUALLY persisted. `qwen` is always written; `coqui` only when
+   the entry is clone-capable there too. Callers that mirror an assign into
+   local state must reconcile against this, never against the engine they
+   asked for. Both shapes are pinned to the generated OpenAPI types so the
+   client can't drift from the contract. */
+export type CloneEngineSlot =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['post']['responses']['200']['content']['application/json']['written'][number];
+export type AssignLibraryVoiceResult =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['post']['responses']['200']['content']['application/json'];
+export type UnassignLibraryVoiceResult =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['delete']['responses']['200']['content']['application/json'];
 
 async function realListVoiceLibrary(): Promise<{ voices: VoiceLibraryEntry[] }> {
   const res = await fetch('/api/voice-library');
@@ -9444,7 +9468,7 @@ async function realPatchVoiceLibrary(
 async function realDeleteVoiceLibrary(
   voiceUuid: string,
   opts?: { confirm?: boolean },
-): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+): Promise<VoiceLibraryDeleteResult | { usage: VoiceLibraryUsageEntry[] }> {
   const qs = opts?.confirm ? '?confirm=1' : '';
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}${qs}`, {
     method: 'DELETE',
@@ -9542,7 +9566,7 @@ async function realPromoteToLibrary(body: {
 async function realAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
-): Promise<{ updated: number }> {
+): Promise<AssignLibraryVoiceResult> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -9560,6 +9584,25 @@ async function realAssignLibraryVoice(
   if (!res.ok)
     throw new Error(
       `Voice library assign failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* GATE 1, owner-decided — the explicit "Remove voice" affordance's wire call.
+   Query params (not a DELETE body) to match this file's other DELETE callers
+   and the route's own `?confirm=1` convention. */
+async function realUnassignLibraryVoice(
+  voiceUuid: string,
+  args: { bookId: string; characterId: string },
+): Promise<UnassignLibraryVoiceResult> {
+  const qs = new URLSearchParams({ bookId: args.bookId, characterId: args.characterId });
+  const res = await fetch(
+    `/api/voice-library/${encodeURIComponent(voiceUuid)}/assign?${qs.toString()}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Voice library unassign failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -9659,7 +9702,7 @@ export async function mockPatchVoiceLibrary(
 export async function mockDeleteVoiceLibrary(
   voiceUuid: string,
   opts?: { confirm?: boolean },
-): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+): Promise<VoiceLibraryDeleteResult | { usage: VoiceLibraryUsageEntry[] }> {
   await wait(60);
   if (voiceUuid === 'lib-used' && !opts?.confirm) {
     return { usage: MOCK_VOICE_LIBRARY_USAGE };
@@ -9802,16 +9845,55 @@ export function _mockAssignGuardError(
   return null;
 }
 
+/* GATE 1 [F1] — the mock's mirror of the real route's `shouldWriteCoquiSlot`
+   (server/src/routes/voice-library.ts). The qwen slot is unconditional there
+   and here.
+
+   The coqui arm is an APPROXIMATION, deliberately: the real route decides a
+   DESIGNED entry by `stat`-ing its retained reference clip on disk
+   (`hasRetainedDesignedClip`), and mock mode has no filesystem to stat. The
+   nearest observable proxy on the entry itself is whether it carries an
+   `xtts` artifact slot at all — a designed voice that has already derived on
+   Coqui necessarily had a clip to derive from. So the two can disagree for
+   one case the mock cannot represent (a designed entry that still has its
+   clip but has never derived); every mock fixture is unambiguous. CLONED
+   entries always qualify and IMPORTED never do — those two arms are exact.
+
+   Exported for direct unit testing, same rationale as `_mockAssignGuardError`
+   above. */
+export function _mockAssignWrittenSlots(entry: VoiceLibraryEntry): CloneEngineSlot[] {
+  const coqui =
+    entry.provenance === 'cloned' ||
+    (entry.provenance === 'designed' && !!entry.engines?.xtts);
+  return coqui ? ['qwen', 'coqui'] : ['qwen'];
+}
+
 export async function mockAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
-): Promise<{ updated: number }> {
+): Promise<AssignLibraryVoiceResult> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
   const guardError = _mockAssignGuardError(entry, body.modelKey);
   if (guardError) throw new Error(guardError);
-  return { updated: 1 };
+  return { updated: 1, written: _mockAssignWrittenSlots(entry) };
+}
+
+/* GATE 1 — mock "Remove voice". Mock mode keeps characters in the redux cast
+   slice, never round-tripped through `api.*`, so this has no cast.json to
+   inspect and cannot narrow `cleared` to the slots that really pointed at
+   this voice. It therefore names BOTH clone-capable slots, and correctness is
+   carried by the reducer that consumes it: `castActions.clearOverrideVoiceSlot`
+   applies the SAME `slot.libraryUuid === voiceUuid` predicate the real route
+   applies server-side, so an over-broad `cleared` still cannot remove a slot
+   holding a different library voice. */
+export async function mockUnassignLibraryVoice(
+  _voiceUuid: string,
+  _args: { bookId: string; characterId: string },
+): Promise<UnassignLibraryVoiceResult> {
+  await wait(60);
+  return { cleared: ['qwen', 'coqui'] };
 }
 
 export async function mockSampleLibraryVoice(
@@ -10202,6 +10284,7 @@ const real = {
   discardLibraryRedesign: realDiscardLibraryRedesign,
   promoteToLibrary: realPromoteToLibrary,
   assignLibraryVoice: realAssignLibraryVoice,
+  unassignLibraryVoice: realUnassignLibraryVoice,
   sampleLibraryVoice: realSampleLibraryVoice,
   cloneVoiceSample: realCloneVoiceSample,
   cloneVoice: realCloneVoice,
@@ -10494,6 +10577,7 @@ const mock = {
   discardLibraryRedesign: mockDiscardLibraryRedesign,
   promoteToLibrary: mockPromoteToLibrary,
   assignLibraryVoice: mockAssignLibraryVoice,
+  unassignLibraryVoice: mockUnassignLibraryVoice,
   sampleLibraryVoice: mockSampleLibraryVoice,
   cloneVoiceSample: mockCloneVoiceSample,
   cloneVoice: mockCloneVoice,

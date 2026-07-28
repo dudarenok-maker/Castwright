@@ -1953,14 +1953,28 @@ paths:
           description: Pass '1' to delete despite in-use warnings.
       responses:
         '200':
-          description: Entry deleted
+          description: |
+            Two outcomes, discriminated by `deleted` (fs-38 Wave 3c).
+
+            `deleted: true` — the artifact purge was clean and the manifest
+            entry is gone.
+
+            `deleted: false` + `artifactPurgeIncomplete: true` — at least one
+            derived artifact could NOT be erased, so the manifest entry is
+            deliberately RETAINED: the consent gates key off that entry, and
+            dropping it would leave the surviving artifact LESS gated than it
+            was before the delete. The client should keep showing the entry
+            and let the user retry. `deleted: false` is literal, not an error
+            code — the request itself succeeded.
           content:
             application/json:
               schema:
                 type: object
                 required: [deleted]
                 properties:
-                  deleted: { type: boolean, enum: [true] }
+                  deleted: { type: boolean }
+                  artifactPurgeIncomplete: { type: boolean }
+                  artifactPurgeFailedPaths: { type: array, items: { type: string } }
         '404':
           description: No library entry with that voiceUuid
         '409':
@@ -2158,14 +2172,26 @@ paths:
                     (`getResolvedTtsModelKey()`).
       responses:
         '200':
-          description: Character's overrideTtsVoices slot updated
+          description: Character's overrideTtsVoices slot(s) updated
           content:
             application/json:
               schema:
                 type: object
-                required: [updated]
+                required: [updated, written]
                 properties:
                   updated: { type: integer }
+                  written:
+                    type: array
+                    items: { type: string, enum: [qwen, coqui] }
+                    description: |
+                      The engine slots this assign actually PERSISTED (fs-38 Wave 3c).
+                      `qwen` is always written; `coqui` only when the entry is
+                      clone-capable there too (a cloned entry always is; a designed
+                      entry only while it still has its retained reference clip on
+                      disk; an imported entry never). Clients that mirror the assign
+                      into local state MUST reconcile against this rather than
+                      assuming the engine they asked for was written — otherwise the
+                      UI shows an assignment the server declined to make.
         '404':
           description: No library entry, book, or character matching the request
         '409':
@@ -2180,6 +2206,43 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
+    delete:
+      summary: Remove a library voice's assignment from one character
+      operationId: unassignVoiceLibraryEntry
+      description: |
+        The inverse of the assign above: drops every `overrideTtsVoices` slot on
+        that ONE character in that ONE book whose `libraryUuid` is this voice,
+        returning the character to "no voice assigned" (the engine's ordinary
+        catalogue/attribute inference takes over).
+
+        Never refuses — unassigning destroys no artifact, so it works even for a
+        revoked or already-deleted library entry, which is precisely when a
+        character is most likely to be stuck holding a dangling assignment. It is
+        also the only way off a cloned slot: `PUT /api/voices/{voiceId}/override`
+        preserves cloned provenance by design, so a stock-voice pick over a clone
+        still renders the clone.
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+        - { in: query, name: bookId, required: true, schema: { type: string } }
+        - { in: query, name: characterId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: |
+            Slots cleared. `cleared: []` means the character was not carrying this
+            voice — the requested end state already held, which is not an error.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared:
+                    type: array
+                    items: { type: string, enum: [qwen, coqui] }
+        '400':
+          description: bookId or characterId missing
+        '404':
+          description: No book or character matching the request
 
   /api/voice-library/{voiceUuid}/sample:
     post:
