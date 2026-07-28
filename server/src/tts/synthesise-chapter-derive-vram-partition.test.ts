@@ -1030,6 +1030,142 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 2 
   });
 });
 
+/* [#1894] — the RENDER-phase half of the eviction symmetry.
+   `synthGroupsSerialized` evicted Qwen for the Coqui phase but never the
+   reverse, so XTTS (~3.5 GB) stayed resident for the rest of the render.
+
+   Asserted as a SEQUENCE, in the same shared `callOrder` array the rest of
+   this file uses, for the reason the file header already gives: an
+   end-state assertion ("fetch was eventually called with engine coqui")
+   passes for an implementation that evicts at the WRONG moment — before the
+   Coqui groups, say, which would unload the model those groups need. Only
+   the ordering distinguishes correct from merely-present. Synth calls are
+   tagged into the same array so the evict's position relative to the LAST
+   Coqui synth is visible, not just its position relative to the other
+   evict. */
+describe('[#1894] render phase evicts Coqui once its groups are done', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetUserSettingsCache();
+  });
+
+  /** A provider that tags every synth into the shared `callOrder`. No clone
+      or library voices anywhere in this chapter — the pre-pass issues zero
+      derives and zero evicts, so every entry below comes from the render
+      path this test is about. */
+  function taggingProvider(callOrder: string[], engine: string): TtsProvider {
+    return {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        callOrder.push(`synth:${engine}`);
+        void input;
+        return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+  }
+
+  /* Orin carries a plain DESIGNED qwen name (no libraryUuid, no
+     provenance) so `pickVoiceForEngine('qwen', …)` resolves non-empty.
+     Without it `applyQwenFallback`'s `needsFallback` fires on the empty
+     voiceName and reroutes him to Kokoro — the chapter then mixes
+     coqui+kokoro, `synthGroupsSerialized` short-circuits, and this suite
+     would silently test nothing. Neither character touches the voice
+     library, so the pre-pass issues zero derives and zero evicts: every
+     entry in `callOrder` comes from the render path. */
+  const mixedCast: CastCharacter[] = [
+    { id: 'nova', name: 'Nova', gender: 'female', ttsEngine: 'coqui' },
+    {
+      id: 'orin',
+      name: 'Orin',
+      gender: 'male',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'Orin Designed' } },
+    },
+  ];
+
+  it('a mixed qwen+coqui chapter ends its Coqui phase with an `evict:coqui`, AFTER the last coqui synth', async () => {
+    const callOrder: string[] = [];
+    mockEvictFetch(callOrder);
+    const qwenProvider = taggingProvider(callOrder, 'qwen');
+    const coquiProvider = taggingProvider(callOrder, 'coqui');
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coquiProvider, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: qwenProvider, modelKey: 'qwen3-tts-0.6b' as const };
+
+    await synthesiseChapter({
+      // groups[0] (Nova) is the standalone anchor — it renders BEFORE
+      // synthGroupsSerialized is reached, so `groups.slice(1)` is
+      // [orin(qwen), nova(coqui), orin(qwen)]: genuinely mixed.
+      sentences: [sentence(1, 'nova'), sentence(2, 'orin'), sentence(3, 'nova'), sentence(4, 'orin')],
+      cast: mixedCast,
+      provider: qwenProvider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+    });
+
+    // The anchor renders first, outside the wrapper. Then the wrapper:
+    // pre-evict (qwen) groups, evict qwen, coqui groups, evict coqui.
+    expect(callOrder).toEqual([
+      'synth:coqui', // anchor
+      'synth:qwen',
+      'synth:qwen',
+      'evict:qwen',
+      'synth:coqui',
+      'evict:coqui',
+    ]);
+  });
+
+  it('a failed trailing evict never destroys the finished chapter (fail-soft)', async () => {
+    const callOrder: string[] = [];
+    /* Only the TRAILING evict fails — a sidecar recycle landing between the
+       two. Every group is already synthesised at that point, so a throw here
+       would discard completed work purely to free VRAM. */
+    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
+        engine?: string;
+      };
+      callOrder.push(`evict:${body.engine}`);
+      if (body.engine === 'coqui') throw new Error('ECONNREFUSED');
+      return new Response(null, { status: 200 });
+    });
+    const qwenProvider = taggingProvider(callOrder, 'qwen');
+    const coquiProvider = taggingProvider(callOrder, 'coqui');
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coquiProvider, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: qwenProvider, modelKey: 'qwen3-tts-0.6b' as const };
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'nova'), sentence(2, 'orin'), sentence(3, 'nova'), sentence(4, 'orin')],
+      cast: mixedCast,
+      provider: qwenProvider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+    });
+
+    expect(callOrder).toContain('evict:coqui'); // it was attempted…
+    expect(result.segments).toHaveLength(4); // …and every segment survived it.
+  });
+
+  it('a single-engine chapter still never evicts at all (the over-trigger guard #1894 warns about)', async () => {
+    const callOrder: string[] = [];
+    mockEvictFetch(callOrder);
+    const qwenProvider = taggingProvider(callOrder, 'qwen');
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin'), sentence(2, 'orin'), sentence(3, 'orin')],
+      cast: mixedCast,
+      provider: qwenProvider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+    });
+
+    expect(callOrder.filter((c) => c.startsWith('evict:'))).toEqual([]);
+  });
+});
+
 function mockFetchSpy() {
   return vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(null, { status: 200 }));
 }

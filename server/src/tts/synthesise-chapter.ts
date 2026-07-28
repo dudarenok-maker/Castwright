@@ -1326,6 +1326,21 @@ export async function synthesiseChapter(
        through and get rerouted, which is the exact defect class this wave
        exists to close.
 
+       GATE 1 M-3 — that predicate choice is right, but do NOT read the
+       paragraph above as "this branch catches the malformed case". The
+       THROW below also requires `(!voiceName || routeEngineUnavailable)`,
+       and a malformed cloned slot resolves through `pickVoiceForEngine` to
+       its non-empty human-readable `name` — so with a HEALTHY routed engine
+       `voiceName` is truthy and this backstop does not fire at all. Live
+       coverage for the malformed case comes from the pre-pass (which
+       extracts the uuid through `libraryVoiceForEngine` and hard-fails
+       `misconfigured`), not from here. The Task 21 test that covers this
+       shape (`synthesise-chapter-cloned-exemption.test.ts`) passes only
+       because it ALSO leaves coqui install-state unset, satisfying the
+       second disjunct. The predicate still matters for the case this
+       branch DOES catch — an unavailable routed engine — where treating a
+       malformed slot as not-cloned would let it reroute.
+
        Defence-in-depth, not the live guard: the cloned-voice resolver
        pre-pass above (`resolveClonedVoicesForChapter`, ~:1119) now runs
        BEFORE any group reaches this function, over exactly the same
@@ -1746,7 +1761,18 @@ export async function synthesiseChapter(
      real regression against synthesise-chapter.test.ts's plain, zero-coqui
      fake-timer batching suite while building this fix. Scoping to books
      that actually touch Coqui somewhere mirrors the leading evict's own
-     scope (only fires when a coqui-engine request exists at all). */
+     scope (only fires when a coqui-engine request exists at all).
+
+     GATE 1 M-5 — precise scope of what dropping the `coquiEvict.ok` gate
+     actually fixed, since the fix-round note below reads broader than the
+     code: it covers the cross-chapter case ONLY WHEN THIS chapter also has
+     coqui-engine REQUESTS. A prior chapter that merely RENDERED coqui
+     groups (catalogue voices — no cloned and no designed library voice)
+     leaves XTTS resident, and a following chapter with zero coqui requests
+     plus a real qwen derive returns early right here, so that derive still
+     runs with XTTS resident. The narrowing is deliberate (see the
+     regression above); `synthGroupsSerialized`'s render-phase evicts are
+     the backstop for the residency itself ([#1894] added the trailing one). */
   const hasCoquiPresence = clonedCoquiRequests.length > 0 || designedCoquiRequests.length > 0;
   const qwenEvict: { promise: Promise<void> | null } = { promise: null };
   const beforeFirstQwenDerive = (): Promise<void> => {
@@ -2612,6 +2638,47 @@ export async function synthesiseChapter(
     for (const [k, v] of await synthGroupsBatched(preEvictGroups, onDone)) out.set(k, v);
     await evictQwenForCoquiPhase();
     for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
+    /* [#1894] — the missing half of fs-60's eviction. This wrapper evicted
+       Qwen FOR the Coqui phase but never the reverse, so XTTS (~3.5 GB)
+       stayed resident for the whole rest of the render: into the next
+       chapter, which on this project's Qwen-default books usually has no
+       Coqui work at all and is exactly the render XTTS then crowds out.
+
+       Placed HERE, at the end of the Coqui phase, because this is the one
+       point where "no further Coqui work is queued" is a FACT rather than a
+       prediction: the Coqui phase is the last thing this dispatch does. That
+       matters — #1894 records a near-miss where gating a different evict on
+       "a Qwen load is imminent" over-triggered on nearly every chapter of
+       nearly every book (Qwen is the default engine) and broke an unrelated
+       fake-timer batching suite. This gate is not that: it is the exact
+       mirror of the `evictQwenForCoquiPhase()` call three lines up, under
+       the identical mixed-engine condition, so it fires only where that one
+       already does. A chapter that never mixes engines short-circuits above
+       and is untouched.
+
+       The engine-partition invariant is preserved, not weakened: the
+       sequence is preEvict → evict qwen → coqui → evict coqui, so the two
+       are never co-resident at any point. Cost is symmetric with the leading
+       evict — a mixed chapter reloads XTTS (and its `_latents_cache`, which
+       Task 11 clears on unload) once per mixed dispatch — and is accepted
+       deliberately: 3.5 GB held across an entire book is the worse trade.
+
+       Fail-SOFT, deliberately and unlike the leading evict: every group is
+       already synthesised by the time this runs, so letting a sidecar
+       recycle window (502/ECONNREFUSED on `/unload`) throw here would
+       destroy a chapter's completed work purely to free VRAM — the exact
+       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. The
+       leading evict's own bare `await` is untouched here; it is a separate
+       finding with its own reconciliation against main. */
+    try {
+      await evictCoquiForQwenPhase();
+    } catch (err) {
+      console.warn(
+        '[synthesise-chapter] failed to evict Coqui after the chapter’s Coqui phase — continuing; ' +
+          'XTTS stays resident until the next unload:',
+        err,
+      );
+    }
     return out;
   }
 
