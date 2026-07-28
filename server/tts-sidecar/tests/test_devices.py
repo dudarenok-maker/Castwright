@@ -342,21 +342,38 @@ class _FakeEvictSingleton:
         return True
 
 
-def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev):
+class _FakeEvictCoqui:
+    """Matches CoquiEngine's residency surface for _idle_evict: a `_device`
+    attribute and a `maybe_free_idle(ttl)` that reports it freed."""
+
+    def __init__(self, device):
+        self._device = device
+        self.freed = 0
+        self.ttls = []
+
+    def maybe_free_idle(self, ttl_seconds):
+        self.freed += 1
+        self.ttls.append(ttl_seconds)
+        return True
+
+
+def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu"):
     qwen = _FakeEvictQwen(qwen_dev)
     asr = _FakeEvictSingleton("_device", asr_dev)
     spk = _FakeEvictSingleton("device", spk_dev)
+    coqui = _FakeEvictCoqui(coqui_dev)
     monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.setitem(main.ENGINES, "coqui", coqui)
     monkeypatch.setattr(main, "ASR", asr)
     monkeypatch.setattr(main, "SPK", spk)
-    return qwen, asr, spk
+    return qwen, asr, spk, coqui
 
 
 def test_idle_evict_only_frees_engines_on_target_card(monkeypatch):
     """Qwen on cuda:0, ASR on cuda:1, SPK on cuda:0. Admitting onto cuda:0 must
     free Qwen (design + base17) and SPK, but NOT ASR (different card) — the
     multi-GPU over-eviction #1721 fixes."""
-    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
+    qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
     assert main._idle_evict("cuda:0", "qwen") is True
     assert (qwen.design_freed, qwen.base17_freed) == (1, 1)
     assert spk.freed == 1
@@ -366,7 +383,7 @@ def test_idle_evict_only_frees_engines_on_target_card(monkeypatch):
 def test_idle_evict_targets_the_other_card(monkeypatch):
     """Same layout, admitting onto cuda:1 instead: only ASR (the cuda:1
     resident) is freed; Qwen + SPK on cuda:0 are untouched."""
-    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
+    qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
     assert main._idle_evict("cuda:1", "qwen") is True
     assert asr.freed == 1
     assert (qwen.design_freed, qwen.base17_freed) == (0, 0)
@@ -377,7 +394,7 @@ def test_idle_evict_skips_cpu_resident_engines(monkeypatch):
     """An engine resident on cpu holds no VRAM on any GPU, so a GPU admission
     never evicts it (evicting would just cost a needless reload). ASR defaults
     to cpu — admitting onto cuda:0 must leave it alone."""
-    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda:0", "cpu", "cpu")
+    qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cpu", "cpu")
     assert main._idle_evict("cuda:0", "qwen") is True  # qwen still freed
     assert asr.freed == 0
     assert spk.freed == 0
@@ -386,8 +403,43 @@ def test_idle_evict_skips_cpu_resident_engines(monkeypatch):
 def test_idle_evict_unindexed_cuda_is_card_zero(monkeypatch):
     """A resident engine reporting bare "cuda" (no index) normalises to card 0,
     so it's freed for a cuda:0 admission and spared for cuda:1."""
-    qwen, asr, spk = _wire_evict_engines(monkeypatch, "cuda", "cuda", "cuda")
+    qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda", "cuda", "cuda")
     assert main._idle_evict("cuda:1", "qwen") is False  # nothing on card 1
     assert (qwen.design_freed, spk.freed, asr.freed) == (0, 0, 0)
     assert main._idle_evict("cuda:0", "qwen") is True
     assert (qwen.design_freed, qwen.base17_freed, asr.freed, spk.freed) == (1, 1, 1, 1)
+
+
+def test_idle_evict_frees_an_idle_coqui_on_the_target_card(monkeypatch):
+    """#1894 — a starved non-Coqui op reclaims a resident, idle XTTS."""
+    _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:0")
+    assert main._idle_evict("cuda:0", "qwen") is True
+    assert coqui.freed == 1
+    assert coqui.ttls == [main._coqui_idle_ttl()]
+
+
+def test_idle_evict_skips_coqui_on_another_card(monkeypatch):
+    _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:1")
+    assert main._idle_evict("cuda:0", "qwen") is False
+    assert coqui.freed == 0
+
+
+def test_idle_evict_never_evicts_coqui_for_a_coqui_op(monkeypatch):
+    """Coqui is a PRIMARY engine, unlike the transient models beside it here:
+    evicting it for a starved Coqui op would unload the very model that op is
+    about to reload. Admission gives a resident engine no free pass, so this
+    is reachable."""
+    _q, _a, _s, coqui = _wire_evict_engines(monkeypatch, "cpu", "cpu", "cpu", coqui_dev="cuda:0")
+    assert main._idle_evict("cuda:0", "coqui") is False
+    assert coqui.freed == 0
+
+
+def test_coqui_idle_ttl_defaults_and_floors(monkeypatch):
+    monkeypatch.delenv("COQUI_IDLE_TTL", raising=False)
+    assert main._coqui_idle_ttl() == 30.0
+    monkeypatch.setenv("COQUI_IDLE_TTL", "90")
+    assert main._coqui_idle_ttl() == 90.0
+    monkeypatch.setenv("COQUI_IDLE_TTL", "1")  # below the 5s floor -> default
+    assert main._coqui_idle_ttl() == 30.0
+    monkeypatch.setenv("COQUI_IDLE_TTL", "not-a-number")
+    assert main._coqui_idle_ttl() == 30.0

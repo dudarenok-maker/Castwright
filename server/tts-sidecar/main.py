@@ -2717,6 +2717,17 @@ def _idle_evict(device_key: str, engine: str) -> bool:
             freed = SPK.maybe_free_idle(0.0) or freed
         except Exception:
             pass
+    # Coqui (#1894). Unlike everything above, this is a PRIMARY synth engine —
+    # so it is skipped when the admitting op is itself Coqui (evicting would
+    # unload the model that op is about to reload), and it uses a real idle TTL
+    # rather than the 0.0 the transient models take.
+    if engine != "coqui":
+        coqui = ENGINES.get("coqui")
+        if coqui is not None and _same_card(getattr(coqui, "_device", None), device_key):
+            try:
+                freed = coqui.maybe_free_idle(_coqui_idle_ttl()) or freed
+            except Exception:
+                pass
     return freed
 
 
@@ -5329,6 +5340,30 @@ def _spk_idle_ttl() -> float:
     except (TypeError, ValueError):
         return _SPK_IDLE_TTL_DEFAULT
     return ttl if ttl >= 5.0 else _SPK_IDLE_TTL_DEFAULT
+
+
+# Default seconds of Coqui inactivity before an ADMISSION-PATH evict may free
+# the resident XTTS model (#1894). Override via COQUI_IDLE_TTL. Must match the
+# registry sidecar.coquiIdleTtl default.
+#
+# 30, not the 120 its neighbours use, because Coqui deliberately has NO
+# background watchdog: those TTLs answer "how long before we reclaim
+# proactively", while this one only answers "was this in use just now", and it
+# is consulted solely when another op is already starved. At 120 the lever
+# would refuse in most real chapter gaps and the starved op would fail instead.
+_COQUI_IDLE_TTL_DEFAULT = 30.0
+
+
+def _coqui_idle_ttl() -> float:
+    """Resolve COQUI_IDLE_TTL (seconds) with a safe default + 5 s floor —
+    mirrors `_spk_idle_ttl`. Too small and a mixed-engine book evicts XTTS
+    between groups and pays the ~90 s reload; too large and the lever declines
+    while a render fails for want of the VRAM."""
+    try:
+        ttl = float(os.environ.get("COQUI_IDLE_TTL", _COQUI_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _COQUI_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _COQUI_IDLE_TTL_DEFAULT
 
 
 async def _spk_idle_watchdog() -> None:

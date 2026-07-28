@@ -104,6 +104,34 @@ def test_idle_evict_then_place():
     assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
 
 
+def test_starved_qwen_admits_after_coqui_is_evicted():
+    """#1894 end to end at the placement seam: an op that would have been told
+    `noCapacity` is admitted once the idle Coqui hold is released."""
+    devices = [dev(free=8000)]
+    ledger = main.ReservationLedger()
+    coqui_hold = ledger.hold("cuda:0", 3000)
+    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+    evicted = []
+
+    def evict(device_key, engine):
+        if engine == "coqui":
+            return False
+        evicted.append((device_key, engine))
+        ledger.release(coqui_hold)
+        return True
+
+    pc = main.PlacementController(
+        probe=lambda: devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict=evict,
+        is_resident=lambda e: None,
+    )
+    assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
+    assert evicted == [("cuda:0", "qwen")]
+
+
 def test_try_hold_is_atomic_under_concurrency():
     """The decide+hold must be atomic: N threads racing to reserve a device
     that fits only ONE peak must grant exactly one — proving the ledger's
