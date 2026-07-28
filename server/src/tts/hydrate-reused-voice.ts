@@ -129,8 +129,22 @@ export async function resolveReusedVoiceFields(
     /* Found a source that carries the bespoke voice — inherit its engine +
        override. (Engine may be absent on the source even when the override is
        present — e.g. a source written before the per-character engine field;
-       callers fold this over the project default, so undefined is fine.) */
+       callers fold this over the project default, so undefined is fine.)
+
+       [#1885] — a source found via a matchedFrom chain-walk can be a real
+       person's cloned voice even when the STARTING character (`character`,
+       guarded above) is not: `scanLibraryCharacters` only filters DIRECT
+       candidates offered by the matcher, not an arbitrary matchedFrom chain
+       that already exists on disk (series-reuse-link.ts, cast-link-prior.ts,
+       or a hand-edited/legacy record) and can walk PAST a filtered hop onto
+       a cloned ancestor. Copying `source.overrideTtsVoices` here would
+       launder that clone onto a DIFFERENT character/book with no consent
+       check at all — the same FAIL-SAFE test as the top-of-function guard,
+       applied to the terminal source instead of the starting character. Fail
+       loud: refuse to hydrate (this hop's voice never propagates) rather
+       than silently substitute the clone — Property 1. */
     if (hasOwnVoice(source)) {
+      if (characterHasClonedSlot(source)) return null;
       return {
         ttsEngine: source.ttsEngine ?? 'qwen',
         overrideTtsVoices: source.overrideTtsVoices ?? {},

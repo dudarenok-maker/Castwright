@@ -114,6 +114,58 @@ describe('resolveReusedVoiceFields', () => {
     expect(r).toBeNull();
   });
 
+  it('[#1885] refuses to hydrate from a SOURCE that itself carries a cloned voice', async () => {
+    /* The other half of [ADV-C3]/[EX-10]'s guard: that one protects the
+       STARTING character (the one being resolved) from being rerouted onto
+       a foreign designed voice. This is the gap it left open — a reused
+       character with NO clone of its own, whose matchedFrom source turns out
+       to itself be a real person's cloned voice (reachable via a matchedFrom
+       chain that scanLibraryCharacters' matcher-candidate filter never sees,
+       e.g. series-reuse-link.ts's multi-hop walk, or any matchedFrom set by
+       another route). Copying source.overrideTtsVoices here would launder
+       that clone onto a DIFFERENT character/book with zero consent check —
+       must fail loud (return null), never silently substitute. Discriminating
+       fixture: the reused character is ordinary (no clone, no override) —
+       only the SOURCE is cloned, which the pre-existing test suite never
+       covers (every existing cloned-slot test clones the STARTING character
+       instead). */
+    /* Must be a QWEN cloned slot specifically — hasOwnVoice() (the branch
+       that returns a source's override wholesale) only ever inspects
+       `overrideTtsVoices.qwen`, so a coqui-only cloned source never reaches
+       that branch at all (the chain just finds nothing, for an unrelated
+       reason) and would make this fixture a placebo. */
+    const reused: ReuseHydratable = {
+      id: 'x',
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const clonedSource: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-real-person', libraryUuid: 'uuid-real-person', provenance: 'cloned' },
+      },
+    };
+    const r = await resolveReusedVoiceFields(reused, loaderFrom({ src: [clonedSource] }));
+    expect(r).toBeNull();
+  });
+
+  it('[#1885] refuses to hydrate from a cloned ancestor reached via a multi-hop matchedFrom chain', async () => {
+    /* C → B (reused, no override of its own, not cloned) → A (cloned). B is
+       exactly the kind of intermediate hop scanLibraryCharacters' direct-
+       candidate filter WOULD allow (B itself carries no cloned slot), so a
+       name/attribute match onto B is legitimate — but the chain-walk must
+       still refuse once it reaches A. */
+    const inC: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'B', characterId: 'garrow' } };
+    const inB: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'A', characterId: 'garrow' } };
+    const clonedA: ReuseHydratable = {
+      id: 'garrow',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-real-garrow', libraryUuid: 'uuid-real-garrow', provenance: 'cloned' },
+      },
+    };
+    const r = await resolveReusedVoiceFields(inC, loaderFrom({ B: [inB], A: [clonedA] }));
+    expect(r).toBeNull();
+  });
+
   it('[ADV-C3][EX-10] refuses to resolve a coqui-cloned character onto the source book\'s qwen voice', async () => {
     /* A coqui clone (a real person's likeness) with matchedFrom pointing at a
        book whose matched character carries a qwen-DESIGNED voice, and no
