@@ -1062,7 +1062,9 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       .send({ bookId: 'book-four', characterId: 'char-marlow' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ updated: 1 });
+    /* GATE 1 [F1] - `assign-3` is CLONED, so both clone-capable slots are
+       written and the response names both. */
+    expect(res.body).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
 
     const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
       characters: Array<{
@@ -1174,6 +1176,11 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       libraryUuid: 'designed-clip-1',
       provenance: 'designed',
     });
+    /* GATE 1 [F1] — the response must NAME both slots it just wrote. Asserted
+       against the same disk state the block above reads, so the two can't
+       drift: a `written` derived independently of `shouldWriteCoquiSlot`
+       would show up here as a report that contradicts cast.json. */
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
   });
 
   /* fs-38 Wave 3c, Task 24 [D-E/D-F] — legacy behaviour, byte-for-byte: a
@@ -1201,6 +1208,10 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       provenance: 'designed',
     });
     expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+    /* GATE 1 [F1] — THE case the finding is about: the caller asked to assign
+       on a coqui-routed character, the route declined the coqui slot, and the
+       response has to say so or the UI shows an assignment that isn't there. */
+    expect(res.body.written).toEqual(['qwen']);
   });
 
   /* fs-38 Wave 3c, Task 24 — an `imported` entry never qualifies for the
@@ -1227,6 +1238,246 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       provenance: 'imported',
     });
     expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+    expect(res.body.written).toEqual(['qwen']);
+  });
+});
+
+/* fs-38 Wave 3c GATE 1, owner-decided [DELTA-I5] — the unassign affordance.
+
+   Before this route there was NO way to take a library voice off a
+   character: `PUT /api/voices/:voiceId/override` 409s a clear when a cloned
+   slot is present (Task 4) and preserves cloned provenance on a SET, so an
+   explicit stock-voice pick over a clone left the character still RENDERING
+   the clone. Both refusals are correct on their own; what was missing was a
+   deliberate, character-targeted removal. */
+describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELTA-I5)', () => {
+  function castPathFor(bookDir: string) {
+    return join(bookDir, '.audiobook', 'cast.json');
+  }
+  function slotsOf(bookDir: string) {
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    return cast.characters[0].overrideTtsVoices ?? {};
+  }
+
+  it('400s without bookId/characterId', async () => {
+    const res = await request(app).delete('/api/voice-library/lib-1/assign');
+    expect(res.status).toBe(400);
+  });
+
+  it('404s for an unknown bookId', async () => {
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'nope', characterId: 'char-marlow' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown characterId', async () => {
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-unassign-404', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-404', characterId: 'char-nobody' });
+    expect(res.status).toBe(404);
+  });
+
+  /* The headline case. A CLONED coqui slot is exactly what every other
+     write path in this wave is built to preserve — this route is the one
+     deliberate exception, and it must actually remove the slot rather than
+     half-clearing it (dropping the markers but keeping `name` would strand
+     the character on a raw `xtts-<uuid>` key no resolver recognises). */
+  it('removes a cloned library slot outright, markers and name together', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-1',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          ttsEngine: 'coqui',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-1', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    expect(slotsOf(bookDir).coqui).toBeUndefined();
+  });
+
+  /* Scoped by libraryUuid, not by engine. A route that cleared every
+     clone-capable slot would take the OTHER library voice with it — the
+     "erased a marker for an unrelated voice" shape Phase 0 of this wave
+     spent seven fixes on. */
+  it('clears only the slots pointing at THIS voice, leaving another library voice and a plain override alone', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-2',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+            qwen: { name: 'qwen-lib-other', libraryUuid: 'lib-other', provenance: 'designed' },
+            kokoro: { name: 'af_heart' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-2', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    const slots = slotsOf(bookDir);
+    expect(slots.coqui).toBeUndefined();
+    expect(slots.qwen).toEqual({
+      name: 'qwen-lib-other',
+      libraryUuid: 'lib-other',
+      provenance: 'designed',
+    });
+    expect(slots.kokoro).toEqual({ name: 'af_heart' });
+  });
+
+  it('clears BOTH engine slots when the character carries this voice on each', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-3',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-3', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['qwen', 'coqui'] });
+    expect(slotsOf(bookDir)).toEqual({});
+  });
+
+  /* The escape hatch must not be refusable. A revoked entry — or one already
+     deleted, so `readEntry` finds nothing at all — is exactly when a
+     character is stuck holding an assignment it cannot render. Both the
+     `/assign` route above and `/sample` gate on consent; this one must not.
+     Note NO library entry is written here at all. */
+  it('works for a library entry that no longer exists (revoked or deleted) — never gated on the entry', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-4',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-gone', libraryUuid: 'lib-gone', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-gone/assign')
+      .query({ bookId: 'book-unassign-4', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    expect(slotsOf(bookDir).coqui).toBeUndefined();
+  });
+
+  /* A no-op is a 200 with an empty list — the requested end state already
+     holds — and must not rewrite the character. Asserted on the untouched
+     slot, not just the status code. */
+  it('reports cleared: [] and leaves the character untouched when it was not carrying this voice', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-5',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-other', libraryUuid: 'lib-other', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-5', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: [] });
+    expect(slotsOf(bookDir).coqui).toEqual({
+      name: 'xtts-lib-other',
+      libraryUuid: 'lib-other',
+      provenance: 'cloned',
+    });
+  });
+
+  /* Round-trips against the real assign, so the pair can't drift: whatever
+     `/assign` writes, the unassign must be able to take back off. */
+  it('round-trips a real /assign — every slot the assign reported written is cleared', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'roundtrip-1', provenance: 'designed' }));
+    writeFileSync(paths.qwenVoiceWavPath('qwen-roundtrip-1__master'), 'REF-CLIP');
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-6',
+      [{ id: 'char-marlow', name: 'Marlow' }],
+    );
+
+    const assignRes = await request(app)
+      .post('/api/voice-library/roundtrip-1/assign')
+      .send({ bookId: 'book-unassign-6', characterId: 'char-marlow' });
+    expect(assignRes.status).toBe(200);
+    expect(assignRes.body.written).toEqual(['qwen', 'coqui']);
+
+    const unassignRes = await request(app)
+      .delete('/api/voice-library/roundtrip-1/assign')
+      .query({ bookId: 'book-unassign-6', characterId: 'char-marlow' });
+
+    expect(unassignRes.status).toBe(200);
+    expect(unassignRes.body.cleared).toEqual(assignRes.body.written);
+    expect(slotsOf(bookDir)).toEqual({});
   });
 });
 

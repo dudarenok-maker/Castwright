@@ -33,9 +33,11 @@ import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import {
   CLONE_CAPABLE_ENGINES,
+  CLONE_ENGINE_LIST,
   cloneStorageKey,
   isArtifactVersionStale,
   isCloneEngine,
+  type CloneEngine,
 } from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
@@ -1292,10 +1294,114 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
 
     await writeJsonAtomic(castJsonPath(located.bookDir), { ...cast, characters: nextCharacters });
 
-    res.status(200).json({ updated: 1 });
+    /* GATE 1 [F1] — report WHICH engine slots were actually persisted. The
+       response used to be a bare `{ updated: 1 }`, which told the caller
+       nothing about `shouldWriteCoquiSlot`: the profile drawer's picker
+       mirrored a coqui assignment into redux on any 200, so a designed entry
+       with no retained reference clip (coqui slot declined above) displayed
+       as a "My voice" coqui assignment that cast.json never carried, with no
+       refetch to reconcile it. Derived from the SAME `shouldWriteCoquiSlot`
+       flag the write above spreads on, not recomputed — the two cannot
+       disagree. Order mirrors the write: qwen is unconditional, coqui is
+       conditional. */
+    const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
+    res.status(200).json({ updated: 1, written });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
+  }
+});
+
+/* DELETE /api/voice-library/:voiceUuid/assign?bookId=…&characterId=…
+
+   GATE 1, owner-decided — the exact inverse of the assign route above, and
+   the missing half of `[DELTA-I5]`: until now there was NO way to take a
+   library voice back OFF a character.
+
+   Both of the routes that could plausibly have done it deliberately refuse:
+   `PUT /api/voices/:voiceId/override` with `override: null` 409s outright
+   when any matching character carries a cloned slot (Task 4), and its SET
+   branch preserves `libraryUuid`/`provenance` through the
+   `hasClonedProvenance` fail-safe guard — so picking a stock catalogue
+   voice over a cloned slot leaves the character still RENDERING the clone.
+   Both refusals are correct in their own right (Phase 0 of this wave fixed
+   seven bugs that were all clone markers erased by an unrelated upstream
+   write); what they left missing was a DELIBERATE, character-targeted
+   unassign. That is this route.
+
+   Deliberate properties:
+
+   - **Clears whole slots, not just the markers.** Half-clearing (dropping
+     `libraryUuid`/`provenance` and keeping `name`) would strand the
+     character on a raw `xtts-<uuid>`/`qwen-<uuid>` storage key the resolver
+     no longer recognises as a library voice — the exact "slot the resolver
+     can never back" shape Task 24's coqui gate exists to avoid. Removing
+     the slot returns the character to "no voice assigned", where the
+     engine's ordinary catalogue/attribute inference takes over. Any
+     `variants` on the slot go with it, which is correct: `/assign` already
+     drops them (review I-4), so a slot bearing THIS uuid has none that
+     mean anything.
+   - **Scoped by `libraryUuid`, never by engine.** Only slots that actually
+     point at THIS voice are touched, so a character carrying a different
+     library voice on its other engine keeps it.
+   - **No consent / readiness / provenance gate, and no `readEntry` at
+     all.** Unassigning destroys nothing — it is the escape hatch, so it
+     must not be refusable. It must in particular still work when the entry
+     is revoked or already deleted, which is exactly when a character is
+     most likely to be stuck holding a dangling assignment.
+   - **No `await` between the cast.json read and its write-back**, same
+     atomicity discipline the assign route's `shouldWriteCoquiSlot` comment
+     spells out.
+
+   `cleared: []` with a 200 is the honest answer for a character that
+   wasn't carrying this voice — the requested end state already holds. */
+voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
+    const characterId =
+      typeof req.query.characterId === 'string' ? req.query.characterId : undefined;
+    if (!bookId || !characterId) {
+      return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      return res.status(404).json({ error: `No book "${bookId}".` });
+    }
+
+    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+    const characters = cast?.characters ?? [];
+    const charIndex = characters.findIndex((c) => c.id === characterId);
+    if (charIndex === -1) {
+      return res
+        .status(404)
+        .json({ error: `No character "${characterId}" in book "${bookId}".` });
+    }
+
+    const character = characters[charIndex];
+    const nextSlots = { ...character.overrideTtsVoices };
+    const cleared: CloneEngine[] = [];
+    for (const engine of CLONE_ENGINE_LIST) {
+      if (nextSlots[engine]?.libraryUuid === voiceUuid) {
+        delete nextSlots[engine];
+        cleared.push(engine);
+      }
+    }
+
+    if (cleared.length > 0) {
+      const nextCharacters = [...characters];
+      nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
+      await writeJsonAtomic(castJsonPath(located.bookDir), {
+        ...cast,
+        characters: nextCharacters,
+      });
+    }
+
+    res.status(200).json({ cleared });
+  } catch (e) {
+    console.error('[voice-library] unassign failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice library unassign failed.' });
   }
 });
 
