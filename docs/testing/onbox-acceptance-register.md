@@ -15,6 +15,23 @@ is exactly what happened before this file existed: the sweep that produced this
 register found debt going back to **2026-06-01** recorded nowhere but in plan-doc
 prose.
 
+## Live view (update this, never re-publish)
+
+<!-- CANONICAL ARTIFACT — do not mint a new one. -->
+
+**https://claude.ai/code/artifact/adf22b7b-12dd-49fe-874c-4a340585b26a**
+
+This file has a browsable HTML twin at the URL above. Artifact URLs are
+server-assigned UUIDs — they cannot be renamed, aliased, or re-slugged — so
+**that exact URL is the artifact's identity**. Update it by passing it as the
+`url` argument; publishing the register without it mints a *second*, competing
+register and orphans this one. That is the single most likely way this register
+goes wrong.
+
+The twin carries derived figures — owed count, per-group counts, oldest debt —
+that must be **recomputed** on every edit. Rows can be right while the summary
+strip lies.
+
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
 
@@ -26,6 +43,9 @@ discipline" and as Before-shipping checklist step 3. In short:
 - Either way, record *what was observed*, by whom, and when — in the plan's Ship
   notes, the run sheet, or the issue. "Tests pass, so it's presumably fine" is
   never a reason to remove a row.
+- **All three surfaces move in the same PR** — this file, the per-feature run
+  sheet, and the live view above. Recording the state is a merge gate even
+  though *running* the acceptance is not.
 
 Rows are grouped by **hardware prerequisite**, not by feature, because the point
 is to batch: one uncontested session should discharge everything that shares a
