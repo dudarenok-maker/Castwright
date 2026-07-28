@@ -699,6 +699,54 @@ describe('POST /api/sidecar/unload', () => {
     expect(res.body.error).toMatch(/voice engine/i);
     expect(res.body.error).not.toBe('fetch failed');
   });
+
+  it('reports the unload budget, not the probe budget, when the sidecar never answers', async () => {
+    /* Zero wall-clock, fully deterministic, and it pins the constant directly.
+       Fails against the wrong implementation: the message quotes 2000ms. */
+    fetchMock.mockRejectedValueOnce(
+      Object.assign(new Error('aborted'), { name: 'AbortError' }),
+    );
+    const res = await request(makeApp()).post('/api/sidecar/unload');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('90000ms');
+    expect(res.body.error).not.toContain('2000ms');
+  });
+
+  it('waits past the 2s probe budget for an unload blocked on a forward', async () => {
+    /* #1921: `CoquiEngine.unload()` waits for an in-flight forward, so a Stop
+       pressed mid-render takes far longer than PROBE_TIMEOUT_MS. Before the fix
+       this aborted at 2s and returned 503 while the model unloaded anyway a
+       moment later — the user saw a failure for something that worked.
+
+       The mock MUST honour `init.signal`. The route aborts via the unload
+       handler's `AbortController` / `controller.signal` (sidecar-health.ts); a
+       mock that ignores the signal lets `controller.abort()` fire into the
+       void, the promise resolves anyway, and
+       the test passes against the UNFIXED 2s budget. That is the exact placebo
+       shape this branch exists to stop shipping. */
+    fetchMock.mockImplementationOnce(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          const t = setTimeout(
+            () =>
+              resolve(
+                new Response(JSON.stringify({ status: 'idle' }), {
+                  status: 200,
+                  headers: { 'Content-Type': 'application/json' },
+                }),
+              ),
+            2_500,
+          );
+          init.signal.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+    const res = await request(makeApp()).post('/api/sidecar/unload');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'idle' });
+  }, 10_000);
 });
 
 describe('POST /api/sidecar/restart', () => {

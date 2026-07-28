@@ -81,8 +81,8 @@ Run in mock mode (`VITE_USE_MOCKS=true`) for the UI-seam parts; the render-time 
 2. **`evictQwenForCoquiPhase` is a global sidecar unload, not per-book** (`server/src/tts/synthesise-chapter.ts:817-832`). It calls the sidecar's `/unload` for the whole process, so it can evict a DIFFERENT, concurrently-rendering book's resident Qwen — not just this chapter's own. Accepted for v1 because a per-book-scoped unload would require the sidecar to track per-book model residency, a larger change than this plan's scope.
 
    Since #1894 the reverse direction is handled in the SIDECAR instead — an
-   idle Coqui is reclaimed by `_idle_evict` on the admission path, which is
-   engine-aware and device-targeted rather than a global Node-side unload.
+   idle Coqui is reclaimed by `_idle_evict_steps` on the admission path, which
+   is engine-aware and device-targeted rather than a global Node-side unload.
    That asymmetry is deliberate: see
    `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` §3
    for why the symmetric Node-side fix was rejected.

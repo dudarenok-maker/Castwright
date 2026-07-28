@@ -38,7 +38,7 @@ import time
 import wave
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -1118,6 +1118,53 @@ async def _configure_vd_kokoro_coupling() -> None:
     _VD_KOKORO._shares_device = _compute_vd_kokoro_shares_device()
 
 
+class InFlightCounter:
+    """Thread-safe in-flight counter for an engine's forward (#1917).
+
+    Each engine's `maybe_free_idle` uses this as a fast-out so admission never
+    blocks on a forward that may run for seconds. The count therefore has to be
+    readable WITHOUT the engine's forward lock — but `x += 1` on a plain
+    attribute is LOAD_ATTR / BINARY_OP / STORE_ATTR, and CPython can switch
+    threads between any two of those. Two concurrent forwards can lose a
+    decrement, and because every caller's predicate is `> 0`, a counter stuck
+    above zero disables that engine's eviction for the remaining process
+    lifetime — silently, with no error and no log line.
+
+    The lock here is held for the mutation only, never across a forward, so the
+    fast-out stays non-blocking with respect to the work it exists to avoid
+    waiting on.
+    """
+
+    def __init__(self, lock: Optional[Any] = None) -> None:
+        self._lock = lock if lock is not None else threading.Lock()
+        self._n = 0
+
+    @contextmanager
+    def claim(self):
+        """Bracket one forward. Decrements in a `finally`, so a raising forward
+        cannot leave the guard stuck above zero."""
+        with self._lock:
+            self._n += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._n -= 1
+
+    @property
+    def busy(self) -> bool:
+        """True while at least one forward is in flight. `> 0`, never `!= 0` —
+        a drifted-negative count must not wedge eviction off."""
+        with self._lock:
+            return self._n > 0
+
+    @property
+    def value(self) -> int:
+        """Raw count. For tests and diagnostics; production reads `busy`."""
+        with self._lock:
+            return self._n
+
+
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
     We never persist audio here — the Node side encodes PCM to MP3 and
@@ -1163,10 +1210,16 @@ class CoquiEngine(Engine):
         # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
         # `_drop_model_locked()`, never `unload()`.
         self._synth_lock = threading.Lock()
+        # Bumped by every teardown (`_drop_model_locked`, which both unload()
+        # and maybe_free_idle go through). `_ensure_loaded` snapshots it before
+        # the load and re-checks it at the publish: a teardown that landed in
+        # between means the load lost the race and must be discarded rather than
+        # written on top of the unload's field resets (#1918).
+        self._load_epoch = 0
         # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
         # without blocking the admission path on a forward that may run for
-        # seconds.
-        self._synth_in_flight = 0
+        # seconds. Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         self._last_used = 0.0
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
@@ -1226,9 +1279,40 @@ class CoquiEngine(Engine):
             deepspeed = False
         return {"device": device, "half": half, "deepspeed": deepspeed}
 
-    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
+    def _read_speaker_manifest(self, tts: Any) -> list[str]:
+        """Enumerate the speaker names a freshly loaded `tts` instance knows
+        about, so /synthesize can validate inbound `voice` up front — XTTS's
+        own error path on an unknown speaker is a cryptic PyTorch "index out
+        of range in self" from the embedding lookup, which surfaces to the
+        user as a 500 with no actionable detail. Different coqui-tts releases
+        ship slightly different speaker-manager shapes; any drift between our
+        Node-side catalog and the model's own falls back to an empty list
+        (permissive mode) rather than crashing the load."""
+        try:
+            speaker_manager = tts.synthesizer.tts_model.speaker_manager
+            names = list(getattr(speaker_manager, "name_to_id", {}).keys())
+            if not names:
+                # Fallback for older speaker-manager APIs that expose
+                # `speaker_names` directly.
+                names = list(getattr(speaker_manager, "speaker_names", []))
+            return sorted(names)
+        except Exception as e:
+            log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
+            return []
+
+    def _ensure_loaded(
+        self, model: str, device: Optional[str] = None, *, lock_held: bool = False
+    ) -> None:
+        """Load the Coqui XTTS model if it isn't already resident, then publish
+        it atomically (#1918) — a no-op if `_tts` is already set.
+
+        `lock_held=True` means the caller already holds `_synth_lock` (the
+        re-ensure inside `synthesize`), so the publish assigns directly instead
+        of acquiring — `_synth_lock` is non-reentrant and acquiring it here
+        would self-deadlock."""
         if self._tts is not None:
             return
+        epoch = self._load_epoch
         # Importing lazily so the process can start (and /health respond)
         # before the heavy ML deps load. Most useful while iterating on
         # the protocol — the Node side can verify reachability instantly.
@@ -1303,64 +1387,102 @@ class CoquiEngine(Engine):
         # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
         # and only casts the ops where fp16 is safe (matmuls, attention),
         # which is where the speedup lives anyway.
-        #
-        # Stamp `_last_used` BEFORE publishing `_tts`, not after the rest of
-        # this method's bookkeeping (#1894 fix-round-1 Important-1): no lock
-        # is held across this whole tail, and `_ensure_loaded` runs on a
-        # worker thread while the event loop stays free to run
-        # `maybe_free_idle` concurrently. A stamp placed after `self._device
-        # = device` below leaves a window where another thread can already
-        # see `_tts is not None` with a STALE `_last_used` (0.0 on a first
-        # load, or the pre-evict timestamp on a reload) — long enough for
-        # `maybe_free_idle` to fire and run `_drop_model_locked()`, which
-        # restores `self._device = self._requested_device`, only for this
-        # thread to then overwrite it right back to the just-admitted card
-        # a few lines down. That reverts the #1730 gap-3 fix and pins the
-        # engine to a stale placement with `_tts` freshly `None`. Stamping
-        # first closes the window: any thread that observes `_tts is not
-        # None` necessarily observes a fresh timestamp too, and while this
-        # method is still running, `_tts` is `None` so `maybe_free_idle`'s
-        # fast-out already declines.
-        self._last_used = time.monotonic()
-        self._tts = tts
-        self._torch = torch
-        self._resolved_device = device
-        # Keep the shared `self._device` in step with the card the model is
-        # ACTUALLY on (#1730 gap 3): an admitted `device` override resolves here
-        # but previously left `self._device` stale at the env pref, so any reader
-        # of `self._device` saw a card the model wasn't on. `unload()` restores
-        # the requested pref so a later flag-off reload still re-resolves cleanly.
-        self._device = device
-        self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
-        if self._use_half:
+        use_half = bool(want_half and _parse_device(device)[0] == "cuda")
+        if use_half:
             log.info("fp16 autocast enabled for /synthesize.")
 
         # Snapshot the speaker manifest so /synthesize can validate inbound
-        # `voice` against what the model actually knows. Different coqui-tts
-        # releases ship slightly different speaker lists; without this, any
-        # drift between our Node-side catalog and the model's catalog
-        # manifests as "index out of range in self" mid-chapter.
-        try:
-            speaker_manager = self._tts.synthesizer.tts_model.speaker_manager
-            names = list(getattr(speaker_manager, "name_to_id", {}).keys())
-            if not names:
-                # Fallback for older speaker-manager APIs that expose
-                # `speaker_names` directly.
-                names = list(getattr(speaker_manager, "speaker_names", []))
-            self._speakers = sorted(names)
-            log.info("Coqui ready — %d speakers in manifest.", len(self._speakers))
-        except Exception as e:
-            # Don't crash startup if the manifest API drifts — synth will
-            # still work, but validation falls back to permissive mode.
-            log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
-            self._speakers = []
+        # `voice` against what the model actually knows. Read from the LOCAL
+        # `tts`, not `self._tts` — this runs BEFORE the publish (#1918), so
+        # `self._tts` may still be `None` (or hold a different model entirely,
+        # on the losing side of a load race). Extracted to its own frame
+        # (#1918 review) so `speaker_manager` doesn't stay reachable from
+        # THIS frame's locals across the `del tts` a few lines down in the
+        # discard path — `del tts` alone doesn't drop every reference to the
+        # freshly loaded model if a sibling local still points into it.
+        speakers = self._read_speaker_manifest(tts)
+
+        # Publish as ONE atomic step (#1918): `_ensure_loaded` runs outside
+        # `_synth_lock` for most of this ~90s cold load (see the "Load OUTSIDE
+        # the lock" rationale in `synthesize`, a few methods below), so a Stop
+        # pressed anywhere during the load must be able to win the race rather
+        # than have its resets overwritten by this thread finishing after it.
+        # `lock_held` controls whether we still need to acquire `_synth_lock`
+        # ourselves — the re-ensure inside `synthesize` already holds it, and
+        # the lock is non-reentrant.
+        if lock_held:
+            published = self._publish_loaded_locked(
+                epoch, tts, torch, device, use_half, speakers
+            )
+        else:
+            with self._synth_lock:
+                published = self._publish_loaded_locked(
+                    epoch, tts, torch, device, use_half, speakers
+                )
+        if not published:
+            # A teardown (Stop, or an admission evict) landed during the load,
+            # or another thread published first. Discard rather than overwrite —
+            # publishing here would leave a live model with `_device` pinned to
+            # the admitted card, bypassing placement on the next lazy load
+            # (#1730 gap 3).
+            log.info("Coqui load discarded — unloaded or superseded while loading.")
+            # `del` BEFORE the reclaim, or it does nothing: this frame still
+            # holds a reference to the ~3 GB model, so gc.collect() cannot
+            # collect it.
+            del tts
+            if not lock_held:
+                self._reclaim_after_drop(torch, reason="discarded (unloaded or superseded while loading)")
+            # When `lock_held` is True the caller holds `_synth_lock`, and
+            # `_reclaim_after_drop` documents that it MUST run with that lock
+            # released. Skipping it is safe rather than merely convenient: the
+            # epoch only ever moves under `_synth_lock`, and `_tts` is only
+            # ever published under it, so neither failure condition can arise
+            # while the caller holds it — this branch is unreachable on that
+            # path. The guard is here so a future caller cannot make it
+            # reachable silently.
+            return
+        log.info("Coqui ready — %d speakers in manifest.", len(speakers))
+
+    def _publish_loaded_locked(
+        self, epoch: int, tts: Any, torch_module: Any, device: str,
+        use_half: bool, speakers: list[str],
+    ) -> bool:
+        """Publish a freshly loaded model as ONE atomic step. CALLER MUST HOLD
+        `_synth_lock`. Returns False when `epoch` is stale — a teardown landed
+        during the load, so this load lost and is discarded.
+
+        `_last_used` is stamped FIRST (#1894 fix-round-1): any thread that
+        observes a live `_tts` must observe a fresh timestamp, or an
+        admission-path `maybe_free_idle` can drop the model mid-publish.
+
+        The `_tts is not None` half of the guard covers a second loser: two
+        threads can both pass `_ensure_loaded`'s `_tts is None` fast-out (a
+        `/load` and `synthesize`'s pre-lock ensure are serialised by different
+        primitives — an asyncio `_load_lock` and nothing respectively), both
+        load, and both arrive here with the same unchanged epoch. Without it the
+        second publish overwrites the first and orphans ~3 GB.
+        """
+        if epoch != self._load_epoch or self._tts is not None:
+            return False
+        self._last_used = time.monotonic()
+        self._tts = tts
+        self._torch = torch_module
+        self._resolved_device = device
+        # Keep the shared `self._device` in step with the card the model is
+        # ACTUALLY on (#1730 gap 3).
+        self._device = device
+        self._use_half = use_half
+        self._speakers = speakers
+        return True
 
     def unload(self) -> None:
         """Drop references to the loaded XTTS model and free GPU memory.
         Used by POST /unload when the UI's Stop button fires (or when the
         Analysing screen's Load button auto-evicts the TTS model to make
         room for the analyzer LLM). Idempotent — safe to call when nothing
-        is loaded.
+        is loaded, though "nothing loaded" isn't a true no-op (#1918): it
+        still bumps `_load_epoch`, which cancels any cold load currently
+        in flight.
 
         Acquires `_synth_lock` so it cannot null `_tts` out from under an
         in-flight forward (#1894): the route offloads both this and
@@ -1369,6 +1491,13 @@ class CoquiEngine(Engine):
         Internal holders call `_drop_model_locked()` + `_reclaim_after_drop()`.
         """
         with self._synth_lock:
+            # Bump UNCONDITIONALLY (#1918) — a Stop pressed during a cold load
+            # must cancel that load even though there is nothing to drop yet
+            # (`_tts` is still `None`, so `_drop_model_locked` below early-outs
+            # without reaching its own bump). Without this, a Stop mid-load is
+            # invisible to `_ensure_loaded`'s epoch check and its publish lands
+            # on top of the (no-op) unload.
+            self._load_epoch += 1
             dropped, torch_module = self._drop_model_locked()
         if dropped:
             self._reclaim_after_drop(torch_module)
@@ -1399,9 +1528,22 @@ class CoquiEngine(Engine):
         # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
         self._device = self._requested_device
         self._use_half = False
+        # A model was actually dropped (as opposed to unload()'s own
+        # unconditional bump above, which covers the "nothing loaded yet"
+        # case) — bump again so `maybe_free_idle`, which reaches this method
+        # WITHOUT going through unload(), also invalidates a stale epoch
+        # snapshot (#1918). This can't fire MID-load — `maybe_free_idle`
+        # fast-outs on `self._tts is None`, and `_tts` stays `None` for the
+        # whole load until the publish — so the reachable case is the
+        # two-concurrent-loaders interleaving: loader A publishes, an idle
+        # `maybe_free_idle` then evicts A's model, and loader B — which
+        # snapshotted its epoch before either event — must not read `_tts is
+        # None` again as licence to publish on top of that evict. See
+        # test_a_second_concurrent_loader_does_not_overwrite_the_first.
+        self._load_epoch += 1
         return (True, torch_module)
 
-    def _reclaim_after_drop(self, torch_module: Any) -> None:
+    def _reclaim_after_drop(self, torch_module: Any, reason: str = "unloaded") -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
         `_synth_lock` RELEASED — NOT because it protects the event loop
         (`reservation()` is a plain @contextmanager entered synchronously, so
@@ -1409,6 +1551,13 @@ class CoquiEngine(Engine):
         lock held or not); it's released because holding `_synth_lock` across
         this multi-second reclaim would block concurrent synth calls that
         only need the lock briefly, for no benefit.
+
+        `reason` names what happened, for the closing log line only — a real
+        `unload()` (the default) reads differently from a discarded cold load
+        or an idle evict (#1918 review): the discard path's own call can run
+        MINUTES after the click that triggered it (once the ~90s load
+        finally returns), and a hardcoded "unloaded" there reads as a
+        spurious second unload in logs/tts.log.
         """
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
@@ -1423,11 +1572,11 @@ class CoquiEngine(Engine):
                     torch_module.cuda.empty_cache()
             except Exception as e:
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
-        log.info("Coqui model unloaded.")
+        log.info("Coqui model %s.", reason)
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the resident XTTS model when it has been idle longer than
-        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict` on
+        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict_steps` on
         the admission path (#1894) — Coqui deliberately has NO background
         watchdog, unlike the Qwen/ASR/ECAPA idle-evicts, so this only ever
         runs when another op is genuinely starved for VRAM.
@@ -1441,28 +1590,28 @@ class CoquiEngine(Engine):
         clears the cached speaker manifest.
 
         The reclaim runs AFTER the lock is released, and this method is called
-        synchronously on the event loop by `_idle_evict` — see
+        synchronously on the event loop by `_idle_evict_steps` — see
         `_reclaim_after_drop`.
         """
         # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
         # used recently. Skipping the lock here matters — a forward can run
         # for seconds and admission must not block on it.
-        if self._tts is None or self._synth_in_flight > 0:
+        if self._tts is None or self._in_flight.busy:
             return False
         if time.monotonic() - self._last_used <= ttl_seconds:
             return False
-        # Re-validate under the lock: `synthesize` claims `_synth_in_flight`
+        # Re-validate under the lock: `synthesize` claims `_in_flight`
         # and refreshes `_last_used` BEFORE taking the lock, so a check that
         # still finds it idle here cannot be racing a forward.
         with self._synth_lock:
-            if self._tts is None or self._synth_in_flight > 0:
+            if self._tts is None or self._in_flight.busy:
                 return False
             if time.monotonic() - self._last_used <= ttl_seconds:
                 return False
             dropped, torch_module = self._drop_model_locked()
         if not dropped:
             return False
-        self._reclaim_after_drop(torch_module)
+        self._reclaim_after_drop(torch_module, reason="freed (idle)")
         return True
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -1471,24 +1620,32 @@ class CoquiEngine(Engine):
         # that whole window.
         self._ensure_loaded(model)
         # Claim BEFORE the acquire. The counter alone is NOT enough and neither
-        # is the timestamp — main.py:3835-3838 spells out the same TOCTOU for
-        # Qwen: an evict can read a stale `_last_used` and free the model in the
-        # gap between the ensure above and the acquire below. The pair
-        # (`_synth_in_flight` set here + the re-ensure under the lock) closes it.
-        # Decremented in the finally so a failure can't leave the guard stuck.
-        self._synth_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._synth_lock:
-                # Re-ensure under the lock: a concurrent /unload or admission
-                # evict holds `_synth_lock` to null the model, so one ensured
-                # before the lock can be gone in the gap. No-op on the warm
-                # path (`_ensure_loaded` early-returns when `_tts` is set).
-                self._ensure_loaded(model)
-                return self._synthesize_locked(model, voice, text, language)
-        finally:
-            self._synth_in_flight -= 1
+        # is the timestamp — `QwenEngine.design_voice` spells out the same
+        # TOCTOU for Qwen: an evict can read a stale `_last_used` and free the
+        # model in the gap between the ensure above and the acquire below. The
+        # pair (`_in_flight` claimed here + the re-ensure under the lock) closes it.
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — `maybe_free_idle` is called with
+            # `ttl=0.0` from the admission path, so a decrement that lands
+            # before this re-stamp leaves a window where `.busy` reads False
+            # while `_last_used` is still the pre-forward value, which reads
+            # as "idle" and gets evicted.
+            try:
+                with self._synth_lock:
+                    # Re-ensure under the lock: a concurrent /unload or
+                    # admission evict holds `_synth_lock` to null the model,
+                    # so one ensured before the lock can be gone in the gap.
+                    # No-op on the warm path (`_ensure_loaded` early-returns
+                    # when `_tts` is set). `lock_held=True` — this call already
+                    # holds `_synth_lock`, which is non-reentrant, so
+                    # `_ensure_loaded`'s publish must assign directly rather
+                    # than acquire it again (#1918).
+                    self._ensure_loaded(model, lock_held=True)
+                    return self._synthesize_locked(model, voice, text, language)
+            finally:
+                self._last_used = time.monotonic()
 
     def _synthesize_locked(
         self, model: str, voice: str, text: str, language: Optional[str] = None
@@ -1498,7 +1655,7 @@ class CoquiEngine(Engine):
         Binds `self._tts` to a local up front so the forward never re-reads an
         attribute a concurrent unload could null. The assert is a cheap
         invariant, NOT the race guard — the guard is the caller's
-        `_synth_in_flight` claim plus its re-ensure under the lock.
+        `_in_flight` claim plus its re-ensure under the lock.
         """
         tts = self._tts
         assert tts is not None
@@ -2336,26 +2493,39 @@ class ReservationLedger:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._by_device: dict[str, dict[int, int]] = {}
+        self._by_device: dict[str, dict[int, tuple[int, str]]] = {}
         self._next_token_id = 1
 
     def reserved_mb(self, device_key: str) -> int:
         with self._lock:
-            return sum(self._by_device.get(device_key, {}).values())
+            return sum(mb for mb, _ in self._by_device.get(device_key, {}).values())
 
-    def hold(self, device_key: str, mb: int) -> tuple[str, int]:
-        """Reserve `mb` on `device_key`; returns an opaque token (which
-        encodes the device) that `release` needs to give it back."""
+    def hold(self, device_key: str, mb: int, engine: str) -> tuple[str, int]:
+        """Reserve `mb` on `device_key` for `engine`; returns an opaque token
+        (which encodes the device) that `release` needs to give it back."""
         with self._lock:
             token_id = self._next_token_id
             self._next_token_id += 1
-            self._by_device.setdefault(device_key, {})[token_id] = mb
+            self._by_device.setdefault(device_key, {})[token_id] = (mb, engine)
             return (device_key, token_id)
 
     def release(self, token: tuple[str, int]) -> None:
         device_key, token_id = token
         with self._lock:
             self._by_device.get(device_key, {}).pop(token_id, None)
+
+    def engines_holding(self, device_key: str) -> set[str]:
+        """Engine keys with a live reservation on `device_key`.
+
+        The authority for "this engine's operation is already admitted" (#1920B).
+        A reservation spans the WHOLE op — taken before the handler offloads to a
+        worker thread, released after it returns — whereas the engine's in-flight
+        counter only covers the forward itself. The gap between the two is
+        exactly the window in which an admission-path evict could throw away a
+        model whose op was already admitted.
+        """
+        with self._lock:
+            return {engine for _, engine in self._by_device.get(device_key, {}).values()}
 
     def _headroom(self, key: str, free_mb: int, total_mb: int, reserve_cap: int) -> int:
         """Available headroom for `key` given its live free/total and the
@@ -2364,17 +2534,17 @@ class ReservationLedger:
         this device's own VRAM capped at `reserve_cap` — not a flat number
         applied to every candidate regardless of size. Caller MUST hold
         `self._lock`."""
-        reserved = sum(self._by_device.get(key, {}).values())
+        reserved = sum(mb for mb, _ in self._by_device.get(key, {}).values())
         return min(free_mb, total_mb - reserved) - _device_reserve_mb(total_mb, reserve_cap)
 
     def try_hold(
-        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int
+        self, candidates: list[tuple[str, int, int]], peak: int, reserve_cap: int, engine: str
     ) -> Optional[tuple[str, int]]:
-        """Atomically pick the roomiest candidate that fits `peak` and hold it.
-        `candidates` = [(device_key, freeMb, totalMb), ...]. `reserve_cap` is
-        the GPU_RESERVE_MB ceiling — each candidate's actual reserve is
-        computed per-device from its own totalMb (see `_headroom`). Returns
-        the token or None if none fit. The fit-check AND the hold happen
+        """Atomically pick the roomiest candidate that fits `peak` and hold it
+        for `engine`. `candidates` = [(device_key, freeMb, totalMb), ...].
+        `reserve_cap` is the GPU_RESERVE_MB ceiling — each candidate's actual
+        reserve is computed per-device from its own totalMb (see `_headroom`).
+        Returns the token or None if none fit. The fit-check AND the hold happen
         under a SINGLE lock acquisition, so two concurrent admits can't both
         pass the check and double-book the same VRAM — the TOCTOU the per-op
         reservation exists to prevent (decide+hold atomic, per the design)."""
@@ -2389,7 +2559,7 @@ class ReservationLedger:
                 return None
             token_id = self._next_token_id
             self._next_token_id += 1
-            self._by_device.setdefault(best_key, {})[token_id] = peak
+            self._by_device.setdefault(best_key, {})[token_id] = (peak, engine)
             return (best_key, token_id)
 
     def best_fit(
@@ -2422,7 +2592,7 @@ class PlacementController:
         footprints: Optional["FootprintTable"] = None,
         ledger: Optional["ReservationLedger"] = None,
         reserve_mb: Optional[Callable[[], int]] = None,
-        idle_evict: Optional[Callable[[str, str], bool]] = None,
+        idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
     ) -> None:
         self.probe = probe
@@ -2432,7 +2602,7 @@ class PlacementController:
         # the actual per-device cushion is `_device_reserve_mb(total, cap)`,
         # min(5% of that device's own VRAM, this cap). See `_device_reserve_mb`.
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
-        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key, engine: False)
+        self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
 
     @staticmethod
@@ -2476,6 +2646,47 @@ class PlacementController:
                 best_key, best_headroom = key, headroom
         return best_key
 
+    def _evict_until(
+        self, device_key: str, engine: str, fits: Callable[[], Any]
+    ) -> Any:
+        """Run eviction steps one at a time, re-probing after each, and stop the
+        moment `fits()` reports success (#1920A).
+
+        `fits` is the caller's own retry — `try_hold` for `reservation()` (which
+        holds), `best_fit` for `admit()` (which does not) — so "enough freed" is
+        decided by LIVE capacity, never by a boolean 'something was freed'.
+        Returns whatever `fits()` returned on success, or None.
+
+        A step that raises is skipped, not fatal: eviction is best-effort, and
+        one engine's teardown failing must not deny the whole admission.
+        """
+        for step in self.idle_evict_steps(device_key, engine):
+            # Re-read on every iteration, not once before the loop: nothing
+            # here awaits today (every `reservation()` call site enters this
+            # synchronously on the event loop), so a snapshot taken up front
+            # would be safe in practice — but re-reading is one lock-guarded
+            # set comprehension per step (<=5 iterations) and keeps the
+            # #1920B guard correct even if a future step becomes async or is
+            # offloaded to a thread, instead of relying on an undocumented
+            # assumption that could go silently stale on the last, most
+            # expensive step.
+            held_by = self.ledger.engines_holding(device_key)
+            if step.reserved_key is not None and step.reserved_key in held_by:
+                # This engine's op is already admitted and holds VRAM for it
+                # (#1920B) — the reservation spans the whole op, including the
+                # window before its worker thread claims the in-flight counter.
+                continue
+            try:
+                if not step.run():
+                    continue
+            except Exception:
+                log.warning("evict step %s failed", step.name, exc_info=True)
+                continue
+            got = fits()
+            if got is not None:
+                return got
+        return None
+
     def admit(
         self,
         engine: str,
@@ -2510,13 +2721,17 @@ class PlacementController:
             return {"device": "cpu"}
 
         worst = self._worst_device_key(devices)
-        if worst is not None and self.idle_evict(worst, engine):
-            devices = self.probe()
-            candidates = self._gpu_candidates(devices, constraint)
-            key = self.ledger.best_fit(candidates, peak, reserve_cap)
+        if worst is not None:
+            def _fits():
+                probed = self.probe()
+                return self.ledger.best_fit(
+                    self._gpu_candidates(probed, constraint), peak, reserve_cap
+                )
+
+            key = self._evict_until(worst, engine, _fits)
             if key is not None:
                 return {"device": key}
-            worst = self._worst_device_key(devices)
+            worst = self._worst_device_key(self.probe())
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
@@ -2582,13 +2797,19 @@ class PlacementController:
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        held = self.ledger.try_hold(candidates, peak, reserve_cap)
+        held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
-            if worst is not None and self.idle_evict(worst, engine):
+            if worst is not None:
+                def _fits():
+                    probed = self.probe()
+                    return self.ledger.try_hold(
+                        self._gpu_candidates(probed, constraint), peak, reserve_cap, engine
+                    )
+
+                held = self._evict_until(worst, engine, _fits)
+            if held is None:
                 devices = self.probe()
-                candidates = self._gpu_candidates(devices, constraint)
-                held = self.ledger.try_hold(candidates, peak, reserve_cap)
 
         if held is not None:
             admission: dict = {"device": held[0]}
@@ -2679,71 +2900,83 @@ def _same_card(resident: Optional[str], target: str) -> bool:
     return (idx_r or 0) == (idx_t or 0)
 
 
-def _idle_evict(device_key: str, engine: str) -> bool:
-    """PlacementController.idle_evict: best-effort attempt to free idle
-    transient GPU state to make room for the admitting op on `device_key`.
-    Tries each idle-evictable engine (Qwen VoiceDesign + 1.7B-Base share the
-    Qwen engine's card; ASR; ECAPA) with ttl=0 (evict now regardless of recent
-    use) and returns True if anything freed.
+class EvictStep(NamedTuple):
+    """One candidate eviction on the admission path.
 
-    Device-targeted (#1721): only evicts an engine whose resident card matches
-    `device_key`, so a genuine multi-GPU box never frees an idle engine sitting
-    on a DIFFERENT card than the one the op needs (over-eviction — efficiency
-    only, never an OOM). An engine on cpu is likewise skipped: it holds no VRAM
-    on the target card, so freeing it couldn't admit this op. The device strings
-    match how the rest of the sidecar reasons about residency (`_is_resident`,
-    `shares_device`) — Qwen's design/base17 both live on the shared
-    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`.
+    `name` is for logs and tests. `reserved_key` is the engine key the
+    reservation ledger would record for an op using this model, or None when
+    the ledger's engine granularity is the WRONG granularity for this step
+    (see the Qwen steps below). `run` frees it and reports whether it did.
+    """
 
-    `engine` is the ADMITTING op's engine. The engines evicted here are
-    transient or secondary, so freeing them can never be self-defeating —
-    except Coqui (#1894), which is a primary synth engine: a starved Coqui op
-    must not evict the model it is about to reload. See its branch below."""
-    freed = False
+    name: str
+    reserved_key: Optional[str]
+    run: Callable[[], bool]
+
+
+def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
+    """The eviction candidates that apply on `device_key` for an op belonging to
+    `engine`, ORDERED CHEAPEST-RELOAD-FIRST.
+
+    Ordering is load-bearing because `PlacementController` re-probes after each
+    step and stops as soon as the starved request fits (#1920A): the first
+    sufficient step is the only one that runs, so the cheapest must be tried
+    first. Reload costs: ECAPA ~200 MB / ~1 s, ASR ~400 MB / ~1 s, Qwen
+    VoiceDesign + 1.7B-Base seconds, Coqui XTTS ~3 GB / ~90 s.
+
+    Device-targeted (#1721): an engine whose resident card is not `device_key`
+    yields no step — freeing it could not admit this op. An engine on cpu is
+    likewise skipped.
+
+    Coqui (#1894) is the only PRIMARY synth engine on the list, so it is omitted
+    entirely when the admitting op is itself Coqui: evicting would unload the
+    model that op is about to reload. It also uses a real idle TTL rather than
+    the 0.0 the transient models take.
+    """
+    steps: list["EvictStep"] = []
+    if _same_card(getattr(SPK, "device", None), device_key):
+        steps.append(EvictStep("spk", "spk", lambda: SPK.maybe_free_idle(0.0)))
+    if _same_card(getattr(ASR, "_device", None), device_key):
+        steps.append(EvictStep("asr", "asr", lambda: ASR.maybe_free_idle(0.0)))
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):
-        try:
-            freed = qwen.maybe_free_idle_design(0.0) or freed
-        except Exception:
-            pass
-        try:
-            freed = qwen.maybe_free_idle_base17(0.0) or freed
-        except Exception:
-            pass
-    if _same_card(getattr(ASR, "_device", None), device_key):
-        try:
-            freed = ASR.maybe_free_idle(0.0) or freed
-        except Exception:
-            pass
-    if _same_card(getattr(SPK, "device", None), device_key):
-        try:
-            freed = SPK.maybe_free_idle(0.0) or freed
-        except Exception:
-            pass
-    # Coqui (#1894). Unlike everything above, this is a PRIMARY synth engine —
-    # so it is skipped when the admitting op is itself Coqui (evicting would
-    # unload the model that op is about to reload), and it uses a real idle TTL
-    # rather than the 0.0 the transient models take.
+        # `reserved_key=None` deliberately. EVERY Qwen route reserves under the
+        # bare key "qwen" — /load base (:7071), /load 1.7b (:7046),
+        # /design_voice (:7284), /clone (:7406), /mint (:7502), /synthesize
+        # (:7693) — so the ledger cannot tell Qwen's three models apart. With
+        # reserved_key="qwen", one Qwen op holding a reservation would make a
+        # SECOND starved Qwen op skip both cheap Qwen steps and fall through to
+        # evicting Coqui: a ~90 s XTTS reload taken to avoid freeing an idle
+        # 5 GB design model. Qwen's per-model in-flight guards
+        # (`_design_in_flight`, `_base17_in_flight`) are the right granularity
+        # and already cover the forward itself.
+        #
+        # KNOWN RESIDUAL: this leaves #1920B open for Qwen specifically — a
+        # /design_voice admitted but not yet at its `_design_in_flight` claim
+        # can have a warm VoiceDesign model evicted underneath it, the same
+        # window the ledger closes for Coqui/ASR/ECAPA. Recorded in the design's
+        # Known limitations. Closing it properly means recording
+        # FootprintTable._key(...) (`qwen.1.7b.design` / `.mint` / `qwen.1.7b` /
+        # `qwen`) in the ledger instead of the bare engine — out of scope here.
+        steps.append(EvictStep("qwen.design", None, lambda: qwen.maybe_free_idle_design(0.0)))
+        steps.append(EvictStep("qwen.base17", None, lambda: qwen.maybe_free_idle_base17(0.0)))
     if engine != "coqui":
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
-            try:
-                freed = coqui.maybe_free_idle(_coqui_idle_ttl()) or freed
-            except Exception:
-                pass
-    return freed
+            steps.append(EvictStep("coqui", "coqui", lambda: coqui.maybe_free_idle(_coqui_idle_ttl())))
+    return steps
 
 
 # Module-level admission instance /synthesize reserves against when the flag
-# is on. `probe`/`idle_evict`/`is_resident` are real deps (not test doubles);
-# tests monkeypatch `_placement.probe` (and the env flag) for determinism —
-# see test_devices.py.
+# is on. `probe`/`idle_evict_steps`/`is_resident` are real deps (not test
+# doubles); tests monkeypatch `_placement.probe` (and the env flag) for
+# determinism — see test_devices.py.
 _placement = PlacementController(
     probe=probe_capacity,
     footprints=FootprintTable(),
     ledger=ReservationLedger(),
     reserve_mb=lambda: int(os.environ.get("GPU_RESERVE_MB", 500)),
-    idle_evict=_idle_evict,
+    idle_evict_steps=_idle_evict_steps,
     is_resident=_is_resident,
 )
 
@@ -3110,8 +3343,9 @@ class QwenEngine(Engine):
         # once QWEN_BASE17_IDLE_TTL elapses since the last use. Mirrors the
         # VoiceDesign `_design_last_used` / `_design_in_flight` pair: the
         # in-flight guard stops the watchdog freeing it mid-forward.
+        # Thread-safe (#1917) — see `InFlightCounter`.
         self._base17_last_used: float = 0.0
-        self._base17_in_flight: int = 0
+        self._base17_in_flight = InFlightCounter()
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -3124,11 +3358,13 @@ class QwenEngine(Engine):
         # to elapse mid-design, and a watchdog free in the unguarded window
         # between _ensure_design_loaded() and the _synth_lock forward nulls
         # `_design` → "'NoneType' object has no attribute 'generate_voice_design'".
-        # Incremented at entry / decremented in a finally; `maybe_free_idle_design`
-        # bails while it's > 0. Read/written under the GIL (simple int), which is
-        # sufficient here: the airtight backstop is the re-ensure under _synth_lock
-        # inside design_voice — this guard just stops the wasteful, racy free.
-        self._design_in_flight: int = 0
+        # Claimed at entry / released in a finally; `maybe_free_idle_design`
+        # bails while `.busy`. Thread-safe (#1917) — see `InFlightCounter`: a
+        # plain int here can silently lose a decrement and disable this
+        # engine's eviction for the rest of the process lifetime. The
+        # airtight backstop is still the re-ensure under `_synth_lock` inside
+        # design_voice — this guard just stops the wasteful, racy free.
+        self._design_in_flight = InFlightCounter()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -3423,17 +3659,24 @@ class QwenEngine(Engine):
     def _base17_activity(self):
         """Bracket a 1.7B-Base forward (mint OR 1.7B synth/batch): refresh the
         idle timestamp and hold the in-flight guard so the idle watchdog can't
-        free the model mid-forward (issue #1024). Mirrors design_voice's manual
+        free the model mid-forward (issue #1024). Mirrors design_voice's
         `_design_in_flight` bracketing, factored because three sites drive the
-        1.7B-Base (mint_variant + synthesize + synthesize_batch). The int
-        inc/dec is GIL-atomic — same rationale as `_design_in_flight`."""
+        1.7B-Base (mint_variant + synthesize + synthesize_batch). Thread-safe
+        (#1917) — see `InFlightCounter`.
+
+        Exit ordering is load-bearing: the re-stamp lives in an INNER
+        `finally`, run BEFORE the `claim()` context manager's own `finally`
+        decrements the count. `maybe_free_idle_base17` is reached with
+        `ttl=0.0` from the admission path, so a decrement that lands before
+        the re-stamp opens a window where `.busy` reads False while
+        `_base17_last_used` is still the pre-forward value — which reads as
+        idle and gets evicted."""
         self._base17_last_used = time.monotonic()
-        self._base17_in_flight += 1
-        try:
-            yield
-        finally:
-            self._base17_last_used = time.monotonic()
-            self._base17_in_flight -= 1
+        with self._base17_in_flight.claim():
+            try:
+                yield
+            finally:
+                self._base17_last_used = time.monotonic()
 
     def maybe_free_idle_base17(self, ttl_seconds: float) -> bool:
         """Free the resident 1.7B-Base model once it's idled past `ttl_seconds`
@@ -3448,12 +3691,12 @@ class QwenEngine(Engine):
         under an active mint or 1.7B generate. Nulls inline (calling
         `unload_base17()` would re-acquire the non-reentrant `_synth_lock` →
         deadlock); the gc/empty_cache reclaim runs after the lock is released."""
-        if self._base17 is None or self._base17_in_flight > 0:
+        if self._base17 is None or self._base17_in_flight.busy:
             return False
         if time.monotonic() - self._base17_last_used <= ttl_seconds:
             return False
         with self._synth_lock:
-            if self._base17 is None or self._base17_in_flight > 0:
+            if self._base17 is None or self._base17_in_flight.busy:
                 return False
             if time.monotonic() - self._base17_last_used <= ttl_seconds:
                 return False
@@ -3917,7 +4160,7 @@ class QwenEngine(Engine):
         (which re-acquires the non-reentrant `_synth_lock` → deadlock); the
         gc/empty_cache reclaim runs after the lock is released."""
         # Cheap, lock-free fast-outs first (no model, or recently used).
-        if self._design is None or self._design_in_flight > 0:
+        if self._design is None or self._design_in_flight.busy:
             return False
         if time.monotonic() - self._design_last_used <= ttl_seconds:
             return False
@@ -3925,7 +4168,7 @@ class QwenEngine(Engine):
         # and runs its forward while holding `_synth_lock`, so a check that still
         # finds it idle here cannot be mid-forward.
         with self._synth_lock:
-            if self._design is None or self._design_in_flight > 0:
+            if self._design is None or self._design_in_flight.busy:
                 return False
             if time.monotonic() - self._design_last_used <= ttl_seconds:
                 return False
@@ -3989,189 +4232,189 @@ class QwenEngine(Engine):
         # so the idle watchdog can't free the VoiceDesign model out from under
         # it. The timestamp alone is a TOCTOU (the watchdog can read a stale value
         # and free in the gap before the _synth_lock forward); `_design_in_flight`
-        # + the re-ensure under the lock below close that race. Decremented in the
-        # finally so a failure can't leave the guard stuck > 0.
+        # + the re-ensure under the lock below close that race. Released in
+        # `claim()`'s own finally so a failure can't leave the guard stuck.
+        # Re-stamped on the way out in an INNER finally, BEFORE the claim's
+        # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+        # the ordering matters.
         self._design_last_used = time.monotonic()
-        self._design_in_flight += 1
-        try:
-            # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
-            # the whole operation so the structured timing line below can split a
-            # slow design into its phases — see that log.info for the field map.
-            t0 = time.perf_counter()
-            def _phase(name: str) -> None:
-                if report_progress is not None:
-                    try:
-                        report_progress(name)
-                    except Exception:  # best-effort: never fail a design on progress
-                        pass
-            # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
-            # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
-            # (waits for any in-flight Kokoro synth to drain, blocks new ones),
-            # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
-            # reloads on the next synth (~1s); when no generation ran it isn't
-            # resident, so this is a no-op.
-            _kokoro_pre = ENGINES.get("kokoro")
-            if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
-                _phase("freeing-vram")
-            with _VD_KOKORO.design():
-                _kokoro_eng = ENGINES.get("kokoro")
-                if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
-                    log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
-                    _kokoro_eng.unload()
-                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
-                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-                # interleaves variant mints (which leave _base17 resident) with
-                # base designs; evict the lingering 1.7B-Base before the
-                # VoiceDesign load — symmetric with the synth path's
-                # unload_design() (synthesize/synthesize_batch) and the Kokoro
-                # evict above. design_voice never uses _base17, so this is safe;
-                # the idle watchdog would reclaim it eventually, but not within
-                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                if self._base17 is not None:
-                    log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                    self.unload_base17()
-                _phase("loading-model")
-                # Capacity-aware placement (task 3, vram-aware-placement plan):
-                # a concrete `device` from an admitted reservation overrides the
-                # env-derived pref for this design. `device` is threaded straight
-                # into each ensure call so the set-pref + resolve + load are ONE
-                # atomic acquisition under that model's own load lock — a
-                # concurrent design/mint admitted to a DIFFERENT card can't clobber
-                # `_device_pref` in the gap between set and resolve (the TOCTOU
-                # this closes). The design load runs first and sets `_device_pref`,
-                # so the base load inherits the same card; passing it here too is
-                # belt-and-suspenders for the warm-design / cold-base case. `None`
-                # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                self._ensure_design_loaded(device=device)
-                self._ensure_base_loaded(device=device)
-                # Phase boundary: everything above is Kokoro-evict + (cold) model
-                # load; everything below is GPU forwards. `load_ms` isolates the
-                # cold-start cost (the transient 1.7B VoiceDesign load the operator
-                # suspects) from the design forward itself.
-                load_ms = (time.perf_counter() - t0) * 1000.0
-                # Serialise the GPU forwards against any concurrent synth/design — see
-                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                with self._synth_lock:
-                    # Re-ensure the models UNDER the lock. Every in-place nuller of
-                    # `_design`/`_base` (the idle watchdog, a concurrent
-                    # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                    # so a model ensured before we took the lock may have been freed
-                    # in the gap. Re-ensuring here is the airtight backstop against
-                    # "'NoneType' object has no attribute 'generate_voice_design'".
-                    # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                    # `_synth_lock`, so this can't deadlock.
-                    self._ensure_design_loaded()
-                    self._ensure_base_loaded()
-                    # 1. design a reference clip from the persona instruction.
-                    _phase("designing")
-                    _t = time.perf_counter()
-                    ref_wavs, ref_sr = self._design.generate_voice_design(
-                        text=ref_text, language=lang, instruct=instruct
-                    )
-                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                    ref_audio = ref_wavs[0]
-
-                    # 2. distil into a reusable clone prompt on the Base model.
-                    _phase("distilling")
-                    _t = time.perf_counter()
-                    prompt = self._base.create_voice_clone_prompt(
-                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                    )
-                    distil_ms = (time.perf_counter() - _t) * 1000.0
-
-            # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
-            os.makedirs(self._voices_dir, exist_ok=True)
-            pt_path, json_path = self._voice_paths(voice_id)
-            _atomic_torch_save(torch, prompt, pt_path)
-            import json as _json
-
-            with open(json_path, "w", encoding="utf-8") as fh:
-                _json.dump(
-                    {
-                        "voiceId": voice_id,
-                        "voiceUuid": voice_uuid,
-                        "instruct": instruct,
-                        "language": lang,
-                        "refText": ref_text,
-                        "baseModel": self.BASE_MODEL,
-                        "designModel": self.VOICEDESIGN_MODEL,
-                        **({"mintMethod": mint_method} if mint_method else {}),
-                        **({"fallbackFor": fallback_for} if fallback_for else {}),
-                    },
-                    fh,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-
-            # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
-            # this DESIGNED voice re-derive a fresh embedding from the same
-            # clip after a base-model upgrade (not byte-identical — Node's
-            # reader resamples it to a fixed 24kHz first), the way a CLONED
-            # voice already can from its retained `master.wav` (Wave 3b1).
-            # Strictly additive: the HTTP
-            # response, the audition PCM, and the `.pt`/`.json` above are
-            # already complete by this point, so a failure here must never
-            # break voice design — it's a future re-derivation aid, not part
-            # of the design contract. Log-and-continue, not propagate.
+        with self._design_in_flight.claim():
             try:
-                _atomic_wav_save(
-                    _float_audio_to_int16_le(ref_audio),
-                    int(ref_sr),
-                    self._voice_master_wav_path(voice_id),
-                )
-            except Exception:
-                log.warning(
-                    "Failed to persist reference clip for voice '%s' — "
-                    "continuing (design itself is unaffected).",
-                    voice_id, exc_info=True,
-                )
+                # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
+                # the whole operation so the structured timing line below can split a
+                # slow design into its phases — see that log.info for the field map.
+                t0 = time.perf_counter()
+                def _phase(name: str) -> None:
+                    if report_progress is not None:
+                        try:
+                            report_progress(name)
+                        except Exception:  # best-effort: never fail a design on progress
+                            pass
+                # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
+                # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
+                # (waits for any in-flight Kokoro synth to drain, blocks new ones),
+                # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
+                # reloads on the next synth (~1s); when no generation ran it isn't
+                # resident, so this is a no-op.
+                _kokoro_pre = ENGINES.get("kokoro")
+                if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
+                    _phase("freeing-vram")
+                with _VD_KOKORO.design():
+                    _kokoro_eng = ENGINES.get("kokoro")
+                    if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                        log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                        _kokoro_eng.unload()
+                    # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                    # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                    # interleaves variant mints (which leave _base17 resident) with
+                    # base designs; evict the lingering 1.7B-Base before the
+                    # VoiceDesign load — symmetric with the synth path's
+                    # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                    # evict above. design_voice never uses _base17, so this is safe;
+                    # the idle watchdog would reclaim it eventually, but not within
+                    # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                    if self._base17 is not None:
+                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        self.unload_base17()
+                    _phase("loading-model")
+                    # Capacity-aware placement (task 3, vram-aware-placement plan):
+                    # a concrete `device` from an admitted reservation overrides the
+                    # env-derived pref for this design. `device` is threaded straight
+                    # into each ensure call so the set-pref + resolve + load are ONE
+                    # atomic acquisition under that model's own load lock — a
+                    # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                    # `_device_pref` in the gap between set and resolve (the TOCTOU
+                    # this closes). The design load runs first and sets `_device_pref`,
+                    # so the base load inherits the same card; passing it here too is
+                    # belt-and-suspenders for the warm-design / cold-base case. `None`
+                    # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                    self._ensure_design_loaded(device=device)
+                    self._ensure_base_loaded(device=device)
+                    # Phase boundary: everything above is Kokoro-evict + (cold) model
+                    # load; everything below is GPU forwards. `load_ms` isolates the
+                    # cold-start cost (the transient 1.7B VoiceDesign load the operator
+                    # suspects) from the design forward itself.
+                    load_ms = (time.perf_counter() - t0) * 1000.0
+                    # Serialise the GPU forwards against any concurrent synth/design — see
+                    # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                    with self._synth_lock:
+                        # Re-ensure the models UNDER the lock. Every in-place nuller of
+                        # `_design`/`_base` (the idle watchdog, a concurrent
+                        # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
+                        # so a model ensured before we took the lock may have been freed
+                        # in the gap. Re-ensuring here is the airtight backstop against
+                        # "'NoneType' object has no attribute 'generate_voice_design'".
+                        # Idempotent / a no-op on the warm path; `_ensure_*` don't take
+                        # `_synth_lock`, so this can't deadlock.
+                        self._ensure_design_loaded()
+                        self._ensure_base_loaded()
+                        # 1. design a reference clip from the persona instruction.
+                        _phase("designing")
+                        _t = time.perf_counter()
+                        ref_wavs, ref_sr = self._design.generate_voice_design(
+                            text=ref_text, language=lang, instruct=instruct
+                        )
+                        design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                        ref_audio = ref_wavs[0]
 
-            log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+                        # 2. distil into a reusable clone prompt on the Base model.
+                        _phase("distilling")
+                        _t = time.perf_counter()
+                        prompt = self._base.create_voice_clone_prompt(
+                            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                        )
+                        distil_ms = (time.perf_counter() - _t) * 1000.0
 
-            # Evict any stale in-memory entry so a RE-designed voice can't keep
-            # serving the previous embedding — the next synth reloads the fresh
-            # .pt we just wrote. (We don't warm it here: the audition preview
-            # below uses `prompt` directly, and the first real synth's single
-            # disk load is negligible.) Also evict the derived 1.7B-native
-            # prompt (in-memory AND on-disk) — it was derived from the OLD
-            # embedding and must be re-derived from this new one.
-            with self._cache_lock:
-                self._prompt_cache.pop(voice_id, None)
-            self._evict_17b_prompt(voice_id)
+                # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
+                os.makedirs(self._voices_dir, exist_ok=True)
+                pt_path, json_path = self._voice_paths(voice_id)
+                _atomic_torch_save(torch, prompt, pt_path)
+                import json as _json
 
-            # 4. audition preview — speak the caller's calibration line in the new
-            #    voice (the full evidence quote, NOT the short reference text).
-            # The silent degenerate-load OUTPUT guard (#1593) is intentionally NOT
-            # applied to this audition forward: it's a cast-review preview the
-            # operator hears live (not shipped chapter audio), and a degenerate
-            # preview is re-run by clicking re-audition — no silent bad ship.
-            _phase("rendering")
-            _t = time.perf_counter()
-            with self._synth_lock:
-                self._ensure_base_loaded()  # re-ensure under the lock — see above
-                wavs, sr = self._base.generate_voice_clone(
-                    text=[audition_text], language=[lang], voice_clone_prompt=prompt
+                with open(json_path, "w", encoding="utf-8") as fh:
+                    _json.dump(
+                        {
+                            "voiceId": voice_id,
+                            "voiceUuid": voice_uuid,
+                            "instruct": instruct,
+                            "language": lang,
+                            "refText": ref_text,
+                            "baseModel": self.BASE_MODEL,
+                            "designModel": self.VOICEDESIGN_MODEL,
+                            **({"mintMethod": mint_method} if mint_method else {}),
+                            **({"fallbackFor": fallback_for} if fallback_for else {}),
+                        },
+                        fh,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+
+                # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
+                # this DESIGNED voice re-derive a fresh embedding from the same
+                # clip after a base-model upgrade (not byte-identical — Node's
+                # reader resamples it to a fixed 24kHz first), the way a CLONED
+                # voice already can from its retained `master.wav` (Wave 3b1).
+                # Strictly additive: the HTTP
+                # response, the audition PCM, and the `.pt`/`.json` above are
+                # already complete by this point, so a failure here must never
+                # break voice design — it's a future re-derivation aid, not part
+                # of the design contract. Log-and-continue, not propagate.
+                try:
+                    _atomic_wav_save(
+                        _float_audio_to_int16_le(ref_audio),
+                        int(ref_sr),
+                        self._voice_master_wav_path(voice_id),
+                    )
+                except Exception:
+                    log.warning(
+                        "Failed to persist reference clip for voice '%s' — "
+                        "continuing (design itself is unaffected).",
+                        voice_id, exc_info=True,
+                    )
+
+                log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+
+                # Evict any stale in-memory entry so a RE-designed voice can't keep
+                # serving the previous embedding — the next synth reloads the fresh
+                # .pt we just wrote. (We don't warm it here: the audition preview
+                # below uses `prompt` directly, and the first real synth's single
+                # disk load is negligible.) Also evict the derived 1.7B-native
+                # prompt (in-memory AND on-disk) — it was derived from the OLD
+                # embedding and must be re-derived from this new one.
+                with self._cache_lock:
+                    self._prompt_cache.pop(voice_id, None)
+                self._evict_17b_prompt(voice_id)
+
+                # 4. audition preview — speak the caller's calibration line in the new
+                #    voice (the full evidence quote, NOT the short reference text).
+                # The silent degenerate-load OUTPUT guard (#1593) is intentionally NOT
+                # applied to this audition forward: it's a cast-review preview the
+                # operator hears live (not shipped chapter audio), and a degenerate
+                # preview is re-run by clicking re-audition — no silent bad ship.
+                _phase("rendering")
+                _t = time.perf_counter()
+                with self._synth_lock:
+                    self._ensure_base_loaded()  # re-ensure under the lock — see above
+                    wavs, sr = self._base.generate_voice_clone(
+                        text=[audition_text], language=[lang], voice_clone_prompt=prompt
+                    )
+                audition_ms = (time.perf_counter() - _t) * 1000.0
+                # Structured timing line, mirroring the synth path. Field map:
+                #   load_ms        Kokoro-evict + (cold) 1.7B VoiceDesign / 0.6B load
+                #   design_fwd_ms  the 1.7B VoiceDesign reference-clip forward
+                #   distil_ms      0.6B clone-prompt distil from the reference clip
+                #   audition_ms    0.6B audition-preview synth of the calibration line
+                # A single grep over this line tells us where a slow design spends its
+                # time, with no guesswork.
+                total_ms = (time.perf_counter() - t0) * 1000.0
+                log.info(
+                    "qwen voice design: voice=%s lang=%s load_ms=%.0f design_fwd_ms=%.0f "
+                    "distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
+                    voice_id, lang, load_ms, design_fwd_ms, distil_ms, audition_ms, total_ms,
                 )
-            audition_ms = (time.perf_counter() - _t) * 1000.0
-            # Structured timing line, mirroring the synth path. Field map:
-            #   load_ms        Kokoro-evict + (cold) 1.7B VoiceDesign / 0.6B load
-            #   design_fwd_ms  the 1.7B VoiceDesign reference-clip forward
-            #   distil_ms      0.6B clone-prompt distil from the reference clip
-            #   audition_ms    0.6B audition-preview synth of the calibration line
-            # A single grep over this line tells us where a slow design spends its
-            # time, with no guesswork.
-            total_ms = (time.perf_counter() - t0) * 1000.0
-            log.info(
-                "qwen voice design: voice=%s lang=%s load_ms=%.0f design_fwd_ms=%.0f "
-                "distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
-                voice_id, lang, load_ms, design_fwd_ms, distil_ms, audition_ms, total_ms,
-            )
-            # Idle clock starts now (design finished) — back-to-back designs keep
-            # the model warm; a pause past the TTL lets the watchdog reclaim it.
-            self._design_last_used = time.monotonic()
+            finally:
+                self._design_last_used = time.monotonic()
             return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
-        finally:
-            self._design_in_flight -= 1
 
     def clone_voice(
         self, voice_id: str, ref_audio: Any, ref_sr: int, ref_text: str,
@@ -4939,7 +5182,8 @@ class WhisperEngine:
         self._infer_lock = threading.Lock()
         # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
         # without blocking the admission path on a whole forward (#1894).
-        self._infer_in_flight = 0
+        # Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
@@ -5023,30 +5267,32 @@ class WhisperEngine:
         route→load gap; `None` is the pre-admission path."""
         self._ensure_loaded(device=device)
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
-        self._infer_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._infer_lock:
-                # Re-ensure under the lock: an idle-evict holds `_infer_lock`
-                # to null the model, so one ensured before the lock can be gone
-                # in the gap. No-op on the warm path.
-                self._ensure_loaded(device=device)
-                model = self._model
-                assert model is not None
-                self._last_used = time.monotonic()
-                segments, info = model.transcribe(
-                    audio,
-                    language=language,
-                    beam_size=1,                     # greedy
-                    temperature=0.0,                 # deterministic → idempotent verdicts
-                    condition_on_previous_text=word_timestamps,  # True only for captions
-                    vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
-                    word_timestamps=word_timestamps,
-                )
-                segs = list(segments)
-        finally:
-            self._infer_in_flight -= 1
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+            # the ordering matters.
+            try:
+                with self._infer_lock:
+                    # Re-ensure under the lock: an idle-evict holds
+                    # `_infer_lock` to null the model, so one ensured before
+                    # the lock can be gone in the gap. No-op on the warm path.
+                    self._ensure_loaded(device=device)
+                    model = self._model
+                    assert model is not None
+                    self._last_used = time.monotonic()
+                    segments, info = model.transcribe(
+                        audio,
+                        language=language,
+                        beam_size=1,                     # greedy
+                        temperature=0.0,                 # deterministic → idempotent verdicts
+                        condition_on_previous_text=word_timestamps,  # True only for captions
+                        vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+                        word_timestamps=word_timestamps,
+                    )
+                    segs = list(segments)
+            finally:
+                self._last_used = time.monotonic()
         text = " ".join((s.text or "").strip() for s in segs).strip()
         logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
         no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
@@ -5101,7 +5347,7 @@ class WhisperEngine:
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight transcribe (#1894). The reclaim runs after the lock is
-        released — this is reached from `_idle_evict` on the event loop.
+        released — this is reached from `_idle_evict_steps` on the event loop.
         """
         with self._infer_lock:
             dropped = self._drop_model_locked()
@@ -5118,18 +5364,18 @@ class WhisperEngine:
         used recently — skipping the lock here matters, a forward can run
         for seconds and admission must not block on it. Re-validated UNDER
         the lock before dropping (#1894): `transcribe` claims
-        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
         """
-        if self._model is None or self._infer_in_flight > 0:
+        if self._model is None or self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
-            if self._model is None or self._infer_in_flight > 0:
+            if self._model is None or self._in_flight.busy:
                 return False
             if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
                 return False
@@ -5157,7 +5403,8 @@ class SpeakerEngine:
         self._infer_lock = threading.Lock()
         # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
         # without blocking the admission path on a whole forward (#1894).
-        self._infer_in_flight = 0
+        # Thread-safe (#1917) — see `InFlightCounter`.
+        self._in_flight = InFlightCounter()
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
@@ -5218,21 +5465,23 @@ class SpeakerEngine:
             audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
                               np.arange(len(audio)), audio).astype(np.float32)
         t = torch.from_numpy(audio).unsqueeze(0)
-        self._infer_in_flight += 1
-        self._last_used = time.monotonic()
-        try:
-            with self._infer_lock, torch.no_grad():
-                # `ensure_loaded` is async here, so unlike WhisperEngine we
-                # cannot reload under the lock — re-check and surface the
-                # documented precondition. The `_infer_in_flight` claim above
-                # is what actually stops an idle-evict getting here (#1894).
-                model = self._model
-                if model is None:
-                    raise RuntimeError("model was unloaded during embed()")
-                emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
-        finally:
-            self._infer_in_flight -= 1
+        with self._in_flight.claim():
             self._last_used = time.monotonic()
+            # Re-stamp on the way out in an INNER finally, BEFORE the claim's
+            # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+            # the ordering matters.
+            try:
+                with self._infer_lock, torch.no_grad():
+                    # `ensure_loaded` is async here, so unlike WhisperEngine we
+                    # cannot reload under the lock — re-check and surface the
+                    # documented precondition. The `_in_flight` claim above
+                    # is what actually stops an idle-evict getting here (#1894).
+                    model = self._model
+                    if model is None:
+                        raise RuntimeError("model was unloaded during embed()")
+                    emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+            finally:
+                self._last_used = time.monotonic()
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
 
@@ -5269,7 +5518,7 @@ class SpeakerEngine:
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight embed (#1894). The reclaim runs after the lock is
-        released — this is reached from `_idle_evict` on the event loop.
+        released — this is reached from `_idle_evict_steps` on the event loop.
         """
         with self._infer_lock:
             dropped = self._drop_model_locked()
@@ -5286,7 +5535,7 @@ class SpeakerEngine:
         loaded / mid-forward / used recently) — skipping the lock matters, a
         forward can run for seconds and admission must not block on it.
         Re-validated UNDER the lock before dropping (#1894): `embed` claims
-        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
@@ -5294,14 +5543,14 @@ class SpeakerEngine:
         """
         if _parse_device(self.device)[0] != "cuda" or self._model is None:
             return False
-        if self._infer_in_flight > 0:
+        if self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
             if _parse_device(self.device)[0] != "cuda" or self._model is None:
                 return False
-            if self._infer_in_flight > 0:
+            if self._in_flight.busy:
                 return False
             if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
                 return False
@@ -6305,7 +6554,13 @@ async def _preload_default_engines() -> None:
             try:
                 log.info("Preloading Coqui (model=%s) at startup…", coqui_model)
                 await asyncio.to_thread(coqui._ensure_loaded, coqui_model)
-                log.info("Coqui preload complete — /synthesize will respond fast on first call.")
+                # `_ensure_loaded` can now discard a load rather than publish it
+                # (#1918) — check residency instead of assuming the call above
+                # means "loaded".
+                if coqui._tts is not None:
+                    log.info("Coqui preload complete — /synthesize will respond fast on first call.")
+                else:
+                    log.info("Coqui preload discarded (unloaded or superseded while loading).")
             except Exception as e:
                 # Don't crash the process — the user still gets /health and a
                 # diagnostic on the first real /synthesize call.
@@ -7123,7 +7378,13 @@ async def load_model(req: Request) -> JSONResponse:
             return error_response(e, log, status=500)
         finally:
             coqui._loading = False
-    return JSONResponse({"status": "ready"})
+    # `_ensure_loaded` can discard a load rather than publish it (#1918) — a
+    # Stop pressed mid-load lands here with nothing resident. Report the
+    # engine's ACTUAL residency rather than assuming the call above means
+    # "ready": on this ticket's own headline scenario (Load clicked, Stop
+    # pressed mid-load), the sidecar must not tell Node the model is ready
+    # while `coqui._tts is None`.
+    return JSONResponse({"status": "ready" if coqui._tts is not None else "idle"})
 
 
 @app.post("/unload")

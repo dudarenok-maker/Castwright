@@ -113,6 +113,30 @@ def test_load_nocapacity_returns_503(monkeypatch, load_client):
     assert fake.load_calls == []
 
 
+def test_load_reports_idle_when_the_load_was_discarded(monkeypatch, load_client):
+    """#1918 review F1 — this ticket's own headline scenario: Load clicked,
+    Stop pressed mid-load. `CoquiEngine._ensure_loaded` can now return
+    normally WITHOUT publishing (the epoch moved out from under it), and the
+    route used to report `{"status": "ready"}` unconditionally once the call
+    returned — telling Node the model is ready while `coqui._tts is None`.
+
+    Bypasses capacity admission (same as `test_load_flag_off_never_probes`)
+    so this pins the route's post-load status purely against engine
+    residency, independent of the placement machinery. The fake
+    `_ensure_loaded` stands in for a load that raced a Stop and lost: it
+    returns normally but leaves nothing resident, exactly what the real
+    discard branch in `main.py` does."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
+    fake = load_client.fake_coqui
+    monkeypatch.setattr(fake, "_ensure_loaded", lambda model, device=None: None)
+
+    r = load_client.post("/load", json={"engine": "coqui"})
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "idle"}
+    assert fake._tts is None
+
+
 # --- kokoro branch (main.py's kokoro `/load` arm) ---
 # Same fixture shape as the coqui trio above, swapped onto KokoroEngine's
 # `_ensure_loaded` sentinel (`_kokoro`) so the load path actually runs
