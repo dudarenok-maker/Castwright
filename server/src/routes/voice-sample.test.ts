@@ -673,6 +673,50 @@ describe('voice-sample router', () => {
       expect(synthesize).not.toHaveBeenCalled();
     });
 
+    /* GATE 1 fix (C4) — the sibling of (c) that was missing, and the reason
+       this guard survived the branch's other case-fold fixes: (c) only ever
+       sent the canonical lower-case key. `voice-override-linked.test.ts`'s
+       "MAJOR-1 fix-round: rejects a case-varied planted key" and
+       `preserve-cast-voices.test.ts`'s "[#1899] throws case-insensitively"
+       are the two siblings that DID have one.
+
+       The bypass is real, not theoretical: the sidecar sanitises with
+       `re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)` (case-preserving) and then
+       `os.path.isfile`, so on NTFS/APFS `XTTS-<uuid>.pt` opens the real
+       `xtts-<uuid>.pt`. Asserting the 403 alone would be the placebo shape
+       the review warned about, so this also asserts `synthesize` was never
+       reached — no audio of the revoked person's voice was produced at all —
+       and that nothing was cached under the case-varied `raw-coqui-<djb2>`
+       scope, which no purge sweep computes (it only ever hashes the
+       lower-case key). */
+    it('GATE 1 C4: (c) with a CASE-VARIED raw key — `XTTS-<uuid>` must not slip past the consent gate', async () => {
+      const voiceUuid = 'revoked-raw-case-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Uncle',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `XTTS-${voiceUuid}`, // the only difference from (c)
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/consent/i);
+      // The actual bypass consequence: no audio was ever synthesised...
+      expect(synthesize).not.toHaveBeenCalled();
+      // ...and no MP3 was left in a cache scope no purge can reach.
+      expect(res.body.url).toBeUndefined();
+    });
+
     it('(raw analogue of d) a non-cloned (designed) library voice is unaffected via the raw-speaker bypass', async () => {
       /* Fix wave (finding 4) — (a)/(c)/(d) above cover the raw branch's
          REVOKED case (c) and the normal branch's designed case (d), but

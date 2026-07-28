@@ -138,8 +138,32 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
      the library entry rather than trusting the client-supplied `provenance`
      field. */
   if (isCloneEngine(engine)) {
-    const prefix = `${manifestSlotFor(engine)}-`;
-    if (voiceName.startsWith(prefix)) {
+    /* GATE 1 fix (C4) — the prefix test is CASE-FOLDED, matching the two
+       sibling guards added in this same wave (voice-override-linked.ts's
+       `nameLower.startsWith(prefix)` and preserve-cast-voices.ts's). This was
+       the only clone-key check on the branch that wasn't, and it sits on the
+       one route that actually PLAYS audio: `rawSpeaker: 'XTTS-<uuid>'` failed
+       the case-sensitive `startsWith`, so `readEntry` was never called, the
+       403 never fired, and a revoked person's voice rendered. The sidecar
+       resolves it anyway — main.py's `re.sub(r"[^A-Za-z0-9_.-]", "_", …)`
+       preserves case and `os.path.isfile` is case-insensitive on NTFS/APFS,
+       so `XTTS-<uuid>.pt` opens the real `xtts-<uuid>.pt`. Two aggravating
+       consequences the fold also closes: the sidecar's `_evict_epoch` /
+       `_latents_cache` are dicts keyed on the RAW voice_id, so a render under
+       a case-varied key had its own epoch at 0 and was never interrupted by
+       the evict-epoch stop; and `asciiFileScope` preserves case, so the
+       resulting audition cached under a `raw-coqui-<djb2>` scope no purge
+       sweep ever computes.
+
+       Only the PREFIX is folded — the uuid tail is sliced verbatim, never
+       lower-cased. `randomUUID()` and `nanoid()` both mint mixed-case uuids,
+       so lower-casing the tail would break `readEntry` on a case-sensitive
+       filesystem. A case-varied UUID is not a bypass either way: on NTFS/APFS
+       `readEntry`'s own `existsSync` matches it exactly as the sidecar's
+       `os.path.isfile` does, and on a case-sensitive filesystem neither
+       resolves. */
+    const prefix = `${manifestSlotFor(engine)}-`; // manifestSlotFor already returns lower-case
+    if (voiceName.toLowerCase().startsWith(prefix)) {
       const libraryUuid = voiceName.slice(prefix.length);
       const entry = await readEntry(libraryUuid);
       if (clonedVoiceLacksConsent(entry)) {
