@@ -25,8 +25,9 @@ owner: null
 Source spec: [`docs/superpowers/specs/2026-07-27-ffmpeg-version-floor-design.md`](../superpowers/specs/2026-07-27-ffmpeg-version-floor-design.md)
 Implementation plan: [`docs/superpowers/plans/2026-07-27-ffmpeg-version-floor.md`](../superpowers/plans/2026-07-27-ffmpeg-version-floor.md)
 Related: [`218-pinokio-installer.md`](218-pinokio-installer.md) (the conda env this
-constrains), [`archive/185-golden-audio.md`](archive/185-golden-audio.md) (the
-deferred drift half) · ops-35 · [#1877](https://github.com/dudarenok-maker/Castwright/issues/1877)
+constrains), [`archive/185-golden-audio-regression.md`](archive/185-golden-audio-regression.md) (the
+deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembly-comparison.md)
+(the follow-up that built the drift comparison) · ops-35 · [#1877](https://github.com/dudarenok-maker/Castwright/issues/1877)
 
 ## Benefit / Rationale
 

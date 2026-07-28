@@ -19,6 +19,7 @@ import { stampStateSchema } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { formatDuration } from './format-duration.js';
+import { measureLoudnessFile } from './measure-loudness.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -216,6 +217,33 @@ export async function finalizeChapterAudioWrite(
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
   } catch (err) {
     console.warn(`[splice] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`);
+  }
+
+  /* ops-36 finding 10 — replace loudnorm's self-reported figures with a real
+     EBU R128 measurement of the file we just wrote. `i`/`lra`/`tp` are rendered
+     to users by the Listen view's loudness badge, and loudnorm's `output_tp` is
+     the ceiling it was ASKED for, not what the audio reached. Fails soft: the
+     audio is already on disk, so a failed measurement leaves the loudnorm-
+     derived sidecar in place rather than breaking the render. */
+  if (loudnormStats) {
+    try {
+      const real = await measureLoudnessFile(audioPath);
+      if (real) {
+        await writeChapterLufsFile(
+          { ...(loudnormStats as LoudnormSidecarJson), i: real.i, lra: real.lra, tp: real.tp },
+          lufsPath,
+        );
+      } else {
+        console.warn(
+          `[splice] ebur128 measurement unavailable for ${chapter.slug}; ` +
+            `sidecar keeps loudnorm's self-reported figures`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[splice] failed to re-measure loudness for ${chapter.slug}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /* Stamp duration / model / QA into state.json (read-modify-write, keyed by

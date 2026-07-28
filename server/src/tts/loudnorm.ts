@@ -63,24 +63,41 @@ export interface LoudnormFirstPassStats {
  *  audio as `<chapterSlug>.lufs.json`. Plan 77 (Wave 2 — LUFS report card UI)
  *  reads this back; field names are stable contract.
  *
- *  In two-pass mode `i` / `lra` / `tp` are the POST-normalisation values
- *  ffmpeg's second-pass loudnorm filter reports as `output_*` — i.e. what
- *  the chapter actually sounds like after the gain pass, not what the raw
- *  PCM measured before. In single-pass mode they are the nominal target
- *  (single-pass doesn't re-measure post filter); consumers MUST check
- *  `twoPass === true` before treating these fields as ground truth
- *  (`loudness-report.tsx:classifyDrift`). */
+ *  `i` / `lra` / `tp` are measured from the FINISHED file by a real `ebur128`
+ *  pass (`server/src/audio/measure-loudness.ts`), run after the audio is
+ *  encoded and renamed into place — not loudnorm's self-reported `output_*`
+ *  figures (ops-36 finding 10: `output_tp` in particular is the ceiling
+ *  loudnorm was ASKED to hit, not what the audio measured, and can sit below
+ *  the true sample peak). On measurement failure — the audio is already on
+ *  disk by then — they fall back to loudnorm's self-reports, which are NOT
+ *  measurements. */
 export interface LoudnormSidecarJson {
-  /** Measured integrated loudness (LUFS) of the rendered chapter. */
+  /** Integrated loudness (LUFS) of the finished chapter, as measured by
+   *  `ebur128`; falls back to loudnorm's self-reported `output_i` if the
+   *  post-write measurement failed. */
   i: number;
-  /** Measured loudness range (LU). */
+  /** Loudness range (LU), as measured by `ebur128`; falls back to loudnorm's
+   *  self-reported `output_lra` if the post-write measurement failed. */
   lra: number;
-  /** Measured true peak (dBTP). */
+  /** True peak (dBTP), as measured by `ebur128`; falls back to loudnorm's
+   *  self-reported `output_tp` — the requested ceiling, not a measurement —
+   *  if the post-write measurement failed. */
   tp: number;
   /** Target integrated loudness (LUFS) used for normalisation. */
   target: number;
   /** Whether two-pass measure-then-apply was used. */
   twoPass: boolean;
+  /** Which mode loudnorm's second pass actually used. `linear` applies a single
+   *  gain offset and preserves the source envelope; `dynamic` compresses on the
+   *  fly, which ffmpeg falls back to when the linear gain would breach the
+   *  true-peak ceiling.
+   *
+   *  OPTIONAL, and absence is meaningful in two ways: single-pass mode never
+   *  has one, and a two-pass encode whose second-pass JSON failed to parse
+   *  falls back WITHOUT one while still reporting `twoPass: true`. Do NOT infer
+   *  presence from `twoPass`. Sidecars written by
+   *  `scripts/relufs-existing.mjs` also omit it (ebur128 has no mode). */
+  normalizationType?: 'linear' | 'dynamic';
   /** ISO-8601 timestamp the measurement was taken. */
   measuredAt: string;
 }
