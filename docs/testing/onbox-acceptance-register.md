@@ -7,6 +7,12 @@ at PR time.
 A row here is a debt: the code is merged and users have it, but nobody has
 watched it work. Empty register = done.
 
+`npm run check:onbox-register` (CI: `.github/workflows/onbox-register-check.yml`,
+ops-43) mechanically checks this file's own internal arithmetic — glance-table
+counts against body row headings, and the stated total against the glance
+table — on every PR that touches it. It cannot tell you a row is missing,
+only that the ones already here don't add up.
+
 This exists because complex work routinely cannot be accepted inside its own PR.
 The box is often contended, an acceptance run can take hours, and a PR should not
 sit open waiting for one. **Owed acceptance never blocks a merge — it converts
