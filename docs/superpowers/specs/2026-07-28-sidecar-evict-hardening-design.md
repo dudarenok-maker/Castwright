@@ -77,9 +77,20 @@ The load itself stays outside the lock — that is the whole point, and holding
 `_synth_lock` for 90 s would make the Stop button useless. What moves inside the
 lock is only the **publish**, which is seven field assignments:
 
-- `_drop_model_locked()` increments `self._load_epoch`. It is already the single
-  teardown path for both `unload()` and `maybe_free_idle`, and it already runs
-  under `_synth_lock`, so this covers every drop with no new call site.
+- **`unload()` increments `self._load_epoch` unconditionally, under
+  `_synth_lock`** — it is a *"a teardown was requested"* counter, not a *"a model
+  was dropped"* one. This distinction is the whole fix: `_drop_model_locked`
+  early-returns when `_tts is None`, and during a cold load `_tts` **is** `None`,
+  so bumping only inside the drop would leave the epoch untouched for exactly
+  the scenario #1918 is about.
+- `_drop_model_locked()` increments it too, for the `maybe_free_idle` path, which
+  reaches the teardown without going through `unload()`.
+
+The two halves close different windows. The atomic publish closes the *narrow*
+one — the ~30 lines after `self._tts = tts` where the model is visible but
+`_device` / `_speakers` are not yet written, which is where a concurrent
+`unload()` can have its resets overwritten. The epoch closes the *wide* one: a
+Stop pressed at any point during the ~90 s load now cancels it.
 - `_ensure_loaded` snapshots `epoch = self._load_epoch` **before** starting the
   load, keeps every loaded value in locals, and hands them to
   `_publish_loaded_locked(...)`.
@@ -166,11 +177,19 @@ and `hold` take the engine key and record it alongside the token; a new
 reservation on that device. `PlacementController` skips any step whose name is in
 that set.
 
-Step names *are* engine keys, so this filtering lives entirely in the controller
-— the step builder stays a pure "what could be evicted here" function. The ledger
-is the right authority because the hold spans the whole op, from before the worker
-thread starts until after it finishes; the in-flight counter only covers the
-forward.
+Each step carries the engine key the ledger would record for an op using it —
+or `None` where the ledger's engine granularity is the *wrong* granularity. The
+filtering lives entirely in the controller; the step builder stays a pure "what
+could be evicted here" function. The ledger is the right authority because the
+hold spans the whole op, from before the worker thread starts until after it
+finishes; the in-flight counter only covers the forward.
+
+The two Qwen steps declare `None`. Every Qwen route reserves under the bare key
+`"qwen"`, so the ledger cannot tell its three models apart — and with a `"qwen"`
+key, one Qwen op holding a reservation would make a second starved Qwen op skip
+both cheap Qwen steps and fall through to a ~90 s XTTS reload instead. Qwen's
+per-model in-flight guards are the correct granularity there. The cost is
+recorded under Known limitations.
 
 `ledger.hold()` has no production callers today (tests only), so the signature
 change touches `try_hold`'s two production sites and the tests.
@@ -267,6 +286,16 @@ recurring shapes are recorded in that PR's review notes; the ones that bite here
 - **The 90 s unload budget is a ceiling, not a promise.** A forward longer than
   90 s still reports a timeout. Coqui sentence forwards are seconds; this is the
   same bet `LOAD_TIMEOUT_MS` already makes.
+- **#1920B stays open for Qwen.** The ledger records reservations under the bare
+  engine key, and every Qwen route reserves as `"qwen"`, so the two Qwen evict
+  steps cannot use the ledger guard (see §4B). A `/design_voice` that has been
+  admitted but whose worker thread has not yet claimed `_design_in_flight` can
+  still have a warm VoiceDesign model evicted underneath it — the same window
+  the ledger closes for Coqui, ASR and ECAPA. Closing it means recording
+  `FootprintTable._key(engine, model, cfg)` (which already yields
+  `qwen.1.7b.design` / `qwen.1.7b.mint` / `qwen.1.7b` / `qwen`) in the ledger
+  instead of the engine, and threading that key through both `try_hold` sites.
+  Deliberately out of scope here; file it if the design work is wanted.
 
 ## 9. Owed acceptance
 

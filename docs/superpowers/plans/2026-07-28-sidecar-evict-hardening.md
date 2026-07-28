@@ -17,6 +17,7 @@
 - **Never hold an engine lock across a model load or a forward.** The whole point of #1894's design is that a ~90 s cold XTTS pull happens with the lock released so the Stop button stays responsive.
 - **The `> 0` in-flight predicate stays `> 0`,** never `!= 0`. It is a deliberate choice so a drifted-negative counter cannot wedge eviction off.
 - **`_last_used` is stamped BEFORE `_tts` is published,** never after (#1894 fix-round-1). Any thread that observes a live model must observe a fresh timestamp.
+- **On the way OUT of a forward, the `_last_used` re-stamp must happen BEFORE the in-flight count drops** — the mirror of the rule above, and equally load-bearing. Decrementing first leaves a window where the count reads 0 while the timestamp is still the pre-forward value, which `maybe_free_idle*` (called with `ttl=0.0` from the admission path) will happily evict on. Every existing site already gets this right by accident of statement order; a careless `with counter.claim(): yield` rewrite reintroduces the race, because the context manager's decrement runs after the block body ends. Put the final stamp in an inner `finally` **inside** the claim.
 - **`_drop_model_locked()` must keep restoring `self._device = self._requested_device`** (the #1730 gap-3 fix). Losing it means the next lazy cold load bypasses placement.
 - **`engine != "coqui"` self-eviction guard stays.** A starved Coqui op must never evict the model it is about to reload.
 - **Every new test must fail against the wrong implementation.** Before marking a task done, state for each new test which wrong implementation it catches. A test that passes against the unfixed code is a finding, not coverage. Watch for the three shapes that got through on #1894: a timing assertion a merely-slow bug satisfies; a fixture that stamps the field under test; an assertion read after the call instead of during it.
@@ -54,43 +55,62 @@ import threading
 import main
 
 
-def test_claim_mutates_under_the_lock():
-    """The deterministic one. Replaces the counter's lock with a spy and asserts
-    the mutation happens BETWEEN acquire and release.
+def test_the_mutation_happens_between_acquire_and_release():
+    """THE GATE. Deterministic, single-threaded, no timing.
 
-    Fails against the wrong implementation: a bare `self._n += 1` outside the
-    lock records the mutation with depth 0, so `seen_inside` stays empty.
-    A stress test alone cannot prove this — it is probabilistic.
+    Reads the counter's RAW `_n` at each lock boundary — not `.value` / `.busy`,
+    which re-acquire and would deadlock against a real inner lock.
+
+    Fails against the wrong implementation: with `self._n += 1` outside the
+    `with`, the enter/exit pair reads (0, 0) instead of (0, 1) — or there are no
+    events at all, because a lock-free version never touches `_lock`.
+
+    Note what this catches that a weaker spy would not: asserting merely that
+    "one acquire/release pair happened per claim" passes against an
+    implementation that takes the lock for nothing and mutates outside it.
+    The VALUE at the boundary is the discriminator.
     """
-    c = main.InFlightCounter()
-    real = threading.Lock()
-    seen_inside: list[int] = []
-    depth = 0
+    events: list[tuple[str, int]] = []
 
-    class SpyLock:
+    class Spy:
         def __enter__(self):
-            nonlocal depth
-            real.acquire()
-            depth += 1
+            events.append(("enter", c._n))
             return self
 
         def __exit__(self, *a):
-            nonlocal depth
-            depth -= 1
-            real.release()
+            events.append(("exit", c._n))
             return False
 
-    c._lock = SpyLock()
-    original_setattr = main.InFlightCounter.__dict__  # keep the class untouched
-
-    # Observe the depth at the moment the value changes by wrapping the
-    # counter's storage in a property-like recorder.
-    class Recorder(int):
-        pass
-
+    c = main.InFlightCounter(lock=Spy())
     with c.claim():
-        seen_inside.append(depth_at_mutation[0] if (depth_at_mutation := [0]) else 0)
-    assert original_setattr is not None
+        pass
+    assert events == [("enter", 0), ("exit", 1), ("enter", 1), ("exit", 0)]
+
+
+def test_the_mutation_is_guarded_by_the_lock_not_merely_adjacent_to_it():
+    """Stronger companion to the test above: hold the counter's own lock, then
+    prove a concurrent claim BLOCKS on it rather than racing past.
+
+    Fails against the wrong implementation: a lock-free `+=` completes
+    immediately, so the thread is dead and `_n` is 1.
+    """
+    c = main.InFlightCounter()
+    started = threading.Event()
+
+    def worker():
+        started.set()
+        with c.claim():
+            pass
+
+    with c._lock:
+        t = threading.Thread(target=worker)
+        t.start()
+        assert started.wait(2)
+        t.join(0.5)
+        assert t.is_alive()      # blocked on the lock we hold
+        assert c._n == 0         # and it has NOT mutated
+    t.join(2)
+    assert c._n == 0
 
 
 def test_concurrent_claims_return_to_zero():
@@ -141,17 +161,16 @@ def test_claim_releases_on_exception():
     assert c.value == 0
 ```
 
-**NOTE for the implementer:** `test_claim_mutates_under_the_lock` above is a
-sketch and does NOT work as written — the recorder scaffolding is incoherent.
-Write it properly: the requirement is a **deterministic** assertion that the
-`+= 1` happens while the counter's own lock is held. The clean way is to give
-`InFlightCounter` an injectable lock (`InFlightCounter(lock=...)`, defaulting to
-`threading.Lock()`), pass a spy whose `__enter__`/`__exit__` track depth, and
-have the test read `c.value` from inside a `__enter__` hook — or simplest,
-assert that a spy lock recorded exactly one acquire/release pair per `claim()`
-entry and exit, and that `value` is unchanged when the spy refuses to acquire.
-Pick whichever you can make genuinely fail against a lock-free `+=`, and state
-in your report which wrong implementation it catches.
+**NOTE for the implementer:** the first two tests are the #1917 gate and the
+stress test is a realism check. `test_busy_reflects_an_outstanding_claim` and
+`test_claim_releases_on_exception` **pass against the broken implementation
+too** — they are contract tests for the new helper, not coverage of the defect.
+Keep them, but do not count them toward "this task is tested"; say so in your
+report.
+
+The injectable lock (`InFlightCounter(lock=...)`, defaulting to
+`threading.Lock()`) exists for the spy test and is part of the required
+interface.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -223,7 +242,34 @@ Each site: replace the `int` attribute with an `InFlightCounter`, replace the ma
 2. **`WhisperEngine`** — `self._infer_in_flight` → `self._in_flight`. `transcribe`'s manual bracket becomes `with self._in_flight.claim():` around the stamp + `with self._infer_lock:` block. `maybe_free_idle`: both reads.
 3. **`SpeakerEngine`** — identical to Whisper. `embed`'s bracket wraps the stamp + `with self._infer_lock, torch.no_grad():` block. `maybe_free_idle`: both reads.
 4. **`QwenEngine._design_in_flight`** → `self._design_in_flight = InFlightCounter()`. `design_voice` brackets manually (`+= 1`, big `try`, `finally: -= 1`); convert to `with self._design_in_flight.claim():`. `maybe_free_idle_design`: both reads.
-5. **`QwenEngine._base17_in_flight`** → `InFlightCounter()`. `_base17_activity()` is already a `@contextmanager`; its body becomes a `with self._base17_in_flight.claim():` wrapping the `yield`, keeping the two `_base17_last_used` stamps where they are. `maybe_free_idle_base17`: both reads.
+5. **`QwenEngine._base17_in_flight`** → `InFlightCounter()`. `_base17_activity()` is already a `@contextmanager`. **Its exit ordering is load-bearing** — see the Global Constraint on exit ordering. The current body is stamp → increment → `yield` → stamp → decrement. The naive rewrite
+
+   ```python
+   self._base17_last_used = time.monotonic()
+   with self._base17_in_flight.claim():
+       yield
+   self._base17_last_used = time.monotonic()   # WRONG — runs AFTER the decrement
+   ```
+
+   reintroduces the exact TOCTOU `_base17_in_flight` exists to close: the claim's
+   `finally` decrements when the block ends, so between the decrement and the
+   re-stamp the count reads 0 with a stale timestamp, and `maybe_free_idle_base17`
+   (reached with `ttl=0.0` from the admission path) evicts. Write it as:
+
+   ```python
+   self._base17_last_used = time.monotonic()
+   with self._base17_in_flight.claim():
+       try:
+           yield
+       finally:
+           self._base17_last_used = time.monotonic()
+   ```
+
+   `maybe_free_idle_base17`: both reads become `.busy`. Apply the same
+   inner-`finally` shape to **every** converted site whose original code
+   re-stamped `_last_used` after the decrement — Coqui's `synthesize`, Whisper's
+   `transcribe`, Speaker's `embed`, and Qwen's `design_voice`. Check each one; do
+   not assume.
 
 **Delete the false claim** in `_base17_activity`'s docstring: *"The int inc/dec is GIL-atomic — same rationale as `_design_in_flight`."* Replace with a pointer to `InFlightCounter`.
 
@@ -333,10 +379,29 @@ def test_the_reensure_under_the_lock_does_not_deadlock():
     """`synthesize` calls `_ensure_loaded` while HOLDING `_synth_lock`; a publish
     that unconditionally acquires that non-reentrant lock self-deadlocks.
 
-    Fails against the wrong implementation by hanging — assert with a bounded
-    join, never an unbounded one.
+    MUST drive `_ensure_loaded(..., lock_held=True)` DIRECTLY on a cold engine
+    while holding `_synth_lock`. Going through `synthesize` instead proves
+    NOTHING: its pre-lock ensure at main.py:1472 already loads and publishes, so
+    the in-lock re-ensure at :1487 hits the `_tts is not None` fast-out and never
+    reaches the publish at all — that version passes identically against an
+    implementation that unconditionally acquires the lock.
+
+    Fails against the wrong implementation by hanging. Bounded join only, never
+    an unbounded one.
     """
-    # run synthesize on a thread with a cold engine, join(10), assert it finished.
+    eng = main.CoquiEngine()
+    # ... same fake TTS/torch monkeypatching as above, no blocking Event ...
+    done = threading.Event()
+
+    def run():
+        with eng._synth_lock:
+            eng._ensure_loaded("xtts_v2", device="cuda:0", lock_held=True)
+        done.set()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    assert done.wait(10), "publish self-deadlocked on the non-reentrant _synth_lock"
+    assert eng._tts is not None
 ```
 
 **NOTE for the implementer:** the fixture scaffolding above is elided. Reuse the
@@ -363,14 +428,46 @@ In `CoquiEngine.__init__`, beside `_synth_lock`:
         self._load_epoch = 0
 ```
 
-In `_drop_model_locked`, immediately before `return (True, torch_module)`:
+**The epoch must be bumped in TWO places, and getting this wrong makes the whole
+task inert.** It is a *"a teardown was requested"* counter, not a *"a model was
+dropped"* counter.
+
+1. In `_drop_model_locked`, immediately before `return (True, torch_module)`:
 
 ```python
         self._load_epoch += 1
 ```
 
-(It runs under `_synth_lock`, so the increment needs no separate guard, and it
-is the single teardown path for both callers.)
+2. In `unload()`, **unconditionally, inside `with self._synth_lock:`**, beside
+   the `_drop_model_locked()` call:
+
+```python
+        with self._synth_lock:
+            self._load_epoch += 1   # a Stop was requested — see below
+            dropped, torch_module = self._drop_model_locked()
+```
+
+**Why (2) is mandatory and (1) alone is not enough.** `_drop_model_locked`
+early-returns `(False, None)` when `self._tts is None` (`main.py:1390-1391`) —
+*before* the bump in (1). And `_ensure_loaded` only ever runs a load when
+`self._tts is None` (`:1230-1231`). So during a cold load `_tts` is `None`,
+`unload()` finds nothing to drop, and with only (1) **the epoch never moves** —
+the publish then sees an unchanged epoch, publishes on top of the Stop, and
+`test_an_unload_during_a_cold_load_wins` cannot pass. Bumping unconditionally in
+`unload()` makes a Stop genuinely cancel an in-flight cold load, which is what
+the user asked for and what the test asserts. Keep (1) as well, for the
+`maybe_free_idle` path, which reaches `_drop_model_locked` without going through
+`unload()`.
+
+Note the scope this clarifies: the atomic publish alone closes the *narrow*
+window — the ~30 lines after `self._tts = tts` at `:1325` where `_tts` is live
+but `_device` / `_speakers` are not yet written. The epoch closes the *wide* one:
+Stop pressed at any point during the ~90 s load. Both are wanted; do not drop
+either half.
+
+If the implementer is tempted to weaken
+`test_an_unload_during_a_cold_load_wins` because it will not go green — stop.
+That means (2) is missing.
 
 - [ ] **Step 4: Extract the publish**
 
@@ -388,8 +485,15 @@ Add to `CoquiEngine`:
         `_last_used` is stamped FIRST (#1894 fix-round-1): any thread that
         observes a live `_tts` must observe a fresh timestamp, or an
         admission-path `maybe_free_idle` can drop the model mid-publish.
+
+        The `_tts is not None` half of the guard covers a second loser: two
+        threads can both pass `_ensure_loaded`'s `_tts is None` fast-out (a
+        `/load` and `synthesize`'s pre-lock ensure are serialised by different
+        primitives — an asyncio `_load_lock` and nothing respectively), both
+        load, and both arrive here with the same unchanged epoch. Without it the
+        second publish overwrites the first and orphans ~3 GB.
         """
-        if epoch != self._load_epoch:
+        if epoch != self._load_epoch or self._tts is not None:
             return False
         self._last_used = time.monotonic()
         self._tts = tts
@@ -444,12 +548,25 @@ Then, at the current publish point (`self._last_used = time.monotonic()` /
                     epoch, tts, torch, device, use_half, speakers
                 )
         if not published:
-            # A teardown (Stop, or an admission evict) landed during the load.
-            # Discard rather than overwrite its field resets — publishing here
-            # would leave a live model with `_device` pinned to the admitted
-            # card, bypassing placement on the next lazy load (#1730 gap 3).
-            log.info("Coqui load discarded — the model was unloaded while it was loading.")
-            self._reclaim_after_drop(torch)
+            # A teardown (Stop, or an admission evict) landed during the load,
+            # or another thread published first. Discard rather than overwrite —
+            # publishing here would leave a live model with `_device` pinned to
+            # the admitted card, bypassing placement on the next lazy load
+            # (#1730 gap 3).
+            log.info("Coqui load discarded — unloaded or superseded while loading.")
+            # `del` BEFORE the reclaim, or it does nothing: this frame still
+            # holds a reference to the ~3 GB model, so gc.collect() cannot
+            # collect it.
+            del tts
+            if not lock_held:
+                self._reclaim_after_drop(torch)
+            # When `lock_held` is True the caller holds `_synth_lock`, and
+            # `_reclaim_after_drop` documents that it MUST run with that lock
+            # released. Skipping it is safe rather than merely convenient: the
+            # epoch only ever moves under `_synth_lock`, and `_tts` is only ever
+            # published under it, so neither failure condition can arise while
+            # the caller holds it — this branch is unreachable on that path. The
+            # guard is here so a future caller cannot make it reachable silently.
             return
         log.info("Coqui ready — %d speakers in manifest.", len(speakers))
 ```
@@ -462,10 +579,21 @@ In `CoquiEngine.synthesize`, the call inside `with self._synth_lock:` becomes:
                 self._ensure_loaded(model, lock_held=True)
 ```
 
-Leave the pre-lock call at the default. Then **grep for every other
-`_ensure_loaded(` call on a `CoquiEngine`** (the `/load` route, `_synthesize_locked`'s
-neighbours, any batch path) and confirm each is genuinely NOT holding
-`_synth_lock`; report what you found.
+Leave the pre-lock call at the default. **The full caller audit is already done —
+this is the verified answer, not a starting point:**
+
+| Site | Holds `_synth_lock`? | `lock_held` |
+|---|---|---|
+| `main.py:1472` — `synthesize`, pre-lock ensure | no | default |
+| `main.py:1487` — `synthesize`, in-lock re-ensure | **yes** | `True` |
+| `main.py:6307` — `PRELOAD_COQUI` eager preload (`to_thread`) | no | default |
+| `main.py:7119`, `:7121` — `POST /load` (`to_thread`) | no — holds only the *asyncio* `_load_lock`, a different primitive | default |
+
+`:1670` / `:1825` are `KokoroEngine._ensure_loaded`; `:4958` / `:5024` / `:5033`
+are `WhisperEngine`'s — neither is this method. Coqui never uses
+`/synthesize-batch` (Qwen-only), so there is no batch path. **Exactly one caller
+takes `lock_held=True`.** Re-run the grep to confirm nothing has moved, and
+report if the table no longer matches.
 
 - [ ] **Step 7: Run to verify they pass**
 
@@ -551,7 +679,25 @@ Change the ledger's storage from `dict[str, dict[int, int]]` (device → token �
 
 - [ ] **Step 4: Run to verify they pass, and fix the existing callers**
 
-`tests/test_placement.py:94,116,146` call `ledger.hold(...)` with two args and `:187` calls `try_hold` with three — add the engine argument to each (`"qwen"`, `"coqui"`, `"coqui"`, `"qwen"` respectively; match what each test is modelling and update the surrounding docstring if it names an engine).
+`tests/test_placement.py:94,116,146` call `ledger.hold(...)` with two args and `:187` calls `try_hold` with three.
+
+`:94` and `:187` take the engine argument straightforwardly (`"qwen"`).
+
+**`:116` and `:146` need a modelling change, not just an argument — and getting
+this wrong will delete #1920B.** Those two
+(`test_starved_qwen_admits_after_coqui_is_evicted` and
+`test_starved_qwen_reservation_admits_after_coqui_is_evicted`) model *idle Coqui
+residency* as a ledger hold. That was always a shortcut: in production an
+idle-but-resident Coqui holds **no** reservation — its token is released when
+`reservation()` exits. Tag those holds `"coqui"` and Task 4's ledger check will
+skip the Coqui step, both tests go red, and the obvious repair is to weaken the
+ledger check, which is exactly the fix #1920B consists of.
+
+Convert both to the model production actually uses: **occupied VRAM in the probe
+(low `freeMb`), not a ledger hold**, with the injected evict step raising
+`freeMb`. That is the same `freeMb`-mutation model Task 4's new tests use, so
+the two tasks stop fighting. If you cannot make that conversion cleanly, stop
+and report — do NOT relax the ledger check.
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_placement.py tests/test_devices.py -v`
 Expected: PASS.
@@ -617,14 +763,36 @@ Model the freed VRAM by having each injected step mutate the fake probe's
 `freeMb` — a step that returns True without changing capacity would let a
 broken short-circuit pass. Use the existing `make(...)` helper in that file.
 
-In `tests/test_devices.py`, convert the seven `main._idle_evict(...) is True/False`
-assertions to assert on the **step list** instead, which is a stronger claim than
-the old boolean:
+In `tests/test_devices.py` there are **ten** `main._idle_evict(...) is True/False`
+assertions across **nine** test functions (`:382, 392, 403, 412, 414, 421, 428,
+438, 460, 479`) — not seven.
+
+**Assert on the step list AND run the steps.** `_idle_evict_steps` is a pure
+builder that never invokes its lambdas, so a names-only conversion silently
+deletes real coverage:
+
+- `:423` `assert coqui.ttls == [main._coqui_idle_ttl()]` is the **only** test
+  pinning that the Coqui step uses the real 30 s TTL rather than the siblings'
+  `0.0` — a shipped design decision (predecessor spec §4.3).
+- `:383-385, 393-395, 404-405, 413, 415, 461-462, 480` are `design_freed` /
+  `base17_freed` / `asr.freed` / `spk.freed` counters, pinning that a step calls
+  the right engine's method rather than merely being *named* after it.
+
+So the shape is:
 
 ```python
-def _names(device_key, engine):
-    return [s.name for s in main._idle_evict_steps(device_key, engine)]
+def _run(device_key, engine):
+    """Build the steps, assert on their names, then RUN them — the builder
+    never invokes the lambdas, so the existing per-engine call counters and
+    the TTL assertion only mean anything if we drive them here."""
+    steps = main._idle_evict_steps(device_key, engine)
+    names = [s.name for s in steps]
+    freed = any([s.run() for s in steps])   # list, not generator — no short-circuit
+    return names, freed
 ```
+
+Keep every existing counter/TTL assertion verbatim alongside the new name
+assertions. That is strictly stronger than either alone.
 
 - `test_idle_evict_only_frees_engines_on_target_card` → `assert "qwen" in _names("cuda:0", "qwen")`
 - `test_idle_evict_targets_the_other_card`, `_skips_cpu_resident_engines`, `_unindexed_cuda_is_card_zero`, `_frees_an_idle_coqui_on_the_target_card`, `_skips_coqui_on_another_card` → same treatment
@@ -637,6 +805,10 @@ Run: `.venv\Scripts\python.exe -m pytest tests/test_placement.py tests/test_devi
 Expected: FAIL — `module 'main' has no attribute '_idle_evict_steps'`.
 
 - [ ] **Step 3: Define the step type and builder**
+
+**First: `NamedTuple` is not imported.** `main.py:41` reads
+`from typing import Any, Callable, Optional`. Add `NamedTuple` to it, or the
+module raises `NameError` on import.
 
 Replace `_idle_evict` wholesale:
 
@@ -681,14 +853,24 @@ def _idle_evict_steps(device_key: str, engine: str) -> list[EvictStep]:
         steps.append(EvictStep("asr", "asr", lambda: ASR.maybe_free_idle(0.0)))
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):
-        # `reserved_key=None` deliberately. Qwen runs THREE models off one
-        # engine key, and the ledger records reservations per ENGINE — so an
-        # engine-level skip would protect the transient VoiceDesign model
-        # whenever any Qwen Base synth held a reservation, which is exactly
-        # backwards: freeing VoiceDesign at the first real synth is the
-        # intended "leaving design mode for generation" behaviour. Qwen's
-        # per-model in-flight guards (`_design_in_flight`, `_base17_in_flight`)
-        # are the correct granularity here and already do this job.
+        # `reserved_key=None` deliberately. EVERY Qwen route reserves under the
+        # bare key "qwen" — /load base (:7071), /load 1.7b (:7046),
+        # /design_voice (:7284), /clone (:7406), /mint (:7502), /synthesize
+        # (:7693) — so the ledger cannot tell Qwen's three models apart. With
+        # reserved_key="qwen", one Qwen op holding a reservation would make a
+        # SECOND starved Qwen op skip both cheap Qwen steps and fall through to
+        # evicting Coqui: a ~90 s XTTS reload taken to avoid freeing an idle
+        # 5 GB design model. Qwen's per-model in-flight guards
+        # (`_design_in_flight`, `_base17_in_flight`) are the right granularity
+        # and already cover the forward itself.
+        #
+        # KNOWN RESIDUAL: this leaves #1920B open for Qwen specifically — a
+        # /design_voice admitted but not yet at its `_design_in_flight` claim
+        # can have a warm VoiceDesign model evicted underneath it, the same
+        # window the ledger closes for Coqui/ASR/ECAPA. Recorded in the design's
+        # Known limitations. Closing it properly means recording
+        # FootprintTable._key(...) (`qwen.1.7b.design` / `.mint` / `qwen.1.7b` /
+        # `qwen`) in the ledger instead of the bare engine — out of scope here.
         steps.append(EvictStep("qwen.design", None, lambda: qwen.maybe_free_idle_design(0.0)))
         steps.append(EvictStep("qwen.base17", None, lambda: qwen.maybe_free_idle_base17(0.0)))
     if engine != "coqui":
@@ -709,6 +891,12 @@ Update the `_placement = PlacementController(...)` construction to pass
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
 ```
 defaulting to `lambda device_key, engine: []`.
+
+**Five test constructions pass the old keyword and will all `TypeError`:**
+`tests/test_placement.py:57` (inside the `make(...)` helper the new tests use),
+`:101`, `:132`, `:162`, `:242`. `make`'s own signature at `:50`
+(`idle_evict=None`) changes too. Update all five plus the helper — the plan's
+Files list names the file, this is the enumeration.
 
 Add the shared driver:
 
@@ -806,20 +994,50 @@ git commit -m "fix(sidecar): stop evicting once the starved request actually fit
 
 In the existing `describe('POST /api/sidecar/unload')` block:
 
-```ts
-  it('waits past the 2s probe budget for an unload that is blocked on a forward', async () => {
-    /* #1921: `CoquiEngine.unload()` waits for an in-flight forward, so a Stop
-       pressed mid-render can take far longer than PROBE_TIMEOUT_MS. Before the
-       fix this aborted at 2s and returned 503; the model then unloaded anyway,
-       so the user saw a failure for something that succeeded.
+**Two tests. The first is the cheap deterministic gate; write it first.**
 
-       Fails against the wrong implementation: with the 2s budget the response
-       is 503 'did not respond within 2000ms'. */
+```ts
+  it('reports the unload budget, not the probe budget, when the sidecar never answers', async () => {
+    /* Zero wall-clock, fully deterministic, and it pins the constant directly.
+       Fails against the wrong implementation: the message quotes 2000ms. */
+    fetchMock.mockRejectedValueOnce(
+      Object.assign(new Error('aborted'), { name: 'AbortError' }),
+    );
+    const res = await request(makeApp()).post('/api/sidecar/unload');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('90000ms');
+    expect(res.body.error).not.toContain('2000ms');
+  });
+
+  it('waits past the 2s probe budget for an unload blocked on a forward', async () => {
+    /* #1921: `CoquiEngine.unload()` waits for an in-flight forward, so a Stop
+       pressed mid-render takes far longer than PROBE_TIMEOUT_MS. Before the fix
+       this aborted at 2s and returned 503 while the model unloaded anyway a
+       moment later — the user saw a failure for something that worked.
+
+       The mock MUST honour `init.signal`. The route aborts via AbortController
+       (sidecar-health.ts:411-412, :417); a mock that ignores the signal lets
+       `controller.abort()` fire into the void, the promise resolves anyway, and
+       the test passes against the UNFIXED 2s budget. That is the exact placebo
+       shape this branch exists to stop shipping. */
     fetchMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(() => resolve(jsonResponse({ status: 'idle' })), 3_000),
-        ),
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          const t = setTimeout(
+            () =>
+              resolve(
+                new Response(JSON.stringify({ status: 'idle' }), {
+                  status: 200,
+                  headers: { 'Content-Type': 'application/json' },
+                }),
+              ),
+            2_500,
+          );
+          init.signal.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
     );
     const res = await request(makeApp()).post('/api/sidecar/unload');
     expect(res.status).toBe(200);
@@ -827,9 +1045,12 @@ In the existing `describe('POST /api/sidecar/unload')` block:
   }, 10_000);
 ```
 
-Match the file's existing fetch-mock and `jsonResponse` helpers — read them
-first rather than assuming these names. Prefer fake timers if the file already
-uses them; a real 3 s wait is acceptable only if it does not.
+**There is no `jsonResponse` helper in this file** — every existing mock inlines
+`new Response(JSON.stringify(...), { status, headers })`, as above. The fetch
+double is a bare `vi.fn()` (`sidecar-health.test.ts:40`, stubbed at `:45`), so
+signal handling is entirely on you. **The file uses no fake timers**, so the
+2.5 s wait is real; that is why the first test exists and carries the actual
+gate. Do not introduce fake timers into this file just for this.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -878,7 +1099,7 @@ git commit -m "fix(server): give /api/sidecar/unload its own 90s budget"
 - Modify: `src/components/ModelControlPill.tsx`
 - Modify: `src/lib/use-tts-lifecycle.ts` (`doStop`)
 - Test: `src/components/ModelControlPill.test.tsx`
-- Test: the existing `use-tts-lifecycle` spec if one exists (check `src/lib/`); otherwise add the coverage to `ModelControlPill.test.tsx` plus whichever view spec already drives `doStop`.
+- Test: `src/lib/use-tts-lifecycle.test.ts` — it exists (400+ lines). **`:353`, in `'Kokoro pending state does not bleed into Coqui pill'`, asserts `expect(result.current.kokoro.state).toBe('idle')` immediately after `onStop()`. That becomes `'unloading'`.** Update the test's docstring alongside the assertion — it states the old semantics, so changing only the expected value leaves a comment that contradicts the code. A working precedent for asserting inside a pending window already lives at `:339-360`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -899,9 +1120,28 @@ it('renders a Stopping state with the action disabled', () => {
 ```
 
 Plus a `doStop` test asserting the pending state is `'unloading'` (not `'idle'`)
-while `api.unloadSidecar` is in flight, and clears once it resolves. Model the
-in-flight window with a deferred promise — **assert during the pending window,
-not after**, or the test passes against the unfixed code.
+while `api.unloadSidecar` is in flight. Model the in-flight window with a
+deferred promise — **assert during the pending window, not after**, or the test
+passes against the unfixed code.
+
+**And a third test, for the defect that makes the other two only half-true:**
+
+```tsx
+it('keeps the Stopping state across a /health poll tick', async () => {
+  /* The poll runs on setInterval(probe, 30_000) (use-tts-lifecycle.ts:156) and
+     EVERY resolution unconditionally clears all four pending overrides (:125-128,
+     and again on reject at :133-136). `doStop` now awaits a call with a 90s
+     budget — precisely the mid-render case — so at the 30s tick the probe lands,
+     clears pendingCoqui, /health still reports modelLoaded: true, and the pill
+     flips back to "Voice engine ready · Stop", ENABLED, while the unload is
+     still blocked on the forward. Same lie as #1921, delayed by 30 seconds.
+
+     Fails against the wrong implementation: without the in-flight guard the
+     state is 'ready' after the tick. */
+  // deferred unloadSidecar; call onStop(); advance fake timers past 30_000;
+  // assert result.current.coqui.state is still 'unloading'; then resolve.
+});
+```
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -915,13 +1155,28 @@ Expected: FAIL.
 - The header comment's state list gains: `` - `unloading`   — /unload is in flight → action: spinner, disabled. Since #1894 an unload waits for the in-flight forward, so this can last a whole sentence (#1921). ``
 - `labelFor`: `if (state === 'unloading') return \`Stopping ${noun.toLowerCase()}…\`;`
 - `actionFor`: `case 'unloading': return { label: 'Stopping…', handler: 'stop', disabled: true };`
-- Mirror whatever the `loading` case does for the status dot colour.
+- **`TONES: Record<ModelControlState, Tone>` at `ModelControlPill.tsx:85`** needs
+  an `unloading` entry. Widening the union without it is a typecheck failure,
+  and at runtime `tone.pill` throws before `actionFor` is ever reached. Mirror
+  the `loading` entry.
+- `labelFor`'s if-chain has no exhaustiveness check, so a missing branch falls
+  silently through to `streaming`. Add the `unloading` branch explicitly.
 
 `use-tts-lifecycle.ts` — in `doStop`:
 - `setPending(engine, 'idle')` → `setPending(engine, 'unloading')`
-- On success, clear the override (`setPending(engine, null)`) so the /health
-  poll takes over, rather than leaving a stale optimistic state. Verify against
-  how `doLoad` sequences its own clear and match it.
+- **Do NOT add a clear-on-success.** `doLoad` does not clear on success
+  (`:245-259`) — it clears only on the error paths and relies on
+  `setHealthProbeKey((k) => k + 1)` (`:259`) to re-run the effect, whose fresh
+  probe clears all pendings in its `.then` (`:125-128`). `doStop` already does
+  the same at `:280`. Clearing explicitly would drop the override before the new
+  `/health` lands, so the pill renders from the stale `modelLoaded: true` and
+  flashes "Voice engine ready · Stop" between "Stopping…" and idle.
+- **Guard the poll's clear against an in-flight op** (the third test above). Add
+  a `useRef<number>` counter incremented at the top of `doLoad` and `doStop` and
+  decremented in a `finally`; check it is zero before the four `setPendingX(null)`
+  calls in **both** the probe's `.then` (`:125-128`) and its `.catch`
+  (`:133-136`). Without this the 90 s budget from Task 5 and the `'unloading'`
+  state contradict each other after 30 seconds.
 
 - [ ] **Step 4: Run to verify they pass**
 
