@@ -18,7 +18,7 @@ describe('describeVramBlockers', () => {
     ]);
   });
 
-  it('lists both when both are resident', () => {
+  it('lists Kokoro only when both Coqui and Kokoro are resident', () => {
     expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(1);
   });
 
