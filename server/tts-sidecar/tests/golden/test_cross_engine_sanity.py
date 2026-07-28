@@ -36,6 +36,7 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 from tests.golden.compare import measure_pcm, rms  # noqa: E402
+from tests.golden.prereq import synthesise_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.golden
 
@@ -106,7 +107,20 @@ def test_xtts_clone_sanity():
     """XTTS cloned-voice check (fs-38 Wave 3c) — mirrors `test_qwen_sanity`'s
     shape against an already-cloned voice, plus a long-sentence case that
     specifically exercises the `enable_text_splitting` path (see
-    `LONG_SANITY_TEXT`'s docstring)."""
+    `LONG_SANITY_TEXT`'s docstring).
+
+    GATE 1 IMP-2: both synths used to sit inside
+    `except Exception: pytest.skip(...)`, and `AssertionError` is an
+    `Exception` — so the upstream
+    `assert text_tokens.shape[-1] < gpt_max_text_tokens` crash this check
+    exists to catch reported SKIP, which reads as green. The long render now
+    calls `engine.synthesize` DIRECTLY: by then the short render has already
+    proved the engine is present, so anything the long one raises is a
+    regression by definition and must fail. Only the first call is
+    skippable, and only when the engine itself is absent from this box
+    (`synthesise_or_skip` — a missing `.pt` for the uuid the caller
+    explicitly named in GOLDEN_XTTS_CLONE is a setup error it deliberately
+    surfaces rather than absorbs)."""
     voice = os.environ.get("GOLDEN_XTTS_CLONE")
     if not voice:
         pytest.skip(
@@ -115,11 +129,8 @@ def test_xtts_clone_sanity():
         )
     engine = main.CoquiEngine()
     requested_voice = f"{engine.XTTS_KEY_PREFIX}{voice}"
-    try:
-        res = engine.synthesize("xtts_v2", requested_voice, SANITY_TEXT)
-        long_res = engine.synthesize("xtts_v2", requested_voice, LONG_SANITY_TEXT)
-    except Exception as e:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Coqui engine/voice unavailable: {e}")
+    res = synthesise_or_skip(engine, "xtts_v2", requested_voice, SANITY_TEXT)
+    long_res = engine.synthesize("xtts_v2", requested_voice, LONG_SANITY_TEXT)
     _assert_sane(res, requested_voice)
     _assert_sane(long_res, requested_voice, max_duration=MAX_DURATION_SEC_LONG)
 
@@ -136,7 +147,14 @@ def test_xtts_designed_sanity():
     this check converts that into a delivery gate. NOTE: format-level
     assertions below can only prove the render isn't broken, not that it
     sounds right — the listening test that actually settles quality belongs
-    on the on-box acceptance sheet."""
+    on the on-box acceptance sheet.
+
+    Same GATE 1 IMP-2 narrowing as `test_xtts_clone_sanity` above: a failure
+    is only skippable when the engine itself is missing from this box. A
+    designed voice whose synthetic-clip-derived `.pt` is stranded raises
+    `VoiceNotDesignedError`, which now FAILS this delivery gate — absorbing
+    it as "engine/voice unavailable" is exactly how a §2.3 deferral would
+    have shipped unnoticed."""
     voice = os.environ.get("GOLDEN_XTTS_DESIGNED")
     if not voice:
         pytest.skip(
@@ -146,8 +164,5 @@ def test_xtts_designed_sanity():
         )
     engine = main.CoquiEngine()
     requested_voice = f"{engine.XTTS_KEY_PREFIX}{voice}"
-    try:
-        res = engine.synthesize("xtts_v2", requested_voice, SANITY_TEXT)
-    except Exception as e:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Coqui engine/voice unavailable: {e}")
+    res = synthesise_or_skip(engine, "xtts_v2", requested_voice, SANITY_TEXT)
     _assert_sane(res, requested_voice)
