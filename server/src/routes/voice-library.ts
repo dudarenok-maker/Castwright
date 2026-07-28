@@ -241,16 +241,52 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
   }
 });
 
+/* GATE 1 fix (C1) — persona redesign is a DESIGNED-voice operation and must
+   never touch a cloned one. Both `/redesign` and `/redesign/promote` write to
+   the `qwen-<uuid>` storage key: promote does `rm(qwen-<uuid>.pt)` +
+   `rename(qwen-<uuid>-preview.pt → qwen-<uuid>.pt)`, replacing a cloned
+   voice's artifact in place with a persona-instruct design that has nothing
+   to do with the person's clip. Nothing downstream re-checks — PATCH refuses
+   to change `provenance`, promote's own `updateEntry` only touches `persona`,
+   and every cast slot `/assign` wrote still carries
+   `{ libraryUuid, provenance: 'cloned' }`. `libraryVoiceForEngine` resolves
+   that slot, the artifact exists, and the chapter renders a stranger's
+   synthesised voice under the cloned speaker's name, with no error and no
+   badge change. That is Property 1's exact failure mode, reachable from the
+   Edit button on a cloned card.
+
+   Fails CLOSED with a 403 rather than inventing a re-consent flow or
+   clearing the entry's cloned provenance + every slot referencing it. Both
+   of those are live options and the choice between them is the repo owner's
+   — this is the safe default until then, and it is trivially reversible.
+   `PATCH /:voiceUuid` already enforces the same rule for the `persona` field
+   itself (see its 400 below); these are the two routes that ACT on persona
+   and were missing it. */
+function clonedRedesignRefusal(
+  entry: { provenance?: string } | null,
+): { error: string } | undefined {
+  if (entry?.provenance !== 'cloned') return undefined;
+  return {
+    error:
+      'This voice was cloned from a recording, so it cannot be re-designed from a persona — ' +
+      'doing so would replace the cloned voice with a synthesised one. Revoke this voice first ' +
+      'if you want to design a new one.',
+  };
+}
+
 /* POST /api/voice-library/:voiceUuid/redesign
 
    Stage a redesign of an existing library voice under `<storageKey>-preview`
    (preview:true) so the live `.pt` is untouched while the user A/B-compares.
-   → 200 { previewUrl } — the A/B modal plays this against the live sample. */
+   → 200 { previewUrl } — the A/B modal plays this against the live sample.
+   → 403 when the entry is CLONED (see `clonedRedesignRefusal`). */
 voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    const refusal = clonedRedesignRefusal(entry);
+    if (refusal) return res.status(403).json(refusal);
 
     const body = (req.body ?? {}) as { persona?: unknown; modelKey?: unknown };
     const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
@@ -295,12 +331,21 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
    auditions and bumps persona/updatedAt on the manifest. A missing preview
    `.pt` (nothing staged / double-promote) → 409 — checked via `stat` BEFORE
    the live `.pt` is removed (#1804), so a double-promote can't delete a live
-   artifact when the replacement was never staged. */
+   artifact when the replacement was never staged.
+
+   GATE 1 fix (C1) — → 403 when the entry is CLONED. Guarded independently of
+   `/redesign` above, not merely as a consequence of it: this is the handler
+   that actually overwrites the live `.pt`, so it must refuse on its own even
+   if a preview were staged some other way (a pre-fix preview still sitting on
+   disk, a direct API call, a future stager). Placed BEFORE the preview `stat`
+   so a cloned entry can never reach the `rm`+`rename`. */
 voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    const refusal = clonedRedesignRefusal(entry);
+    if (refusal) return res.status(403).json(refusal);
 
     const storageKey = `qwen-${voiceUuid}`;
     const previewKey = `${storageKey}-preview`;

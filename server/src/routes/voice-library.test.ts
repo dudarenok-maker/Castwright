@@ -1846,6 +1846,98 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     const r2 = await request(app).post('/api/voice-library/nope/redesign/discard').send({});
     expect(r2.status).toBe(404);
   });
+
+  /* GATE 1 fix (C1). Asserting "a 403 comes back" would be a placebo — the
+     property that matters is that the cloned voice's LIVE `.pt` is still the
+     cloned one afterwards, i.e. no stranger's voice can render under the
+     clone's name. So both tests stage a real preview `.pt` on disk and assert
+     the live artifact's BYTES are unchanged. `promote` is exercised with a
+     preview already staged, which is the state that actually performs the
+     destructive `rm`+`rename`. */
+  function makeClonedEntry(voiceUuid: string) {
+    return makeEntry({
+      voiceUuid,
+      provenance: 'cloned',
+      engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      consent: {
+        personName: 'Dad',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'me',
+      },
+    });
+  }
+
+  it('GATE 1 C1: refuses to STAGE a redesign of a cloned voice (403), leaving the clone intact', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeClonedEntry('cloned-redesign-1'));
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-cloned-redesign-1');
+    writeFileSync(liveP, 'CLONED-LATENTS');
+
+    const res = await request(app)
+      .post('/api/voice-library/cloned-redesign-1/redesign')
+      .send({ persona: 'a wry, steady woman' });
+
+    expect(res.status).toBe(403);
+    // No design was even attempted — the sidecar was never asked to synthesise.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The person's own artifact is untouched.
+    expect(readFileSync(liveP, 'utf8')).toBe('CLONED-LATENTS');
+    // Provenance is not quietly rewritten either.
+    expect((await vl.readEntry('cloned-redesign-1'))?.provenance).toBe('cloned');
+  });
+
+  it('GATE 1 C1: refuses to PROMOTE a staged redesign onto a cloned voice (403), so the clone is never overwritten', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeClonedEntry('cloned-promo-1'));
+
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-cloned-promo-1');
+    const previewP = qwenVoice.qwenVoicePtPath('qwen-cloned-promo-1-preview');
+    writeFileSync(liveP, 'CLONED-LATENTS');
+    // A preview IS staged — the state in which promote does its rm+rename.
+    // Guarded independently of /redesign so a preview staged before this fix
+    // (or by any other route) still cannot land on a cloned voice.
+    writeFileSync(previewP, 'STRANGER-DESIGN');
+
+    const res = await request(app)
+      .post('/api/voice-library/cloned-promo-1/redesign/promote')
+      .send({ persona: 'a wry, steady woman' });
+
+    expect(res.status).toBe(403);
+    expect(readFileSync(liveP, 'utf8')).toBe('CLONED-LATENTS'); // NOT overwritten
+    expect(existsSync(previewP)).toBe(true); // and nothing was consumed
+    expect((await vl.readEntry('cloned-promo-1'))?.provenance).toBe('cloned');
+  });
+
+  it('GATE 1 C1: a DESIGNED voice can still be redesigned and promoted (the fix is provenance-scoped)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'designed-redesign-1',
+        provenance: 'designed',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+
+    const staged = await request(app)
+      .post('/api/voice-library/designed-redesign-1/redesign')
+      .send({ persona: 'a calm, measured narrator' });
+    expect(staged.status).toBe(200);
+
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-designed-redesign-1');
+    writeFileSync(liveP, 'OLD-DESIGN');
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-designed-redesign-1-preview'), 'NEW-DESIGN');
+
+    const promoted = await request(app)
+      .post('/api/voice-library/designed-redesign-1/redesign/promote')
+      .send({ persona: 'a calm, measured narrator' });
+    expect(promoted.status).toBe(200);
+    expect(readFileSync(liveP, 'utf8')).toBe('NEW-DESIGN');
+  });
 });
 
 /* Task 11 — POST /api/voice-library/promote. Promotes a confirmed-cast
