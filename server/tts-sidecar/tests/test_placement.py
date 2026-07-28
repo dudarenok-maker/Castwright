@@ -318,6 +318,81 @@ def test_an_engine_holding_a_reservation_is_not_evicted():
     assert coqui_touched == []
 
 
+def test_reserved_key_not_name_gates_the_ledger_skip():
+    """The #1920B skip must key off `reserved_key`, never `name`. A step named
+    something else entirely but carrying `reserved_key="coqui"` must still be
+    skipped while Coqui holds a reservation.
+
+    Fails against `step.name in held_by` (comparing name instead of
+    reserved_key): name "x" is never held, so the mutated skip would let this
+    step run, and admission would wrongly succeed instead of reporting
+    noCapacity."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+    ran = []
+
+    def free_mismatched_name():
+        ran.append("x")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        # name != reserved_key on purpose — the skip must key off reserved_key.
+        return [main.EvictStep("x", "coqui", free_mismatched_name)]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
+    assert ran == []  # skipped: reserved_key="coqui" matched the held engine
+
+
+def test_reserved_key_none_is_not_skipped_even_if_name_matches_held_engine():
+    """The twin case: a step literally NAMED "coqui" but with reserved_key=None
+    must NOT be skipped, even while a "coqui" reservation is held — this
+    step's ledger granularity is deliberately not engine-keyed (mirrors the
+    real Qwen steps' `reserved_key=None`).
+
+    Fails the same mutation from the other side: `step.name in held_by` WOULD
+    skip this step (name "coqui" IS held), wrongly denying an eviction that
+    should run and reporting noCapacity instead of admitting."""
+    state = {"free": 500, "total": 8192}
+    devices = lambda: [dev(free=state["free"], total=state["total"])]
+    ledger = main.ReservationLedger()
+    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+    ran = []
+
+    def free_named_coqui():
+        ran.append("coqui")
+        state["free"] += 3000
+        return True
+
+    def steps(device_key, engine):
+        return [main.EvictStep("coqui", None, free_named_coqui)]
+
+    pc = main.PlacementController(
+        probe=devices,
+        footprints=fp,
+        ledger=ledger,
+        reserve_mb=lambda: 768,
+        idle_evict_steps=steps,
+        is_resident=lambda e: None,
+    )
+    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+        assert admission["device"] == "cuda:0"
+    assert ran == ["coqui"]  # ran despite name=="coqui" matching a held engine
+
+
 def test_declining_step_does_not_stop_the_loop():
     """Moved from test_devices.py's `_idle_evict` coverage (#1920A converted
     the `or freed` composition into a controller-driven loop). A step that

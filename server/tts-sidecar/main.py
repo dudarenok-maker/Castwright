@@ -2660,8 +2660,17 @@ class PlacementController:
         A step that raises is skipped, not fatal: eviction is best-effort, and
         one engine's teardown failing must not deny the whole admission.
         """
-        held_by = self.ledger.engines_holding(device_key)
         for step in self.idle_evict_steps(device_key, engine):
+            # Re-read on every iteration, not once before the loop: nothing
+            # here awaits today (every `reservation()` call site enters this
+            # synchronously on the event loop), so a snapshot taken up front
+            # would be safe in practice — but re-reading is one lock-guarded
+            # set comprehension per step (<=5 iterations) and keeps the
+            # #1920B guard correct even if a future step becomes async or is
+            # offloaded to a thread, instead of relying on an undocumented
+            # assumption that could go silently stale on the last, most
+            # expensive step.
+            held_by = self.ledger.engines_holding(device_key)
             if step.reserved_key is not None and step.reserved_key in held_by:
                 # This engine's op is already admitted and holds VRAM for it
                 # (#1920B) — the reservation spans the whole op, including the
@@ -2671,6 +2680,7 @@ class PlacementController:
                 if not step.run():
                     continue
             except Exception:
+                log.warning("evict step %s failed", step.name, exc_info=True)
                 continue
             got = fits()
             if got is not None:

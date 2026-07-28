@@ -349,24 +349,23 @@ class _FakeEvictCoqui(main.CoquiEngine):
     Coqui branch is `isinstance`-guarded (#1894 review) the same way its Qwen
     sibling already was."""
 
-    def __init__(self, device, result=True):
+    def __init__(self, device):
         super().__init__()
         self._device = device
         self.freed = 0
         self.ttls = []
-        self.result = result
 
     def maybe_free_idle(self, ttl_seconds):
         self.freed += 1
         self.ttls.append(ttl_seconds)
-        return self.result
+        return True
 
 
-def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu", coqui_result=True):
+def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu"):
     qwen = _FakeEvictQwen(qwen_dev)
     asr = _FakeEvictSingleton("_device", asr_dev)
     spk = _FakeEvictSingleton("device", spk_dev)
-    coqui = _FakeEvictCoqui(coqui_dev, result=coqui_result)
+    coqui = _FakeEvictCoqui(coqui_dev)
     monkeypatch.setitem(main.ENGINES, "qwen", qwen)
     monkeypatch.setitem(main.ENGINES, "coqui", coqui)
     monkeypatch.setattr(main, "ASR", asr)
