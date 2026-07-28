@@ -237,6 +237,109 @@ describe('useTtsLifecycle', () => {
     expect(result.current.loadErrorNotice).toBeNull();
   });
 
+  it('Coqui onStop sets pending state to "unloading" (not "idle") while unloadSidecar is in flight (#1921)', async () => {
+    /* #1921: `doStop` used to set the optimistic pending state straight to
+       'idle', so the pill read "Voice engine idle · Load model" — inviting a
+       Load against a model that had not actually gone yet — while the unload
+       (which, per #1894, waits out any in-flight forward and can take up to
+       90s) was still running.
+
+       Fails against the wrong implementation: with `setPending(engine, 'idle')`
+       still in doStop, `result.current.coqui.state` reads 'idle' here instead
+       of 'unloading'. Assert DURING the pending window (deferred promise still
+       unresolved), not after — an after-the-fact assertion passes against
+       either implementation once /health has re-settled things. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: true,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+    });
+    let resolveUnload: (v: { status: string }) => void = () => {};
+    mocks.unloadSidecar.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveUnload = r;
+      }),
+    );
+
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('ready'));
+
+    let stopPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      stopPromise = result.current.coqui.onStop();
+    });
+    expect(result.current.coqui.state).toBe('unloading');
+
+    await act(async () => {
+      resolveUnload({ status: 'ok' });
+      await stopPromise;
+    });
+  });
+
+  it('keeps the "unloading" state across a /health poll tick while the unload is still in flight (#1921)', async () => {
+    /* The poll runs on setInterval(probe, 30_000) and EVERY resolution
+       unconditionally used to clear all four pending overrides. `doStop` now
+       awaits a call with up to a 90s budget (#1894) — precisely the
+       mid-render case — so at the 30s tick the probe would land, clear
+       pendingCoqui, /health would still report modelLoaded: true, and the
+       pill would flip back to "Voice engine ready · Stop", ENABLED, while the
+       unload is still blocked on the forward. Same lie as #1921, delayed by
+       30 seconds.
+
+       Fails against the wrong implementation: without the in-flight guard,
+       after advancing past the 30s tick (with unloadSidecar still pending),
+       result.current.coqui.state reads 'ready' instead of 'unloading'. */
+    vi.useFakeTimers();
+    try {
+      mocks.getSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: '',
+        loading: false,
+        modelLoaded: true,
+        kokoroLoaded: false,
+        kokoroLoading: false,
+      });
+      let resolveUnload: (v: { status: string }) => void = () => {};
+      mocks.unloadSidecar.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveUnload = r;
+        }),
+      );
+
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.coqui.state).toBe('ready');
+
+      let stopPromise: Promise<void> = Promise.resolve();
+      await act(async () => {
+        stopPromise = result.current.coqui.onStop();
+        await Promise.resolve();
+      });
+      expect(result.current.coqui.state).toBe('unloading');
+
+      /* Advance past the 30s poll tick while the unload is STILL pending —
+         the probe resolves (mocked as always reachable/modelLoaded: true)
+         but must not clear the 'unloading' override. */
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.coqui.state).toBe('unloading');
+
+      /* Release the hang so the test cleans up. */
+      await act(async () => {
+        resolveUnload({ status: 'ok' });
+        await stopPromise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('Kokoro onStop calls unloadSidecar with engine=kokoro', async () => {
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.kokoro.state).toBe('idle'));
@@ -323,7 +426,8 @@ describe('useTtsLifecycle', () => {
 
   it('Kokoro pending state does not bleed into Coqui pill', async () => {
     /* Per-engine pending override: when the user clicks Stop on Kokoro,
-       only the Kokoro pill flips to 'idle' optimistically — the Coqui
+       only the Kokoro pill flips to 'unloading' optimistically (#1921 — the
+       unload is in flight and may take up to 90s per #1894) — the Coqui
        pill keeps its current state until the next /health resolve. */
     mocks.getSidecarHealth.mockResolvedValueOnce({
       status: 'reachable',
@@ -351,7 +455,7 @@ describe('useTtsLifecycle', () => {
       stopPromise = result.current.kokoro.onStop();
     });
     /* Pending override fires synchronously inside onStop before the await. */
-    expect(result.current.kokoro.state).toBe('idle');
+    expect(result.current.kokoro.state).toBe('unloading');
     expect(result.current.coqui.state).toBe('ready');
 
     /* Release the hang so the test cleans up. */

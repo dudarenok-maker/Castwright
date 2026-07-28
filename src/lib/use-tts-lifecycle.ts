@@ -24,7 +24,7 @@
    sample-Play surfaces (drawer, cast row) still trigger their own JIT
    warm independently. Plan 30 explicitly preserves that path. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type SidecarHealth, type GpuQueueState } from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
 
@@ -113,6 +113,16 @@ export function useTtsLifecycle(): TtsLifecycle {
   const [pendingQwen17b, setPendingQwen17b] = useState<ModelControlState | null>(null);
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
+  /* In-flight op counter — guards the /health poll's unconditional pending-
+     clear below against a Load/Stop that is still awaiting its response.
+     Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
+     in-flight forward before dropping the model), so the 30 s poll tick can
+     land WHILE a Stop is still pending. Without this guard the poll would
+     clear the optimistic 'unloading' override and the pill would flip back
+     to the stale (still-resident) 'ready' reading — the same lie #1921 is
+     about, delayed by 30 seconds. Incremented at the top of doLoad/doStop,
+     decremented in a finally; the poll only clears when it reads zero. */
+  const inFlightOps = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,18 +132,22 @@ export function useTtsLifecycle(): TtsLifecycle {
         .then((h) => {
           if (cancelled) return;
           setSidecarHealth(h);
-          setPendingCoqui(null);
-          setPendingKokoro(null);
-          setPendingQwen(null);
-          setPendingQwen17b(null);
+          if (inFlightOps.current === 0) {
+            setPendingCoqui(null);
+            setPendingKokoro(null);
+            setPendingQwen(null);
+            setPendingQwen17b(null);
+          }
         })
         .catch(() => {
           if (cancelled) return;
           setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
-          setPendingCoqui(null);
-          setPendingKokoro(null);
-          setPendingQwen(null);
-          setPendingQwen17b(null);
+          if (inFlightOps.current === 0) {
+            setPendingCoqui(null);
+            setPendingKokoro(null);
+            setPendingQwen(null);
+            setPendingQwen17b(null);
+          }
         });
 
       /* GPU queue state — same cadence, separate endpoint. Permissive
@@ -213,71 +227,81 @@ export function useTtsLifecycle(): TtsLifecycle {
   };
 
   const doLoad = async (engine: EngineId) => {
-    setPending(engine, 'loading');
-    setEvictionNotice(null);
-    setLoadErrorNotice(null);
-    /* Auto-evict the analyzer ONLY when loading Coqui — Coqui's ~3 GB
-       fights the analyzer for VRAM on an 8 GB GPU; Kokoro's ~1 GB fits
-       alongside the analyzer (plan 14a) so its Load is a no-op for the
-       analyzer's residency. */
-    if (engine === 'coqui') {
-      let analyzerWasLoaded = false;
-      try {
-        const ollama = await api.getOllamaHealth();
-        analyzerWasLoaded = ollama.status === 'reachable' && ollama.modelResident === true;
-      } catch {
-        /* If the analyzer probe fails we still try to unload — Ollama might
-           be reachable for /api/generate even if /api/ps is flaky. */
-      }
-      try {
-        await api.unloadAnalyzer();
-        if (analyzerWasLoaded) {
-          setEvictionNotice('Analyzer unloaded to free VRAM for the voice engine.');
-        }
-      } catch {
-        /* Ollama down or no model loaded — proceed with TTS load anyway. */
-      }
-    }
-    /* The /api/sidecar/load proxy returns {status:'error', error:'…'} with
-       a 5xx body on timeout or sidecar-side failure; realLoadSidecar parses
-       the body either way and only throws if fetch itself fails. So we
-       inspect AND catch — both paths can be the failure. */
+    inFlightOps.current += 1;
     try {
-      const loadOpts =
-        engine === 'qwen1_7b'
-          ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
-          : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
-      const result = await api.loadSidecar(loadOpts);
-      if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'Voice engine failed to load. Check the voice engine logs.');
+      setPending(engine, 'loading');
+      setEvictionNotice(null);
+      setLoadErrorNotice(null);
+      /* Auto-evict the analyzer ONLY when loading Coqui — Coqui's ~3 GB
+         fights the analyzer for VRAM on an 8 GB GPU; Kokoro's ~1 GB fits
+         alongside the analyzer (plan 14a) so its Load is a no-op for the
+         analyzer's residency. */
+      if (engine === 'coqui') {
+        let analyzerWasLoaded = false;
+        try {
+          const ollama = await api.getOllamaHealth();
+          analyzerWasLoaded = ollama.status === 'reachable' && ollama.modelResident === true;
+        } catch {
+          /* If the analyzer probe fails we still try to unload — Ollama might
+             be reachable for /api/generate even if /api/ps is flaky. */
+        }
+        try {
+          await api.unloadAnalyzer();
+          if (analyzerWasLoaded) {
+            setEvictionNotice('Analyzer unloaded to free VRAM for the voice engine.');
+          }
+        } catch {
+          /* Ollama down or no model loaded — proceed with TTS load anyway. */
+        }
+      }
+      /* The /api/sidecar/load proxy returns {status:'error', error:'…'} with
+         a 5xx body on timeout or sidecar-side failure; realLoadSidecar parses
+         the body either way and only throws if fetch itself fails. So we
+         inspect AND catch — both paths can be the failure. */
+      try {
+        const loadOpts =
+          engine === 'qwen1_7b'
+            ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
+            : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
+        const result = await api.loadSidecar(loadOpts);
+        if (result.status === 'error') {
+          setLoadErrorNotice(result.error || 'Voice engine failed to load. Check the voice engine logs.');
+          setPending(engine, null);
+        }
+      } catch (e) {
+        setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
         setPending(engine, null);
       }
-    } catch (e) {
-      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
-      setPending(engine, null);
+      setHealthProbeKey((k) => k + 1);
+    } finally {
+      inFlightOps.current -= 1;
     }
-    setHealthProbeKey((k) => k + 1);
   };
 
   const doStop = async (engine: EngineId) => {
-    setPending(engine, 'idle');
-    setEvictionNotice(null);
-    setLoadErrorNotice(null);
+    inFlightOps.current += 1;
     try {
-      const stopOpts =
-        engine === 'qwen1_7b'
-          ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
-          : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
-      const result = await api.unloadSidecar(stopOpts);
-      if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'Voice engine failed to unload.');
+      setPending(engine, 'unloading');
+      setEvictionNotice(null);
+      setLoadErrorNotice(null);
+      try {
+        const stopOpts =
+          engine === 'qwen1_7b'
+            ? ({ engine: 'qwen' as const, model: '1.7b' } as const)
+            : { engine: engine as 'coqui' | 'kokoro' | 'qwen' };
+        const result = await api.unloadSidecar(stopOpts);
+        if (result.status === 'error') {
+          setLoadErrorNotice(result.error || 'Voice engine failed to unload.');
+          setPending(engine, null);
+        }
+      } catch (e) {
+        setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
         setPending(engine, null);
       }
-    } catch (e) {
-      setLoadErrorNotice(`Couldn't reach the sidecar: ${(e as Error).message ?? 'fetch failed'}`);
-      setPending(engine, null);
+      setHealthProbeKey((k) => k + 1);
+    } finally {
+      inFlightOps.current -= 1;
     }
-    setHealthProbeKey((k) => k + 1);
   };
 
   const dismissNotices = () => {
