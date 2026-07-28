@@ -9,7 +9,13 @@ import { checkRegister } from '../check-onbox-register.mjs';
 // A minimal but structurally complete register: an "At a glance" table with
 // two groups plus a Blocked row, and matching body sections. Coherent by
 // construction — each fixture below mutates exactly one aspect of it.
-function buildRegister({ tableA = 2, tableB = 1, total = 3, bodyARows = [1, 2], bodyBRows = [1] } = {}) {
+function buildRegister({
+  tableA = 2,
+  tableB = 1,
+  total = 3,
+  bodyARows = [1, 2],
+  bodyBRows = [1],
+} = {}) {
   const bodyASection = bodyARows
     .map((n) => `### A${n} · thing ${n}\n\nSome body text.\n`)
     .join('\n');
@@ -61,7 +67,11 @@ test('the real docs/testing/onbox-acceptance-register.md is internally coherent'
 test('check 1: per-group count mismatch is reported with a fix-naming message', () => {
   const errors = checkRegister(buildRegister({ tableA: 3 }));
   assert.ok(
-    errors.some((e) => e === 'Group A: glance table says 3, body has 2 rows (A1–A2). Update the table or the body.'),
+    errors.some(
+      (e) =>
+        e ===
+        'Group A: glance table says 3, body has 2 rows (A1–A2). Update the table or the body.',
+    ),
     `expected a Group A count-mismatch error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -69,7 +79,11 @@ test('check 1: per-group count mismatch is reported with a fix-naming message', 
 test('check 2: total mismatch against the glance table sum is reported', () => {
   const errors = checkRegister(buildRegister({ total: 5 }));
   assert.ok(
-    errors.some((e) => e === 'Total says 5 owed but the glance table\'s group counts sum to 3. Update the total or the table.'),
+    errors.some(
+      (e) =>
+        e ===
+        "Total says 5 owed but the glance table's group counts sum to 3. Update the total or the table.",
+    ),
     `expected a total-mismatch error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -81,7 +95,11 @@ test('check 3: a group in the glance table with no body section is reported', ()
   );
   const errors = checkRegister(withoutBodyC);
   assert.ok(
-    errors.some((e) => e.includes('Group C appears in the "At a glance" table but has no "## Group C — ..." section')),
+    errors.some((e) =>
+      e.includes(
+        'Group C appears in the "At a glance" table but has no "## Group C — ..." section',
+      ),
+    ),
     `expected a missing-body-section error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -101,7 +119,11 @@ Some body text.
   );
   const errors = checkRegister(withExtraBodySection);
   assert.ok(
-    errors.some((e) => e.includes('Body has a "## Group D — ..." section but Group D is missing from the "At a glance" table')),
+    errors.some((e) =>
+      e.includes(
+        'Body has a "## Group D — ..." section but Group D is missing from the "At a glance" table',
+      ),
+    ),
     `expected a missing-table-row error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -129,12 +151,164 @@ test('check 4: a gap in row numbers is reported', () => {
   );
 });
 
+test('fix 1: a body-only group heading with an ASCII hyphen still counts as a group (not silently dropped)', () => {
+  const withExtraBodySection = buildRegister().replace(
+    '## Blocked — hardware not available',
+    `## Group D - setup d
+
+### D1 · thing 1
+
+Some body text.
+
+---
+
+## Blocked — hardware not available`,
+  );
+  const errors = checkRegister(withExtraBodySection);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        'Body has a "## Group D — ..." section but Group D is missing from the "At a glance" table',
+      ),
+    ),
+    `expected a missing-table-row error even with an ASCII-hyphen heading, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('fix 1: a body-only group heading with an en dash still counts as a group (not silently dropped)', () => {
+  const withExtraBodySection = buildRegister().replace(
+    '## Blocked — hardware not available',
+    `## Group D – setup d
+
+### D1 · thing 1
+
+Some body text.
+
+---
+
+## Blocked — hardware not available`,
+  );
+  const errors = checkRegister(withExtraBodySection);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        'Body has a "## Group D — ..." section but Group D is missing from the "At a glance" table',
+      ),
+    ),
+    `expected a missing-table-row error even with an en-dash heading, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('fix 2: a malformed glance-table row (extra column) is reported on its own, not as "missing from the table"', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Oldest | Rows |
+|---|---|---|---|
+| **A** | Setup A | 2026-01-01 | 2 |
+| **F** | Setup F | 2026-01-01 | 1 |
+
+**3 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A2 · thing 2
+
+Body text.
+
+---
+
+## Group F — setup f
+
+### F1 · thing 1
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'The glance-table row for Group A could not be parsed — expected exactly three cells, the last a bare integer.',
+    ),
+    `expected a Group A malformed-row error, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'The glance-table row for Group F could not be parsed — expected exactly three cells, the last a bare integer.',
+    ),
+    `expected a Group F malformed-row error, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('missing from the "At a glance" table')),
+    `did not expect a misleading missing-from-table error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('fix 3: a duplicated body group section is reported', () => {
+  const withDuplicateSection = buildRegister().replace(
+    '## Blocked — hardware not available',
+    `## Group A — setup a (duplicate)
+
+### A1 · thing 1
+
+Some body text.
+
+### A2 · thing 2
+
+Some body text.
+
+---
+
+## Blocked — hardware not available`,
+  );
+  const errors = checkRegister(withDuplicateSection);
+  assert.ok(
+    errors.some((e) => e.includes('Group A appears more than once in the body')),
+    `expected a duplicate-body-section error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('fix 3: a duplicated glance-table row is reported', () => {
+  const withDuplicateRow = buildRegister().replace(
+    '| **A** | Setup A | 2 |',
+    '| **A** | Setup A | 2 |\n| **A** | Setup A | 2 |',
+  );
+  const errors = checkRegister(withDuplicateRow);
+  assert.ok(
+    errors.some((e) => e.includes('Group A appears more than once in the "At a glance" table')),
+    `expected a duplicate-table-row error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('fix 5: a single-row count mismatch uses singular grammar and no dash range', () => {
+  const errors = checkRegister(buildRegister({ tableB: 2, total: 4, bodyBRows: [1] }));
+  assert.ok(
+    errors.some(
+      (e) =>
+        e === 'Group B: glance table says 2, body has 1 row (B1). Update the table or the body.',
+    ),
+    `expected singular-grammar error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
 test('regression: reproduces the real 2026-07-28 drift (E=5 vs 7 rows, total 31)', () => {
   // Mirrors the actual incident this check exists to catch: the "At a
   // glance" table under-reported Group E (5 instead of the 7 rows actually
   // in the body) and the stated total (31) didn't even match what the
-  // table's own (wrong) per-group figures summed to. Sized down from the
-  // real register (19/2/3/2/7/1/1 = 35) but keeps the same shape.
+  // table's own (wrong) per-group figures summed to. Uses the real
+  // register's own group sizes (19/2/3/2/7/1/1 = 35), not a scaled-down set.
   const groupSizes = { A: 19, B: 2, C: 3, D: 2, F: 1, G: 1 };
   const tableRows = Object.entries(groupSizes)
     .map(([letter, count]) => `| **${letter}** | Setup ${letter} | ${count} |`)
@@ -143,11 +317,17 @@ test('regression: reproduces the real 2026-07-28 drift (E=5 vs 7 rows, total 31)
     .map(
       ([letter, count]) =>
         `## Group ${letter} — setup ${letter}\n\n` +
-        Array.from({ length: count }, (_, i) => `### ${letter}${i + 1} · thing ${i + 1}\n\nBody text.\n`).join('\n') +
+        Array.from(
+          { length: count },
+          (_, i) => `### ${letter}${i + 1} · thing ${i + 1}\n\nBody text.\n`,
+        ).join('\n') +
         '\n---\n',
     )
     .join('\n');
-  const bodyE = Array.from({ length: 7 }, (_, i) => `### E${i + 1} · thing ${i + 1}\n\nBody text.\n`).join('\n');
+  const bodyE = Array.from(
+    { length: 7 },
+    (_, i) => `### E${i + 1} · thing ${i + 1}\n\nBody text.\n`,
+  ).join('\n');
 
   const text = `# On-box acceptance register
 
@@ -173,12 +353,14 @@ ${bodyE}
   const errors = checkRegister(text);
   assert.ok(
     errors.some(
-      (e) => e === 'Group E: glance table says 5, body has 7 rows (E1–E7). Update the table or the body.',
+      (e) =>
+        e ===
+        'Group E: glance table says 5, body has 7 rows (E1–E7). Update the table or the body.',
     ),
     `expected the Group E under-count error, got: ${JSON.stringify(errors)}`,
   );
   assert.ok(
-    errors.some((e) => e.includes('Total says 31 owed but the glance table\'s group counts sum to')),
+    errors.some((e) => e.includes("Total says 31 owed but the glance table's group counts sum to")),
     `expected a total-mismatch error, got: ${JSON.stringify(errors)}`,
   );
 });

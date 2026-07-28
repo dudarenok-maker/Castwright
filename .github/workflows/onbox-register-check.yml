@@ -8,6 +8,11 @@ on:
     # to preserve for an unrelated PR.
     paths:
       - 'docs/testing/onbox-acceptance-register.md'
+      # Also fire on the checker itself (and its own workflow file) so
+      # editing the checker exercises it against the real register, rather
+      # than only ever running against a register that hasn't changed.
+      - 'scripts/check-onbox-register.mjs'
+      - '.github/workflows/onbox-register-check.yml'
 
 permissions:
   contents: read
