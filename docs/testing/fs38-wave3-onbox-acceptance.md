@@ -111,7 +111,7 @@ this box is dual-GPU).
 | P-17 | `WORKSPACE_ROOT` (resolved) | `curl -s http://localhost:8080/api/workspace` → `{ root, booksRoot, source }`. **Use this value, not a guess** — it can come from `workspaceDirOverride` in `~/.castwright/user-settings.json`, from `WORKSPACE_DIR` in `server/.env`, or from the built-in `<repo>/castwright-workspace` default (`server/src/workspace/paths.ts:20-45`). | |
 | P-18 | Workspace source | from P-17 `source` (`env` / `default`; note `override` is also possible per `paths.ts:41`) | |
 | P-19 | **(3c) Coqui/XTTS weights + package installed?** | The sidecar reports `coqui_package_installed` and `coqui_weights_present` in its health payload (`server/src/routes/sidecar-health.ts:98,221-262`), and its currently-installed `coqui-tts` package version at `coqui_version` (Task 19, `:107-112`, `:297-298`) — surfaced server-side via `getLastKnownCoquiVersion()`. Confirm via `curl -s http://localhost:9000/health` or the Voices page's Coqui pill. Needed for all of Section E; a not-installed/no-weights Coqui makes E-01 through E-09 blocked, not failed. | |
-| P-20 | `SEG_CAPACITY_ADMISSION` | `server/.env` line (ships `SEG_CAPACITY_ADMISSION=1`, `server/.env.example:126`). Sidecar default is **ON** when unset (`main.py:2379-2380` — anything but `"0"` enables). **No registry knob exists for this — it is env-only.** | |
+| P-20 | `SEG_CAPACITY_ADMISSION` | `server/.env` line (ships `SEG_CAPACITY_ADMISSION=1`, `server/.env.example:126`). Sidecar default is **ON** when unset (`main.py:2978-2979` — anything but `"0"` enables). **No registry knob exists for this — it is env-only.** | |
 | P-21 | Analyzer engine setting | Account → analyzer settings (or `~/.castwright/user-settings.json`). Record it; the analyzer competes for VRAM. | |
 | P-22 | TTS engine setting (persisted account default) | Account settings → default TTS model. Record the **model key** (e.g. `qwen3-tts-0.6b`). | |
 | P-23 | **Session model-key the picker is set to** | The Voices-page / top-bar engine picker writes a **session-only** `ui.ttsModelKey` that is *never persisted* and is what generation actually routes off. Record it explicitly — several tests (B-11, C-13) turn on the difference between this and P-22. | |
@@ -1080,15 +1080,18 @@ $j | ConvertTo-Json -Depth 10 | Set-Content $p -Encoding utf8
 
 **Proves:** the known automated-coverage gap carried from 267 (M4) into 268 — the
 sidecar's `if _capacity_admission_enabled(): with _placement.reservation(...)`
-branch (`main.py:7003-7015`), which pytest never exercises because admission is
-off in the test env.
+branch, specifically `/qwen/clone-voice`'s own copy at `main.py:7671-7676`
+(there are now many such call sites across the sidecar's engines — the file
+grew substantially in Wave 3c — this is the one to watch for THIS test), which
+pytest never exercises because admission is off in the test env.
 
 **How admission is controlled:** environment variable **`SEG_CAPACITY_ADMISSION`**,
-read by the sidecar at `main.py:2379-2380`. **Anything except the literal `"0"`
-— including unset — means ON.** `server/.env` ships `SEG_CAPACITY_ADMISSION=1`
-(`server/.env.example:126`). **There is no config-registry knob for it** — it is
-env-only, so it must be set in `server/.env` (or the sidecar's environment) and
-the sidecar restarted.
+read by `_capacity_admission_enabled()` at `main.py:2978-2979` (moved from the
+pre-3c `:2379-2380` — the file grew ~600 lines before this function during
+Wave 3c). **Anything except the literal `"0"` — including unset — means ON.**
+`server/.env` ships `SEG_CAPACITY_ADMISSION=1` (`server/.env.example:126`).
+**There is no config-registry knob for it** — it is env-only, so it must be
+set in `server/.env` (or the sidecar's environment) and the sidecar restarted.
 
 **Steps**
 1. Confirm admission is **ON**: `SEG_CAPACITY_ADMISSION` is `1` or absent in
@@ -1100,7 +1103,8 @@ the sidecar restarted.
    render, or load Coqui + Qwen 1.7B together on the 8 GB card), then clone again.
 4. Optionally A/B: set `SEG_CAPACITY_ADMISSION=0`, restart the sidecar, clone
    again, and confirm the clone still works via the non-admitted path
-   (`main.py:7016-7020`). **Restore it to `1` afterwards.**
+   (the `else:` branch right after the reservation block, `main.py:7683-7687`).
+   **Restore it to `1` afterwards.**
 
 **Expected**
 - Step 2: clone succeeds; the reservation names a concrete device
@@ -1145,7 +1149,7 @@ sidecar rejected *our* request, not the client's).
 - Step 3: the sidecar itself returns **400** for the missing header.
 - ⚠️ Confirm on box that a sidecar 4xx surfaced through `POST /api/voice-library/clone`
   reads as **502** to the browser (per the #1822 policy comment at
-  `voice-library.ts:793-802`), not 4xx.
+  `voice-library.ts:1024-1030`, moved from the pre-3c `:793-802`), not 4xx.
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
