@@ -248,18 +248,76 @@ history at cut time.
   engine-aware library sample route, so the card's Play button still always auditions the Qwen
   artifact even for a Coqui-primary card
   ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). Two other consent-adjacent
-  gaps this wave's review surfaced are still open: a manual cast-link route that bypasses the
-  library consent check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and
-  a wholesale `PUT /api/books/:bookId {slice:'cast'}` route that lets a client restamp a
-  character's `voiceUuid`/engine-slot pair with no guard at all
+  gaps this wave's review surfaced — a manual cast-link route that bypassed the library consent
+  check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and a wholesale
+  `PUT /api/books/:bookId {slice:'cast'}` route that let a client restamp a character's
+  `voiceUuid`/engine-slot pair with no guard at all
   ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), found during this wave's
-  own review). Roughly twenty further pre-existing or adjacent gaps this wave's review surfaced —
+  own review) — were **both closed by the follow-up campaign below**, not left open. Roughly
+  twenty further pre-existing or adjacent gaps this wave's review surfaced —
   most still untriaged in the implementation ledger's Minor roll-up — are catalogued in the plan's
   Known limitations, with follow-up issues for the load-bearing ones. **The whole-branch review
   gates (GATE 1/2/3) have not run on this branch yet.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
   Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
   Live-GPU acceptance owed — see the plan's "Owed on-box acceptance" and Section E of
   `docs/testing/fs38-wave3-onbox-acceptance.md`.
+- **fs-38 Wave 3c follow-up campaign — consent hardening, a preparing-voice phase, and a dozen
+  smaller fixes** (refs #624). Landed after the Wave 3c entry above was first written.
+  - **Consent hardening.** Three fail-safe-only fixes (no clone predicate widened) close every
+    path this wave's review surfaced by which a cloned voice's consent state could be
+    bypassed. A manual cast-link (`cast-link-prior.ts`) and the series-reuse chain-walk
+    (`hydrate-reused-voice.ts`) no longer denormalise a voice onto a character that carries a
+    cloned slot on the *target* side of the link, closing the gap the manual-link route left
+    open ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)). The wholesale
+    `PUT /api/books/:bookId {slice:'cast'}` cast-save route now keeps `voiceUuid` and any
+    reserved clone-storage-key server-owned, rejecting a client-supplied value that disagrees
+    with what is already on disk — replicating the already-reviewed
+    `voice-override-linked.ts` pattern rather than inventing new policy
+    ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899)). And a legacy cloned
+    slot carrying a `libraryUuid` with no `provenance` field — invisible to the render-time
+    revocation check because only `pickVoiceForEngine`'s Qwen branch resolves a bare
+    `libraryUuid` — is now included in the resolver pre-pass's revocation check, Qwen-only
+    since Coqui has no such exemption
+    ([#1891](https://github.com/dudarenok-maker/Castwright/issues/1891)).
+  - **fs-38 issue #1813 — a `preparing-voice` phase for the resolver pre-pass.** The Wave 3b2/
+    3c resolver pre-pass can spend several seconds transparently re-deriving a Repairable
+    cloned voice or self-healing a designed one, before the first synth call — previously a
+    dead pause with no UI signal (`docs/testing/fs38-wave3-onbox-acceptance.md`'s KL-f). Both
+    request interfaces (`ClonedVoiceRequest`/`DesignedVoiceRequest`) gain `characterId`; a new
+    `onVoicePrepare` callback fires at each pre-derive call site in both the cloned (fail-loud)
+    and designed (fail-soft) arms independently, threaded through `SynthesiseChapterOpts` to a
+    new `generation.ts` `emitPreparingVoice` tick (mirroring `emitVerifying`/`emitRecovering`)
+    and a new `chapter_preparing_voice` `GenerationTick` type. The Generation view gains a
+    "Preparing voice — `{character}`…" caption and pill beside `recovering`'s, with matching
+    `ChapterProgressBar` busy-styling. A `withVoicePrepareHeartbeat` wrapper re-fires the last
+    payload on the existing heartbeat interval so a long derive doesn't look stalled. Design:
+    `docs/superpowers/specs/2026-07-26-resolver-prepass-progress-phase-design.md`. Closes
+    [#1813](https://github.com/dudarenok-maker/Castwright/issues/1813).
+  - **Smaller fixes.** A voice-library `promote` handler (both the library route and the
+    character `design-voice` route) now `stat`s the preview artifact before deleting the live
+    one, closing a data-loss window where a double-promote deleted the live `.pt` before
+    discovering the preview it was meant to replace it with was already gone
+    ([#1804](https://github.com/dudarenok-maker/Castwright/issues/1804)). The golden-audio
+    gate's PowerShell runner no longer crashes on the Qwen probe's benign stderr line (a
+    `torchaudio`→`sox`-absent warning tripped under `$ErrorActionPreference = 'Stop'`), so
+    `test:golden-audio:sidecar` now actually reaches pytest instead of erroring out before it
+    starts ([#1892](https://github.com/dudarenok-maker/Castwright/issues/1892)).
+    `spawn-sidecar.ts`'s `QWEN_VOICES_DIR`/`XTTS_VOICES_DIR` env vars now route through the
+    same `paths.ts` helpers the rest of the codebase uses instead of a parallel literal `join`,
+    closing a latent drift risk this wave's own review flagged
+    ([#1890](https://github.com/dudarenok-maker/Castwright/issues/1890)). The voice-library
+    panel's "My voices" assign action now surfaces a rejected `assignVoice` dispatch inline
+    instead of swallowing it silently
+    ([#1896](https://github.com/dudarenok-maker/Castwright/issues/1896)). A Wave 3a
+    deferred-minor sweep closed nine smaller items — per-field consent-structure test
+    coverage, a direct test for the sample route's `!entry.consent` 403 branch, a `cloneSample`
+    thunk unit test, three OpenAPI status-code omissions, a `mockRevokeVoiceLibraryEntry`
+    `.find()!` guard, static imports replacing a dynamic one in a test, a redundant re-spread,
+    and an `aria-describedby` association from the clone-capture panel's attest checkbox to its
+    sentence text ([#1808](https://github.com/dudarenok-maker/Castwright/issues/1808)). And the
+    `VoiceProvenanceBadge` docstring now names its real consuming surface — the My-voices card's
+    `ProvenanceMarker`, added by this wave — rather than the stale claim that it has none
+    ([#1803](https://github.com/dudarenok-maker/Castwright/issues/1803)).
 
 ---
 

@@ -96,6 +96,46 @@ and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
 book fixture that actually routes to Coqui.
 *Plans:* 267, 268, 271 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
 
+**Four checks added by the post-32 follow-up campaign, same box/setup as
+above — batch them into the same session:**
+
+1. **The `preparing-voice` phase (#1813).** Render a chapter with a
+   Repairable cloned voice or a self-healing designed voice (same setup as
+   C-06/C-07/E-01) and confirm the Generate screen shows a "Preparing
+   voice — `{character}`" step, with its own pill, *before* synthesis
+   begins — mirroring the existing `recovering` phase, replacing the
+   multi-second silent pause `docs/testing/fs38-wave3-onbox-acceptance.md`'s
+   KL-f documents. Then render a chapter for a character with no library
+   voice at all and confirm the phase never appears. Not yet folded into
+   that run sheet's own step list or KL-f's now-stale "expected" text —
+   update both when this is next revised.
+2. **A cloned voice actually rendering on XTTS end to end** — the wave's
+   central claim, already exercised by E-01 above but worth restating
+   concretely: play the rendered chapter and confirm the dialogue is
+   recognisably the cloned speaker, not a stock catalogue voice, and that
+   `cast.json` records the character's `overrideTtsVoices.coqui.libraryUuid`
+   matching the clone's uuid with `provenance: 'cloned'`.
+3. **Revoke-then-render.** Revoke consent for a voice already cast on
+   Coqui, then render a chapter that uses it (same shape as C-01/C-02 on
+   the Qwen side, E-02/E-03 on Coqui), and confirm the chapter fails loud —
+   `UnresolvableClonedVoiceError`, zero audio produced for that chapter —
+   rather than silently substituting a stock catalogue voice.
+4. **VRAM partitioning across a mixed chapter — no existing test names
+   this explicitly.** Cast one character in a chapter to a Qwen cloned/
+   designed voice and another to a Coqui cloned/designed voice in the same
+   book, then watch `nvidia-smi` through the resolver pre-pass while that
+   chapter renders. Qwen and Coqui must never both hold GPU memory
+   resident at the same time — the pre-pass partitions cloned-voice derives
+   by engine specifically to preserve this serialization (`fix(server):
+   partition cloned-voice derives by engine to preserve VRAM
+   serialization`). A spike showing both models resident simultaneously is
+   a regression, not a variance.
+
+*Pass/fail criteria for all four:* `docs/features/271-fs38-wave3c-xtts.md`.
+*Hardware:* the same single 8 GB box as the rest of Group A, XTTS weights
+installed (`install-coqui.mjs`/`.ps1`/`.sh`), no additional prerequisites
+beyond what A1 already lists above.
+
 ### A2 · Capacity-aware GPU placement (plan 264) · **two distinct debts**
 
 **The gate to `stable`/archive** is the plan header's own words (`:14-22`): the

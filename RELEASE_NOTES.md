@@ -61,6 +61,25 @@
   cast it on a book that used the other one and you'd either hit a wall or, worse, quietly get
   a stand-in voice instead. Both are covered now, with the same promise either way: it renders
   as the real voice, or it tells you it can't — never a silent swap.
+- **Your consent record for a cloned voice is now enforced everywhere it applies.** Revoking a
+  clone was already final — Castwright stopped rendering it and erased what it could be rebuilt
+  from. That same check now reaches a couple of paths inside your own install that hadn't been
+  covered yet: linking one character's voice to another's, and a plain cast save. A voice you've
+  revoked, or never gave consent for in the first place, can't be quietly carried across either
+  one.
+- **A chapter that needs to rebuild a voice now shows you it's happening.** Before narration
+  starts, Castwright sometimes has to quietly re-derive a cloned voice or self-heal a designed
+  one — that could look like nothing was happening for several seconds. The Generate screen now
+  shows a "Preparing voice" step and names the character, so a quiet pause reads as progress,
+  not a stall.
+- **Assigning a voice that won't work now tells you why.** In My voices, trying to assign a
+  library voice Castwright can't actually use on that character — the wrong engine, say — used to
+  fail with no visible response. It now shows the reason right in the panel.
+- **Promoting a voice into your library can no longer lose the one it's replacing.** Promoting a
+  redesigned voice removed the live version first and only afterwards checked whether the
+  redesign meant to replace it actually existed — so promoting a second time, before a first
+  promote had produced anything new, could delete your live voice for nothing. It now checks
+  first.
 - Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
