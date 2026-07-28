@@ -6951,7 +6951,7 @@ export interface operations {
                 content: {
                     "text/event-stream": {
                         /** @enum {string} */
-                        type?: "qa_scan" | "splice_start" | "progress" | "chapter_assembling" | "qa_repair_complete" | "chapter_failed";
+                        type?: "qa_scan" | "splice_start" | "progress" | "chapter_assembling" | "warning" | "qa_repair_complete" | "chapter_failed";
                         chapterId?: number;
                         dryRun?: boolean;
                         flaggedCount?: number;
@@ -6971,6 +6971,22 @@ export interface operations {
                         hasPreviousAudio?: boolean;
                         progress?: number;
                         errorReason?: string;
+                        /**
+                         * @description Only on `warning` — a stable machine-readable warning code
+                         *     (today only `voice_language_mismatch`), matching the
+                         *     GenerationTick field of the same name so a caller can
+                         *     dedupe and route warnings without parsing `message`.
+                         */
+                        code?: string;
+                        /**
+                         * @description Only on `warning` — the human-readable advisory text. A
+                         *     `warning` is non-fatal: the repair still proceeds. Emitted
+                         *     when a non-English book's reused DESIGNED voices were
+                         *     cleared because their baked manifest language differs from
+                         *     the book's, mirroring the same advisory the generation and
+                         *     splice streams already send for that clear.
+                         */
+                        message?: string;
                     };
                 };
             };

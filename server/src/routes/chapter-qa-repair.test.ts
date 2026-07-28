@@ -826,4 +826,64 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-38 Wave 3c clone
     const castor = lastArgs.cast.find((c) => c.id === 'castor');
     expect(castor?.overrideTtsVoices?.qwen?.libraryUuid).toBe('uuid-qwen');
   });
+
+  /* [#1889] — the clear itself is a SILENT cast mutation; generation.ts and
+     chapter-splice.ts both send a `warning` frame so the user learns their
+     designed voice was re-detected and dropped, and this route did not. The
+     assertion is on the FRAME THE ROUTE EMITTED — a test that only checked
+     'warning' is a member of the openapi enum would still pass with the emit
+     deleted, which is exactly the placebo shape this branch keeps producing. */
+  it('[#1889] emits a voice_language_mismatch warning frame naming the cleared voice', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook(
+      'Mismatched Designed Warning Story',
+      { qwen: { name: 'Spanish Voice', provenance: 'designed' } } as unknown as Record<
+        string,
+        { name: string; libraryUuid: string; provenance: 'cloned' }
+      >,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    const warning = events.find((e) => e.type === 'warning');
+    expect(warning, `expected a warning frame, got:\n${res.text}`).toBeTruthy();
+    expect(warning?.code).toBe('voice_language_mismatch');
+    // Names the character whose voice was dropped — the actionable half.
+    expect(String(warning?.message)).toContain('Castor');
+  });
+
+  /* The negative half, and the real anti-placebo guard: an UNCONDITIONAL
+     `send({type:'warning'…})` would pass the case above. Here nothing is
+     cleared (the cloned slot is exempt), so the stream must carry no
+     `warning` frame at all. */
+  it('[#1889] emits NO warning frame when the sweep cleared nothing', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Cloned No Warning Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+    expect(events.filter((e) => e.type === 'warning')).toEqual([]);
+  });
 });

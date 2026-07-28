@@ -323,18 +323,31 @@ chapterQaRepairRouter.post(
            manifest read per designed qwen character per repair request —
            accepted, and identical to what the other two routes already pay.
 
-           No SSE `warning` frame is emitted, unlike the other two routes:
-           this stream's frame vocabulary is pinned in openapi.yaml
+           The SSE `warning` frame is emitted here too, byte-identical in
+           shape and copy to generation.ts's and chapter-splice.ts's — the
+           clearing is a silent cast mutation otherwise, and the user whose
+           line just got re-recorded would never learn their voice was
+           re-detected and dropped. `clearMismatchedDesignedVoices` also
+           console.warns per cleared voice, but a server log is not a user
+           notification. `warning` is now in this stream's openapi enum
            (`qa_scan | splice_start | progress | chapter_assembling |
-           qa_repair_complete | chapter_failed`) and adding to it is a
-           contract change outside this fix. `clearMismatchedDesignedVoices`
-           console.warns per cleared voice, so the clearing is still
-           diagnosable server-side. */
-        await clearMismatchedDesignedVoices(
+           warning | qa_repair_complete | chapter_failed`) alongside the
+           `code`/`message` fields it carries. */
+        const clearedVoices = await clearMismatchedDesignedVoices(
           cast.characters,
           sidecarLanguageName(bookLanguage),
           bookLanguage,
         );
+        if (clearedVoices.length > 0) {
+          const names = clearedVoices.map((c) => c.name).join(', ');
+          send({
+            type: 'warning',
+            code: 'voice_language_mismatch',
+            message:
+              `${clearedVoices.length} designed voice(s) were cleared because they were designed for a ` +
+              `different language than this book — re-design ${names} before generating.`,
+          });
+        }
       }
       const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
       const qwenInUse = requiredEngines.has('qwen');

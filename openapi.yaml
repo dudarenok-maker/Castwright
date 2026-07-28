@@ -1639,9 +1639,9 @@ paths:
             text/event-stream:
               schema:
                 type: object
-                description: 'A `data:` frame — one of qa_scan / splice_start / progress / chapter_assembling / qa_repair_complete / chapter_failed.'
+                description: 'A `data:` frame — one of qa_scan / splice_start / progress / chapter_assembling / warning / qa_repair_complete / chapter_failed.'
                 properties:
-                  type: { type: string, enum: [qa_scan, splice_start, progress, chapter_assembling, qa_repair_complete, chapter_failed] }
+                  type: { type: string, enum: [qa_scan, splice_start, progress, chapter_assembling, warning, qa_repair_complete, chapter_failed] }
                   chapterId: { type: integer }
                   dryRun: { type: boolean }
                   flaggedCount: { type: integer }
@@ -1662,6 +1662,22 @@ paths:
                   hasPreviousAudio: { type: boolean }
                   progress: { type: number }
                   errorReason: { type: string }
+                  code:
+                    type: string
+                    description: |
+                      Only on `warning` — a stable machine-readable warning code
+                      (today only `voice_language_mismatch`), matching the
+                      GenerationTick field of the same name so a caller can
+                      dedupe and route warnings without parsing `message`.
+                  message:
+                    type: string
+                    description: |
+                      Only on `warning` — the human-readable advisory text. A
+                      `warning` is non-fatal: the repair still proceeds. Emitted
+                      when a non-English book's reused DESIGNED voices were
+                      cleared because their baked manifest language differs from
+                      the book's, mirroring the same advisory the generation and
+                      splice streams already send for that clear.
 
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:
