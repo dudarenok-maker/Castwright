@@ -303,6 +303,137 @@ test('fix 5: a single-row count mismatch uses singular grammar and no dash range
   );
 });
 
+test('ops-44: a sub-lettered row heading ("### A19b") is rejected with a clear message, not silently dropped', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A19b
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e ===
+        'Row heading "### A19b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    ),
+    `expected the sub-lettered-row error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('ops-44: a non-row "### " subheading inside a group section is still ignored', () => {
+  const withNotesSubheading = buildRegister().replace(
+    '### A2 · thing 2',
+    '### Notes\n\nSome context that is not a row.\n\n### A2 · thing 2',
+  );
+  assert.deepEqual(checkRegister(withNotesSubheading), []);
+});
+
+test('ops-44: a fenced code block containing "### F2 · ..." does not inflate group F\'s count', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **F** | Setup F | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group F — setup f
+
+### F1 · thing 1
+
+Body text.
+
+\`\`\`
+### F2 · this is example text inside a fenced block, not a real row
+\`\`\`
+
+---
+`;
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('ops-44: a fenced code block containing "## Group Z — ..." does not create a phantom group', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+\`\`\`
+## Group Z — this line must not create a phantom section
+\`\`\`
+
+More body text after the fence, still part of Group A.
+
+---
+`;
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('ops-44: "~~~" fences behave the same as ``` fences for both the section split and the row-heading scan', () => {
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 1 |
+
+**1 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+~~~
+### A2 · this is example text inside a tilde-fenced block, not a real row
+## Group Z — this must not create a phantom section either
+~~~
+
+---
+`;
+  assert.deepEqual(checkRegister(text), []);
+});
+
 test('regression: reproduces the real 2026-07-28 drift (E=5 vs 7 rows, total 31)', () => {
   // Mirrors the actual incident this check exists to catch: the "At a
   // glance" table under-reported Group E (5 instead of the 7 rows actually

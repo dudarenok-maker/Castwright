@@ -16,6 +16,37 @@ import { readFileSync } from 'node:fs';
 // as "not a group" rather than special-casing two sections whose rows would
 // buy little coverage for a lot of parser fragility.
 
+// ops-44 (issue #1913) added two edge-case behaviours on top of the above: a
+// row heading that looks row-shaped but isn't a strict `<Letter><N>` (e.g. a
+// sub-lettered `### A19b`) is now rejected with a specific error rather than
+// silently uncounted, and both heading scans below are fence-aware so an
+// example `##`/`###` line inside a fenced code block can't be parsed as a
+// real section or row.
+
+// Blanks the contents of fenced code blocks (``` or ~~~) so neither the
+// section split nor the row-heading scan below can mistake an example
+// heading inside a fence for a real one. Toggling is per-delimiter — a line
+// only closes a fence when it starts with the SAME delimiter that opened it,
+// so a `~~~` line inside a ```-fenced block is just content, not a closer.
+function stripFences(text) {
+  const lines = text.split('\n');
+  let openFence = null;
+  return lines
+    .map((line) => {
+      const trimmed = line.trimStart();
+      if (openFence) {
+        if (trimmed.startsWith(openFence)) openFence = null;
+        return '';
+      }
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        openFence = trimmed.startsWith('```') ? '```' : '~~~';
+        return '';
+      }
+      return line;
+    })
+    .join('\n');
+}
+
 // Splits the document into `## `-level sections: { title, body } from just
 // after each `## Heading` line to just before the next one. Row headings use
 // `### ` (three `#`s), so a regex requiring the space directly after exactly
@@ -74,16 +105,35 @@ function parseGlanceTable(sectionBody) {
 function parseBodyGroups(sections) {
   const groups = new Map();
   const duplicateLetters = new Set();
+  const invalidRowHeadings = [];
   for (const section of sections) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
     const letter = titleMatch[1];
     if (groups.has(letter)) duplicateLetters.add(letter);
-    const rowRegex = new RegExp(`^### ${letter}(\\d+)\\b`, 'gm');
-    const numbers = [...section.body.matchAll(rowRegex)].map((m) => Number(m[1]));
+    // A row candidate is a `### ` heading whose text starts with this
+    // section's own letter followed by a digit — anything else (e.g. a
+    // `### Notes` subheading) isn't row-shaped and is never even looked at,
+    // so group sections may legitimately gain non-row subheadings. A
+    // candidate then either parses as a strict `<Letter><N>` (word boundary
+    // right after the digits) or doesn't — e.g. a sub-lettered `A19b`, whose
+    // digits run straight into a trailing letter with no boundary — and is
+    // collected in `invalidRowHeadings` instead of being silently dropped.
+    const candidateRegex = new RegExp(`^### (${letter}\\d[^\\n]*)$`, 'gm');
+    const rowRegex = new RegExp(`^${letter}(\\d+)\\b`);
+    const numbers = [];
+    for (const match of section.body.matchAll(candidateRegex)) {
+      const headingText = match[1];
+      const rowMatch = headingText.match(rowRegex);
+      if (rowMatch) {
+        numbers.push(Number(rowMatch[1]));
+      } else {
+        invalidRowHeadings.push({ letter, headingText });
+      }
+    }
     groups.set(letter, numbers);
   }
-  return { groups, duplicateLetters };
+  return { groups, duplicateLetters, invalidRowHeadings };
 }
 
 // Formats a group's found row numbers for an error message: a single row is
@@ -103,7 +153,7 @@ function formatRowList(letter, numbers) {
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
-  const sections = splitSections(text);
+  const sections = splitSections(stripFences(text));
   const glanceSection = sections.find((s) => s.title === 'At a glance');
   if (!glanceSection) {
     return ['No "## At a glance" section found — cannot check the register.'];
@@ -115,7 +165,11 @@ export function checkRegister(text) {
     duplicateLetters: duplicateTableLetters,
     malformedLetters,
   } = parseGlanceTable(glanceSection.body);
-  const { groups: bodyGroups, duplicateLetters: duplicateBodyLetters } = parseBodyGroups(sections);
+  const {
+    groups: bodyGroups,
+    duplicateLetters: duplicateBodyLetters,
+    invalidRowHeadings,
+  } = parseBodyGroups(sections);
   const tableLetters = new Set(tableGroups.keys());
   const bodyLetters = new Set(bodyGroups.keys());
   const malformedLetterSet = new Set(malformedLetters);
@@ -127,6 +181,17 @@ export function checkRegister(text) {
   for (const letter of malformedLetterSet) {
     errors.push(
       `The glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
+    );
+  }
+
+  // Sub-lettered row headings (e.g. `### A19b`) are the body-side mirror of
+  // the malformed-table-row check above — rejected outright rather than
+  // silently uncounted. The register's own convention for a row covering
+  // more than one debt is to annotate the row's title, not sub-letter it
+  // (ops-44, issue #1913).
+  for (const { letter, headingText } of invalidRowHeadings) {
+    errors.push(
+      `Row heading "### ${headingText}" is not a valid row number. Rows are numbered contiguously (${letter}1, ${letter}2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
 
