@@ -1518,10 +1518,10 @@ class CoquiEngine(Engine):
         # that whole window.
         self._ensure_loaded(model)
         # Claim BEFORE the acquire. The counter alone is NOT enough and neither
-        # is the timestamp — main.py:3835-3838 spells out the same TOCTOU for
-        # Qwen: an evict can read a stale `_last_used` and free the model in the
-        # gap between the ensure above and the acquire below. The pair
-        # (`_in_flight` claimed here + the re-ensure under the lock) closes it.
+        # is the timestamp — `QwenEngine.design_voice` spells out the same
+        # TOCTOU for Qwen: an evict can read a stale `_last_used` and free the
+        # model in the gap between the ensure above and the acquire below. The
+        # pair (`_in_flight` claimed here + the re-ensure under the lock) closes it.
         with self._in_flight.claim():
             self._last_used = time.monotonic()
             # Re-stamp on the way out in an INNER finally, BEFORE the claim's
@@ -4053,187 +4053,186 @@ class QwenEngine(Engine):
         # and free in the gap before the _synth_lock forward); `_design_in_flight`
         # + the re-ensure under the lock below close that race. Released in
         # `claim()`'s own finally so a failure can't leave the guard stuck.
-        # No inner re-stamp-before-decrement dance needed here (unlike
-        # `_base17_activity` / `CoquiEngine.synthesize` / `transcribe` /
-        # `embed`) — the only `_design_last_used` re-stamp on this path already
-        # runs BEFORE the `return` below, i.e. before this `with` block's exit.
+        # Re-stamped on the way out in an INNER finally, BEFORE the claim's
+        # own decrement runs (#1917) — see CoquiEngine.synthesize for why
+        # the ordering matters.
         self._design_last_used = time.monotonic()
         with self._design_in_flight.claim():
-            # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
-            # the whole operation so the structured timing line below can split a
-            # slow design into its phases — see that log.info for the field map.
-            t0 = time.perf_counter()
-            def _phase(name: str) -> None:
-                if report_progress is not None:
-                    try:
-                        report_progress(name)
-                    except Exception:  # best-effort: never fail a design on progress
-                        pass
-            # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
-            # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
-            # (waits for any in-flight Kokoro synth to drain, blocks new ones),
-            # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
-            # reloads on the next synth (~1s); when no generation ran it isn't
-            # resident, so this is a no-op.
-            _kokoro_pre = ENGINES.get("kokoro")
-            if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
-                _phase("freeing-vram")
-            with _VD_KOKORO.design():
-                _kokoro_eng = ENGINES.get("kokoro")
-                if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
-                    log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
-                    _kokoro_eng.unload()
-                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
-                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-                # interleaves variant mints (which leave _base17 resident) with
-                # base designs; evict the lingering 1.7B-Base before the
-                # VoiceDesign load — symmetric with the synth path's
-                # unload_design() (synthesize/synthesize_batch) and the Kokoro
-                # evict above. design_voice never uses _base17, so this is safe;
-                # the idle watchdog would reclaim it eventually, but not within
-                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                if self._base17 is not None:
-                    log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                    self.unload_base17()
-                _phase("loading-model")
-                # Capacity-aware placement (task 3, vram-aware-placement plan):
-                # a concrete `device` from an admitted reservation overrides the
-                # env-derived pref for this design. `device` is threaded straight
-                # into each ensure call so the set-pref + resolve + load are ONE
-                # atomic acquisition under that model's own load lock — a
-                # concurrent design/mint admitted to a DIFFERENT card can't clobber
-                # `_device_pref` in the gap between set and resolve (the TOCTOU
-                # this closes). The design load runs first and sets `_device_pref`,
-                # so the base load inherits the same card; passing it here too is
-                # belt-and-suspenders for the warm-design / cold-base case. `None`
-                # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                self._ensure_design_loaded(device=device)
-                self._ensure_base_loaded(device=device)
-                # Phase boundary: everything above is Kokoro-evict + (cold) model
-                # load; everything below is GPU forwards. `load_ms` isolates the
-                # cold-start cost (the transient 1.7B VoiceDesign load the operator
-                # suspects) from the design forward itself.
-                load_ms = (time.perf_counter() - t0) * 1000.0
-                # Serialise the GPU forwards against any concurrent synth/design — see
-                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                with self._synth_lock:
-                    # Re-ensure the models UNDER the lock. Every in-place nuller of
-                    # `_design`/`_base` (the idle watchdog, a concurrent
-                    # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                    # so a model ensured before we took the lock may have been freed
-                    # in the gap. Re-ensuring here is the airtight backstop against
-                    # "'NoneType' object has no attribute 'generate_voice_design'".
-                    # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                    # `_synth_lock`, so this can't deadlock.
-                    self._ensure_design_loaded()
-                    self._ensure_base_loaded()
-                    # 1. design a reference clip from the persona instruction.
-                    _phase("designing")
-                    _t = time.perf_counter()
-                    ref_wavs, ref_sr = self._design.generate_voice_design(
-                        text=ref_text, language=lang, instruct=instruct
-                    )
-                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                    ref_audio = ref_wavs[0]
-
-                    # 2. distil into a reusable clone prompt on the Base model.
-                    _phase("distilling")
-                    _t = time.perf_counter()
-                    prompt = self._base.create_voice_clone_prompt(
-                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                    )
-                    distil_ms = (time.perf_counter() - _t) * 1000.0
-
-            # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
-            os.makedirs(self._voices_dir, exist_ok=True)
-            pt_path, json_path = self._voice_paths(voice_id)
-            _atomic_torch_save(torch, prompt, pt_path)
-            import json as _json
-
-            with open(json_path, "w", encoding="utf-8") as fh:
-                _json.dump(
-                    {
-                        "voiceId": voice_id,
-                        "voiceUuid": voice_uuid,
-                        "instruct": instruct,
-                        "language": lang,
-                        "refText": ref_text,
-                        "baseModel": self.BASE_MODEL,
-                        "designModel": self.VOICEDESIGN_MODEL,
-                        **({"mintMethod": mint_method} if mint_method else {}),
-                        **({"fallbackFor": fallback_for} if fallback_for else {}),
-                    },
-                    fh,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-
-            # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
-            # this DESIGNED voice re-derive a fresh embedding from the same
-            # clip after a base-model upgrade (not byte-identical — Node's
-            # reader resamples it to a fixed 24kHz first), the way a CLONED
-            # voice already can from its retained `master.wav` (Wave 3b1).
-            # Strictly additive: the HTTP
-            # response, the audition PCM, and the `.pt`/`.json` above are
-            # already complete by this point, so a failure here must never
-            # break voice design — it's a future re-derivation aid, not part
-            # of the design contract. Log-and-continue, not propagate.
             try:
-                _atomic_wav_save(
-                    _float_audio_to_int16_le(ref_audio),
-                    int(ref_sr),
-                    self._voice_master_wav_path(voice_id),
-                )
-            except Exception:
-                log.warning(
-                    "Failed to persist reference clip for voice '%s' — "
-                    "continuing (design itself is unaffected).",
-                    voice_id, exc_info=True,
-                )
+                # Phase timer (mirrors the synth path's load_ms/gen_ms). `t0` brackets
+                # the whole operation so the structured timing line below can split a
+                # slow design into its phases — see that log.info for the field map.
+                t0 = time.perf_counter()
+                def _phase(name: str) -> None:
+                    if report_progress is not None:
+                        try:
+                            report_progress(name)
+                        except Exception:  # best-effort: never fail a design on progress
+                            pass
+                # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
+                # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
+                # (waits for any in-flight Kokoro synth to drain, blocks new ones),
+                # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
+                # reloads on the next synth (~1s); when no generation ran it isn't
+                # resident, so this is a no-op.
+                _kokoro_pre = ENGINES.get("kokoro")
+                if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
+                    _phase("freeing-vram")
+                with _VD_KOKORO.design():
+                    _kokoro_eng = ENGINES.get("kokoro")
+                    if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                        log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                        _kokoro_eng.unload()
+                    # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                    # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                    # interleaves variant mints (which leave _base17 resident) with
+                    # base designs; evict the lingering 1.7B-Base before the
+                    # VoiceDesign load — symmetric with the synth path's
+                    # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                    # evict above. design_voice never uses _base17, so this is safe;
+                    # the idle watchdog would reclaim it eventually, but not within
+                    # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                    if self._base17 is not None:
+                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        self.unload_base17()
+                    _phase("loading-model")
+                    # Capacity-aware placement (task 3, vram-aware-placement plan):
+                    # a concrete `device` from an admitted reservation overrides the
+                    # env-derived pref for this design. `device` is threaded straight
+                    # into each ensure call so the set-pref + resolve + load are ONE
+                    # atomic acquisition under that model's own load lock — a
+                    # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                    # `_device_pref` in the gap between set and resolve (the TOCTOU
+                    # this closes). The design load runs first and sets `_device_pref`,
+                    # so the base load inherits the same card; passing it here too is
+                    # belt-and-suspenders for the warm-design / cold-base case. `None`
+                    # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                    self._ensure_design_loaded(device=device)
+                    self._ensure_base_loaded(device=device)
+                    # Phase boundary: everything above is Kokoro-evict + (cold) model
+                    # load; everything below is GPU forwards. `load_ms` isolates the
+                    # cold-start cost (the transient 1.7B VoiceDesign load the operator
+                    # suspects) from the design forward itself.
+                    load_ms = (time.perf_counter() - t0) * 1000.0
+                    # Serialise the GPU forwards against any concurrent synth/design — see
+                    # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                    with self._synth_lock:
+                        # Re-ensure the models UNDER the lock. Every in-place nuller of
+                        # `_design`/`_base` (the idle watchdog, a concurrent
+                        # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
+                        # so a model ensured before we took the lock may have been freed
+                        # in the gap. Re-ensuring here is the airtight backstop against
+                        # "'NoneType' object has no attribute 'generate_voice_design'".
+                        # Idempotent / a no-op on the warm path; `_ensure_*` don't take
+                        # `_synth_lock`, so this can't deadlock.
+                        self._ensure_design_loaded()
+                        self._ensure_base_loaded()
+                        # 1. design a reference clip from the persona instruction.
+                        _phase("designing")
+                        _t = time.perf_counter()
+                        ref_wavs, ref_sr = self._design.generate_voice_design(
+                            text=ref_text, language=lang, instruct=instruct
+                        )
+                        design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                        ref_audio = ref_wavs[0]
 
-            log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+                        # 2. distil into a reusable clone prompt on the Base model.
+                        _phase("distilling")
+                        _t = time.perf_counter()
+                        prompt = self._base.create_voice_clone_prompt(
+                            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                        )
+                        distil_ms = (time.perf_counter() - _t) * 1000.0
 
-            # Evict any stale in-memory entry so a RE-designed voice can't keep
-            # serving the previous embedding — the next synth reloads the fresh
-            # .pt we just wrote. (We don't warm it here: the audition preview
-            # below uses `prompt` directly, and the first real synth's single
-            # disk load is negligible.) Also evict the derived 1.7B-native
-            # prompt (in-memory AND on-disk) — it was derived from the OLD
-            # embedding and must be re-derived from this new one.
-            with self._cache_lock:
-                self._prompt_cache.pop(voice_id, None)
-            self._evict_17b_prompt(voice_id)
+                # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
+                os.makedirs(self._voices_dir, exist_ok=True)
+                pt_path, json_path = self._voice_paths(voice_id)
+                _atomic_torch_save(torch, prompt, pt_path)
+                import json as _json
 
-            # 4. audition preview — speak the caller's calibration line in the new
-            #    voice (the full evidence quote, NOT the short reference text).
-            # The silent degenerate-load OUTPUT guard (#1593) is intentionally NOT
-            # applied to this audition forward: it's a cast-review preview the
-            # operator hears live (not shipped chapter audio), and a degenerate
-            # preview is re-run by clicking re-audition — no silent bad ship.
-            _phase("rendering")
-            _t = time.perf_counter()
-            with self._synth_lock:
-                self._ensure_base_loaded()  # re-ensure under the lock — see above
-                wavs, sr = self._base.generate_voice_clone(
-                    text=[audition_text], language=[lang], voice_clone_prompt=prompt
+                with open(json_path, "w", encoding="utf-8") as fh:
+                    _json.dump(
+                        {
+                            "voiceId": voice_id,
+                            "voiceUuid": voice_uuid,
+                            "instruct": instruct,
+                            "language": lang,
+                            "refText": ref_text,
+                            "baseModel": self.BASE_MODEL,
+                            "designModel": self.VOICEDESIGN_MODEL,
+                            **({"mintMethod": mint_method} if mint_method else {}),
+                            **({"fallbackFor": fallback_for} if fallback_for else {}),
+                        },
+                        fh,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+
+                # 3b. retain the reference clip as WAV (§2.3, fs-38 Wave 3b2) — lets
+                # this DESIGNED voice re-derive a fresh embedding from the same
+                # clip after a base-model upgrade (not byte-identical — Node's
+                # reader resamples it to a fixed 24kHz first), the way a CLONED
+                # voice already can from its retained `master.wav` (Wave 3b1).
+                # Strictly additive: the HTTP
+                # response, the audition PCM, and the `.pt`/`.json` above are
+                # already complete by this point, so a failure here must never
+                # break voice design — it's a future re-derivation aid, not part
+                # of the design contract. Log-and-continue, not propagate.
+                try:
+                    _atomic_wav_save(
+                        _float_audio_to_int16_le(ref_audio),
+                        int(ref_sr),
+                        self._voice_master_wav_path(voice_id),
+                    )
+                except Exception:
+                    log.warning(
+                        "Failed to persist reference clip for voice '%s' — "
+                        "continuing (design itself is unaffected).",
+                        voice_id, exc_info=True,
+                    )
+
+                log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+
+                # Evict any stale in-memory entry so a RE-designed voice can't keep
+                # serving the previous embedding — the next synth reloads the fresh
+                # .pt we just wrote. (We don't warm it here: the audition preview
+                # below uses `prompt` directly, and the first real synth's single
+                # disk load is negligible.) Also evict the derived 1.7B-native
+                # prompt (in-memory AND on-disk) — it was derived from the OLD
+                # embedding and must be re-derived from this new one.
+                with self._cache_lock:
+                    self._prompt_cache.pop(voice_id, None)
+                self._evict_17b_prompt(voice_id)
+
+                # 4. audition preview — speak the caller's calibration line in the new
+                #    voice (the full evidence quote, NOT the short reference text).
+                # The silent degenerate-load OUTPUT guard (#1593) is intentionally NOT
+                # applied to this audition forward: it's a cast-review preview the
+                # operator hears live (not shipped chapter audio), and a degenerate
+                # preview is re-run by clicking re-audition — no silent bad ship.
+                _phase("rendering")
+                _t = time.perf_counter()
+                with self._synth_lock:
+                    self._ensure_base_loaded()  # re-ensure under the lock — see above
+                    wavs, sr = self._base.generate_voice_clone(
+                        text=[audition_text], language=[lang], voice_clone_prompt=prompt
+                    )
+                audition_ms = (time.perf_counter() - _t) * 1000.0
+                # Structured timing line, mirroring the synth path. Field map:
+                #   load_ms        Kokoro-evict + (cold) 1.7B VoiceDesign / 0.6B load
+                #   design_fwd_ms  the 1.7B VoiceDesign reference-clip forward
+                #   distil_ms      0.6B clone-prompt distil from the reference clip
+                #   audition_ms    0.6B audition-preview synth of the calibration line
+                # A single grep over this line tells us where a slow design spends its
+                # time, with no guesswork.
+                total_ms = (time.perf_counter() - t0) * 1000.0
+                log.info(
+                    "qwen voice design: voice=%s lang=%s load_ms=%.0f design_fwd_ms=%.0f "
+                    "distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
+                    voice_id, lang, load_ms, design_fwd_ms, distil_ms, audition_ms, total_ms,
                 )
-            audition_ms = (time.perf_counter() - _t) * 1000.0
-            # Structured timing line, mirroring the synth path. Field map:
-            #   load_ms        Kokoro-evict + (cold) 1.7B VoiceDesign / 0.6B load
-            #   design_fwd_ms  the 1.7B VoiceDesign reference-clip forward
-            #   distil_ms      0.6B clone-prompt distil from the reference clip
-            #   audition_ms    0.6B audition-preview synth of the calibration line
-            # A single grep over this line tells us where a slow design spends its
-            # time, with no guesswork.
-            total_ms = (time.perf_counter() - t0) * 1000.0
-            log.info(
-                "qwen voice design: voice=%s lang=%s load_ms=%.0f design_fwd_ms=%.0f "
-                "distil_ms=%.0f audition_ms=%.0f total_ms=%.0f",
-                voice_id, lang, load_ms, design_fwd_ms, distil_ms, audition_ms, total_ms,
-            )
-            # Idle clock starts now (design finished) — back-to-back designs keep
-            # the model warm; a pause past the TTL lets the watchdog reclaim it.
-            self._design_last_used = time.monotonic()
+            finally:
+                self._design_last_used = time.monotonic()
             return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
     def clone_voice(

@@ -77,6 +77,57 @@ def test_asr_unload_waits_for_an_in_flight_transcribe(monkeypatch):
     assert eng._model is None
 
 
+def test_asr_transcribe_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """ASR twin of `CoquiEngine`'s
+    `test_synthesize_restamps_last_used_before_the_in_flight_drop` (#1917
+    Global Constraint): the `_last_used` re-stamp on the way out must happen
+    BEFORE the in-flight claim's own decrement, never after — see that test
+    for the full rationale — including why the sentinel MUST be zeroed from
+    inside the forward rather than before the call. `transcribe` stamps
+    `_last_used` both on the way in and again under `_infer_lock`, so a
+    sentinel set before the call is overwritten twice before the forward
+    ends and the assertion would hold under either ordering.
+
+    Observes `_last_used` AT THE MOMENT of each in-flight-lock acquire via an
+    injectable lock; `stamps == [entry-time, exit-time]` for a single call."""
+    eng = main.WhisperEngine()
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda device=None: None)
+    monkeypatch.setattr(eng, "_pcm_to_float32_16k", lambda pcm, sr: [0.0])
+
+    def _fake_transcribe(self, audio, **kw):
+        # Last write before the forward returns — see the docstring.
+        eng._last_used = 0.0
+        return ([], type("I", (), {"language": "en"})())
+
+    eng._model = type("M", (), {"transcribe": _fake_transcribe})()
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.transcribe(b"\x00\x00", 16000)
+
+    # Sentinel rather than a strict `>` against a freshly sampled clock —
+    # ~15.6 ms monotonic granularity on Python 3.12/Windows.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
+
+
 def test_asr_maybe_free_idle_skips_an_in_flight_transcribe(monkeypatch):
     """The fast-out must exist, or admission blocks on the whole forward."""
     eng = main.WhisperEngine()
@@ -204,6 +255,68 @@ def test_spk_unload_waits_for_an_in_flight_embed(monkeypatch):
     assert errors == [], f"embed raised while unload raced it: {errors!r}"
     assert observed.get("alive") is True, "unload() nulled the model mid-forward"
     assert eng._model is None
+
+
+def test_spk_embed_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """SPK twin of `CoquiEngine`'s
+    `test_synthesize_restamps_last_used_before_the_in_flight_drop` (#1917
+    Global Constraint) — see that test for the full rationale, including why
+    the sentinel MUST be zeroed from inside the forward: `embed` stamps
+    `_last_used` on the way in, so a sentinel set before the call is gone
+    before `encode_batch` runs and the assertion would hold under either
+    ordering. `stamps == [entry-time, exit-time]`."""
+    import numpy as np
+
+    class _FakeOut:
+        def __init__(self, arr):
+            self._arr = arr
+
+        def squeeze(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self._arr.squeeze()
+
+        def astype(self, dt):
+            return self._arr.squeeze().astype(dt)
+
+    class _FakeEncoder:
+        def encode_batch(self, t):
+            # Last write before the forward returns — see the docstring.
+            eng._last_used = 0.0
+            return _FakeOut(np.ones((1, 4), dtype="float32"))
+
+    eng = main.SpeakerEngine()
+    eng._model = _FakeEncoder()
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.embed(b"\x00\x00" * 160, 16000)
+
+    # Sentinel rather than a strict `>` against a freshly sampled clock —
+    # ~15.6 ms monotonic granularity on Python 3.12/Windows.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
 
 
 def test_spk_maybe_free_idle_skips_an_in_flight_embed(monkeypatch):

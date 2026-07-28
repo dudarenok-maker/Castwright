@@ -6,7 +6,6 @@ lose a decrement, leaving the counter stuck above zero — and because the evict
 predicate is `> 0`, that disables that engine's eviction for the rest of the
 process lifetime, silently.
 """
-import sys
 import threading
 
 import main
@@ -44,12 +43,18 @@ def test_the_mutation_happens_between_acquire_and_release():
     assert events == [("enter", 0), ("exit", 1), ("enter", 1), ("exit", 0)]
 
 
-def test_the_mutation_is_guarded_by_the_lock_not_merely_adjacent_to_it():
-    """Stronger companion to the test above: hold the counter's own lock, then
-    prove a concurrent claim BLOCKS on it rather than racing past.
+def test_a_concurrent_claim_blocks_on_the_counter_lock():
+    """Companion to the deterministic gate above: hold the counter's own lock,
+    then prove a concurrent claim BLOCKS on it rather than racing past.
 
-    Fails against the wrong implementation: a lock-free `+=` completes
-    immediately, so the thread is dead and `_n` is 1.
+    Catches a strict subset of what the gate above catches — only the
+    lock-free mutant, not a "takes the lock for nothing, mutates outside it"
+    mutant (that one still blocks here, since it does take `_lock` — it just
+    doesn't guard `_n` with it). Fails against a lock-free `+=`: with no lock
+    to block on, the worker thread runs `+= 1` immediately and exits before
+    `t.join(0.5)` returns, so `t.is_alive()` is False — that assertion is the
+    discriminator, not `_n`, which reads 0 either way (the empty claim body
+    means the lock-free mutant's decrement has already run too).
     """
     c = main.InFlightCounter()
     started = threading.Event()
@@ -68,35 +73,6 @@ def test_the_mutation_is_guarded_by_the_lock_not_merely_adjacent_to_it():
         assert c._n == 0         # and it has NOT mutated
     t.join(2)
     assert c._n == 0
-
-
-def test_concurrent_claims_return_to_zero():
-    """Realism check: heavy contention must leave the counter at exactly 0.
-
-    Fails against the wrong implementation reliably (not certainly) with the
-    switch interval dialled down — a lost decrement leaves a positive residue.
-    Paired with the deterministic test above, which is the real gate.
-    """
-    c = main.InFlightCounter()
-    barrier = threading.Barrier(8)
-    old_interval = sys.getswitchinterval()
-    sys.setswitchinterval(1e-6)
-    try:
-        def worker():
-            barrier.wait()
-            for _ in range(5000):
-                with c.claim():
-                    pass
-
-        threads = [threading.Thread(target=worker) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-    finally:
-        sys.setswitchinterval(old_interval)
-    assert c.value == 0
-    assert c.busy is False
 
 
 def test_busy_reflects_an_outstanding_claim():

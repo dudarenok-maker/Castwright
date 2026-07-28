@@ -542,6 +542,7 @@ def test_idle_watchdog_frees_idle_base17(fake_qwen_runtime) -> None:
     VoiceDesign idle watchdog."""
     eng = fake_qwen_runtime["engine"]
     eng._base17 = object()   # watchdog only inspects identity/flags, never calls the model
+    assert eng._base17_in_flight.value == 0  # the InFlightCounter's own default
     eng._base17_last_used = time.monotonic()
     assert eng.maybe_free_idle_base17(600.0) is False   # still within the idle window → warm
     assert eng._base17 is not None

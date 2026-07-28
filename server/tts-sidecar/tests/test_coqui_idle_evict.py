@@ -118,6 +118,64 @@ def test_synthesize_tracks_in_flight_and_last_used(monkeypatch):
     assert eng._last_used > 0.0
 
 
+def test_synthesize_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """Exit-ordering regression (#1917 Global Constraint): the `_last_used`
+    re-stamp on the way out must happen BEFORE the in-flight claim's own
+    decrement, never after. A decrement-then-restamp order opens a window
+    where `.busy` reads False while `_last_used` is still the pre-forward
+    value — which `maybe_free_idle`'s admission-path call (`ttl=0.0`) reads
+    as idle and evicts.
+
+    `test_synthesize_tracks_in_flight_and_last_used` above does NOT pin this:
+    it asserts `_last_used > 0.0` only after the whole call has returned, and
+    both orderings satisfy that post-hoc check. This test instead observes
+    `_last_used` AT THE MOMENT of each in-flight-lock acquire, via an
+    injectable lock that records it — `claim()` takes that lock once for the
+    increment and once for the decrement, so `stamps == [entry-time,
+    exit-time]` for a single call.
+
+    The sentinel is zeroed from INSIDE the forward, not before the call, and
+    that is the whole discriminator. `synthesize` stamps `_last_used` on the
+    way IN (first statement inside the claim), so a sentinel set before the
+    call is destroyed before the forward even starts — `stamps[1] > 0.0`
+    would then be satisfied by that entry stamp under BOTH orderings, and the
+    test would pass against the very bug it names. Measured: an earlier
+    revision of this test did exactly that and passed against a faithful
+    decrement-then-restamp revert. Zeroing inside the forward means the only
+    write that can make `stamps[1]` non-zero is the exit re-stamp, and it
+    only lands there if it runs BEFORE the decrement."""
+    fake = _FakeTts()
+    eng = _loaded_coqui(monkeypatch, fake)
+    fake.on_enter = lambda: setattr(eng, "_last_used", 0.0)
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.synthesize("xtts", "Claribel Dervla", "hello")
+
+    # A sentinel rather than a strict `>` against a freshly sampled clock —
+    # time.monotonic() has ~15.6 ms granularity on Python 3.12/Windows, so
+    # entry and exit stamps can be the same float for a fake forward.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
+
+
 def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
     """The OTHER interleaving, and the one the counter alone does not cover.
 
