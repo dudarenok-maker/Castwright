@@ -9,10 +9,12 @@ date: 2026-07-28
 
 `server/src/tts/synthesise-chapter.ts`'s fs-60 mixed-engine logic evicts **Qwen
 for Coqui** (`evictQwenForCoquiPhase`) and never the reverse. There is no
-`evictCoqui*` symbol anywhere in the tree, and nothing off the render path frees
-XTTS either — a full sweep of `/unload` callers in `server/src` turns up only
-`routes/sidecar-health.ts` (the user-triggered `POST /api/sidecar/unload`) and
-the Ollama-side evictions, which are a different engine entirely.
+`evictCoqui*` symbol anywhere in the tree. Of the three `/unload` fetch sites in
+`server/src` — `tts/ensure-sidecar-loaded.ts:206`, `tts/synthesise-chapter.ts:886`,
+and `routes/sidecar-health.ts:399` — the two on the render path both target
+`qwen`, and the third is the user's Stop button. The sidecar's own idle-evict
+framework (`server/tts-sidecar/main.py:2544`) covers Qwen VoiceDesign, Qwen
+1.7B-Base, ASR and ECAPA, but **not Coqui**. Nothing frees XTTS automatically.
 
 So a chapter with zero Coqui presence, following one that used Coqui, inherits a
 resident XTTS (~3 GB) it has no use for — on an 8 GB card, potentially crowding
@@ -20,26 +22,25 @@ out the Qwen render that chapter actually needs.
 
 ### What already happens today
 
-This is **not** an unguarded crash, and the design changes shape because of it.
-`/synthesize` goes through `withCapacityRetry` (`tts/sidecar.ts:310`). A render
-starved by a resident Coqui polls with backoff, evicts the analyzer Ollama once
-if that would help, and finally raises `NoCapacityError` naming the blocker:
-_"Coqui XTTS — Use its Stop button, at the top of the window."_
+This is **not** an unguarded crash, and the design's shape follows from that.
+`/synthesize` goes through `withCapacityRetry` (`tts/sidecar.ts:169-171`,
+`:304-320`). A render starved by a resident Coqui polls with backoff, evicts the
+analyzer Ollama once if that would help, and finally raises `NoCapacityError`
+naming the blocker: _"Coqui XTTS — Use its Stop button, at the top of the
+window."_
 
-`gpu/describe-vram-blockers.ts`'s header states that this is deliberate — it
-lists only models "the USER controls **and that admission deliberately will not
+`gpu/describe-vram-blockers.ts`'s header states this is deliberate — it lists
+only models "the USER controls **and that admission deliberately will not
 auto-evict**."
 
-The real defect is therefore narrower than the issue implies: **a render can
-burn its whole retry budget and then fail, over VRAM the run provably does not
-need.** A stall-then-fail, not a crash.
+The real defect is therefore narrower than the issue implies: **a render can burn
+its whole retry budget and then fail, over VRAM the run provably does not need.**
+A stall-then-fail, not a crash.
 
 ### Provenance
 
 Audit-found, during Wave 3c's Task 22 eviction-symmetry review. **No observed
-incident** — no OOM, recycle, or cold reload has been traced to a lingering
-Coqui. That fact drove the choice of a reactive design over a proactive one
-(§3).
+incident.** That drove the choice of a reactive design over a proactive one (§3).
 
 ### Corrections to the issue text
 
@@ -47,9 +48,8 @@ Coqui. That fact drove the choice of a reactive design over a proactive one
   the OpenAPI setup surface. The relevant plans are
   `docs/features/249-fs60-xtts-language-eligibility.md` and
   `267-fs38-wave3-voice-clone.md`.
-- The issue frames the constraint as "don't over-trigger on the common
-  'next chapter uses Qwen' case." That constraint is real but secondary; §2
-  covers what turned out to be the binding one.
+- The issue frames the constraint as "don't over-trigger on the common 'next
+  chapter uses Qwen' case." Real, but secondary — §2 covers the binding one.
 
 ## 1. The policy question, resolved
 
@@ -62,265 +62,251 @@ Coqui. That fact drove the choice of a reactive design over a proactive one
 
 This reads as a blocking contradiction and is not one. That module is a
 capacity-admission lever for **interactive** ops and early-returns on
-`isAnyGenerationActive()` — it is inert during any render, by construction. A
-render-path reclaim does not contradict its code.
+`isAnyGenerationActive()` — inert during any render, by construction.
 
-What survives is the softer form: someone can press Load Coqui in another tab to
-audition voices, and a render would silently unload it. Real, but not a carve-out
-from a documented decision.
+More decisively: **the sidecar already auto-evicts resident models under
+starvation without asking**, via `_idle_evict` (§3). The question was never
+"may the server reclaim VRAM the user loaded?" — it already does, for four
+engines. The question is only which engines belong in that set.
 
-Against that sits an established precedent in the same direction:
-`reconcileResidentQwenTiers` already evicts Qwen tiers the run's cast doesn't
-need, at run start (`routes/generation.ts:1060`) and after each chapter's score
-pass (`:192`). "The render path reclaims VRAM it doesn't need" is settled here.
-This design extends it; it does not establish it.
+**Kokoro stays out**, and not from timidity. It is ~1 GB, and `PRELOAD_KOKORO`
+reloads it at every sidecar start, so evicting it buys little and can fight a
+setting the user turned on. `describe-vram-blockers.ts` already encodes this
+asymmetry: Coqui's remedy is "press Stop" (durable), Kokoro's is "change the
+setting" (because Stop is not durable).
 
-**Kokoro stays excluded**, and not from timidity. It is ~1 GB, and
-`PRELOAD_KOKORO` reloads it at every sidecar start, so evicting it buys little
-and can fight a setting the user turned on. `describe-vram-blockers.ts` already
-encodes exactly this asymmetry: Coqui's remedy is "press Stop" (durable),
-Kokoro's is "change the setting" (because Stop is not durable). This design
-follows that existing line rather than drawing a new one.
+## 2. Why the obvious triggers don't work
 
-## 2. The binding constraint: nothing can answer "does anyone still need Coqui?"
-
-Two facts make the issue's own suggested trigger unimplementable as written.
+Two facts kill the issue's own suggested trigger ("zero Coqui-cast characters in
+this chapter AND Coqui currently resident").
 
 **Chapters render concurrently across books.** One queue worker renders one
-chapter; the queue's N workers are the concurrency authority — "N chapters run
-concurrently across all books, **including sibling chapters of the same book**"
-(`routes/generation.ts:2227-2238`). At any chapter-complete hook, a sibling
-chapter of the same book may still be mid-Coqui. "The last Coqui chapter" is not
-observable from a single chapter's completion.
+chapter; "N chapters run concurrently across all books, **including sibling
+chapters of the same book**" (`routes/generation.ts:2227-2238`). At any
+chapter-complete hook a sibling chapter may still be mid-Coqui, so "the last
+Coqui chapter" is not observable from one chapter's completion.
 
-**Every existing eviction is a global sidecar unload decided from one book's
-point of view.** That is exactly what #1393 is open about for the Qwen tier
-reconcile, and what plan 249's accepted limitation #2 already records for
-`evictQwenForCoquiPhase`. Coqui inherits the same race and it lands harder: a
-cold XTTS reload is ~90 s (`tts/ensure-sidecar-loaded.ts`'s `LOAD_TIMEOUT_MS`
-comment) where a Qwen tier reloads fast.
+**Every Node-side eviction is a global sidecar unload decided from one book's
+point of view** — what #1393 is open about for the Qwen tier reconcile, and what
+plan 249's accepted limitation #2 records for `evictQwenForCoquiPhase`. Coqui
+inherits the same race, and harder: a cold XTTS load genuinely takes ~90 s
+(`routes/sidecar-health.ts:337`; `LOAD_TIMEOUT_MS` at
+`tts/ensure-sidecar-loaded.ts:50` is the matching abort budget).
 
-So closing #1894 requires a source of truth for in-flight engine demand. That is
-the work, not the `/unload` call.
+**Cast-derived demand is also wrong, not merely imprecise.** `applyQwenFallback`
+(`tts/synthesise-chapter.ts:1130-1197`) reroutes a **Qwen**-cast character to
+**Coqui** at synth time when `forbidKokoroFallback && coquiEligible`
+(`:1180-1187`), triggered by `!voiceName || qwenUnavailable` (`:1162`) — fs-60's
+non-English fallback, and plan 249 invariant #5. A chapter whose cast resolves
+to `{qwen}` can therefore synth on Coqui, so any demand set built from
+`resolveCharacterEngine` **under**-reports Coqui in exactly the scenario
+(non-English book, undesigned voice) most likely on this codebase. Under-reporting
+is the fatal direction: it evicts under a live render.
 
-## 3. Approach: reactive, not proactive
+The conclusion is not "build a better predictor." It is that Node cannot answer
+this question safely, and should not try.
 
-`withCapacityRetry` already carries a hook documented as _"free a resident TTS
-model this op doesn't need"_ (`gpu/capacity-retry.ts:73-76`), called at most once
-per blocked call (`:160-163`), currently wired only to `evictIdleQwenBase`. This
-design adds a second tenant to that hook.
+## 3. Approach: extend the sidecar's existing idle-evict
 
-**Reclaim fires only when an op is genuinely starved.** The issue's
-over-triggering worry dissolves by construction: there is no prediction to get
-wrong, because the design reacts to real starvation instead of guessing when
-Coqui stops being needed.
+The sidecar already solves this problem for four engines.
+`PlacementController.admit` (`main.py:2365-2385`) calls `self.idle_evict(worst)`
+**immediately before returning `noCapacity`**, then re-probes and retries the
+fit. `_idle_evict` (`:2544-2580`) tries Qwen VoiceDesign, Qwen 1.7B-Base, ASR and
+ECAPA via per-engine `maybe_free_idle*(ttl)` methods that are:
+
+- **device-targeted** (#1721) — never frees an engine on a different card;
+- **lock-free on the fast path**, then **re-validated under `_synth_lock`** and
+  **skipped entirely while a forward is in flight** (`:3757-3775`).
+
+This fires at exactly the moment §3 wants — real starvation, nothing speculative
+— and is race-free by a mechanism already proven on four engines. Adding Coqui is
+one new method and one branch.
+
+It answers a weaker question — *"has Coqui been idle?"* rather than *"does anyone
+still need Coqui?"* — and that is sufficient: at the starvation moment in
+#1894's scenario, Coqui has been idle since the last Coqui chapter ended.
 
 ### Rejected alternatives
 
-**Proactive run-start reclaim** (extend the hygiene block at
-`generation.ts:1060`: run's `requiredEngines` lacks Coqui + Coqui resident → one
-best-effort `/unload`). ~15 lines, perfectly symmetric with the Qwen reconcile
-three lines above. Rejected because it is a global unload decided from one
-book's viewpoint — it can unload Coqui out from under a concurrently-rendering
-book that is using it, costing that book a ~90 s cold reload. **For an
-audit-found issue with no observed pain, that trades a hypothetical stall for a
-reachable one.** It also only addresses the run-start half, not the case the
-issue is titled after.
+**A Node-side engine-demand registry** (the first draft of this spec; superseded
+after review). Register each in-flight job's engine demand, let the
+`withCapacityRetry` `evictIdleTts` hook consult it. Rejected on four independent
+grounds, any one sufficient:
 
-**Close as by-design.** Defensible: the existing failure is bounded and names the
-button that fixes it. Rejected because a render can still stall for the full
-retry budget and then fail over reclaimable VRAM — an outcome the server can
-prevent with information it already has.
+1. **Grain contradiction.** Per-chapter demand is not computable where the race
+   requires registering it. `requiredEngines` (`generation.ts:858`) is whole-cast;
+   the per-chapter data is `analysis.chapters[chapter.id]`, read at `:1349`
+   inside `processOneChapter` — i.e. *after* `registerJob` (`:1253`). Registering
+   at `:858` yields the whole-cast grain that provably does not fix #1894's
+   titled case.
+2. **Fail-open by construction.** A registry that "imports nothing and owns its
+   own `Map`" reads an empty map as *nothing is demanded*. The three existing
+   leaf gates exist precisely to make the opposite structurally impossible —
+   `active-generation-gate.ts:16-23`: _"FAIL CLOSED IS REQUIRED, NOT A
+   PREFERENCE… Do NOT 'simplify' the unregistered default to `false`."_
+3. **Cast-derived demand under-reports Coqui** (§2, `applyQwenFallback`).
+4. **A Node-side unload has no serialization.** `CoquiEngine` has no synth lock
+   at all (§4.1), and a Node-side check-then-unload is a TOCTOU that cannot
+   acquire one.
 
-**Build #1393's registry first.** Correct and complete, and it would close the
-open cross-book Qwen race too. Rejected as disproportionate to an audit finding;
-§4's registry is a deliberate down payment on it instead.
+It also had two secondary defects: a Coqui-op starved inside `withCapacityRetry`
+holds `defaultEngineSynths.get('coqui')` for its whole poll (`tts/sidecar.ts:169`
+acquires before `:171` posts), so an "is a Coqui synth in flight" check would
+deadlock the pair; and `evictedTts` caps evictions per `withCapacityRetry` call,
+i.e. per POST, not per chapter — a much weaker thrash bound than it appears.
+
+**Proactive run-start reclaim** (extend `generation.ts:1060`'s hygiene block).
+~15 lines, symmetric with the Qwen reconcile above it. Rejected: a global unload
+from one book's viewpoint can strip Coqui from a concurrent book mid-render
+(§2), and it only addresses the run-start half, not the titled case. For an
+audit-found issue with no observed incident, that trades a hypothetical stall for
+a reachable one.
+
+**Close as by-design.** Defensible — the existing failure is bounded and names
+the button that fixes it. Rejected because a render can still stall for the full
+retry budget and then fail over reclaimable VRAM.
+
+**Build #1393's registry first.** Disproportionate to an audit finding. Note it
+is *not* a prerequisite and this design is not a down payment on it: #1393
+requires **whole-cast** grain deliberately (`generation.ts:868-884` — the
+superset is required so a not-yet-started chapter's tier is not evicted), which
+is the opposite of what a per-chapter registry would have provided.
 
 ## 4. Design
 
-### 4.1 The reclaim step
+Substantively this all lands in `server/tts-sidecar/main.py`. The one Node-side
+edit is a **deletion** (§4.4); the Node eviction lever itself is untouched
+(§4.5).
 
-`evictIdleTts` becomes two sequential reclaims tried in cost order: Qwen bases
-first (unchanged — same `isAnyGenerationActive()` guard, same elevate-only rule),
-then Coqui if that freed nothing. Returning `true` from either short-circuits
-into an immediate retry, which is the existing contract.
+### 4.1 Prerequisite: `CoquiEngine` has no synth lock (a live bug)
 
-**The `isAnyGenerationActive()` early return must be relocated, not kept.** It
-sits at function scope today (`gpu/evict-idle-tts.ts:111`) and returns before
-anything else runs; left there it would make the Coqui step inert during renders
-— the exact failure §4.2 exists to prevent. It moves down to guard the Qwen step
-only. `if (!modelKey) return false` (`:110`) stays at function scope.
+`CoquiEngine` holds only an `asyncio` `_load_lock` (`main.py:1158`). `unload()`
+(`:1327-1362`) sets `self._tts = None` with no lock, while `synthesize()`
+(`:1364`) dereferences `self._tts.tts(...)` (`~:1403`) and `self._tts.synthesizer`
+(`~:1414`) after its `assert`. `QwenEngine.unload` guards exactly this (`:3694`,
+`with self._synth_lock:`); Coqui does not.
 
-The Coqui step fires only when all four hold:
+`unload()`'s own docstring says it is _"Used by POST /unload when the UI's Stop
+button fires (or when the Analysing screen's Load button auto-evicts the TTS
+model to make room for the analyzer LLM)."_ So **pressing Stop on Coqui during a
+render can already crash that synth today** with `AttributeError: 'NoneType'
+object has no attribute 'tts'` — user-reachable, with no auto-evict involved.
 
-1. **The blocked op is not itself Coqui** — `engineForModelKey(modelKey) !==
-   'coqui'`, reusing the existing helper.
-2. **Coqui is resident** — read through `gpu/sidecar-health-gate.ts`, the leaf
-   gate `defaultDescribeBlockers` already uses for exactly this. No new import
-   path, no new cycle risk.
-3. **No Coqui synth is in flight.**
-4. **No in-flight chapter needs Coqui** — the registry, §4.3.
+Folded into this scope (rather than filed separately) because it is a hard
+prerequisite — auto-eviction makes the window far more likely to be hit — and
+shipping both together means one on-box acceptance pass, not two.
 
-Criterion 3 shifted meaning under per-chapter demand (§4.3): for **render**
-traffic it is now subsumed, since a chapter mid-Coqui-synth has Coqui in its
-registered demand and criterion 4 already blocks the evict. It earns its place
-for **interactive** Coqui work — an audition or preview — which registers no
-chapter demand and would otherwise be invisible.
+**Change:** give `CoquiEngine` a `threading.Lock` `_synth_lock`, mirroring
+`QwenEngine`'s. `synthesize()` holds it across the forward; `unload()` acquires
+it before nulling. The same non-reentrancy rule applies as Qwen's: `unload()`
+must not be called while already holding it (`:3691`), and `maybe_free_idle`
+nulls inline rather than calling `unload()` (`:3763`).
 
-The exported symbol is renamed `evictIdleQwenBase` → `evictIdleTtsModels`. Two
-call sites (`tts/sidecar.ts:319`, `tts/design-voice-core.ts:169`) plus tests; the
-old name becomes false the moment it can evict Coqui.
+### 4.2 `CoquiEngine.maybe_free_idle(ttl_seconds)`
 
-### 4.2 The guard that must NOT be inherited
+Modelled directly on `QwenEngine.maybe_free_idle_design` (`:3752-3789`):
 
-`evictIdleQwenBase` early-returns on `isAnyGenerationActive()`, making it inert
-during any render. **The Coqui step deliberately does not inherit that guard.**
+1. Lock-free fast-outs: nothing resident, or a synth in flight, or used within
+   `ttl_seconds` → `False`.
+2. Re-validate all three under `_synth_lock`; null `self._tts` inline.
+3. Release the lock, then `gc.collect()` + `torch.cuda.empty_cache()` — matching
+   `unload()`'s existing reclaim, which the 2026-05-30 host-RAM leak made
+   mandatory (`:1345-1352`).
+4. Return `True`.
 
-#1894's scenario _is_ a render — the starved op is the next chapter's synth. A
-Coqui step inert during generation would help only interactive previews and
-would not touch the issue at all.
+Requires a `_last_used` monotonic stamp refreshed in `synthesize()`, and an
+in-flight counter — both mirroring the Qwen fields.
 
-The blunt guard is replaced by the precise one: "no in-flight chapter needs
-Coqui" plus "no Coqui synth in flight." That is strictly more informed than
-`isAnyGenerationActive()`, which is why the registry is a requirement rather
-than a convenience — and why the startup race (§4.4) matters more here than it
-does for the Qwen lever, since we are removing the guard that made that race
-benign.
+### 4.3 The `_idle_evict` branch, and the one real gap
 
-### 4.3 The registry, and why per-chapter grain
+Add a Coqui branch to `_idle_evict` (`:2544`), device-gated by `_same_card` like
+its siblings.
 
-One new module, `server/src/gpu/engine-demand-registry.ts`. It **imports
-nothing** and owns its own `Map`, keyed by an opaque token, holding a set of
-engine names plus an optional expiry. "Imports nothing" is what makes it
-cycle-proof — the same property the three existing leaf gates rely on — so it
-needs no provider indirection and no fourth gate file. Engine names are plain
-`string`s deliberately: a `type`-only import still counts as a cycle edge (see
-`gpu/qwen-tier-reconcile-gate.ts`), and `defaultEngineSynths` already uses
-`Map<string, …>` for the same reason.
+**`_idle_evict` does not know which engine is admitting**, and for Coqui that
+matters in a way it did not for the existing four. Its signature is
+`_idle_evict(device_key)`; the sibling engines are transient or secondary, so
+freeing them can never be self-defeating. Coqui is a primary synth engine — a
+starved **Coqui** op would evict the very model it is about to reload. Admission
+does not give it a free pass for being resident ("being resident is not a free
+pass", `:2352-2360`), so this is reachable.
 
-**Grain: the engine demand of the chapter each in-flight job is rendering — not
-the run's whole cast.** This is the decision the design turns on.
+**Change:** thread the admitting op's engine through to `idle_evict` and skip the
+Coqui branch when it is `coqui`. `admit` (`:2341`) and `reservation` (`:2423`)
+both already take `engine: str`, so this is confined to widening the injected
+callable's type (`Optional[Callable[[str], bool]]`, `:2287`) and its two call
+sites (`:2375`, `:2450`) — the only signature change in the design.
 
-A full-cast registry would report "Coqui needed" for a book's entire run if its
-cast contains any Coqui character. #1894's titled case is precisely a book whose
-cast includes Coqui characters rendering a chapter that has none — so a
-full-cast registry returns "still needed," evicts nothing, and fixes only *other*
-activities' leftovers. It would be a registry that does not fix the case it was
-built for.
+**TTL: 30 s for Coqui, not the `0.0` its siblings use.** `0.0` means "evict now
+regardless of recent use," which is right for a transient design model and wrong
+for a primary engine that a mixed chapter may return to within seconds. 30 s is
+long enough to ride out an inter-group gap and far shorter than the ~90 s reload
+it protects. §6 records how to tell if it is mistuned.
 
-Per-chapter demand resolves each job's target chapter through the same
-`resolveCharacterEngine` path the synth uses.
+### 4.4 `describe-vram-blockers.ts` must be updated
 
-**Accepted cost: thrash.** A mixed book can evict Coqui after chapter 4 and
-reload it (~90 s) at chapter 7. Accepted because the lever fires **only under
-real starvation** — the alternative in that exact moment is not "keep rendering
-smoothly," it is "poll the full retry budget and fail with `NoCapacityError`." A
-90 s reload beats a failed chapter, and `evictedTts` already caps it at once per
-blocked call. §6 records how to detect that this was the wrong call.
+`gpu/describe-vram-blockers.ts:4-10` selects on "models the USER controls **and
+that admission deliberately will not auto-evict**," and excludes a resident Qwen
+base *because* `evict-idle-tts.ts` already frees it — "naming it here would be
+noise on top of an action already taken."
 
-**Failure modes point the safe way, and the design leans on it.** A **leaked**
-registration means we believe Coqui is demanded, decline to evict, and get
-today's behaviour. A **missed** registration is the dangerous one — evicting
-under a live render. So the design registers early and lets leaks expire, never
-the reverse.
+Once admission auto-evicts Coqui, its `{ model: 'Coqui XTTS', remedy: 'Use its
+Stop button' }` entry (`:36`) becomes exactly that noise: the user is told to
+press a button the server just pressed. Drop the Coqui entry and update the
+header's rationale. This is the one Node-side edit, and it is a deletion.
 
-### 4.4 Closing the startup race
+Note the consequence: a `NoCapacityError` that survives Coqui eviction will now
+name fewer blockers. That is correct — the surviving blocker is genuinely not
+Coqui — but the message must not become empty and unhelpful; verify the
+no-blockers path still reads sensibly.
 
-`gpu/active-generation-gate.ts`'s header documents a known window: `registerJob`
-lands ~190 lines into a render's startup, so a render that has begun but not yet
-registered is invisible. Its worst case for the Qwen lever is called benign (a
-fast cold reload). For Coqui the same race costs ~90 s, which is not.
+### 4.5 What deliberately does not change
 
-`requiredEngines` is computed at `routes/generation.ts:858`, well before
-`registerJob`. Register the chapter's demand **there**, with a short TTL; let
-`registerJob` promote it to durable; let the existing teardown release it. A
-marker leaked by an early return simply expires.
-
-**TTL: 60 s, as a module constant — not a settings knob.** It only has to span
-`:858` → `registerJob`, which is bounded by the awaits in between (the disk-guard
-probe and the run-start `reconcileResidentQwenTiers` fetch), so 60 s is generous
-by an order of magnitude while still clearing a leak quickly. A knob would need a
-registry entry, a `config:sync`, and a wiki row for a value no operator has any
-basis to tune.
-
-This avoids the `let`-hoisting surgery `active-generation-gate.ts`'s header
-explicitly rejected, and it is not invented for this change: #1393's issue body
-already specifies TTL-or-lifecycle liveness as what the registry needs
-("robust to a crashed/aborted run that never deregisters"). Doing it here first
-is the down payment.
-
-### 4.5 Where the in-flight count is written
-
-`tts/sidecar.ts` writes its per-engine in-flight count into the same registry.
-Direction matters: `sidecar.ts` already imports from `gpu/`, so this adds no new
-edge, whereas `gpu/` reaching into `tts/sidecar.ts` would close the cycle the
-leaf-gate rule exists to prevent (`gpu/evict-idle-tts.ts` is itself reached
-_from_ `tts/sidecar.ts`).
-
-Verify with `npx madge --circular --extensions ts server/src`, which must stay at
-its 15-cycle baseline.
-
-### 4.6 Failure semantics
-
-Inherited verbatim from #1893, shipped in #1898:
-
-- A failed `/unload` returns `false` rather than throwing into the retry loop.
-- The return value is **truthful** — `true` only when an unload actually went
-  out (#1839 finding 1), or the caller `continue`s into a wasted immediate
-  retry.
-- The abort signal is forwarded, and an abort **propagates** rather than being
-  swallowed, preserving `name === 'AbortError'` so
-  `routes/generation.ts:2040`'s pause detector is not fooled.
-
-### 4.7 Data flow
-
-Blocked op receives 503 `{noCapacity}` → `evictIdleTts()` → Qwen step runs
-unchanged → Coqui step: op is not Coqui? → health says resident? → registry says
-undemanded? → `POST /unload {engine:'coqui'}` → returns `true` →
-`withCapacityRetry` retries immediately.
+`gpu/evict-idle-tts.ts` is **untouched** — no Coqui step, no rename, no relocated
+`isAnyGenerationActive()` guard. Its existing test asserting the lever "never
+grows into touching Coqui/Kokoro residency itself"
+(`gpu/evict-idle-tts.test.ts:105-125`) therefore stays green and keeps its
+meaning: Coqui residency is the **sidecar's** business, not this lever's. No new
+registry, no leaf gate, no TTL plumbing on the Node side, and
+`npx madge --circular --extensions ts server/src` stays at its 15-cycle baseline
+untouched.
 
 ## 5. Testing
 
-Every input is already injectable — `withCapacityRetry` takes `evictIdleTts`,
-`capacityProbe`, and `describeBlockers` as options; `SidecarTtsProvider` takes
-`engineSynths` — so unit tests carry almost all of this.
+Sidecar-side, `server/tts-sidecar/tests/` (pytest, `npm run test:sidecar`):
 
-- **Registry:** register / expire / promote / release; a leaked TTL entry stops
-  suppressing after expiry; concurrent tokens union correctly.
-- **The four gates, one test each proving the negative:** a Coqui-engine op does
-  not evict itself; a non-resident Coqui is a no-op; a demanded Coqui is not
-  evicted; an in-flight interactive Coqui synth is not evicted.
-- **The scenario that matters:** a starved Qwen chapter with a resident,
-  undemanded Coqui evicts it and retries — #1894 end to end through
-  `withCapacityRetry`.
-- **Ordering:** Qwen step first; a successful Qwen reclaim short-circuits and
-  never reaches the Coqui step.
-- **Failure semantics**, mirroring #1893's suite: non-ok `/unload` returns
-  `false` rather than throwing; a rejected fetch likewise; an abort propagates
-  with `name === 'AbortError'` intact.
-- **Rename regression guard** so both existing call sites stay wired.
+- **`maybe_free_idle` contract**, mirroring the Qwen coverage: no-op when nothing
+  resident; no-op within TTL; frees past TTL; returns `True` only when it freed.
+- **The race the lock exists for** — a `maybe_free_idle` (and a bare `unload()`)
+  attempted while a synth forward is in flight must not null `_tts`. This is the
+  regression test for §4.1's bug and must fail before that fix.
+- **`_idle_evict` wiring**: fires the Coqui branch on a matching card, skips a
+  non-matching card, and **skips when the admitting engine is Coqui** (§4.3).
+- **Admission end to end**: a starved non-Coqui op with an idle resident Coqui is
+  admitted after the evict — #1894's scenario at the `PlacementController` seam,
+  which is where `test_devices.py` already exercises `noCapacity`.
+
+Node-side: update `gpu/describe-vram-blockers.test.ts` for the dropped entry
+(`:6`, `:25` assert on it today) and confirm the `NoCapacityError` message path
+still reads well with fewer blockers.
 
 ## 6. Owed on-box acceptance
 
-Unit tests cannot reach two things, both of which need a real 8 GB card:
+Two things unit tests cannot reach, both needing a real 8 GB card:
 
-1. Whether reclaiming ~3 GB actually lets the blocked chapter through, or
-   whether the freed VRAM is immediately consumed by something else.
-2. Whether a mixed Qwen+Coqui book **thrashes** across chapter boundaries.
+1. Whether reclaiming ~3 GB actually admits the blocked op, or the freed VRAM is
+   immediately taken by something else.
+2. Whether the 30 s TTL (§4.3) is tuned right. **An evict→reload cycle repeating
+   across chapters of one book means it is too short**; a render that still fails
+   `NoCapacityError` with an idle Coqui resident means it is too long. Record
+   which, with the observed interval.
 
-An evict→reload cycle repeating across chapters is the signal that per-chapter
-grain (§4.3) was the wrong call and that lookahead suppression — skip the evict
-when a later queued chapter of the same run is known to need Coqui again — is
-needed. Record a row per the register's conventions saying exactly that.
+Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
 
 ## 7. Out of scope
 
-- **#1393's cross-book tier union.** This design adds a per-*engine* set to
-  answer one boolean; #1393 needs a per-*tier* union to make the Qwen reconcile's
-  global unload safe. #1393 should widen this record rather than introduce a
-  parallel one.
+- **#1393's cross-book tier union** — not a prerequisite, and not served by this
+  design (§3).
 - **Kokoro eviction** (§1).
-- **Recalibrating `ENGINE_VRAM_COST`** — plan 249's accepted limitation #1, and
-  explicitly out of scope there too.
+- **Recalibrating `ENGINE_VRAM_COST`** — plan 249's accepted limitation #1.
 - **Making `evictQwenForCoquiPhase` per-book** — plan 249's accepted
   limitation #2.
