@@ -18,7 +18,8 @@
 
 ## Global Constraints
 
-- **Branch:** all work lands on `docs/docs-ops36-golden-comparison` in the worktree `.claude/worktrees/docs+ops36-golden-comparison`. Do not commit to the primary checkout.
+- **Branch:** all work lands on `feat/server-ops36-golden-comparison` in the worktree `.claude/worktrees/docs+ops36-golden-comparison`. Do not commit to the primary checkout. (The branch was renamed from `docs/docs-ops36-golden-comparison` when implementation started — it now carries server + frontend code, not only docs. The worktree DIRECTORY name still reads `docs+…`; that is cosmetic.)
+- **Line numbers were re-verified against `main` @ `87d7f89d` (2026-07-28), after merging main into this branch.** They were accurate at that moment. If a task's quoted context does not appear at the stated line, trust the QUOTED CONTENT and search for it — never patch a line number blind.
 - **The golden tier stays opt-in.** Never add `test:golden-audio` (or `:assembly`) to `test:all`, `verify`, `verify:fast*`, or any CI workflow. `server/vitest.config.ts` must keep excluding `src/**/*.golden.test.ts`.
 - **Every number in the spec is measured.** Do not round, re-derive, or "improve" a tolerance. The exact values: L1 `±0.1`, L2 `±0.3`, L3 envelope `±10 %` relative with a `-50 dBFS` skip floor and a `-45 dBFS` audibility ceiling, L4-loose `rmse < 16 %`, L5 tilt `±3.5 %`.
 - **Never trust a tool's self-reported derived number.** This cost three revisions. ffmpeg's `loudnorm` reports `output_lra`, and comparing it to `input_lra` suggested a fivefold loudness-range collapse; an independent `ebur128` measurement of the finished audio showed the real figure is 2.0 → 1.7 LU. If a number matters, measure the artifact.
@@ -777,7 +778,7 @@ L2 wants to pin loudnorm's mode. Today `mp3.ts:440` parses `normalization_type` 
 **Files:**
 - Modify: `server/src/tts/loudnorm.ts:73-86` (the `LoudnormSidecarJson` interface)
 - Modify: `server/src/tts/mp3.ts:442-449` (the success branch)
-- Modify: `openapi.yaml:5254` (`ChapterLoudness`) and `:5266-5269` (a wrong description)
+- Modify: `openapi.yaml:5370` (`ChapterLoudness`) and `:5383-5385` (a wrong description)
 - Regenerate: `src/lib/api-types.ts`
 - Test: `server/src/tts/mp3-spawn-args.test.ts`
 
@@ -866,7 +867,7 @@ Expected: FAIL — `expected undefined to be 'linear'` on the success-path case.
                   : undefined,
 ```
 
-**3c.** In `openapi.yaml`, add the property to `ChapterLoudness`. The `twoPass` property ends at `:5290` and `measuredAt` begins at `:5291` — insert between them. **Do not add it to the `required:` list at `:5256`** — existing sidecars on disk lack it:
+**3c.** In `openapi.yaml`, add the property to `ChapterLoudness`. The `twoPass` property ends at `:5406` and `measuredAt` begins at `:5407` — insert between them. **Do not add it to the `required:` list at `:5372`** — existing sidecars on disk lack it:
 
 ```yaml
         normalizationType:
@@ -879,7 +880,7 @@ Expected: FAIL — `expected undefined to be 'linear'` on the success-path case.
             so consumers MUST NOT infer presence from `twoPass`.
 ```
 
-**3d.** In `openapi.yaml`, fix the factually wrong description at `:5266-5269`. Replace:
+**3d.** In `openapi.yaml`, fix the factually wrong description at `:5383-5385`. Replace:
 
 ```
             Measured integrated loudness (LUFS). In two-pass mode this is
@@ -1188,11 +1189,11 @@ In `finalize-chapter-write.test.ts`, add a case asserting the written `.lufs.jso
 
 `LoudnormSidecarJson`'s doc comment (`loudnorm.ts:62-72`) says `i`/`lra`/`tp` are "the POST-normalisation values ffmpeg's second-pass loudnorm filter reports as `output_*`". That is now wrong. Replace with: measured from the finished file by `ebur128` (`server/src/audio/measure-loudness.ts`); on measurement failure they fall back to loudnorm's self-reports, which are NOT measurements — `tp` in particular is the requested ceiling.
 
-Apply the same correction to `openapi.yaml`'s `ChapterLoudness` descriptions for `i`, `lra` and `tp` (`:5263-5294`), then `npm run openapi:types`.
+Apply the same correction to `openapi.yaml`'s `ChapterLoudness` descriptions for `i`, `lra` and `tp` (`:5380-5393`), then `npm run openapi:types`.
 
 - [ ] **Step 4: Confirm the QA-gate limitation and file it if warranted**
 
-`finalize-chapter-write.ts:145` feeds `measured.tp` into `evaluateChapterQa` as `truePeakDb`, and it runs **before** the rename — so it still sees loudnorm's `-1.5`, meaning a true-peak QA check that always observes exactly the target. Read `evaluateChapterQa` and determine whether that makes the check inert. **If it does, file a `bug` issue** (do not reorder QA in this PR — moving it after the rename has its own blast radius) and note it in plan 272.
+`finalize-chapter-write.ts:150` feeds `measured.tp` into `evaluateChapterQa` as `truePeakDb`, and it runs **before** the rename — so it still sees loudnorm's `-1.5`, meaning a true-peak QA check that always observes exactly the target. Read `evaluateChapterQa` and determine whether that makes the check inert. **If it does, file a `bug` issue** (do not reorder QA in this PR — moving it after the rename has its own blast radius) and note it in plan 272.
 
 - [ ] **Step 5: Verify and commit**
 
