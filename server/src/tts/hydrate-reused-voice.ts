@@ -20,7 +20,7 @@
    a real workspace; `hydrateReusedVoice` wires the default workspace loader. */
 
 import type { TtsEngine } from './index.js';
-import { characterHasClonedSlot } from './clone-engines.js';
+import { characterHasClonedSlot, libraryVoiceForEngine } from './clone-engines.js';
 
 /* fs-25 — the per-engine override slot, carrying optional Qwen emotion
    `variants`. Declared here so the reuse-carry path is type-honest: a reused
@@ -73,6 +73,32 @@ function hasOwnVoice(c: ReuseHydratable): boolean {
   return !!slot?.name || !!slot?.libraryUuid;
 }
 
+/** GATE 1 M-4 — "does this character already carry a voice-LIBRARY voice on
+    a clone-capable engine other than qwen?"
+
+    `hasOwnVoice` above reads the qwen slot only, which was correct while
+    reuse hydration was a qwen-only concern. Task 20a made a DESIGNED coqui
+    library slot first-class, and `characterHasClonedSlot` (the guard beside
+    this one) only recognises `provenance: 'cloned'` — so a character
+    carrying just `{ coqui: { libraryUuid, provenance: 'designed' } }` and no
+    `ttsEngine` read as "no own voice", walked the reuse chain, and came back
+    with the SOURCE book's qwen slot merged in plus `ttsEngine: 'qwen'`,
+    rendering a foreign designed voice in place of its own coqui assignment.
+
+    Deliberately narrow, for two reasons. It tests a validated LIBRARY slot
+    (`libraryVoiceForEngine`), not any coqui slot with a `name` — a plain
+    catalogue name on the coqui slot is not a bespoke identity and must keep
+    hydrating exactly as it does today. And it is applied only to the
+    STARTING character's guards, never to `hasOwnVoice`'s other role as the
+    chain-TERMINATION test: terminating on a source that carries only a coqui
+    library slot would hand the caller `ttsEngine: source.ttsEngine ?? 'qwen'`
+    over an override map with no qwen slot in it — a second-order change this
+    finding did not ask for, and returning null (walk on / give up) is the
+    safer existing behaviour. */
+function hasOwnLibraryVoiceOffQwen(c: ReuseHydratable): boolean {
+  return Boolean(libraryVoiceForEngine(c, 'coqui'));
+}
+
 /** The voice fields a reused character should inherit from its source, or null
     when none can be resolved (no chain, missing books, or the source itself
     never carried an override). Follows the `matchedFrom` chain so a multi-hop
@@ -105,6 +131,13 @@ export async function resolveReusedVoiceFields(
      below, since none of them may default `source.ttsEngine ?? 'qwen'`
      for such a character either. */
   if (characterHasClonedSlot(character)) return null;
+
+  /* GATE 1 M-4 — the designed-on-coqui sibling of the guard above; see
+     `hasOwnLibraryVoiceOffQwen`. Not a Property-1 case (designed, not
+     cloned), so it sits here rather than being folded into
+     `characterHasClonedSlot`, whose fail-safe cloned-only contract must not
+     be widened. */
+  if (hasOwnLibraryVoiceOffQwen(character)) return null;
 
   const seen = new Set<string>();
   let cursor: ReuseHydratable = character;
@@ -177,6 +210,9 @@ export async function hydrateCharacterVoice<T extends ReuseHydratable>(
      ttsEngine (nor merge in a foreign engine's slot) for a character that
      already carries a cloned voice on another engine. */
   if (characterHasClonedSlot(character)) return character;
+  // GATE 1 M-4 — same belt-and-suspenders treatment for the designed-coqui
+  // case (see resolveReusedVoiceFields' matching guard).
+  if (hasOwnLibraryVoiceOffQwen(character)) return character;
 
   const mergedOverrides: OverrideMap = {
     ...resolved.overrideTtsVoices,

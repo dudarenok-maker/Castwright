@@ -183,6 +183,44 @@ describe('resolveReusedVoiceFields', () => {
     const r = await resolveReusedVoiceFields(clonedCoqui, loaderFrom({ src: [source] }));
     expect(r).toBeNull();
   });
+
+  /* GATE 1 M-4 — the DESIGNED-on-coqui sibling of the case above.
+     `characterHasClonedSlot` only recognises `provenance: 'cloned'`, and
+     `hasOwnVoice` reads the qwen slot only, so a character carrying just a
+     designed coqui library slot fell through both guards, walked the chain,
+     and came back wearing the source book's qwen voice. Not a Property-1
+     case (designed, not cloned) — but it silently replaced the character's
+     own coqui assignment with a foreign one. */
+  it('[M-4] refuses to resolve a character with a DESIGNED coqui library slot onto the source book\'s qwen voice', async () => {
+    const designedCoqui: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-uuid-own', libraryUuid: 'uuid-own', provenance: 'designed' },
+      },
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const r = await resolveReusedVoiceFields(
+      designedCoqui,
+      loaderFrom({ src: [designed('x', 'qwen-someone-else')] }),
+    );
+    expect(r).toBeNull();
+  });
+
+  /* Deliberately narrow: a plain CATALOGUE name on the coqui slot is not a
+     bespoke identity, so it must keep hydrating exactly as before. A guard
+     widened to "any coqui slot" would break this. */
+  it('[M-4] a coqui slot carrying only a catalogue NAME still hydrates from the source, unchanged', async () => {
+    const catalogueCoqui: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: { coqui: { name: 'Viktor Menelaos' } },
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const r = await resolveReusedVoiceFields(
+      catalogueCoqui,
+      loaderFrom({ src: [designed('x', 'qwen-x')] }),
+    );
+    expect(r?.overrideTtsVoices?.qwen?.name).toBe('qwen-x');
+  });
 });
 
 describe('hydrateCharacterVoice', () => {
@@ -219,6 +257,25 @@ describe('hydrateCharacterVoice', () => {
     );
     expect(out.overrideTtsVoices?.kokoro?.name).toBe('af_bella'); // own slot kept
     expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-x'); // source slot added
+  });
+
+  /* GATE 1 M-4 — the merge step's belt-and-suspenders half. Without it, a
+     designed coqui character would come back with `ttsEngine: 'qwen'` (line
+     `character.ttsEngine ?? resolved.ttsEngine`) and the source's qwen slot
+     merged in — i.e. rendering the source's designed voice, on the wrong
+     engine, in place of its own coqui assignment. */
+  it('[M-4] returns a character with a DESIGNED coqui library slot completely unchanged', async () => {
+    const c: ReuseHydratable = {
+      id: 'x',
+      overrideTtsVoices: {
+        coqui: { name: 'xtts-uuid-own', libraryUuid: 'uuid-own', provenance: 'designed' },
+      },
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const out = await hydrateCharacterVoice(c, loaderFrom({ src: [designed('x', 'qwen-x')] }));
+    expect(out).toBe(c); // identity — nothing merged, nothing defaulted.
+    expect(out.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(out.ttsEngine).toBeUndefined();
   });
 
   it('copies the source persona onto a reused char that lacks one (srv-18)', async () => {
