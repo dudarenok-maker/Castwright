@@ -554,7 +554,7 @@ history at cut time.
 
 - **`golden-audio`: the assembly tier now compares its output against a recorded, ffmpeg-stamped
   baseline across five layers (plus a dedicated linear-loudnorm-arm baseline) instead of a 20-LU
-  tolerance band; `--bless` is now suite-scoped** (ops-36, #PR). Bare `--bless` re-records both
+  tolerance band; `--bless` is now suite-scoped** (ops-36, #1926). Bare `--bless` re-records both
   suites' baselines; `--assembly-only --bless` / `--sidecar-only --bless` record only their own.
   **Fixed a live bug found on the way:** the chapter loudness sidecar (`<slug>.lufs.json`) now
   persists a real `ebur128` measurement of the finished audio file instead of loudnorm's

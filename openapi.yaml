@@ -5360,12 +5360,13 @@ components:
             EBU R128 loudness measurement persisted next to the chapter
             audio as `<slug>.lufs.json` (plan 71). Null when no loudnorm
             pass landed — legacy chapter, `AUDIO_LOUDNORM_ENABLED=false`,
-            or silent-source fallthrough. Consumers MUST gate any
-            drift-vs-ground-truth comparison on `twoPass === true`;
-            single-pass values are nominal target values, not real
-            post-filter measurements. Plan 77 (LUFS report card UI)
-            reads this back to surface per-chapter drift badges and a
-            book-level loudness summary card on the Listen view.
+            or silent-source fallthrough. `i`/`lra`/`tp` are measured from
+            the finished file by a real `ebur128` pass regardless of
+            `twoPass`, falling back to loudnorm's self-reported figures
+            only when that post-write measurement fails (ops-36). Plan 77
+            (LUFS report card UI) reads this back to surface per-chapter
+            drift badges and a book-level loudness summary card on the
+            Listen view.
 
     ChapterLoudness:
       type: object
@@ -5409,9 +5410,11 @@ components:
           type: boolean
           description: |
             `true` when the measure-then-apply flow ran (±0.5 LU vs target);
-            `false` for single-pass streaming normalisation. UI consumers
-            MUST gate drift comparisons on this — single-pass `i`/`lra`/`tp`
-            are NOT post-filter measurements.
+            `false` for single-pass streaming normalisation. Does NOT gate
+            whether `i`/`lra`/`tp` are real measurements — those are always
+            measured from the finished file by `ebur128` (falling back to
+            loudnorm's self-reports only when that measurement fails),
+            single-pass included (ops-36).
         normalizationType:
           type: string
           enum: [linear, dynamic]
