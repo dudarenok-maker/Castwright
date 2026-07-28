@@ -244,4 +244,59 @@ describe('VoiceLibraryCard', () => {
       }),
     );
   });
+
+  /* GATE 1 [F2] — Preview must sample on an engine that is actually READY.
+     This is the exact state Task 28's chips describe as "repairable, not
+     broken": Qwen stale/failed, Coqui ready. The button was hardcoded to
+     Qwen, so it 409'd ("hasn't been prepared on Qwen yet") on a voice that
+     was genuinely playable — the card advertising a Coqui path its own
+     Preview couldn't take. */
+  it('[F2] preview-play falls back to Coqui when the qwen artifact is stale but xtts is ready', async () => {
+    sampleLibraryVoice.mockResolvedValue({ url: '/preview.mp3' });
+    const entry = makeEntry({
+      engines: { qwen: { status: 'stale' }, xtts: { status: 'ready' } },
+    });
+    /* A 1.7B session tier deliberately: a fix that merely dropped the
+       hardcoded 'qwen' and passed the session key straight through would
+       send 'qwen3-tts-1.7b' here and still 409. Only engine selection
+       produces 'coqui-xtts-v2'. */
+    renderCard(entry, {}, 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId(`voice-library-play-${entry.voiceUuid}`));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'coqui-xtts-v2',
+      }),
+    );
+  });
+
+  it('[F2] preview-play still prefers Qwen (with its session tier) when both engines are ready', async () => {
+    sampleLibraryVoice.mockResolvedValue({ url: '/preview.mp3' });
+    const entry = makeEntry({
+      engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+    });
+    renderCard(entry, {}, 'qwen3-tts-1.7b');
+    fireEvent.click(screen.getByTestId(`voice-library-play-${entry.voiceUuid}`));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-1.7b',
+      }),
+    );
+  });
+
+  /* Neither engine ready → keep the pre-existing loud Qwen 409 rather than
+     inventing a second failure mode. Pins that the fallback chain terminates
+     on qwen, not on 'whichever slot exists'. */
+  it('[F2] preview-play stays on Qwen when no engine is ready', async () => {
+    sampleLibraryVoice.mockResolvedValue({ url: '/preview.mp3' });
+    const entry = makeEntry({
+      engines: { qwen: { status: 'failed' }, xtts: { status: 'deriving' } },
+    });
+    renderCard(entry);
+    fireEvent.click(screen.getByTestId(`voice-library-play-${entry.voiceUuid}`));
+    await waitFor(() =>
+      expect(sampleLibraryVoice).toHaveBeenCalledWith(entry.voiceUuid, {
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
+  });
 });

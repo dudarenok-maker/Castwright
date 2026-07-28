@@ -163,6 +163,27 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
     void dispatch(revokeVoice(entry.voiceUuid));
   }
 
+  /* GATE 1 [F2] — preview on an engine whose artifact is actually READY.
+     This was hardcoded to `'qwen'`, so an entry in precisely the state the
+     chips above exist to describe — Qwen stale or failed, Coqui ready, i.e.
+     the "repairable, not broken" case `coquiEngineState` encodes — 409'd on
+     every Preview ("hasn't been prepared on Qwen yet") even though the voice
+     was genuinely playable. The sample route selects the ENGINE off `modelKey`
+     as of Task 27, so no server change is needed; only this caller was still
+     Qwen-only.
+
+     Qwen first because it is the primary engine and carries the session's
+     tier pin (`modelKeyForEngineChoice('qwen', …)` preserves a 1.7B choice;
+     'coqui' has a single model key). Neither ready → fall back to qwen, which
+     keeps the pre-existing loud 409 rather than inventing a second failure
+     mode for a voice that genuinely has nothing to play. */
+  const previewEngine: EngineKey =
+    entry.engines.qwen?.status === 'ready'
+      ? 'qwen'
+      : entry.engines.xtts?.status === 'ready'
+        ? 'coqui'
+        : 'qwen';
+
   async function playSample() {
     if (playing) {
       playback.stop();
@@ -172,7 +193,7 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
     setSampleLoading(true);
     try {
       const { url } = await api.sampleLibraryVoice(entry.voiceUuid, {
-        modelKey: modelKeyForEngineChoice('qwen', ttsModelKey),
+        modelKey: modelKeyForEngineChoice(previewEngine, ttsModelKey),
       });
       setSampleUrl(url);
       await playback.play(url);
