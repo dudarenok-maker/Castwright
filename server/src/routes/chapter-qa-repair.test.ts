@@ -743,4 +743,87 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-38 Wave 3c clone
     const castor = lastArgs.cast.find((c) => c.id === 'castor');
     expect(castor?.ttsEngine).toBe('qwen');
   });
+
+  /* [#1889] — generation.ts and chapter-splice.ts both re-check a reused
+     DESIGNED qwen voice's baked manifest language against the book's before
+     rendering; this route did not, so a line whose voice was mis-detected
+     once was faithfully re-synthesised in the wrong language on every repair
+     pass. The 'es' book above + a designed qwen slot whose sidecar manifest
+     is absent is exactly the mismatch shape `clearMismatchedDesignedVoices`
+     exists for.
+
+     The assertion is on the CAST HANDED TO `synthesiseChapter`, not on "the
+     request succeeded": the repair completes either way (the mock renders
+     anything), so only the cleared slot distinguishes fixed from reverted. */
+  it('[#1889] clears a designed qwen voice whose baked manifest language does not match the book before re-recording', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook(
+      'Mismatched Designed Story',
+      // Designed, NOT cloned — a cloned slot is deliberately exempt from
+      // this sweep (see verify-designed-voice-language.ts's fail-safe guard).
+      { qwen: { name: 'Spanish Voice', provenance: 'designed' } } as unknown as Record<
+        string,
+        { name: string; libraryUuid: string; provenance: 'cloned' }
+      >,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    // The slot with the wrong baked language is gone — the repair can no
+    // longer re-record this line through it.
+    expect(castor?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  /* The other half: a CLONED slot must survive the same sweep. A cloned
+     voice's language is the speaker's own, not a baked design language, and
+     its manifest lives under `qwen-<libraryUuid>` — which `qwenStorageKey`
+     never produces — so a language-blind clear would delete the clone marker
+     on every non-English book and hand a real person's line to a catalogue
+     voice (Property 1). Without this case, widening the new call to cover
+     cloned slots would go unnoticed. */
+  it('[#1889] leaves a CLONED qwen slot untouched on the same non-English book', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Cloned Survives Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; overrideTtsVoices?: Record<string, { libraryUuid?: string }> }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    expect(castor?.overrideTtsVoices?.qwen?.libraryUuid).toBe('uuid-qwen');
+  });
 });

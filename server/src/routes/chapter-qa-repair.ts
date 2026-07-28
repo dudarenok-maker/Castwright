@@ -45,7 +45,8 @@ import {
 } from '../tts/segment-asr-qa.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
-import { isNonEnglish, resolveEligibleEngines } from '../tts/language.js';
+import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
+import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
@@ -303,11 +304,37 @@ chapterQaRepairRouter.post(
              has no voice at all. */
           c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
         }
-        /* Unlike generation.ts and chapter-splice.ts, this route does NOT call
-           clearMismatchedDesignedVoices here — a reused designed Qwen voice
-           whose baked manifest language differs from this book's is not
-           re-checked on the QA-repair path. Pre-existing asymmetry, not
-           introduced by this fix; noted but out of scope here (follow-up). */
+        /* [#1889] — closes the splice/repair asymmetry this comment used to
+           merely record. generation.ts and chapter-splice.ts both re-check a
+           reused designed Qwen voice's BAKED manifest language against the
+           book's here; QA-repair did not, so a line whose voice was
+           mis-detected once got faithfully re-synthesised in the wrong
+           language on every repair pass — the one path that exists
+           specifically to FIX bad audio was the one path that could not see
+           this class of badness.
+
+           Same call shape as chapter-splice.ts (whole cast, gated on
+           `nonEnglishBook`), deliberately not narrowed to the flagged
+           characters: `clearMismatchedDesignedVoices` mutates the in-memory
+           cast that `synthesiseChapter` then routes EVERY re-record through,
+           and a repair round can re-render a group whose characterId isn't
+           in `flagged` (the acoustic UNION candidates below). A per-character
+           scope would leave those on the mismatched voice. Cost is one
+           manifest read per designed qwen character per repair request —
+           accepted, and identical to what the other two routes already pay.
+
+           No SSE `warning` frame is emitted, unlike the other two routes:
+           this stream's frame vocabulary is pinned in openapi.yaml
+           (`qa_scan | splice_start | progress | chapter_assembling |
+           qa_repair_complete | chapter_failed`) and adding to it is a
+           contract change outside this fix. `clearMismatchedDesignedVoices`
+           console.warns per cleared voice, so the clearing is still
+           diagnosable server-side. */
+        await clearMismatchedDesignedVoices(
+          cast.characters,
+          sidecarLanguageName(bookLanguage),
+          bookLanguage,
+        );
       }
       const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
       const qwenInUse = requiredEngines.has('qwen');
