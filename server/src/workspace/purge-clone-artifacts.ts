@@ -37,16 +37,25 @@ import { getResolvedSidecarUrl } from './user-settings.js';
     couldn't be removed (e.g. Windows EBUSY/EPERM because the sidecar has it
     open mid-`torch.load`). For a contract whose whole promise is *total*
     erasure, that must not be swallowed silently — log it loudly and report
-    the path back to the caller instead. */
-async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Promise<void> {
+    the path back to the caller instead.
+
+    GATE 1 fix (C2) — also RETURNS whether the file is now gone, so a caller
+    that mirrors an unlink into persisted state (the `deleteMasterClip`
+    branch below, which clears the manifest's `master` pointer) can only do
+    so once the file it points at is actually gone. `true` covers
+    "already absent" too — `force: true` makes a missing file a success, and
+    that is exactly right for a pointer-clearing caller. */
+async function unlinkTracked(f: string, voiceUuid: string, failed: string[]): Promise<boolean> {
   try {
     await rm(f, { force: true });
+    return true;
   } catch (err) {
     failed.push(f);
     console.warn(
       `[purge-clone-artifacts] failed to erase "${f}" for voice "${voiceUuid}" — artifact may still be on disk:`,
       err,
     );
+    return false;
   }
 }
 
@@ -271,10 +280,27 @@ export async function purgeCloneArtifacts(
        this clearing the `master` field off a stale snapshot. The unlink
        itself runs inside `mutate`, under the same lock, so nothing else can
        observe (or write) this entry between "the clip is gone from disk"
-       and "the manifest stops pointing at it". */
+       and "the manifest stops pointing at it".
+
+       GATE 1 fix (C2) — the `master` field is now cleared ONLY when the
+       unlink actually succeeded. `unlinkTracked` never throws (it records
+       the path in `failed` and returns false), so clearing the pointer
+       unconditionally orphaned the person's real recording on disk with
+       nothing left naming it: this module's own doc comment tells the
+       operator to retry by POSTing /revoke again, but that retry read
+       `fresh.master === undefined`, returned early, re-attempted nothing,
+       and answered a CLEAN 200 with no `artifactPurgeIncomplete`. The
+       documented remedy was guaranteed to mis-report total erasure of a
+       file that is still there. Keeping the pointer on failure is what
+       makes the retry able to find the clip again. */
     await updateEntry(voiceUuid, async (fresh) => {
       if (!fresh?.master) return null;
-      await unlinkTracked(join(entryDir(voiceUuid), fresh.master.clipFile), voiceUuid, failed);
+      const erased = await unlinkTracked(
+        join(entryDir(voiceUuid), fresh.master.clipFile),
+        voiceUuid,
+        failed,
+      );
+      if (!erased) return null;
       return { ...fresh, master: undefined };
     });
   }

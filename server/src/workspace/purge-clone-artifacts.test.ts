@@ -577,4 +577,74 @@ describe('purgeCloneArtifacts — deleteMasterClip (revoke recording erasure)', 
     const onDisk = await vl.readEntry(voiceUuid);
     expect(onDisk?.master).toEqual(makeMaster());
   });
+
+  /* GATE 1 fix (C2) — the bypass this locks is NOT "does a failed unlink get
+     reported" (it always did, via `failed`); it is that the RETRY the module's
+     own doc comment prescribes used to be a guaranteed no-op that reported
+     clean. So the test drives both revokes: the first fails the clip unlink,
+     the second (clip now unlockable) must actually re-attempt it. Before the
+     fix the second call returned early on `fresh.master === undefined`, left
+     the clip on disk forever, and resolved `{ failed: [] }` — a clean 200. */
+  it('GATE 1 (C2): a FAILED clip unlink keeps `master`, so the documented retry-revoke really re-erases it', async () => {
+    const voiceUuid = 'r4';
+    await vl.writeEntry({
+      voiceUuid,
+      name: 'Dad',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      engines: {},
+      consent: {
+        personName: 'Dad',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'me',
+        revokedAt: '2026-07-26T00:00:00.000Z',
+      },
+      master: makeMaster(),
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const clipPath = join(vl.entryDir(voiceUuid), 'master.wav');
+    writeFileSync(clipPath, 'fake-wav-bytes');
+
+    // Fail ONLY the clip's unlink (the Windows EBUSY case unlinkTracked's own
+    // doc comment exists for); every other artifact path still really unlinks.
+    let clipUnlinkAttempts = 0;
+    rmMock.mockImplementation(async (f: string, opts?: unknown) => {
+      if (f === clipPath) {
+        clipUnlinkAttempts += 1;
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.rm(f, opts as never);
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const first = await purge.purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
+
+    expect(clipUnlinkAttempts).toBe(1);
+    expect(first.failed).toContain(clipPath);
+    expect(existsSync(clipPath)).toBe(true); // still on disk — the unlink failed
+    // The pointer MUST survive: it is the only thing a retry can find the
+    // clip from. Clearing it here is what orphaned the recording.
+    expect((await vl.readEntry(voiceUuid))?.master).toEqual(makeMaster());
+
+    // Second revoke — the operator's documented recovery, clip no longer held.
+    rmMock.mockImplementation(async (f: string, opts?: unknown) => {
+      if (f === clipPath) clipUnlinkAttempts += 1;
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return actual.rm(f, opts as never);
+    });
+
+    const second = await purge.purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
+
+    expect(clipUnlinkAttempts).toBe(2); // it was genuinely RE-attempted
+    expect(second.failed).toEqual([]);
+    expect(existsSync(clipPath)).toBe(false); // the recording is finally gone
+    expect((await vl.readEntry(voiceUuid))?.master).toBeUndefined();
+
+    warnSpy.mockRestore();
+  });
 });
