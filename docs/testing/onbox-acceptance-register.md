@@ -71,13 +71,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 5 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**31 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**35 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
