@@ -4124,17 +4124,26 @@ export interface components {
          */
         ChapterLoudness: {
             /**
-             * @description Measured integrated loudness (LUFS). In two-pass mode this is the
-             *     POST-normalisation value ffmpeg's second pass reports as
-             *     `output_i` — what the chapter actually sounds like. In single-pass
-             *     mode it is the nominal target (no re-measurement is done). If the
-             *     second-pass JSON fails to parse, the encoder falls back to
-             *     persisting the first-pass input-side measurement here.
+             * @description Integrated loudness (LUFS) of the finished chapter, measured by a
+             *     real `ebur128` pass over the encoded file after it lands on disk
+             *     (`server/src/audio/measure-loudness.ts`). If that post-write
+             *     measurement fails, falls back to loudnorm's self-reported
+             *     `output_i`, which is NOT a measurement of the finished file.
              */
             i: number;
-            /** @description Measured loudness range (LU). Same single-pass caveat as `i`. */
+            /**
+             * @description Loudness range (LU), measured by the same post-write `ebur128`
+             *     pass as `i`. Falls back to loudnorm's self-reported `output_lra`
+             *     on measurement failure.
+             */
             lra: number;
-            /** @description Measured true peak (dBTP). Same single-pass caveat as `i`. */
+            /**
+             * @description True peak (dBTP), measured by the same post-write `ebur128` pass
+             *     as `i`. Falls back to loudnorm's self-reported `output_tp` on
+             *     measurement failure — that fallback is the ceiling loudnorm was
+             *     ASKED to hit, not what the audio measured, and can read below the
+             *     true sample peak.
+             */
             tp: number;
             /**
              * @description Target integrated loudness (LUFS) the chapter was normalised

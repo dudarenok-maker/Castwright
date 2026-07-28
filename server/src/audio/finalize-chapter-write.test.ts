@@ -9,9 +9,10 @@
    boundary, matching the rest of the audio suite. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { measureLoudnessFile } from './measure-loudness.js';
 
 const AUTHOR = 'Finalize Author';
 const SERIES = 'Standalones';
@@ -174,5 +175,26 @@ describe('finalizeChapterAudioWrite engine stamp (false-drift fix)', () => {
     const ch = await readChapter();
     expect(ch.audioModelKey).toBe('kokoro-v1');
     expect(ch.audioEngines).toEqual({ kokoro: 1, qwen: 1 });
+  });
+});
+
+describe('finalizeChapterAudioWrite loudness sidecar (ops-36 finding 10)', () => {
+  it('persists a REAL ebur128 measurement, not loudnorm self-reports', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const audioPath = join(audioRoot, `${SLUG}.mp3`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    const real = await measureLoudnessFile(audioPath);
+
+    expect(real).not.toBeNull();
+    expect(sidecar.i).toBeCloseTo(real!.i, 1);
+    expect(sidecar.lra).toBeCloseTo(real!.lra, 1);
+    expect(sidecar.tp).toBeCloseTo(real!.tp, 1);
+    /* The regression this locks: loudnorm reports tp as the REQUESTED ceiling
+       (-1.5), which is not a measurement and can sit below the sample peak. */
+    expect(sidecar.tp).not.toBe(-1.5);
+    // loudnorm's own state still comes from loudnorm.
+    expect(sidecar.normalizationType).toBeDefined();
   });
 });
