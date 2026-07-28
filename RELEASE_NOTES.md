@@ -36,6 +36,11 @@
 - **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
   line for re-recording could quietly re-record the line before it, or fail with a confusing error
   about segment indices. Both are fixed.
+- **Re-recording a character now tells you when one of their voices had to be dropped.** If a
+  voice you'd designed turns out to have been built for a different language than the book
+  you're fixing, Castwright sets it aside rather than reading the line in the wrong language —
+  and it now says so on screen. It was already doing the setting-aside quietly; you just never
+  heard about it, so a line could come back in a voice you didn't choose with no explanation.
 - **The groundwork for cloning a real voice is quietly taking shape.** Recording, quality
   checks, and consent — the plumbing behind _"even in your own voice"_ — are now in place
   under the hood. Nothing to try yet; the first voice you can actually clone and cast is

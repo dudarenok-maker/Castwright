@@ -80,6 +80,22 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
           }),
       signal: controller.signal,
       onTick: (ev: SpliceTick) => {
+        if (ev.type === 'warning' && ev.message) {
+          /* Non-fatal run-setup advisory (today: a non-English book's reused
+             designed voices were cleared because their baked manifest language
+             differs from the book's). The splice still proceeds, but the user
+             MUST see it — a silently cleared voice re-records the line in a
+             voice the user never chose. Same shape and dedupe strategy as
+             generation-stream-runner's `warning` arm; deduped by code so a
+             multi-chapter batch can't stack one toast per chapter. */
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'warn',
+              message: ev.message,
+              dedupeKey: `splice-warning:${ev.code ?? ev.message}`,
+            }),
+          );
+        }
         if (ev.type === 'splice_complete') {
           ok = true;
           dispatch(revisionsActions.markRevisionPlayable({ chapterId }));

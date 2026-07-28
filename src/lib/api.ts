@@ -624,6 +624,11 @@ export type SpliceTick =
   | { type: 'splice_start'; chapterId: number; mode: 'remix' | 'rerecord'; characterId: string }
   | { type: 'progress'; chapterId: number; characterId?: string; progress: number }
   | { type: 'chapter_assembling'; chapterId: number; progress: number }
+  /* Non-fatal advisory the splice route emits when a non-English book's reused
+     DESIGNED voices were cleared (their baked manifest language ≠ the book's).
+     The splice still proceeds — but the user must be told, so the runner
+     middleware toasts it the same way generation-stream-runner does. */
+  | { type: 'warning'; code?: string; message: string }
   | {
       type: 'splice_complete';
       chapterId: number;

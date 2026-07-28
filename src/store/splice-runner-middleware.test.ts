@@ -110,4 +110,62 @@ describe('spliceRunnerMiddleware', () => {
     expect(streamSpliceSpy).toHaveBeenCalledTimes(2);
     expect(store.getState().splice.batches.b2).toMatchObject({ succeeded: 1, failed: 1, status: 'done' });
   });
+
+  /* [#1889 follow-up] chapter-splice.ts has always sent a `warning` frame when
+     clearMismatchedDesignedVoices drops a reused designed voice, but the frame
+     was in neither the splice openapi enum nor SpliceTick, so onTick parsed it
+     and dropped it on the floor. These two cases pin the frame the ROUTE sends
+     reaching a real toast — not enum membership. */
+  const WARN_MESSAGE =
+    '1 designed voice(s) were cleared because they were designed for a different language ' +
+    'than this book — re-design Castor Allred before generating.';
+
+  it('surfaces a warning frame from the splice stream as a warn toast', async () => {
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      args.onTick({
+        type: 'warning',
+        code: 'voice_language_mismatch',
+        message: WARN_MESSAGE,
+      } as SpliceTick);
+      args.onTick({
+        type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId,
+        mode: args.mode, durationSec: 120, segmentCount: 1, hasPreviousAudio: true,
+      } as SpliceTick);
+    });
+    const store = makeStore();
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b3', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'rerecord',
+        modelKey: 'kokoro-v1', chapterIds: [1, 2],
+      }),
+    );
+    await flush();
+
+    const warned = store
+      .getState()
+      .notifications.toasts.filter((t) => t.dedupeKey === 'splice-warning:voice_language_mismatch');
+    /* Exactly one despite TWO chapters each emitting the frame — the dedupeKey
+       collapses the batch into a single advisory. */
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ kind: 'warn', message: WARN_MESSAGE });
+    /* The batch itself still succeeded — the advisory is non-fatal. */
+    expect(store.getState().splice.batches.b3).toMatchObject({ succeeded: 2, failed: 0 });
+  });
+
+  it('pushes no language-mismatch toast when the stream sends no warning frame', async () => {
+    /* Negative arm — without this, an unconditional pushToast would pass the
+       positive case above and still be wrong. */
+    const store = makeStore();
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b4', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix',
+        gainDb: 2, chapterIds: [1, 2],
+      }),
+    );
+    await flush();
+
+    expect(
+      store.getState().notifications.toasts.filter((t) => t.kind === 'warn'),
+    ).toHaveLength(0);
+  });
 });

@@ -332,6 +332,17 @@ history at cut time.
   on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
   the marked one.
 
+- **The splice stream's `warning` frame no longer falls on the floor.** `chapter-splice.ts`
+  has always emitted a `warning` frame when `clearMismatchedDesignedVoices` drops a reused
+  designed voice whose baked manifest language differs from the book's — but `warning` was in
+  neither the splice endpoint's OpenAPI `type` enum nor the hand-written `SpliceTick` union, so
+  `splice-runner-middleware`'s `onTick` parsed the advisory and silently discarded it. Adds the
+  member to both (plus the `code`/`message` fields it carries, mirroring the QA-repair stream's)
+  and toasts it the way `generation-stream-runner` toasts its own, deduped by `code` so a
+  multi-chapter batch raises one advisory rather than one per chapter. Pre-existing drift,
+  unrelated to voice cloning — fixed here because it is the same defect class this wave already
+  closed twice.
+
 - **Series-memory's hardcoded-dark surfaces no longer borrow the theme's accent** (#1832). The
   three `src/components/series-memory/` surfaces pin a `#1b1714` background that never follows the
   app theme, but their accent resolved through the theme-flipping `--magenta` — `#A43C6C` on light,
