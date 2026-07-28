@@ -725,11 +725,14 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    checkout — the cheap alternative to installing. Frontend tooling resolves via
    root alone, so `server/` is easy to forget and fails the server test legs
    with "vitest not found".
-3. **Verify both.** `ls -d .husky/_ && git config core.hooksPath`, and
-   `fsutil reparsepoint query <link>` (or `(Get-Item $p -Force).LinkTarget`) for
-   each junction — a relative `..` target resolves against the shell's CWD at
-   creation time, not the link's own directory, so an off-by-one silently points
-   at nothing while `ls` still looks plausible.
+3. **Verify both.** `ls -d .husky/_ && git config core.hooksPath`, and for each
+   junction `(Get-Item $p -Force).Target` — a relative `..` target resolves
+   against the shell's CWD at creation time, not the link's own directory, so an
+   off-by-one silently points at nothing while `ls` still looks plausible.
+   **Do not use `.LinkTarget`:** it is PowerShell 6.2+, and on this box's Windows
+   PowerShell 5.1 it reads as empty for a real junction — a check written against
+   it passes vacuously and proves nothing. `.Target` works on both; so does
+   `fsutil reparsepoint query <link>`.
 4. **Never treat hook output as proof of verification in a worktree.** Hook
    output has been observed looking entirely genuine — real timings, real test
    counts — while gating nothing. If it matters, run
@@ -741,10 +744,14 @@ Drop the reparse points **first**, then remove the worktree — `git worktree
 remove` / `Remove-Item -Recurse` can follow a junction and delete the *real*
 `node_modules` in the primary checkout. Use
 `[System.IO.Directory]::Delete($p, $false)` or `(Get-Item $j -Force).Delete()`;
-both remove the link only. `cmd /c rmdir` from the Bash tool **silently no-ops
-and returns 0**, so verify removal with `Test-Path` on both the junction and its
-target rather than trusting an exit code. If a path was converted to a real
-directory by an `npm install`, that one needs `Remove-Item -Recurse -Force`.
+both remove the link only. Gate that on
+`$i.Attributes -band [IO.FileAttributes]::ReparsePoint` — **not** on
+`.LinkTarget`, which is empty on Windows PowerShell 5.1 even for a real junction,
+so the guard skips the delete and the junction survives the teardown. A path
+converted to a real directory by an `npm install` needs
+`Remove-Item -Recurse -Force` instead. `cmd /c rmdir` from the Bash tool
+**silently no-ops and returns 0**, so verify removal with `Test-Path` on both the
+junction and its target rather than trusting an exit code.
 
 ### The two carve-outs
 
