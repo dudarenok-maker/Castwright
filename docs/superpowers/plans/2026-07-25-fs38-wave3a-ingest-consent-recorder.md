@@ -1241,7 +1241,10 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
             <option value="guardian-of-minor">My child (I’m their guardian)</option>
           </select>
         </label>
-        <label><input type="checkbox" aria-label="I attest" checked={attested} onChange={(e) => setAttested(e.target.checked)} /> I attest I have this person’s permission to clone their voice.</label>
+        <div className="flex items-center gap-2">
+          <input type="checkbox" aria-label="I attest" aria-describedby="clone-attest-sentence" checked={attested} onChange={(e) => setAttested(e.target.checked)} />
+          <span id="clone-attest-sentence">I attest I have this person’s permission to clone their voice.</span>
+        </div>
       </fieldset>
 
       <button

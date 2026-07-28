@@ -9894,7 +9894,9 @@ export async function mockRevokeVoiceLibraryEntry(voiceUuid: string): Promise<Vo
       ? { ...e, consent: { ...e.consent, revokedAt: new Date().toISOString() } }
       : e,
   );
-  return mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid)!;
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return entry;
 }
 
 /* Chapter audio + revisions polling stay mocked for now — both belong to the

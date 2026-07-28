@@ -3268,6 +3268,7 @@ paths:
         '202': { description: Candidate created, content: { application/json: { schema: { $ref: '#/components/schemas/CloneSampleCandidate' } } } }
         '400': { description: Bad or unusable audio }
         '404': { description: Voice library disabled }
+        '413': { description: Upload exceeds the 25 MB sample size limit }
   /voice-library/clone:
     post:
       operationId: cloneVoice
@@ -3314,6 +3315,8 @@ paths:
                       artifactPurgeIncomplete: { type: boolean }
                       artifactPurgeFailedPaths: { type: array, items: { type: string } }
         '404': { description: No such entry / disabled }
+        '409': { description: Entry has no consent record to revoke }
+        '502': { description: Revoke failed (write or artifact-purge error) }
 
 # ---------------------------------------------------------------------
 # Schemas

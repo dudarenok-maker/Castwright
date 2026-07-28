@@ -783,7 +783,7 @@ voiceLibraryRouter.post(
       const captureMethod = (req.body?.captureMethod === 'record' ? 'record' : 'upload') as 'record' | 'upload';
       const candidateId = randomUUID();
       const result = await ingestCloneSample(file.buffer, { captureMethod, candidateId });
-      return res.status(202).json({ ...result, qualityWarnings: result.qualityWarnings });
+      return res.status(202).json(result);
     } catch (e) {
       const status = (e as { status?: number }).status ?? 502;
       return res.status(status).json({ error: (e as Error).message || 'Clone-sample ingest failed.' });

@@ -8826,6 +8826,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Upload exceeds the 25 MB sample size limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     cloneVoice: {
@@ -8930,6 +8937,20 @@ export interface operations {
             };
             /** @description No such entry / disabled */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Entry has no consent record to revoke */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revoke failed (write or artifact-purge error) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
