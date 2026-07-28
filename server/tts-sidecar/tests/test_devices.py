@@ -342,11 +342,15 @@ class _FakeEvictSingleton:
         return True
 
 
-class _FakeEvictCoqui:
-    """Matches CoquiEngine's residency surface for _idle_evict: a `_device`
-    attribute and a `maybe_free_idle(ttl)` that reports it freed."""
+class _FakeEvictCoqui(main.CoquiEngine):
+    """CoquiEngine stand-in whose `maybe_free_idle` just records it was
+    called (real CoquiEngine() construction is cheap — no model I/O). Must
+    subclass CoquiEngine, not just duck-type its surface: `_idle_evict`'s
+    Coqui branch is `isinstance`-guarded (#1894 review) the same way its Qwen
+    sibling already was."""
 
     def __init__(self, device, result=True):
+        super().__init__()
         self._device = device
         self.freed = 0
         self.ttls = []

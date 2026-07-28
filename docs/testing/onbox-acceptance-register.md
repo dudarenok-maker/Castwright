@@ -362,7 +362,15 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
   evidence rather than a guess.
 - Also confirm the Task 1 fix: press **Stop** on Coqui while a chapter is rendering
   through it. The chapter must continue to completion — before #1894 this could kill
-  it with `AttributeError: 'NoneType' object has no attribute 'tts'`.
+  it with `AttributeError: 'NoneType' object has no attribute 'tts'`. Also record
+  what the **Stop control itself** reports: `CoquiEngine.unload()` now acquires
+  `_synth_lock` before dropping the model, so it blocks for the length of the
+  in-flight forward — tens of seconds to minutes — while `POST /api/sidecar/unload`'s
+  probe budget is only 2 s. The expected symptom is the Stop control showing a
+  timeout/failure toast even though the unload (and the chapter) both complete fine
+  a little later; this row is where that trade-off would actually be observed on
+  real hardware, so note whether the toast fired and how long the eventual unload
+  actually took.
 
 **Run this with A19 and A5** — same card, same mixed-cast book, and A19 already stages
 the Qwen+Coqui co-residency this row's first bullet needs.

@@ -18,10 +18,11 @@
    "wait", and an entry advising a destructive action is worse than no entry.
 
    Kokoro stays listed. It has a Stop pill reachable wherever it's resident
-   (the top bar / global TTS notice banner — src/components/tts-notice-banner
-   .tsx), but stopping it only frees the VRAM until the sidecar next restarts,
-   because it's the eagerly-resident fallback gated by the "Preload Kokoro at
-   startup" setting — so the actionable fix names the setting instead. */
+   (the top bar / global TTS notice banner —
+   src/components/tts-notice-banner.tsx), but stopping it only frees the VRAM
+   until the sidecar next restarts, because it's the eagerly-resident fallback
+   gated by the "Preload Kokoro at startup" setting — so the actionable fix
+   names the setting instead. */
 
 export interface VramBlocker {
   /** Display name, as the user sees it in the UI. */
@@ -31,7 +32,6 @@ export interface VramBlocker {
 }
 
 export interface VramBlockerHealth {
-  coquiLoaded?: boolean;
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;

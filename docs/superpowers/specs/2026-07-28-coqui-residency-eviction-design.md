@@ -442,12 +442,19 @@ Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
 
 ## 7. Out of scope
 
-- **The same unguarded-unload race in ASR and ECAPA.** `WhisperEngine` and
-  `SpeakerEngine` have §4.1's bug too (§3), and unlike Coqui they are *already*
-  auto-evicted through `_idle_evict(0.0)` — so the race is live for them today.
-  Discovered while verifying this design; needs its own issue. Not folded in
-  here: it is a different engine pair with different in-flight accounting, and
-  bundling it would make this change unreviewable.
+- ~~**The same unguarded-unload race in ASR and ECAPA.** `WhisperEngine` and
+  `SpeakerEngine` have §4.1's bug too (§3)... Not folded in here.~~ **Update:
+  it WAS folded in**, in the same branch, across two follow-up commits —
+  `4807a392` ("guard ASR and ECAPA unloads against an in-flight forward") and
+  `62060726` ("add the missing re-validate-under-lock leg to ASR/ECAPA
+  evict"). Both `WhisperEngine.unload()` and `SpeakerEngine.unload()` now take
+  `_infer_lock` before dropping the model, and `maybe_free_idle` for each
+  mirrors `CoquiEngine`'s re-validate-under-the-lock shape. Covered by
+  `server/tts-sidecar/tests/test_asr_spk_idle_evict.py` and called out in
+  `docs/release-notes-next.md`. Unlike Coqui, ASR and ECAPA were *already*
+  auto-evicted via `_idle_evict(0.0)` before this branch, so the race was
+  live in production beforehand — this wasn't a hypothetical future risk,
+  it was an existing exposure this branch happened to close along the way.
 - **#1393's cross-book tier union** — not a prerequisite, and not served by this
   design (§3).
 - **Kokoro eviction** (§1).
@@ -468,6 +475,13 @@ Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
   single-GPU case #1894 is about — but it belongs here as a known limitation
   in its own right, not only as the acceptance-scoping note §6 already
   carries.
+- **Multi-GPU: a reclaimed Coqui can reload onto the wrong card.** After an
+  evict, `_drop_model_locked` resets `_device` back to `_requested_device`
+  (usually `"auto"`), and `synthesize`'s re-ensure calls `_ensure_loaded(model)`
+  with no device override — so the reload re-resolves through torch's default
+  (`cuda:0`) rather than the card the reservation actually admitted the
+  starved op onto. Irrelevant on the single-GPU target #1894 addresses, same
+  as the limitation above.
 - **Kokoro is not a beneficiary of this reclaim.** Kokoro is CPU-capable, so a
   starved Kokoro operation is placed on CPU *before* `idle_evict` is ever
   consulted (§1). This design's real beneficiaries are Qwen (synth, design,

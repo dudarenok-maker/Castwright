@@ -2,10 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { describeVramBlockers } from './describe-vram-blockers.js';
 
 describe('describeVramBlockers', () => {
-  it('does not list Coqui — admission auto-evicts an idle one (#1894)', () => {
-    expect(describeVramBlockers({ coquiLoaded: true })).toEqual([]);
-  });
-
   it('names Kokoro with the preload-setting remedy, not "stop it"', () => {
     /* Kokoro DOES have a Stop pill (Task 10, #1839) — but it's the
        eagerly-resident fallback gated by the "Preload Kokoro at startup"
@@ -16,10 +12,6 @@ describe('describeVramBlockers', () => {
     expect(out).toEqual([
       { model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' },
     ]);
-  });
-
-  it('lists Kokoro only when both Coqui and Kokoro are resident', () => {
-    expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(1);
   });
 
   it('never names a Qwen base — admission frees those itself', () => {

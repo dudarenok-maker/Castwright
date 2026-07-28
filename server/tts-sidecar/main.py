@@ -1403,9 +1403,12 @@ class CoquiEngine(Engine):
 
     def _reclaim_after_drop(self, torch_module: Any) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_synth_lock` RELEASED — `gc.collect()` over a multi-GB torch graph is
-        slow, and `_idle_evict` calls this path synchronously on the event
-        loop, where a stall would freeze /health (main.py:5081-5082).
+        `_synth_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        `gc.collect()`/`empty_cache()` runs on the event loop either way,
+        lock held or not); it's released because holding `_synth_lock` across
+        this multi-second reclaim would block concurrent synth calls that
+        only need the lock briefly, for no benefit.
         """
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
@@ -2723,7 +2726,7 @@ def _idle_evict(device_key: str, engine: str) -> bool:
     # rather than the 0.0 the transient models take.
     if engine != "coqui":
         coqui = ENGINES.get("coqui")
-        if coqui is not None and _same_card(getattr(coqui, "_device", None), device_key):
+        if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
             try:
                 freed = coqui.maybe_free_idle(_coqui_idle_ttl()) or freed
             except Exception:
@@ -5082,9 +5085,12 @@ class WhisperEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — `_idle_evict` calls this synchronously on
-        the event loop, and `gc.collect()`-scale work under the lock would
-        stall /health for the duration (main.py, `_idle_evict` doc)."""
+        `_infer_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        the `gc.collect()`-scale work here runs on the event loop either way,
+        lock held or not); it's released because holding `_infer_lock` across
+        this multi-second reclaim would block concurrent transcribe calls
+        that only need the lock briefly, for no benefit."""
         _reclaim_host_and_vram()
         log.info("Whisper ASR model unloaded.")
 
@@ -5247,9 +5253,12 @@ class SpeakerEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — `_idle_evict` calls this synchronously on
-        the event loop, and `gc.collect()`-scale work under the lock would
-        stall /health for the duration (main.py, `_idle_evict` doc)."""
+        `_infer_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        the `gc.collect()`-scale work here runs on the event loop either way,
+        lock held or not); it's released because holding `_infer_lock` across
+        this multi-second reclaim would block concurrent embed calls that
+        only need the lock briefly, for no benefit."""
         _reclaim_host_and_vram()
         log.info("ECAPA speaker model unloaded.")
 

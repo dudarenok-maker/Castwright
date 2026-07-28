@@ -329,11 +329,15 @@ history at cut time.
   the sidecar's admission path frees a resident-but-idle XTTS before reporting
   `noCapacity`, instead of failing the starved operation. Engine-aware (a Coqui
   op never evicts itself) and device-targeted. Tunable via `COQUI_IDLE_TTL` /
-  `sidecar.coquiIdleTtl` (default 30 s). Also fixes an unguarded `CoquiEngine
-  .unload()` that could crash an in-flight synth when the Stop button fired
-  mid-render, and the same unguarded-unload race in the Whisper (ASR) and ECAPA
-  speaker engines — which, unlike Coqui, were already being auto-evicted, so
-  that one was reachable in production.
+  `sidecar.coquiIdleTtl` (default 30 s). One accepted user-visible trade: a
+  starved op's `NoCapacityError` no longer carries the "Coqui XTTS is loaded —
+  Use its Stop button" line, since admission now presses that button itself —
+  the message falls back to the generic "free VRAM or attach a second GPU"
+  text when Coqui was the only listed blocker. Also fixes an unguarded
+  `CoquiEngine.unload()` that could crash an in-flight synth when the Stop
+  button fired mid-render, and the same unguarded-unload race in the Whisper
+  (ASR) and ECAPA speaker engines — which, unlike Coqui, were already being
+  auto-evicted, so that one was reachable in production.
 
 ---
 
