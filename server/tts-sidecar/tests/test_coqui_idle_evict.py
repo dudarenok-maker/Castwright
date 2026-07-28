@@ -40,7 +40,9 @@ def _loaded_coqui(monkeypatch, fake_tts):
     load stamps it too (see Task 2) — leaving it 0.0 would make the engine look
     infinitely idle and mask TTL bugs."""
     eng = main.CoquiEngine()
-    monkeypatch.setattr(eng, "_ensure_loaded", lambda model: None)
+    monkeypatch.setattr(
+        eng, "_ensure_loaded", lambda model, device=None, *, lock_held=False: None
+    )
     eng._tts = fake_tts
     eng._speakers = ["Claribel Dervla"]
     eng._resolved_device = "cuda:0"
@@ -187,7 +189,7 @@ def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
     eng = _loaded_coqui(monkeypatch, _FakeTts())
     eng._last_used = 0.0  # look infinitely idle so the evict will fire
 
-    def ensure_then_evict(model):
+    def ensure_then_evict(model, device=None, *, lock_held=False):
         # Simulate the racing evict landing right after the caller's ensure.
         if eng._tts is None:
             eng._tts = _FakeTts()  # the "reload" a real _ensure_loaded performs

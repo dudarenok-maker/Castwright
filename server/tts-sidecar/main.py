@@ -1210,6 +1210,12 @@ class CoquiEngine(Engine):
         # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
         # `_drop_model_locked()`, never `unload()`.
         self._synth_lock = threading.Lock()
+        # Bumped by every teardown (`_drop_model_locked`, which both unload()
+        # and maybe_free_idle go through). `_ensure_loaded` snapshots it before
+        # the load and re-checks it at the publish: a teardown that landed in
+        # between means the load lost the race and must be discarded rather than
+        # written on top of the unload's field resets (#1918).
+        self._load_epoch = 0
         # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
         # without blocking the admission path on a forward that may run for
         # seconds. Thread-safe (#1917) — see `InFlightCounter`.
@@ -1273,9 +1279,16 @@ class CoquiEngine(Engine):
             deepspeed = False
         return {"device": device, "half": half, "deepspeed": deepspeed}
 
-    def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
+    def _ensure_loaded(
+        self, model: str, device: Optional[str] = None, *, lock_held: bool = False
+    ) -> None:
+        """`lock_held=True` means the caller already holds `_synth_lock` (the
+        re-ensure inside `synthesize`), so the publish assigns directly instead
+        of acquiring — `_synth_lock` is non-reentrant and acquiring it here
+        would self-deadlock."""
         if self._tts is not None:
             return
+        epoch = self._load_epoch
         # Importing lazily so the process can start (and /health respond)
         # before the heavy ML deps load. Most useful while iterating on
         # the protocol — the Node side can verify reachability instantly.
@@ -1350,57 +1363,104 @@ class CoquiEngine(Engine):
         # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
         # and only casts the ops where fp16 is safe (matmuls, attention),
         # which is where the speedup lives anyway.
-        #
-        # Stamp `_last_used` BEFORE publishing `_tts`, not after the rest of
-        # this method's bookkeeping (#1894 fix-round-1 Important-1): no lock
-        # is held across this whole tail, and `_ensure_loaded` runs on a
-        # worker thread while the event loop stays free to run
-        # `maybe_free_idle` concurrently. A stamp placed after `self._device
-        # = device` below leaves a window where another thread can already
-        # see `_tts is not None` with a STALE `_last_used` (0.0 on a first
-        # load, or the pre-evict timestamp on a reload) — long enough for
-        # `maybe_free_idle` to fire and run `_drop_model_locked()`, which
-        # restores `self._device = self._requested_device`, only for this
-        # thread to then overwrite it right back to the just-admitted card
-        # a few lines down. That reverts the #1730 gap-3 fix and pins the
-        # engine to a stale placement with `_tts` freshly `None`. Stamping
-        # first closes the window: any thread that observes `_tts is not
-        # None` necessarily observes a fresh timestamp too, and while this
-        # method is still running, `_tts` is `None` so `maybe_free_idle`'s
-        # fast-out already declines.
-        self._last_used = time.monotonic()
-        self._tts = tts
-        self._torch = torch
-        self._resolved_device = device
-        # Keep the shared `self._device` in step with the card the model is
-        # ACTUALLY on (#1730 gap 3): an admitted `device` override resolves here
-        # but previously left `self._device` stale at the env pref, so any reader
-        # of `self._device` saw a card the model wasn't on. `unload()` restores
-        # the requested pref so a later flag-off reload still re-resolves cleanly.
-        self._device = device
-        self._use_half = bool(want_half and _parse_device(device)[0] == "cuda")
-        if self._use_half:
+        use_half = bool(want_half and _parse_device(device)[0] == "cuda")
+        if use_half:
             log.info("fp16 autocast enabled for /synthesize.")
 
         # Snapshot the speaker manifest so /synthesize can validate inbound
         # `voice` against what the model actually knows. Different coqui-tts
         # releases ship slightly different speaker lists; without this, any
         # drift between our Node-side catalog and the model's catalog
-        # manifests as "index out of range in self" mid-chapter.
+        # manifests as "index out of range in self" mid-chapter. Read from the
+        # LOCAL `tts`, not `self._tts` — this runs BEFORE the publish (#1918),
+        # so `self._tts` may still be `None` (or hold a different model
+        # entirely, on the losing side of a load race).
         try:
-            speaker_manager = self._tts.synthesizer.tts_model.speaker_manager
+            speaker_manager = tts.synthesizer.tts_model.speaker_manager
             names = list(getattr(speaker_manager, "name_to_id", {}).keys())
             if not names:
                 # Fallback for older speaker-manager APIs that expose
                 # `speaker_names` directly.
                 names = list(getattr(speaker_manager, "speaker_names", []))
-            self._speakers = sorted(names)
-            log.info("Coqui ready — %d speakers in manifest.", len(self._speakers))
+            speakers = sorted(names)
         except Exception as e:
             # Don't crash startup if the manifest API drifts — synth will
             # still work, but validation falls back to permissive mode.
             log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
-            self._speakers = []
+            speakers = []
+
+        # Publish as ONE atomic step (#1918): `_ensure_loaded` runs outside
+        # `_synth_lock` for most of this ~90s cold load (see the module-level
+        # rationale above `tts.to(device)`), so a Stop pressed anywhere during
+        # the load must be able to win the race rather than have its resets
+        # overwritten by this thread finishing after it. `lock_held` controls
+        # whether we still need to acquire `_synth_lock` ourselves — the
+        # re-ensure inside `synthesize` already holds it, and the lock is
+        # non-reentrant.
+        if lock_held:
+            published = self._publish_loaded_locked(
+                epoch, tts, torch, device, use_half, speakers
+            )
+        else:
+            with self._synth_lock:
+                published = self._publish_loaded_locked(
+                    epoch, tts, torch, device, use_half, speakers
+                )
+        if not published:
+            # A teardown (Stop, or an admission evict) landed during the load,
+            # or another thread published first. Discard rather than overwrite —
+            # publishing here would leave a live model with `_device` pinned to
+            # the admitted card, bypassing placement on the next lazy load
+            # (#1730 gap 3).
+            log.info("Coqui load discarded — unloaded or superseded while loading.")
+            # `del` BEFORE the reclaim, or it does nothing: this frame still
+            # holds a reference to the ~3 GB model, so gc.collect() cannot
+            # collect it.
+            del tts
+            if not lock_held:
+                self._reclaim_after_drop(torch)
+            # When `lock_held` is True the caller holds `_synth_lock`, and
+            # `_reclaim_after_drop` documents that it MUST run with that lock
+            # released. Skipping it is safe rather than merely convenient: the
+            # epoch only ever moves under `_synth_lock`, and `_tts` is only
+            # ever published under it, so neither failure condition can arise
+            # while the caller holds it — this branch is unreachable on that
+            # path. The guard is here so a future caller cannot make it
+            # reachable silently.
+            return
+        log.info("Coqui ready — %d speakers in manifest.", len(speakers))
+
+    def _publish_loaded_locked(
+        self, epoch: int, tts: Any, torch_module: Any, device: str,
+        use_half: bool, speakers: list[str],
+    ) -> bool:
+        """Publish a freshly loaded model as ONE atomic step. CALLER MUST HOLD
+        `_synth_lock`. Returns False when `epoch` is stale — a teardown landed
+        during the load, so this load lost and is discarded.
+
+        `_last_used` is stamped FIRST (#1894 fix-round-1): any thread that
+        observes a live `_tts` must observe a fresh timestamp, or an
+        admission-path `maybe_free_idle` can drop the model mid-publish.
+
+        The `_tts is not None` half of the guard covers a second loser: two
+        threads can both pass `_ensure_loaded`'s `_tts is None` fast-out (a
+        `/load` and `synthesize`'s pre-lock ensure are serialised by different
+        primitives — an asyncio `_load_lock` and nothing respectively), both
+        load, and both arrive here with the same unchanged epoch. Without it the
+        second publish overwrites the first and orphans ~3 GB.
+        """
+        if epoch != self._load_epoch or self._tts is not None:
+            return False
+        self._last_used = time.monotonic()
+        self._tts = tts
+        self._torch = torch_module
+        self._resolved_device = device
+        # Keep the shared `self._device` in step with the card the model is
+        # ACTUALLY on (#1730 gap 3).
+        self._device = device
+        self._use_half = use_half
+        self._speakers = speakers
+        return True
 
     def unload(self) -> None:
         """Drop references to the loaded XTTS model and free GPU memory.
@@ -1416,6 +1476,13 @@ class CoquiEngine(Engine):
         Internal holders call `_drop_model_locked()` + `_reclaim_after_drop()`.
         """
         with self._synth_lock:
+            # Bump UNCONDITIONALLY (#1918) — a Stop pressed during a cold load
+            # must cancel that load even though there is nothing to drop yet
+            # (`_tts` is still `None`, so `_drop_model_locked` below early-outs
+            # without reaching its own bump). Without this, a Stop mid-load is
+            # invisible to `_ensure_loaded`'s epoch check and its publish lands
+            # on top of the (no-op) unload.
+            self._load_epoch += 1
             dropped, torch_module = self._drop_model_locked()
         if dropped:
             self._reclaim_after_drop(torch_module)
@@ -1446,6 +1513,12 @@ class CoquiEngine(Engine):
         # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
         self._device = self._requested_device
         self._use_half = False
+        # A model was actually dropped (as opposed to unload()'s own
+        # unconditional bump above, which covers the "nothing loaded yet"
+        # case) — bump again so `maybe_free_idle`, which reaches this method
+        # WITHOUT going through unload(), also invalidates any in-flight load
+        # (#1918).
+        self._load_epoch += 1
         return (True, torch_module)
 
     def _reclaim_after_drop(self, torch_module: Any) -> None:
@@ -1536,8 +1609,11 @@ class CoquiEngine(Engine):
                     # admission evict holds `_synth_lock` to null the model,
                     # so one ensured before the lock can be gone in the gap.
                     # No-op on the warm path (`_ensure_loaded` early-returns
-                    # when `_tts` is set).
-                    self._ensure_loaded(model)
+                    # when `_tts` is set). `lock_held=True` — this call already
+                    # holds `_synth_lock`, which is non-reentrant, so
+                    # `_ensure_loaded`'s publish must assign directly rather
+                    # than acquire it again (#1918).
+                    self._ensure_loaded(model, lock_held=True)
                     return self._synthesize_locked(model, voice, text, language)
             finally:
                 self._last_used = time.monotonic()
