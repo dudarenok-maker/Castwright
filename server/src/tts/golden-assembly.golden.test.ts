@@ -34,7 +34,14 @@ import {
   type LoudnormSidecarJson,
 } from './loudnorm.js';
 import { ffmpegBannerLine, parseFfmpegVersion } from '../diagnostics/ffmpeg.js';
-import { rmsEnvelope, md5, toInt16, selectMode, type AssemblyBaseline } from './golden-baseline.js';
+import {
+  rmsEnvelope,
+  md5,
+  toInt16,
+  selectMode,
+  TOL,
+  type AssemblyBaseline,
+} from './golden-baseline.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 
@@ -138,11 +145,8 @@ function isTight(): boolean {
 }
 
 /** Suffix every failure message carries, so a cold reader knows which mode
-    produced the verdict and how to re-record deliberately.
-    (Exported-from-module-scope-only via `export` so `noUnusedLocals` does not
-    flag it between this task, which defines it, and the next, which is the
-    first to call it from a layer's failure message.) */
-export function modeLine(): string {
+    produced the verdict and how to re-record deliberately. */
+function modeLine(): string {
   return (
     `\n  run: ffmpeg ${art.banner ?? '(absent)'}` +
     `\n  baseline: ffmpeg ${baseline?.ffmpegBanner ?? '(none)'}` +
@@ -388,5 +392,79 @@ describe('golden assembly (GPU-free)', () => {
     expect(art.sidecar).not.toBeNull();
     expect(art.sidecar!.i).toBeGreaterThan(-30);
     expect(art.sidecar!.i).toBeLessThan(-10);
+  });
+
+  it('L1 — ffmpeg first-pass loudnorm measurement matches the baseline', () => {
+    if (BLESS) return;
+    const b = baseline!.firstPass;
+    const a = art.firstPass;
+    const fields: [string, number, number][] = [
+      ['input_i', a.input_i, b.input_i],
+      ['input_lra', a.input_lra, b.input_lra],
+      ['input_tp', a.input_tp, b.input_tp],
+      ['input_thresh', a.input_thresh, b.input_thresh],
+    ];
+    for (const [name, actual, expected] of fields) {
+      const delta = actual - expected;
+      expect(
+        Math.abs(delta),
+        `L1 first-pass drift: ${name} ${actual} (baseline ${expected}, ` +
+          `delta ${delta.toFixed(2)} LU, tol ${TOL.firstPassLu})${modeLine()}`,
+      ).toBeLessThanOrEqual(TOL.firstPassLu);
+    }
+  });
+
+  it('L2 — the persisted loudness sidecar matches the baseline', () => {
+    if (BLESS) return;
+    expect(
+      art.sidecar,
+      `L2: no ${SLUG}.lufs.json was written at all. The encoder skips the ` +
+        `sidecar when the FIRST pass is unusable (silent/near-silent input), ` +
+        `so this points at the fixture or at loudnorm, not at a mode ` +
+        `change.${modeLine()}`,
+    ).not.toBeNull();
+
+    const b = baseline!.sidecar;
+    const s = art.sidecar!;
+
+    /* Knob check first: a moved target produces the same symptom as ffmpeg
+       drift, and the two are different bugs. */
+    const knobs = resolveLoudnormOptions();
+    expect(
+      { target: knobs.target, lra: knobs.lra, tp: knobs.tp },
+      `L2: the loudnorm knobs differ from the baseline's. This is a CONFIG ` +
+        `change, not ffmpeg drift — re-bless deliberately.${modeLine()}`,
+    ).toEqual(baseline!.loudnorm);
+
+    for (const [name, actual, expected] of [
+      ['i', s.i, b.i],
+      ['lra', s.lra, b.lra],
+    ] as [string, number, number][]) {
+      const delta = actual - expected;
+      expect(
+        Math.abs(delta),
+        `L2 sidecar drift: ${name} ${actual} (baseline ${expected}, ` +
+          `delta ${delta.toFixed(2)} LU, tol ${TOL.sidecarLu})${modeLine()}`,
+      ).toBeLessThanOrEqual(TOL.sidecarLu);
+    }
+
+    /* Asserted UNCONDITIONALLY — `twoPass === true` does NOT imply a mode is
+       present (mp3.ts stamps twoPass before the encode and the fallback
+       branches leave it untouched), so gating on twoPass would silently skip
+       this. Absence is a DIFFERENT bug from a flip, and gets its own text. */
+    expect(
+      s.normalizationType,
+      s.normalizationType === undefined
+        ? `L2: normalizationType is absent (baseline "${b.normalizationType}").\n` +
+          `  This is NOT a mode flip. The sidecar fell back to the input-side ` +
+          `measurement, which means the second-pass loudnorm stderr JSON was ` +
+          `not parsed — most likely an ffmpeg log-format change. Check \`i\`: ` +
+          `it will read ~${baseline!.firstPass.input_i} (input side) rather ` +
+          `than ~${b.i} (output side).${modeLine()}`
+        : `L2: loudnorm mode changed — "${s.normalizationType}" vs baseline ` +
+          `"${b.normalizationType}". A dynamic->linear flip alters how the ` +
+          `chapter sounds while leaving integrated loudness near ` +
+          `target.${modeLine()}`,
+    ).toBe(b.normalizationType);
   });
 });
