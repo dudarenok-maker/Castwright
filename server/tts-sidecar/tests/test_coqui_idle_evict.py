@@ -56,15 +56,12 @@ def test_unload_waits_for_an_in_flight_synth(monkeypatch):
     eng = _loaded_coqui(monkeypatch, _FakeTts(entered=entered, release=release))
 
     errors: list[BaseException] = []
-    done = threading.Event()
 
     def run_synth():
         try:
             eng.synthesize("xtts", "Claribel Dervla", "hello")
         except BaseException as e:  # noqa: BLE001 - we assert on it
             errors.append(e)
-        finally:
-            done.set()
 
     t = threading.Thread(target=run_synth)
     t.start()

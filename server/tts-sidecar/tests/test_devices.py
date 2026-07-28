@@ -346,22 +346,23 @@ class _FakeEvictCoqui:
     """Matches CoquiEngine's residency surface for _idle_evict: a `_device`
     attribute and a `maybe_free_idle(ttl)` that reports it freed."""
 
-    def __init__(self, device):
+    def __init__(self, device, result=True):
         self._device = device
         self.freed = 0
         self.ttls = []
+        self.result = result
 
     def maybe_free_idle(self, ttl_seconds):
         self.freed += 1
         self.ttls.append(ttl_seconds)
-        return True
+        return self.result
 
 
-def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu"):
+def _wire_evict_engines(monkeypatch, qwen_dev, asr_dev, spk_dev, coqui_dev="cpu", coqui_result=True):
     qwen = _FakeEvictQwen(qwen_dev)
     asr = _FakeEvictSingleton("_device", asr_dev)
     spk = _FakeEvictSingleton("device", spk_dev)
-    coqui = _FakeEvictCoqui(coqui_dev)
+    coqui = _FakeEvictCoqui(coqui_dev, result=coqui_result)
     monkeypatch.setitem(main.ENGINES, "qwen", qwen)
     monkeypatch.setitem(main.ENGINES, "coqui", coqui)
     monkeypatch.setattr(main, "ASR", asr)
@@ -443,3 +444,33 @@ def test_coqui_idle_ttl_defaults_and_floors(monkeypatch):
     assert main._coqui_idle_ttl() == 30.0
     monkeypatch.setenv("COQUI_IDLE_TTL", "not-a-number")
     assert main._coqui_idle_ttl() == 30.0
+
+
+def test_idle_evict_coqui_declining_does_not_clobber_an_earlier_free(monkeypatch):
+    """An earlier branch (Qwen, ASR, SPK) freed successfully and set freed=True.
+    When Coqui's maybe_free_idle returns False, the composition must preserve
+    the True: `freed = coqui.maybe_free_idle(...) or freed`, not clobbering."""
+    qwen, asr, spk, coqui = _wire_evict_engines(
+        monkeypatch, "cuda:0", "cpu", "cpu", coqui_dev="cuda:0", coqui_result=False
+    )
+    assert main._idle_evict("cuda:0", "qwen") is True
+    assert qwen.design_freed == 1  # early branch freed
+    assert coqui.freed == 1  # Coqui branch called
+    assert coqui.result is False  # Coqui declined
+
+
+def test_idle_evict_survives_a_raising_coqui(monkeypatch):
+    """Coqui's maybe_free_idle raises while a Qwen engine on the same card
+    frees successfully. The exception is swallowed, the Qwen result survives."""
+    qwen, asr, spk, coqui = _wire_evict_engines(
+        monkeypatch, "cuda:0", "cpu", "cpu", coqui_dev="cuda:0"
+    )
+    # Monkeypatch Coqui to raise when maybe_free_idle is called
+    original_maybe_free_idle = coqui.maybe_free_idle
+    def raising_maybe_free_idle(ttl_seconds):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(coqui, "maybe_free_idle", raising_maybe_free_idle)
+
+    # Should not propagate; Qwen freed, so overall result is True
+    assert main._idle_evict("cuda:0", "qwen") is True
+    assert qwen.design_freed == 1

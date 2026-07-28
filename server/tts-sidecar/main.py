@@ -5090,7 +5090,8 @@ class WhisperEngine:
 
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees).
+        actually freed, reporting whether a model was freed to the callers
+        (`maybe_free_idle` and the test suite).
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight transcribe (#1894). The reclaim runs after the lock is
@@ -5254,7 +5255,8 @@ class SpeakerEngine:
 
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees).
+        actually freed, reporting whether a model was freed to the callers
+        (`maybe_free_idle` and the test suite).
 
         Acquires `_infer_lock` so it cannot null the model out from under an
         in-flight embed (#1894). The reclaim runs after the lock is
