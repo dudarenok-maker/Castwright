@@ -4934,6 +4934,9 @@ class WhisperEngine:
         # CTranslate2 inference isn't guaranteed reentrant; serialise forwards
         # the same way QwenEngine guards its Base model with `_synth_lock`.
         self._infer_lock = threading.Lock()
+        # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
+        # without blocking the admission path on a whole forward (#1894).
+        self._infer_in_flight = 0
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
@@ -5016,20 +5019,31 @@ class WhisperEngine:
         load, so nothing reads the shared `self._device` across the unlocked
         route→load gap; `None` is the pre-admission path."""
         self._ensure_loaded(device=device)
-        assert self._model is not None
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
-        with self._infer_lock:
+        self._infer_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._infer_lock:
+                # Re-ensure under the lock: an idle-evict holds `_infer_lock`
+                # to null the model, so one ensured before the lock can be gone
+                # in the gap. No-op on the warm path.
+                self._ensure_loaded(device=device)
+                model = self._model
+                assert model is not None
+                self._last_used = time.monotonic()
+                segments, info = model.transcribe(
+                    audio,
+                    language=language,
+                    beam_size=1,                     # greedy
+                    temperature=0.0,                 # deterministic → idempotent verdicts
+                    condition_on_previous_text=word_timestamps,  # True only for captions
+                    vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+                    word_timestamps=word_timestamps,
+                )
+                segs = list(segments)
+        finally:
+            self._infer_in_flight -= 1
             self._last_used = time.monotonic()
-            segments, info = self._model.transcribe(
-                audio,
-                language=language,
-                beam_size=1,                     # greedy
-                temperature=0.0,                 # deterministic → idempotent verdicts
-                condition_on_previous_text=word_timestamps,  # True only for captions
-                vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
-                word_timestamps=word_timestamps,
-            )
-            segs = list(segments)
         text = " ".join((s.text or "").strip() for s in segs).strip()
         logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
         no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
@@ -5053,10 +5067,16 @@ class WhisperEngine:
 
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees)."""
-        if self._model is None:
-            return False
-        self._model = None
+        actually freed (so the watchdog can log only real frees).
+
+        Acquires `_infer_lock` so it cannot null the model out from under an
+        in-flight transcribe (#1894). The reclaim runs after the lock is
+        released — this is reached from `_idle_evict` on the event loop.
+        """
+        with self._infer_lock:
+            if self._model is None:
+                return False
+            self._model = None
         _reclaim_host_and_vram()
         log.info("Whisper ASR model unloaded.")
         return True
@@ -5065,7 +5085,7 @@ class WhisperEngine:
         """Free the model once it has idled past the TTL — mirrors
         `QwenEngine.maybe_free_idle_design`. Matters mainly on the cuda path
         (reclaims VRAM); on cpu it just frees host RAM. No-op while in use."""
-        if self._model is None:
+        if self._model is None or self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
@@ -5087,6 +5107,9 @@ class SpeakerEngine:
         self._model = None
         self._load_lock = asyncio.Lock()
         self._infer_lock = threading.Lock()
+        # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
+        # without blocking the admission path on a whole forward (#1894).
+        self._infer_in_flight = 0
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
@@ -5147,18 +5170,36 @@ class SpeakerEngine:
             audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
                               np.arange(len(audio)), audio).astype(np.float32)
         t = torch.from_numpy(audio).unsqueeze(0)
-        with self._infer_lock, torch.no_grad():
-            emb = self._model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        self._infer_in_flight += 1
         self._last_used = time.monotonic()
+        try:
+            with self._infer_lock, torch.no_grad():
+                # `ensure_loaded` is async here, so unlike WhisperEngine we
+                # cannot reload under the lock — re-check and surface the
+                # documented precondition. The `_infer_in_flight` claim above
+                # is what actually stops an idle-evict getting here (#1894).
+                model = self._model
+                if model is None:
+                    raise RuntimeError("model was unloaded during embed()")
+                emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        finally:
+            self._infer_in_flight -= 1
+            self._last_used = time.monotonic()
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
 
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees)."""
-        if self._model is None:
-            return False
-        self._model = None
+        actually freed (so the watchdog can log only real frees).
+
+        Acquires `_infer_lock` so it cannot null the model out from under an
+        in-flight embed (#1894). The reclaim runs after the lock is
+        released — this is reached from `_idle_evict` on the event loop.
+        """
+        with self._infer_lock:
+            if self._model is None:
+                return False
+            self._model = None
         _reclaim_host_and_vram()
         log.info("ECAPA speaker model unloaded.")
         return True
@@ -5168,6 +5209,8 @@ class SpeakerEngine:
         the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
         freeing ~80–200 MB of host RAM. No-op while recently used."""
         if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            return False
+        if self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
