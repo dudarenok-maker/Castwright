@@ -5065,6 +5065,29 @@ class WhisperEngine:
             "words": words,
         }
 
+    def _drop_model_locked(self) -> bool:
+        """Reset the model field. CALLER MUST HOLD `_infer_lock`. Returns
+        whether a model was actually dropped, so callers skip the reclaim +
+        log when there was nothing to drop.
+
+        Split out (#1894) so `maybe_free_idle` can re-validate + drop under
+        the lock without going through the public `unload()` — `_infer_lock`
+        is non-reentrant, so calling `unload()` while already holding it
+        would self-deadlock. Mirrors `CoquiEngine._drop_model_locked`.
+        """
+        if self._model is None:
+            return False
+        self._model = None
+        return True
+
+    def _reclaim_after_drop(self) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_infer_lock` RELEASED — `_idle_evict` calls this synchronously on
+        the event loop, and `gc.collect()`-scale work under the lock would
+        stall /health for the duration (main.py, `_idle_evict` doc)."""
+        _reclaim_host_and_vram()
+        log.info("Whisper ASR model unloaded.")
+
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
         actually freed (so the watchdog can log only real frees).
@@ -5074,22 +5097,40 @@ class WhisperEngine:
         released — this is reached from `_idle_evict` on the event loop.
         """
         with self._infer_lock:
-            if self._model is None:
-                return False
-            self._model = None
-        _reclaim_host_and_vram()
-        log.info("Whisper ASR model unloaded.")
-        return True
+            dropped = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop()
+        return dropped
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL — mirrors
         `QwenEngine.maybe_free_idle_design`. Matters mainly on the cuda path
-        (reclaims VRAM); on cpu it just frees host RAM. No-op while in use."""
+        (reclaims VRAM); on cpu it just frees host RAM. No-op while in use.
+
+        Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
+        used recently — skipping the lock here matters, a forward can run
+        for seconds and admission must not block on it. Re-validated UNDER
+        the lock before dropping (#1894): `transcribe` claims
+        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        so a counter that flips to nonzero WHILE this is queued on the lock
+        is otherwise invisible to the cheap check above. Calls
+        `_drop_model_locked()` directly rather than `unload()` — re-entering
+        `_infer_lock` here would self-deadlock.
+        """
         if self._model is None or self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
-        return self.unload()
+        with self._infer_lock:
+            if self._model is None or self._infer_in_flight > 0:
+                return False
+            if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+                return False
+            dropped = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop()
+        return True
 
 
 # ASR is a standalone singleton (not a synth `Engine`) — audio in, text out.
@@ -5188,6 +5229,29 @@ class SpeakerEngine:
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
 
+    def _drop_model_locked(self) -> bool:
+        """Reset the model field. CALLER MUST HOLD `_infer_lock`. Returns
+        whether a model was actually dropped, so callers skip the reclaim +
+        log when there was nothing to drop.
+
+        Split out (#1894) so `maybe_free_idle` can re-validate + drop under
+        the lock without going through the public `unload()` — `_infer_lock`
+        is non-reentrant, so calling `unload()` while already holding it
+        would self-deadlock. Mirrors `CoquiEngine._drop_model_locked`.
+        """
+        if self._model is None:
+            return False
+        self._model = None
+        return True
+
+    def _reclaim_after_drop(self) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_infer_lock` RELEASED — `_idle_evict` calls this synchronously on
+        the event loop, and `gc.collect()`-scale work under the lock would
+        stall /health for the duration (main.py, `_idle_evict` doc)."""
+        _reclaim_host_and_vram()
+        log.info("ECAPA speaker model unloaded.")
+
     def unload(self) -> bool:
         """Drop the model + reclaim. Idempotent. Returns True iff a model was
         actually freed (so the watchdog can log only real frees).
@@ -5197,24 +5261,44 @@ class SpeakerEngine:
         released — this is reached from `_idle_evict` on the event loop.
         """
         with self._infer_lock:
-            if self._model is None:
-                return False
-            self._model = None
-        _reclaim_host_and_vram()
-        log.info("ECAPA speaker model unloaded.")
-        return True
+            dropped = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop()
+        return dropped
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
         the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
-        freeing ~80–200 MB of host RAM. No-op while recently used."""
+        freeing ~80–200 MB of host RAM. No-op while recently used.
+
+        Cheap, lock-free fast-outs first (cuda-only guard, then nothing
+        loaded / mid-forward / used recently) — skipping the lock matters, a
+        forward can run for seconds and admission must not block on it.
+        Re-validated UNDER the lock before dropping (#1894): `embed` claims
+        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        so a counter that flips to nonzero WHILE this is queued on the lock
+        is otherwise invisible to the cheap check above. Calls
+        `_drop_model_locked()` directly rather than `unload()` — re-entering
+        `_infer_lock` here would self-deadlock.
+        """
         if _parse_device(self.device)[0] != "cuda" or self._model is None:
             return False
         if self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
-        return self.unload()
+        with self._infer_lock:
+            if _parse_device(self.device)[0] != "cuda" or self._model is None:
+                return False
+            if self._infer_in_flight > 0:
+                return False
+            if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+                return False
+            dropped = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop()
+        return True
 
 
 # SPK is a standalone singleton (not a synth `Engine`) — audio in, embedding out.
