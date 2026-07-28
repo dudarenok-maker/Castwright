@@ -92,8 +92,10 @@
   malformed book could previously have made Castwright try to swallow far more memory than it should.
   Nothing to do at your end, and nothing looks different.
 - Generation no longer stalls when a voice model you're done with is still
-  holding the graphics card — it now steps aside on its own. And stopping
-  Coqui mid-render can no longer interrupt the chapter being recorded.
+  holding the graphics card — it now steps aside on its own. Because Castwright
+  handles this itself now, the out-of-memory message no longer asks you to go
+  and stop Coqui by hand. And stopping Coqui mid-render can no longer interrupt
+  the chapter being recorded.
 
 # Castwright 1.14.0
 

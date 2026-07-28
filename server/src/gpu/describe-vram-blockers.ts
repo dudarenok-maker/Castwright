@@ -36,8 +36,9 @@ export interface VramBlockerHealth {
   // sidecar still reports Coqui residency here, but admission now auto-
   // evicts an idle XTTS itself, so naming it as a user-actionable blocker
   // would advise pressing a button the server already pressed. Kept on the
-  // type (rather than dropped) so the "does not list Coqui" test below can
-  // pin that this is a deliberate omission, not an oversight.
+  // type (rather than dropped) so the "does not list Coqui" test in the
+  // sibling .test.ts can pin that this is a deliberate omission, not an
+  // oversight.
   coquiLoaded?: boolean;
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
