@@ -201,3 +201,44 @@ def test_maybe_free_idle_restores_the_device_preference(monkeypatch):
     assert eng._device == "auto"
     assert eng._speakers == []
     assert eng._resolved_device == "cpu"
+
+
+def test_maybe_free_idle_runs_the_reclaim_outside_the_lock(monkeypatch):
+    """Moving `self._reclaim_after_drop(...)` inside the `with
+    self._synth_lock:` block leaves every other test in this file green —
+    it's a stated global constraint (main.py:5081-5082: `_idle_evict` calls
+    this synchronously on the event loop, so a reclaim held under the lock
+    would stall it), not something the other assertions catch. Spy on
+    `_reclaim_after_drop` and try a non-blocking acquire of the SAME lock
+    from inside it: if `maybe_free_idle` still holds it, the acquire fails."""
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._last_used = time.monotonic() - 120.0
+
+    lock_was_held_during_reclaim = []
+    real_reclaim = eng._reclaim_after_drop
+
+    def spy_reclaim(torch_module):
+        acquired = eng._synth_lock.acquire(blocking=False)
+        lock_was_held_during_reclaim.append(not acquired)
+        if acquired:
+            eng._synth_lock.release()
+        real_reclaim(torch_module)
+
+    monkeypatch.setattr(eng, "_reclaim_after_drop", spy_reclaim)
+
+    assert eng.maybe_free_idle(30.0) is True
+    assert lock_was_held_during_reclaim == [False]
+
+
+def test_maybe_free_idle_frees_with_a_negative_in_flight_counter(monkeypatch):
+    """Pins the `> 0` predicate specifically (not `!= 0`): `_synth_in_flight`
+    is incremented/decremented OUTSIDE `_synth_lock` in `synthesize`, so a
+    GIL switch mid `+=`/`-=` can in principle drift it negative. Under `!=
+    0` a negative value would wedge eviction off permanently; `maybe_free_idle`
+    must still free past the TTL."""
+    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    eng._last_used = time.monotonic() - 120.0
+    eng._synth_in_flight = -1
+
+    assert eng.maybe_free_idle(30.0) is True
+    assert eng._tts is None

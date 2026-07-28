@@ -394,6 +394,27 @@ def test_ensure_loaded_idempotent(monkeypatch, load_stubs):
     assert len(init_calls) == 1
 
 
+def test_ensure_loaded_stamps_last_used(monkeypatch, load_stubs):
+    """`maybe_free_idle` (#1894) fast-outs on `_last_used`, so a REAL load
+    must stamp it — not just the `test_coqui_idle_evict.py` fixture that
+    hand-sets `_last_used` on a fake-loaded engine and would pass even if
+    the production stamp were deleted entirely. `_last_used` starts at 0.0
+    (Task 1's `__init__`), so asserting `> 0.0` after a real
+    `_ensure_loaded` is exact and timing-independent — no before/after
+    comparison, which flakes on Windows' coarse monotonic clock (see
+    test_coqui_idle_evict.py's identical sentinel trick)."""
+    monkeypatch.setenv("COQUI_DEVICE", "cuda")
+    monkeypatch.setenv("COQUI_DEEPSPEED", "0")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    load_stubs.cuda_available = True
+
+    engine = main.CoquiEngine()
+    assert engine._last_used == 0.0
+    engine._ensure_loaded("xtts_v2")
+
+    assert engine._last_used > 0.0
+
+
 def test_speaker_manifest_falls_back_to_speaker_names(monkeypatch, load_stubs):
     """When the speaker manager exposes `speaker_names` but no `name_to_id`
     (older coqui-tts releases), main.py's second getattr must populate

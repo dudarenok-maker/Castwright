@@ -1303,6 +1303,25 @@ class CoquiEngine(Engine):
         # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
         # and only casts the ops where fp16 is safe (matmuls, attention),
         # which is where the speedup lives anyway.
+        #
+        # Stamp `_last_used` BEFORE publishing `_tts`, not after the rest of
+        # this method's bookkeeping (#1894 fix-round-1 Important-1): no lock
+        # is held across this whole tail, and `_ensure_loaded` runs on a
+        # worker thread while the event loop stays free to run
+        # `maybe_free_idle` concurrently. A stamp placed after `self._device
+        # = device` below leaves a window where another thread can already
+        # see `_tts is not None` with a STALE `_last_used` (0.0 on a first
+        # load, or the pre-evict timestamp on a reload) — long enough for
+        # `maybe_free_idle` to fire and run `_drop_model_locked()`, which
+        # restores `self._device = self._requested_device`, only for this
+        # thread to then overwrite it right back to the just-admitted card
+        # a few lines down. That reverts the #1730 gap-3 fix and pins the
+        # engine to a stale placement with `_tts` freshly `None`. Stamping
+        # first closes the window: any thread that observes `_tts is not
+        # None` necessarily observes a fresh timestamp too, and while this
+        # method is still running, `_tts` is `None` so `maybe_free_idle`'s
+        # fast-out already declines.
+        self._last_used = time.monotonic()
         self._tts = tts
         self._torch = torch
         self._resolved_device = device
@@ -1335,11 +1354,6 @@ class CoquiEngine(Engine):
             # still work, but validation falls back to permissive mode.
             log.warning("Could not enumerate Coqui speakers (%s). Skipping pre-validation.", e)
             self._speakers = []
-
-        # A freshly loaded model has not been "idle since epoch": without this
-        # stamp `maybe_free_idle` frees the model the user just spent ~90s
-        # loading, before its first synth ever runs (#1894).
-        self._last_used = time.monotonic()
 
     def unload(self) -> None:
         """Drop references to the loaded XTTS model and free GPU memory.
