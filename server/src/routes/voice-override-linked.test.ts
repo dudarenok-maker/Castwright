@@ -279,6 +279,44 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     expect(c?.voiceUuid).toBe('U-CLONE');
   });
 
+  /* GATE 2 I-B1 — the same refusal when the clone sits on the OTHER
+     clone-capable engine. The SET guard used to test only the engine being
+     written, so this passed: the coqui clone survived on disk while the
+     write pinned `ttsEngine: 'qwen'`, and `resolveCharacterEngine` then
+     routed every one of Wren's lines to the qwen voice instead. Nothing was
+     removed or replaced, and the person's voice stopped rendering anyway —
+     which is why asserting the slot's survival alone would be a placebo
+     here. `ttsEngine` is the assertion that discriminates. */
+  it('[I-B1] refuses a group SET on qwen when the character is cloned on COQUI — the retarget mutes the clone', async () => {
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U-CLONE',
+        ttsEngine: 'coqui',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-clone-1', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'someone-else' },
+    });
+    expect(res.body.updated.some((u: { bookId: string }) => u.bookId === bookA)).toBe(false);
+    expect(res.body.failed.some((f: { bookId: string }) => f.bookId === bookA)).toBe(true);
+
+    const c = findChar(BOOK_A, 'wren');
+    /* The clone is still the engine that renders — the retarget never landed. */
+    expect(c?.ttsEngine).toBe('coqui');
+    const slots = c?.overrideTtsVoices as Record<string, Record<string, unknown>>;
+    expect(slots?.qwen).toBeUndefined();
+    expect(slots?.coqui?.provenance).toBe('cloned');
+  });
+
   it('refuses (does not write) a group SET that would replace a cloned slot with a MALFORMED libraryUuid', async () => {
     /* CRITICAL-2 regression guard: the SET-path guard must test provenance
        ALONE (fail-safe), never the uuid-validating clonedSlotForEngine — a

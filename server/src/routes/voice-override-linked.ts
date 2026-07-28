@@ -38,7 +38,6 @@ import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast
 import type { CharacterOutput } from '../handoff/schemas.js';
 import {
   characterHasClonedSlot,
-  hasClonedProvenance,
   isCloneEngine,
   manifestSlotFor,
   cloneStorageKey,
@@ -239,15 +238,35 @@ export async function applyToBook(
 
   for (const c of cast.characters) {
     if (!want.has(c.id)) continue;
-    /* fs-38 Wave 3c Task 4 CRITICAL-2 fix: the SET-path guard must test
-       provenance ALONE (hasClonedProvenance), never the uuid-validating
-       clonedSlotForEngine — a cloned slot with a missing/malformed
-       libraryUuid is still a consented clone. A guard deciding whether to
-       *preserve* a slot must fail safe (preserve when in doubt); only code
-       that needs the uuid to resolve/derive/purge an artifact should
-       validate it. */
-    const blocked =
-      override === null ? characterHasClonedSlot(c) : hasClonedProvenance(c, override.engine);
+    /* fs-38 Wave 3c Task 4 CRITICAL-2 fix: this guard must test provenance
+       ALONE, never the uuid-validating clonedSlotForEngine — a cloned slot
+       with a missing/malformed libraryUuid is still a consented clone. A
+       guard deciding whether to *preserve* a slot must fail safe (preserve
+       when in doubt); only code that needs the uuid to resolve/derive/purge
+       an artifact should validate it.
+
+       GATE 2 I-B1 — the SET path used to narrow that to
+       `hasClonedProvenance(c, override.engine)`: the engine BEING WRITTEN,
+       and only that one. But the write below does not just fill a slot, it
+       pins `next.ttsEngine = override.engine` — so a character cloned on the
+       OTHER clone-capable engine passed the guard and was silently retargeted
+       off its clone. The marker survived on disk and became inert:
+       `resolveCharacterEngine` routes every one of that character's lines to
+       the incoming engine's voice instead, with no error, no per-book `failed`
+       entry, and no warning. Property 1's failure mode wearing a disguise —
+       and flatly contrary to this guard's own message, which promises a
+       series rebaseline "refuses to remove or replace it".
+
+       So both paths now use the whole-character `characterHasClonedSlot`,
+       which is exactly the predicate Task 6a used to close the identical
+       engine-retarget shape in cast-link-prior.ts (there, `sourceIsCloned` /
+       `targetIsCloned` veto the `ttsEngine` assignment as well as the
+       denormalise). Refusing a cloned character's series rebaseline outright
+       is the intended cost: a bulk propagation reaching a book the user isn't
+       looking at is precisely where a silent mute lands unseen, and the
+       refusal names the character and tells the user to reassign it
+       directly. */
+    const blocked = characterHasClonedSlot(c);
     if (blocked) {
       throw new Error(
         `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +

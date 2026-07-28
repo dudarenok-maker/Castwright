@@ -61,7 +61,11 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
-import { characterHasClonedSlot, hasClonedProvenance } from '../tts/clone-engines.js';
+import {
+  CLONE_ENGINE_LIST,
+  characterHasClonedSlot,
+  hasClonedProvenance,
+} from '../tts/clone-engines.js';
 
 /* The model keys the bespoke Qwen engine synthesises under — BOTH quality tiers
    (fs-56). Cached auditions are named `<scope>-<modelKey>-<hash>.mp3`, and an
@@ -588,10 +592,27 @@ voicesRouter.put('/:voiceId/pin', async (req: Request, res: Response) => {
    refuse the whole clear atomically instead of wiping some books before
    discovering a conflict in another. Deliberately NOT implemented by
    reusing `forEachMatchingCastCharacter` itself (which always persists,
-   even for a no-op mutate) — a validation pass must not touch disk. */
+   even for a no-op mutate) — a validation pass must not touch disk.
+
+   GATE 2 I-B1 — `otherThanEngine` serves the SET branch, which had no
+   pre-check at all. A SET does not only fill a slot: it pins
+   `replacement.ttsEngine = override.engine` (see applyOverrideToCastFiles)
+   across every matching book in scope. A character cloned on a DIFFERENT
+   clone-capable engine was therefore silently retargeted off its clone —
+   the marker survives on disk but goes inert, because
+   `resolveCharacterEngine` now routes its lines to the incoming engine.
+   Same shape Task 6a closed in cast-link-prior.ts and this wave closed in
+   `voice-override-linked.ts`'s applyToBook, which is why the predicate is
+   the same fail-safe provenance test.
+
+   Scoped to the OTHER engines deliberately: a SET on the engine that
+   carries the clone is the documented [DELTA-I5] wart — the slot's
+   libraryUuid/provenance are preserved and the clone still renders, so
+   there is nothing to mute and nothing to refuse. */
 async function hasClonedSlotAmongMatches(
   voiceId: string,
   seriesFilter?: { author: string; series: string },
+  otherThanEngine?: TtsEngine,
 ): Promise<boolean> {
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
@@ -607,7 +628,12 @@ async function hasClonedSlotAmongMatches(
         if (!cast?.characters?.length) continue;
         for (const c of cast.characters) {
           if ((c.voiceId ?? c.id) !== voiceId) continue;
-          if (characterHasClonedSlot(c)) return true;
+          const cloned = otherThanEngine
+            ? CLONE_ENGINE_LIST.some(
+                (e) => e !== otherThanEngine && hasClonedProvenance(c, e),
+              )
+            : characterHasClonedSlot(c);
+          if (cloned) return true;
         }
       }
     }
@@ -626,9 +652,14 @@ async function hasClonedSlotAmongMatches(
    fs-38 Wave 3c Task 4 — the CLEAR branch (`override: null`) refuses with
    409 when any matching character carries a consented cloned voice on any
    engine: a rebaseline is a designed-voice operation, and silently
-   reverting a real person's voice to a catalog voice is never correct. The
-   SET branch is unaffected — `applyOverrideToCastFiles` already spreads the
-   existing slot (line ~781), so it never drops libraryUuid/provenance. */
+   reverting a real person's voice to a catalog voice is never correct.
+
+   GATE 2 I-B1 — the SET branch refuses too, but only when the clone is on a
+   DIFFERENT clone-capable engine than the one being written. `applyOverride
+   ToCastFiles` does spread the existing slot (so it never drops
+   libraryUuid/provenance), which is why a same-engine SET stays allowed —
+   but it also pins `ttsEngine` to the incoming engine, which retargets a
+   character off a clone carried on the other engine and mutes it silently. */
 voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   const { voiceId } = req.params;
   const body = (req.body ?? {}) as { override?: unknown; scope?: unknown; bookId?: unknown };
@@ -680,6 +711,18 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
         error:
           `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
           `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
+      });
+    }
+    /* GATE 2 I-B1 — the SET branch's sibling refusal. The write pins
+       `ttsEngine` to the incoming engine on every matching character, so a
+       character cloned on a DIFFERENT clone-capable engine would keep its
+       marker and stop rendering it. Fail loud instead. */
+    if (parsed !== null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine))) {
+      return res.status(409).json({
+        error:
+          `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
+          `engine — switching it to ${parsed.engine} would silently stop that voice rendering. ` +
+          `Reassign that character directly instead.`,
       });
     }
     const updates = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);

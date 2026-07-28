@@ -1309,6 +1309,78 @@ describe('PUT /api/voices/:voiceId/override — refuses to clear a cloned slot (
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     expect(one.characters[0].overrideTtsVoices).toBeUndefined();
   });
+
+  /* GATE 2 I-B1 — the SET branch's half. `applyOverrideToCastFiles` pins
+     `ttsEngine` to the incoming engine on every matching character, so a
+     SET on engine B against a character cloned on engine A left the clone
+     marker intact but INERT: `resolveCharacterEngine` routes every one of
+     that character's lines to B's voice from then on, with no error and no
+     `failed` entry. The clone survives on disk and stops being heard —
+     Property 1's failure mode with the marker still in place. */
+  it('[I-B1] 409s a SET on a different engine when a linked character is cloned on the other one, and writes nothing', async () => {
+    seedClonedSlot(castPath(BOOK_TWO)); // cloned on QWEN
+    const engineBefore = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO).characters[0]
+      .ttsEngine;
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/different\s+engine/);
+
+    /* Nothing was written anywhere in scope — not the coqui slot, and (the
+       assertion that discriminates) not the `ttsEngine` retarget that would
+       have muted the clone while leaving its marker in place. */
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    const slots = two.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>;
+    expect(slots?.coqui).toBeUndefined();
+    expect(slots?.qwen?.provenance).toBe('cloned');
+    expect(two.characters[0].ttsEngine).toBe(engineBefore);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  it('[I-B1] 409s a SERIES-scoped SET on a different engine too', async () => {
+    seedClonedSlot(castPath(BOOK_ONE));
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' }, scope: 'series', bookId: bookOneId });
+    expect(res.status).toBe(409);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slots = one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>;
+    expect(slots?.coqui).toBeUndefined();
+    expect(slots?.qwen?.provenance).toBe('cloned');
+  });
+
+  it('[I-B1] still allows a SET on the SAME engine as the clone (the [DELTA-I5] wart, deliberately untouched)', async () => {
+    /* The discriminating control: the guard keys off "cloned on a DIFFERENT
+       engine", not "cloned at all". A same-engine SET preserves
+       libraryUuid/provenance and keeps rendering the clone, so there is
+       nothing to mute — refusing it would break the documented Task 16
+       behaviour rather than close a hole. */
+    seedClonedSlot(castPath(BOOK_ONE)); // cloned on QWEN
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'brann-redesigned' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.name).toBe('brann-redesigned');
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('[I-B1] still allows a SET when no linked character is cloned at all', async () => {
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+  });
 });
 
 describe('PUT /api/voices/:voiceId/override — clears a stale libraryUuid/provenance on an explicit pick (fs-38 Wave 3c Task 16, DELTA-I5)', () => {
