@@ -82,10 +82,23 @@ export const voicesSlice = createSlice({
       }
       const map = { ...(v.overrideTtsVoices ?? {}) };
       /* fs-38 Wave 3c Task 4 — spread the existing slot (mirrors the server's
-         applyOverrideToCastFiles, voices.ts:781) so setting a new name
+         applyOverrideToCastFiles, voices.ts:857-874) so setting a new name
          doesn't drop the slot's other fields — notably libraryUuid/
-         provenance, which identify a consented clone. */
-      map[override.engine] = { ...(map[override.engine] ?? {}), name: override.name };
+         provenance, which identify a consented clone. But the server only
+         PRESERVES those markers when the existing slot's provenance is
+         already 'cloned' (its hasClonedProvenance fail-safe read); for any
+         other existing provenance (designed/imported/none) it deletes both
+         so an explicit pick doesn't keep resolving to the old clone/design.
+         Mirror that conditional delete here, or a catalogue pick over a
+         designed slot leaves the client resolving/sampling the stale
+         library voice while the server renders the user's actual pick. */
+      const existingSlot = map[override.engine];
+      const nextSlot: OverrideSlot = { ...(existingSlot ?? {}), name: override.name };
+      if (existingSlot?.provenance !== 'cloned') {
+        delete nextSlot.libraryUuid;
+        delete nextSlot.provenance;
+      }
+      map[override.engine] = nextSlot;
       v.overrideTtsVoices = map;
       /* Project the active engine's slot back into the legacy field
          so legacy badge/UI code keeps working until it's migrated to

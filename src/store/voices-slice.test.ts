@@ -194,10 +194,44 @@ describe('voicesSlice — setOverride', () => {
     expect(next.voices).toEqual(start.voices);
   });
 
-  it('preserves libraryUuid/provenance on the touched slot when only the name changes (fs-38 Wave 3c Task 4)', () => {
-    /* Mirrors the server-side spread at voices.ts:781 — setting a new name
-       for an engine must not drop the slot's other fields (notably
-       libraryUuid/provenance, which the resolver depends on). */
+  it('preserves libraryUuid/provenance on the touched slot when the existing slot is CLONED (fs-38 Wave 3c Task 4)', () => {
+    /* Mirrors the server-side spread at voices.ts:857-874 — setting a new
+       name for an engine must not drop the slot's other fields when the
+       existing slot is a consented clone, or the marker gets erased out
+       from under the resolver. */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [
+          voice('v_brann', {
+            overrideTtsVoices: {
+              qwen: { name: 'brann-old', libraryUuid: 'lib-1', provenance: 'cloned' },
+            },
+          }),
+        ],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.setOverride({
+        voiceId: 'v_brann',
+        override: { engine: 'qwen', name: 'brann-new' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      qwen: { name: 'brann-new', libraryUuid: 'lib-1', provenance: 'cloned' },
+    });
+  });
+
+  it('drops libraryUuid/provenance on the touched slot when the existing slot is DESIGNED, not cloned (fs-38 Wave 3c Gate 2 C-1 fix)', () => {
+    /* The server's applyOverrideToCastFiles only preserves libraryUuid/
+       provenance when the existing slot's provenance is already 'cloned'
+       (hasClonedProvenance) — a designed (or otherwise non-cloned) slot has
+       both deleted so an explicit catalogue pick doesn't keep resolving to
+       the stale library voice. A client mirror that always preserved these
+       fields would resolve/sample the OLD library voice (xtts-lib-1)
+       immediately after the pick while the server renders the user's new
+       choice. */
     const start = voicesSlice.reducer(
       undefined,
       voicesActions.hydrate({
@@ -217,9 +251,7 @@ describe('voicesSlice — setOverride', () => {
         override: { engine: 'qwen', name: 'brann-new' },
       }),
     );
-    expect(next.voices[0].overrideTtsVoices).toEqual({
-      qwen: { name: 'brann-new', libraryUuid: 'lib-1', provenance: 'designed' },
-    });
+    expect(next.voices[0].overrideTtsVoices).toEqual({ qwen: { name: 'brann-new' } });
   });
 });
 
