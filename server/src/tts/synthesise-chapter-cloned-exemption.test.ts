@@ -360,4 +360,51 @@ describe('applyQwenFallback — cloned exemption generalises to ANY clone-capabl
     expect(qwen.calls).toHaveLength(0);
     expect(coqui.calls).toHaveLength(0); // fs-60's Qwen→Coqui branch must not fire for a cloned character
   });
+
+  /* M15 (review) — this same C1 throw (synthesise-chapter.ts:1348) used to
+     sit behind a combined condition that also depended on `!!resolveForEngine`
+     being truthy; Task 21 split C1 into its own unconditional check, so it now
+     fires even when NO `resolveForEngine` is supplied at all — a caller with
+     no fallback engine wired up at all still gets the fail-loud guarantee
+     rather than silently falling through. Strictly a strengthening, but
+     undocumented by a test until now. Defeats the pre-pass the same way the
+     two cases above do, so this isolates `applyQwenFallback`'s own guard. */
+  it('raises even when resolveForEngine is not supplied at all (no fallback engine wired up)', async () => {
+    vi.resetModules();
+    vi.doMock('./clone-engines.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./clone-engines.js')>();
+      return { ...actual, characterHasClonedSlot: () => false };
+    });
+    const {
+      synthesiseChapter: synthesiseChapterFresh,
+      UnresolvableClonedVoiceError: UnresolvableClonedVoiceErrorFresh,
+    } = await import('./synthesise-chapter.js');
+
+    const qwenClonedCast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: { qwen: { name: 'Wren clone', libraryUuid: 'lib-clone', provenance: 'cloned' } },
+      },
+    ];
+    const qwen = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+
+    await expect(
+      synthesiseChapterFresh({
+        sentences: [sentence(1)],
+        cast: qwenClonedCast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        // No resolveForEngine at all — the old combined guard would have
+        // skipped the throw entirely here.
+        qwenUnavailable: true,
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceErrorFresh);
+    expect(qwen.calls).toHaveLength(0);
+  });
 });

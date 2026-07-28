@@ -1460,7 +1460,24 @@ export async function synthesiseChapter(
      though this run's render will never touch qwen. */
   const clonedEngineFor = (c: CastCharacter, routedEngine: TtsEngine): CloneEngine => {
     if (isCloneEngine(routedEngine) && hasClonedProvenance(c, routedEngine)) return routedEngine;
-    return CLONE_ENGINE_LIST.find((e) => hasClonedProvenance(c, e)) ?? 'qwen';
+    /* MINOR-3 (review) — the `.find()` below can never actually return
+       undefined: every caller of `clonedEngineFor` (below) has already
+       filtered `c` on `characterHasClonedSlot(c)`, which is `true` iff
+       `hasClonedProvenance(c, e)` holds for at least one `e` in
+       `CLONE_CAPABLE_ENGINES` — the same members `CLONE_ENGINE_LIST`
+       iterates (see its own doc comment). TS still needs a fallback
+       because `.find()`'s return type is `CloneEngine | undefined`; an
+       explicit throw is less misleading than silently defaulting to
+       'qwen', which would read as a real decision rather than "this
+       should be impossible." */
+    const found = CLONE_ENGINE_LIST.find((e) => hasClonedProvenance(c, e));
+    if (!found) {
+      throw new Error(
+        `clonedEngineFor: "${c.name ?? c.id}" has no cloned slot on any clone-capable engine ` +
+          `— caller must filter on characterHasClonedSlot() first.`,
+      );
+    }
+    return found;
   };
 
   /* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing filter, generalised
