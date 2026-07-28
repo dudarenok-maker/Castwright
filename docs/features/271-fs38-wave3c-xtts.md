@@ -31,9 +31,12 @@ owner: null
 > per-engine state, Qwen and Coqui independently); Cast picker (a cloned
 > voice can be cast on a Coqui-routed character; audition uses the routed
 > engine)
-> OpenAPI ops: no new endpoints on the Node contract this wave (the new
-> sidecar routes `POST /xtts/clone-voice` / `POST /xtts/evict-voice` are
-> internal, Node-to-sidecar only, not part of `openapi.yaml`)
+> OpenAPI ops: the new sidecar routes `POST /xtts/clone-voice` / `POST
+> /xtts/evict-voice` are internal, Node-to-sidecar only, not part of
+> `openapi.yaml`. The follow-up campaign below did add one Node-contract
+> endpoint — `DELETE /api/voice-library/{voiceUuid}/assign` (unassign) —
+> plus a corrected response schema for the existing assign/delete routes
+> (`written`, `deleted: false` + `artifactPurgeIncomplete`).
 
 Source spec: [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md) §2.3 (designed clip-persist), §3.2 (latents persist), §5.3 (sidecar), §5.6 (erasure), §6/§8 (3c scope)
 Implementation plan: [`docs/superpowers/plans/2026-07-26-fs38-wave3c-xtts.md`](../superpowers/plans/2026-07-26-fs38-wave3c-xtts.md)
@@ -421,16 +424,26 @@ CLAUDE.md's Before-shipping checklist step 3.
 
 ## Known limitations
 
-> **This list is not exhaustive, and the wave has had no whole-branch
-> review yet.** Every task-level review on this branch left a roll-up of
-> deferred Minor findings (M1–M24 in the implementation ledger) for GATE 1
-> (a whole-branch review) to triage; **GATE 1 has not run, nor has GATE 2
-> (independent review) or GATE 3 (verify/push/PR/CI).** Roughly five of
-> those Minors are folded into the items below because they were judged
-> consent-adjacent or otherwise load-bearing enough to record now; the
-> other ~19 are still sitting in the ledger, untriaged, and this list
-> should not be read as their replacement. A future reader who wants the
-> full picture needs the ledger, not just this section.
+> **This list is not exhaustive.** Every task-level review on this branch
+> left a roll-up of deferred Minor findings (M1–M24 in the implementation
+> ledger) for GATE 1 (a whole-branch review) to triage. **GATE 1 has since
+> run and closed a cluster of them** — the persona-redesign provenance gap
+> (the most serious finding on the branch: `/redesign`/`/promote` could
+> silently overwrite a cloned voice's identity with a stranger's), a
+> crash-orphan artifact sweep, several remaining case-fold gaps, a
+> fail-soft fix for a designed Coqui slot that outlives its library entry,
+> the My-voices card's Preview button preferring a ready engine over always
+> Qwen, and half a dozen smaller `CoquiEngine` hardening fixes — see the
+> "GATE 1 whole-branch review" entry in `docs/release-notes-next.md` for
+> the full account. **GATE 2 (independent review) and GATE 3
+> (verify/push/PR/CI) have not run.** Roughly five of the M1–M24 Minors were
+> already folded into the items below because they were judged
+> consent-adjacent or otherwise load-bearing enough to record early; whether
+> GATE 1's own findings (numbered separately, C1–C5/F1–F2/M-1–M-6/MIN-1–MIN-6
+> in its review report rather than the M1–M24 ledger) also discharge any of
+> the remaining ledger entries has not been cross-checked here — this list
+> should still not be read as the ledger's replacement. A future reader who
+> wants the full picture needs the ledger itself.
 
 - **(a) All three of the plan's originally-not-landed tasks have since
   landed** (Task 27 as of `b1685fb5`, most recently) — each closed a
@@ -571,13 +584,27 @@ CLAUDE.md's Before-shipping checklist step 3.
   cloned, fail-soft for designed), the same shape the leading Coqui-side
   evict already had. Filed as
   [#1893](https://github.com/dudarenok-maker/Castwright/issues/1893), closed.
-  **The second remains open, deliberately**: a chapter with zero Coqui
-  presence immediately following a Coqui chapter still never evicts XTTS at
-  all (the fs-60 render path only evicts qwen-for-coqui, never the
-  reverse) — closing it is exactly the kind of over-wide regression an
-  earlier fix round for this wave had to back out of, so it needs its own
-  design rather than a quick patch. Filed as
-  [#1894](https://github.com/dudarenok-maker/Castwright/issues/1894).
+  **The second is now closed too, by two independent mechanisms.**
+  [#1894](https://github.com/dudarenok-maker/Castwright/issues/1894)'s
+  sidecar half has since **shipped on `main`**: `CoquiEngine.maybe_free_idle`,
+  `_synth_in_flight`/`_last_used`, and the VRAM-starved idle reclaim now free
+  a resident-but-idle XTTS before reporting `noCapacity` — admission-time,
+  demand-driven, and global (it frees XTTS the moment *any* starved GPU
+  operation needs the room, on any book). This branch adds a **second,
+  complementary** mechanism on top, Node-side (`bd59cae3`, "evict XTTS once
+  a chapter's Coqui phase is done"): `synthesiseChapter` now evicts Coqui at
+  the one point where "no further Coqui work is queued this chapter" is a
+  known fact rather than a guess — the end of the chapter's Coqui phase —
+  mirroring the existing Qwen-side evict under the identical mixed-engine
+  gate. This is reactive and local (fires at a specific chapter boundary a
+  render plan already knows), where main's is idle-driven and global (fires
+  on demand, at admission, with no notion of "this chapter's phase ended").
+  Both are fail-soft. Keeping both mechanisms rather than consolidating into
+  one was a deliberate owner decision — the over-wide regression an earlier
+  fix round for this wave had to back out of is exactly the risk a merge
+  would reintroduce — and consolidation is filed separately as
+  [#1932](https://github.com/dudarenok-maker/Castwright/issues/1932)
+  (`side-18`, `type:chore`).
 - **(m) A fourth inline copy of the `['narrator', 'char-narrator']` pair.**
   Already duplicated across `tts-voice-mapping.ts`, `routes/voices.ts`
   (`isNarratorId`), and `voice-style.ts` before this wave; Task 23's
@@ -596,13 +623,20 @@ CLAUDE.md's Before-shipping checklist step 3.
   [#1896](https://github.com/dudarenok-maker/Castwright/issues/1896), closed.
 - **(o) An explicit stock-voice pick over a cloned slot still renders the
   clone — the user's choice is ignored, and a real person's voice plays
-  instead** `[DELTA-I5]`. The "unassign a library voice" affordance this
-  needs was carried forward twice — first to Task 24, then to Task 25 — and
-  never actually delivered in either. Consent-adjacent: this isn't a
-  substitution *away* from a real person's voice (which Property 1 already
-  forbids), it's the opposite failure — a user trying to move *off* a
-  cloned voice and not succeeding. Not yet filed as its own issue; flagged
-  here from the ledger's roll-up (`DELTA-I5`) rather than lost.
+  instead** `[DELTA-I5]` — **now closed.** The "unassign a library voice"
+  affordance this needed was carried forward twice — first to Task 24, then
+  to Task 25 — and never actually delivered in either; it landed in the
+  follow-up campaign instead (`cd5e91ac` + `839e3a36`, "report the assign's
+  written slots and add an unassign route" / "reconcile a library assign
+  and ship a Remove voice control"). A new `DELETE
+  /api/voice-library/{voiceUuid}/assign?bookId=&characterId=` route clears
+  every `overrideTtsVoices` slot on that one character whose `libraryUuid`
+  is this voice, never refusing (it destroys no artifact, so it works even
+  against a revoked or already-deleted entry), and the profile drawer gains
+  a "Remove voice" control that dispatches it. Consent-adjacent: this
+  wasn't a substitution *away* from a real person's voice (which Property 1
+  already forbade), it was the opposite failure — a user trying to move
+  *off* a cloned voice and not succeeding.
 - **(p) A revoke's timing guarantee is scoped to the pre-pass, not the
   chapter.** Task 22's per-arm VRAM-eviction discipline (Invariant 8) is
   explicit in its own code comment that it does not extend past the

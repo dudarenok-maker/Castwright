@@ -107,6 +107,24 @@
   redesign meant to replace it actually existed — so promoting a second time, before a first
   promote had produced anything new, could delete your live voice for nothing. It now checks
   first.
+- **A cloned voice can no longer be silently overwritten by a redesign.** Editing a cloned voice's
+  persona used to be able to replace it in place with a completely different, synthesised voice —
+  while everything on screen kept calling it by the original name and nothing warned you. Redesigning
+  or promoting a cloned voice is now refused outright, so the voice you cloned stays the one you get.
+- **Take a library voice back off a character.** Until now there was no way to undo an assignment —
+  you could put a My-voices entry on a character, but never remove just that link, short of picking
+  a different voice over it. There's a Remove-voice control right in the profile drawer now, and if
+  Castwright can't actually put a voice on the engine you're using — a designed voice with no saved
+  sample, say — it tells you which part of the assignment stuck instead of quietly showing one that
+  isn't really there.
+- **Deleting a library voice now only claims success when it actually erased everything.** If a
+  stray file couldn't be removed, Castwright used to say the voice was gone anyway. It's honest
+  about it now, and keeps the entry around so you — and Castwright's own consent checks — can still
+  see it and try again.
+- **Previewing a voice in My voices now uses whichever copy is actually ready.** The Play button on
+  a voice's card always tried its Qwen copy first, even when that copy wasn't ready and the other
+  engine's was — so it could fail on a voice that genuinely had something to play. It now plays
+  whichever copy is ready.
 - Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
@@ -120,7 +138,8 @@
   it away didn't work, the whole chapter stopped there — even though the recording itself was
   fine. Now it notes the problem in the log and carries on with the chapter. It also no longer
   waits forever when the speech engine is busy with another book, and it stops promptly when you
-  pause.
+  pause. It also now puts the second engine away again once it's done with it for that chapter,
+  instead of leaving it taking up room through chapters that never needed it.
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
   outside code Castwright is built on — including the component that opens your EPUB files, where a
   malformed book could previously have made Castwright try to swallow far more memory than it should.

@@ -122,7 +122,7 @@ and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
 book fixture that actually routes to Coqui.
 *Plans:* 267, 268, 271 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
 
-**Four checks added by the post-32 follow-up campaign, same box/setup as
+**Six checks added by the post-32 follow-up campaign, same box/setup as
 above — batch them into the same session:**
 
 1. **The `preparing-voice` phase (#1813).** Render a chapter with a
@@ -172,8 +172,20 @@ above — batch them into the same session:**
    on either path. Server-side emission is already covered by
    `server/src/routes/chapter-qa-repair.test.ts`; what is owed here is that
    the real (non-mock) stream reaches the real toast stack.
+6. **Preview plays on the ready engine, not always Qwen.** The My-voices card's
+   Preview button used to always request the Qwen artifact; a voice whose Qwen
+   copy is stale/failed but whose Coqui copy is ready 409'd on every Preview
+   even though it could genuinely play. Confirm on the box: get a cloned or
+   designed voice into a state where `engines.qwen.status` is not `ready` but
+   `engines.xtts.status` is `ready` (e.g. a revoked-then-restored Qwen leg, or
+   a Coqui-only clone with no Qwen derive yet), then press Preview on its
+   My-voices card and confirm real Coqui audio plays instead of a 409 toast. A
+   voice with both engines ready should still preview on Qwen (the primary
+   engine, and the one carrying the session's 1.7B tier pin). Only mock-mode
+   coverage exists (`voice-library-card.test.tsx`); what is owed is the real
+   sidecar round trip.
 
-*Pass/fail criteria for all five:* `docs/features/271-fs38-wave3c-xtts.md`.
+*Pass/fail criteria for all six:* `docs/features/271-fs38-wave3c-xtts.md`.
 *Hardware:* the same single 8 GB box as the rest of Group A, XTTS weights
 installed (`install-coqui.mjs`/`.ps1`/`.sh`), no additional prerequisites
 beyond what A1 already lists above.

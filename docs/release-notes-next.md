@@ -299,19 +299,23 @@ history at cut time.
   weights-path probe never matched Coqui's lazy-fetched weights) plus new `test_xtts_clone_sanity`
   / `test_xtts_designed_sanity` loose-check cases, including a long-sentence case for the
   `enable_text_splitting` crash class. **One planned task did not land in this delivery** — an
-  engine-aware library sample route, so the card's Play button still always auditions the Qwen
+  engine-aware library sample route, so the card's Play button always auditioned the Qwen
   artifact even for a Coqui-primary card
-  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). Two other consent-adjacent
-  gaps this wave's review surfaced — a manual cast-link route that bypassed the library consent
-  check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and a wholesale
-  `PUT /api/books/:bookId {slice:'cast'}` route that let a client restamp a character's
+  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). The route itself gained
+  engine-awareness before this entry was first written; the remaining gap — the My-voices card's
+  own Play button never asking for Coqui — is closed by the follow-up campaign below. Two other
+  consent-adjacent gaps this wave's review surfaced — a manual cast-link route that bypassed the
+  library consent check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and
+  a wholesale `PUT /api/books/:bookId {slice:'cast'}` route that let a client restamp a character's
   `voiceUuid`/engine-slot pair with no guard at all
   ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), found during this wave's
-  own review) — were **both closed by the follow-up campaign below**, not left open. Roughly
+  own review) — were **all closed by the follow-up campaign below**, not left open. Roughly
   twenty further pre-existing or adjacent gaps this wave's review surfaced —
   most still untriaged in the implementation ledger's Minor roll-up — are catalogued in the plan's
-  Known limitations, with follow-up issues for the load-bearing ones. **The whole-branch review
-  gates (GATE 1/2/3) have not run on this branch yet.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
+  Known limitations, with follow-up issues for the load-bearing ones. **GATE 1 of the whole-branch
+  review gates has since run on this branch and closed a cluster of cloned-voice correctness
+  findings** — see the follow-up campaign entry below; **GATE 2 (independent review) and GATE 3
+  (verify/push/PR/CI) remain outstanding.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
   Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
   Live-GPU acceptance owed — see the plan's "Owed on-box acceptance" and Section E of
   `docs/testing/fs38-wave3-onbox-acceptance.md`.
@@ -333,6 +337,75 @@ history at cut time.
     `libraryUuid` — is now included in the resolver pre-pass's revocation check, Qwen-only
     since Coqui has no such exemption
     ([#1891](https://github.com/dudarenok-maker/Castwright/issues/1891)).
+  - **GATE 1 whole-branch review — cloned-voice correctness findings, now closed.** The wave's
+    first whole-branch review pass surfaced and closed a cluster of correctness gaps in the
+    cloned/designed-voice paths on both engines. Most serious: **persona redesign could silently
+    overwrite a cloned voice's identity** — `/redesign` and its `/promote` had no provenance gate,
+    so editing a cloned card's persona overwrote its `.pt` in place with a stranger's synthesised
+    voice while every cast slot still read `provenance: 'cloned'` — no error, no badge change, the
+    chapter then rendering that stranger's voice under the cloned speaker's name. Both routes now
+    403 outright on a cloned entry (fail-closed by owner ruling; a re-consent flow is left as a
+    future decision). Alongside it: case-folding for the clone-key comparisons that decide whether
+    a request lands on a real clone or falls through to a substituted catalogue voice is now
+    applied at the last sites that had missed it — the substitution guard, and the one route that
+    actually plays audio (the sample-consent check, previously bypassable with `XTTS-<uuid>`) — plus
+    the equivalent gate inside the sidecar's own latents lookup. Crash-orphaned temp artifacts (a
+    staging file the sidecar's atomic-save leaves behind when the process is hard-killed mid-write
+    — a scenario this project has already hit) are now swept on clone purge, closing a gap where
+    revoke reported clean erasure while conditioning latents or the person's raw reference clip
+    survived on disk. A designed voice's Coqui slot that outlives its library entry (deleted
+    between assign and confirm, or an unparseable manifest) now fails soft back to the catalogue
+    instead of hard-failing the chapter, and reuse hydration no longer overrides a character's own
+    designed Coqui slot with a source book's Qwen voice when the character carries no `qwen`
+    override at all. The **My-voices card's Preview button now plays on whichever engine's
+    artifact is actually ready** rather than always requesting Qwen — previously a Coqui-ready/
+    Qwen-stale entry 409'd on every preview despite being genuinely playable — closing the
+    remaining gap [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) left after
+    Task 27 made the route itself engine-aware. The sidecar's own `voice_language_unsupported` 409
+    (the voice IS cloned and loaded, but the XTTS model doesn't list the requested language) is
+    now mapped through both Node sample routes instead of falling through to a generic 502 whose
+    remedy copy ("design it first") cannot work for this case. Six smaller hardening fixes landed
+    in `CoquiEngine`'s cloned-voice path (a safe tensor-only latents load, an unload race, an
+    evict-epoch miscount, an atomic manifest write, and rejecting a clone stored under the wrong id
+    prefix), plus one error-message consistency fix — the unavailable-engine remedy now names Qwen
+    before Coqui regardless of report order. (refs #624)
+  - **Assign now reports what it actually wrote; a voice can be taken back off a character; DELETE
+    stops overclaiming erasure.** `POST /:voiceUuid/assign` used to answer a bare `{ updated: 1 }`,
+    so the profile drawer mirrored a Coqui assignment into redux on every 200 even when the entry
+    had no retained reference clip to derive from — a designed voice with no retained clip
+    displayed as a Coqui "My voice" assignment `cast.json` never actually carried. The route now
+    reports `written: CloneEngine[]` (derived from the same `shouldWriteCoquiSlot` flag the write
+    itself uses, so the two cannot disagree), and the drawer reconciles its optimistic write
+    against it, surfacing an inline notice when the routed engine's slot was declined. A new
+    `DELETE /:voiceUuid/assign?bookId=&characterId=` route gives the profile drawer a **"Remove
+    voice" control** — the first way to take a library voice back OFF a character: `PUT
+    /api/voices/:voiceId/override` refuses to clear a cloned slot outright and preserves cloned
+    provenance on a set, so picking a stock voice over a clone previously still rendered the clone.
+    Unassign never refuses — it destroys no artifact, only the character's `overrideTtsVoices`
+    slot(s), and works even against a revoked or already-deleted entry. Separately, `DELETE
+    /:voiceUuid` (the library entry itself) no longer answers an unconditional `{ deleted: true }`:
+    when `purgeCloneArtifacts` fails to erase every artifact, the manifest entry is now
+    deliberately **retained** (`{ deleted: false, artifactPurgeIncomplete,
+    artifactPurgeFailedPaths }`) rather than removed — deleting the manifest on a partial purge
+    would have left a surviving artifact *less* gated than before the delete, since the consent
+    checks key off that entry existing. A sibling fix keeps the manifest's `master` clip pointer
+    intact when a revoke's clip unlink fails (Windows `EBUSY` can leave the file present with
+    nothing naming it), so a retried revoke genuinely re-attempts the unlink instead of reporting a
+    clean erasure that didn't happen. (refs #624)
+  - **XTTS is now evicted at the end of a chapter's Coqui phase, not just kept off Qwen's.**
+    fs-60's mixed-engine dispatch evicted Qwen FOR the Coqui phase but never freed Coqui back — so
+    XTTS (~3.5 GB) stayed resident for the rest of the render, including a following chapter with
+    no further Coqui work at all, which on a Qwen-default book is the common case. This is a
+    **second, complementary** mechanism to the sidecar-side idle reclaim
+    ([#1894](https://github.com/dudarenok-maker/Castwright/issues/1894), `CoquiEngine.maybe_free_idle`)
+    already shipped on `main`: that one is admission-time and demand-driven (global — it frees an
+    idle XTTS the moment *any* starved GPU operation needs the room); this one is **Node-side and
+    reactive**, firing at the one point in `synthesiseChapter` where "no further Coqui work is
+    queued this chapter" is a known fact rather than a guess — mirroring the existing Qwen-side
+    evict under the identical mixed-engine gate. Fail-soft: every group is already synthesised by
+    the time it runs, so a sidecar recycle window must not destroy completed work. Consolidating
+    the two mechanisms into one is a deliberate, deferred owner decision, filed as
+    [#1932](https://github.com/dudarenok-maker/Castwright/issues/1932) (`side-18`, `type:chore`).
   - **fs-38 issue #1813 — a `preparing-voice` phase for the resolver pre-pass.** The Wave 3b2/
     3c resolver pre-pass can spend several seconds transparently re-deriving a Repairable
     cloned voice or self-healing a designed one, before the first synth call — previously a
@@ -355,7 +428,9 @@ history at cut time.
     gate's PowerShell runner no longer crashes on the Qwen probe's benign stderr line (a
     `torchaudio`→`sox`-absent warning tripped under `$ErrorActionPreference = 'Stop'`), so
     `test:golden-audio:sidecar` now actually reaches pytest instead of erroring out before it
-    starts ([#1892](https://github.com/dudarenok-maker/Castwright/issues/1892)).
+    starts ([#1892](https://github.com/dudarenok-maker/Castwright/issues/1892)) — the same guard
+    was missing on the script's sibling Coqui-presence probe (`import TTS`) and is now applied
+    there too, closing the second instance of the same bug class in the same script.
     `spawn-sidecar.ts`'s `QWEN_VOICES_DIR`/`XTTS_VOICES_DIR` env vars now route through the
     same `paths.ts` helpers the rest of the codebase uses instead of a parallel literal `join`,
     closing a latent drift risk this wave's own review flagged
