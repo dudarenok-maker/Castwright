@@ -408,6 +408,63 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(provider.calls[0].voiceName).toBe('qwen-lib-char-narrator-clone');
     expect(result.segments.length).toBeGreaterThan(0);
   });
+
+  it('[#1891] fail-fast: a legacy libraryUuid-with-no-provenance slot still gets revocation-checked', async () => {
+    /* Discriminating fixture: NO `provenance` field at all on the qwen slot
+       (pre-dates the provenance dimension) — unlike every other cloned
+       fixture in this file, `characterHasClonedSlot` does NOT count this as
+       cloned (deliberately — see clone-engines.ts), so the pre-existing
+       pre-pass filter alone would never even look at this character. Yet
+       `pickVoiceForEngine`'s qwen branch resolves the bare `libraryUuid`
+       directly (Review I-3's exemption) and would render from the real
+       library artifact with no revocation check at all if this legacy
+       shape weren't separately fed into the resolver. */
+    const provider = makeProvider();
+    const legacyCast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: {
+          qwen: { name: 'Wren (legacy)', libraryUuid: 'lib-legacy-clone' }, // no `provenance` at all
+        },
+      },
+    ];
+    const revokedEntry = baseEntry({
+      voiceUuid: 'lib-legacy-clone',
+      consent: {
+        personName: 'Real Person',
+        relationship: 'self',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'Real Person',
+        revokedAt: '2026-02-01T00:00:00.000Z', // revoked — must fail-fast
+      },
+    });
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-legacy-clone' ? revokedEntry : null));
+    const deriveEngineArtifact = vi.fn();
+    const deps: Partial<ResolveChapterDeps> = {
+      readEntry,
+      writeEntry: vi.fn(),
+      ptExists: async () => true,
+      deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast: legacyCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        cloneResolverDepsOverride: deps,
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+
+    expect(provider.calls).toHaveLength(0);
+    expect(readEntry).toHaveBeenCalledWith('lib-legacy-clone');
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
 });
 
 /* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing generalisation: the

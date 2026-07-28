@@ -1481,6 +1481,50 @@ export async function synthesiseChapter(
         engineUnavailable: engineUnavailableFor(engine),
       };
     });
+  /* [#1891] — a legacy cast.json slot can carry a qwen `libraryUuid` with NO
+     `provenance` field at all (pre-dates the provenance dimension). Both
+     `characterHasClonedSlot` above and `libraryVoiceForEngine` require
+     `provenance` — correctly, deliberately, for the FAIL-SAFE/RESOLUTION
+     roles they play elsewhere (see clone-engines.ts; five separate reviews
+     have each proposed loosening one of those three predicates for a
+     legacy-shape gap like this one, and each time it reintroduced the
+     malformed-uuid substitution bug this wave's Global Constraints exist to
+     prevent — so this fix does NOT touch them). But `pickVoiceForEngine`'s
+     qwen branch (voice-mapping.ts) resolves a bare `libraryUuid` DIRECTLY,
+     with no provenance check at all (a deliberate, narrower exemption —
+     Review I-3 — for a qwen slot whose `name` can legitimately be blank).
+     So this legacy shape renders from a real library artifact today with
+     ZERO revocation check, purely because it never entered the pre-pass
+     above. Fixed at THIS call site instead: feed it into the SAME resolver
+     the cloned pre-pass already uses, reading the raw `libraryUuid` the
+     same way the renderer will (not through the provenance-gated
+     `libraryVoiceForEngine`) — so revocation is actually checked before any
+     render reaches this data. Scoped to qwen only: coqui's branch of
+     `pickVoiceForEngine` has no such bare-uuid exemption (it goes through
+     the provenance-gated `libraryVoiceForEngine` with nothing to fall back
+     on), so there is no live coqui-equivalent of this gap. A one-time
+     migration stamping `provenance: 'cloned'` onto this legacy data at the
+     source (voice-library.ts) is the OTHER suggested fix shape for #1891 —
+     this is the runtime backstop regardless of whether that migration ever
+     lands. */
+  const legacyQwenLibraryRequests = cast
+    .filter((c) => {
+      if (!inChapterCharacterIds.has(c.id) || characterHasClonedSlot(c)) return false;
+      const qwenSlot = c.overrideTtsVoices?.qwen;
+      return (
+        typeof qwenSlot?.libraryUuid === 'string' &&
+        qwenSlot.libraryUuid.length > 0 &&
+        qwenSlot.provenance === undefined
+      );
+    })
+    .map((c) => ({
+      characterName: c.name ?? c.id,
+      libraryUuid: c.overrideTtsVoices!.qwen!.libraryUuid as string,
+      engine: 'qwen' as CloneEngine,
+      wrongEngine: routeFor(c).engine !== 'qwen',
+      engineUnavailable: engineUnavailableFor('qwen'),
+    }));
+  clonedVoiceRequests.push(...legacyQwenLibraryRequests);
   /* fs-38 Wave 3b2, Task 12 (§2.3) — designed-voice orphan self-heal, over the
      SAME in-chapter readiness gate as the cloned pre-pass above. Narrower and
      gentler than the cloned resolver (see resolveDesignedVoicesForChapter's
