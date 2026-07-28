@@ -11,6 +11,8 @@ owner: null
 > URL surface: none (dev tooling)
 > OpenAPI ops: none
 
+**Follow-up (2026-07-28):** Suite B's assembly tier compared no output bytes until ops-36; the five-layer comparison (plus a dedicated linear-loudnorm-arm baseline) and its baseline live in [`272-golden-assembly-comparison.md`](../272-golden-assembly-comparison.md).
+
 ## Benefit / Rationale
 
 The five test tiers stub every TTS model and feed trivial 1-sample PCM into the

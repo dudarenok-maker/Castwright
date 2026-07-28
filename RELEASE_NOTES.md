@@ -91,6 +91,9 @@
   outside code Castwright is built on — including the component that opens your EPUB files, where a
   malformed book could previously have made Castwright try to swallow far more memory than it should.
   Nothing to do at your end, and nothing looks different.
+- Chapter loudness figures on the Listen view are now measured from the finished audio. The
+  loudness-range and true-peak numbers were previously reported by the normaliser rather than
+  measured, so they could be well off — the integrated loudness reading was always right.
 
 # Castwright 1.14.0
 
