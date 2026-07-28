@@ -1548,7 +1548,7 @@ export async function synthesiseChapter(
      of a freshly-evicted-to-Qwen state if it happens to be coqui-routed —
      `synthGroupsSerialized`'s own evict deliberately doesn't cover it
      either. Pre-existing, not introduced or worsened by this task; track it
-     in plan 269 alongside this pre-pass's other known-but-out-of-scope gap
+     in plan 271 alongside this pre-pass's other known-but-out-of-scope gap
      (two books both mid coqui-derive on the same card — Node serialises
      nothing across books; the sidecar's placement controller is the only
      backstop).

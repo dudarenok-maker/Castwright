@@ -7618,7 +7618,11 @@ export interface operations {
                     /** @description Optional preview text. Omitted defaults to a built-in sample line for the entry's persona/name. */
                     text?: string;
                     /**
-                     * @description The Qwen tier to preview at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @description The tier/engine to preview at (#1842, widened fs-38 Wave 3c Task 27
+                     *     to select the ENGINE too, not just the Qwen tier). Must route to a
+                     *     clone-capable engine (qwen or coqui) or the request 400s — a
+                     *     library entry's artifacts only ever exist under a `qwen` and/or
+                     *     `xtts` slot. Omitted defaults to qwen3-tts-0.6b.
                      * @enum {string}
                      */
                     modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
@@ -7637,7 +7641,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description modelKey is present but does not route to the qwen engine */
+            /** @description modelKey is present but does not route to a clone-capable engine (qwen or coqui) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7655,6 +7659,18 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The requested engine's artifact has not been prepared (derived/designed) for this voice yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code?: string;
+                        message?: string;
+                    };
+                };
             };
         };
     };
@@ -8893,9 +8909,13 @@ export interface operations {
              * @description Revoked — `revokedAt` is always set and rendering is always blocked
              *     regardless of artifact-erasure outcome. `artifactPurgeIncomplete` /
              *     `artifactPurgeFailedPaths` (review I-2) are present only when some
-             *     on-disk clone artifact could not be removed (e.g. a file held open
-             *     by the sidecar) — a partial erasure that must not read as a silent
-             *     total success.
+             *     erasure step failed — a partial erasure that must not read as a
+             *     silent total success. `artifactPurgeFailedPaths` entries are NOT
+             *     all on-disk file paths (fs-38 Wave 3c, Task 14a): a failed
+             *     sidecar in-process cache-evict is recorded as a synthetic
+             *     `sidecar:<qwen|xtts>:<voiceId>` marker alongside any real file
+             *     path that could not be removed (e.g. a file held open by the
+             *     sidecar).
              */
             200: {
                 headers: {

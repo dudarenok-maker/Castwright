@@ -31,7 +31,12 @@ import {
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
-import { CLONE_CAPABLE_ENGINES, cloneStorageKey, isArtifactVersionStale } from '../tts/clone-engines.js';
+import {
+  CLONE_CAPABLE_ENGINES,
+  cloneStorageKey,
+  isArtifactVersionStale,
+  isCloneEngine,
+} from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
@@ -41,6 +46,7 @@ import {
   selectTtsProvider,
   engineForModelKey,
   isTtsModelKey,
+  type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
@@ -144,12 +150,18 @@ async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T
   }
 }
 
-/* Finding 3 (#1842 review) — /design, /:voiceUuid/redesign, and
-   /:voiceUuid/sample each validated an incoming `modelKey` with a
-   character-identical block. Collapsed to one helper: `null` means "reject
-   with the 400 below", any other return is the resolved, valid modelKey
-   (the 0.6B base when the caller omitted the field). Callers still own the
-   400 response status/body — this only decides validity. */
+/* Finding 3 (#1842 review) — /design and /:voiceUuid/redesign each validated
+   an incoming `modelKey` with a character-identical block (both design onto
+   a `qwen-<uuid>` storageKey only, so a non-Qwen modelKey can never be
+   honoured there). Collapsed to one helper: `null` means "reject with the
+   400 below", any other return is the resolved, valid modelKey (the 0.6B
+   base when the caller omitted the field). Callers still own the 400
+   response status/body — this only decides validity.
+
+   fs-38 Wave 3c, Task 27 — /:voiceUuid/sample used to share this helper too,
+   back when it also only ever auditioned `qwen-<uuid>`. It now resolves its
+   own engine-aware modelKey inline (any clone-capable engine, not Qwen-only)
+   — see that route's own comment. */
 function resolveQwenModelKey(raw: unknown): TtsModelKey | null {
   if (raw === undefined) return 'qwen3-tts-0.6b';
   if (!isTtsModelKey(raw) || engineForModelKey(raw) !== 'qwen') return null;
@@ -527,8 +539,25 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
 
    `contentToken = djb2(entry.persona)` busts the cache on a persona edit
    even when the request text/voiceName are otherwise unchanged (Wave 3
-   swaps in a master-clip hash for cloned voices instead). */
+   swaps in a master-clip hash for cloned voices instead).
+
+   fs-38 Wave 3c, Task 27 — `modelKey` now selects the ENGINE to audition,
+   not just the Qwen tier: `voiceName`/`cacheScope` follow `engineForModelKey`
+   via the shared `cloneStorageKey` (tts/clone-engines.js — never hand-built,
+   Task 15 was rejected for reimplementing this helper). Before this task the
+   route hardcoded `qwen-<uuid>`, so a card's Coqui chip Played the QWEN
+   artifact — 409ing whenever qwen was stale/missing even though xtts was
+   ready — and Task 13's `xtts-<uuid>` purge had no cache entries under that
+   scope to ever reach. Restricted to the two clone-capable engines
+   (`isCloneEngine`) because a library entry's `engines` map only ever
+   carries a `qwen` and/or `xtts` slot; omitted → the 0.6B Qwen base,
+   keeping the current frontend caller (which still only ever sends a Qwen
+   tier) working unchanged. */
 voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response) => {
+  /* Hoisted above the try so the catch below can name which engine the
+     un-derived-artifact 409 (below) is about — assigned only once the
+     modelKey has resolved to a clone-capable engine. */
+  let engine: TtsEngine | undefined;
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
@@ -538,21 +567,32 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     }
 
     const body = (req.body ?? {}) as { text?: unknown; modelKey?: unknown };
-    const voiceName = `qwen-${voiceUuid}`;
-    /* #1842 — the card previews at the tier the caller's session will render at,
-       so the same voice doesn't sound different on the card and on the cast row.
-       Qwen-only: this endpoint synthesises `qwen-<uuid>`, which no other engine
-       can voice. Omitted → the 0.6B base (resolveQwenModelKey — Finding 3),
-       keeping older callers working. */
-    const modelKey = resolveQwenModelKey(body.modelKey);
-    if (!modelKey) {
-      return res.status(400).json({ code: 'invalid_model', message: 'modelKey must be a Qwen model key.' });
+    /* #1842 — the card previews at the tier/engine the caller's session will
+       render at, so the same voice doesn't sound different on the card and
+       on the cast row. Omitted → the 0.6B Qwen base. */
+    if (body.modelKey !== undefined && !isTtsModelKey(body.modelKey)) {
+      return res.status(400).json({ code: 'invalid_model', message: 'modelKey is not a recognised TTS model key.' });
     }
+    const modelKey: TtsModelKey = body.modelKey === undefined ? 'qwen3-tts-0.6b' : body.modelKey;
+    const resolvedEngine = engineForModelKey(modelKey);
+    if (!isCloneEngine(resolvedEngine)) {
+      return res
+        .status(400)
+        .json({ code: 'invalid_model', message: 'modelKey must route to a clone-capable engine (Qwen or Coqui).' });
+    }
+    engine = resolvedEngine;
+
     const text =
       typeof body.text === 'string' && body.text.trim().length > 0
         ? body.text.trim()
         : buildSampleText({ id: voiceUuid, character: entry.name, overrideTtsVoices: {} });
-    const cacheScope = `qwen-${voiceUuid}`;
+    /* `cacheScope` IS `voiceName` — both the engine's storage key for this
+       library voice, DERIVED (never hand-built) via `cloneStorageKey`.
+       Deriving it from (engine, voiceUuid) alone is what lets Task 13's
+       storageKey-scoped sample purge reach the cached audition on
+       revoke/delete regardless of which engine it was played on. */
+    const voiceName = cloneStorageKey(engine, voiceUuid);
+    const cacheScope = voiceName;
     /* Finding 1 (#1842 review) — runVoiceDesign (design-voice-core.ts) derives
        this SAME token from opts.persona for a live design, so a /design
        (or /redesign's promoted) audition and this route's first Play land on
@@ -576,6 +616,23 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     await writeFile(filePath, mp3);
     return res.json({ url: publicUrl, cached: false });
   } catch (e) {
+    /* #1801 doc comment on httpStatusForSidecarError flagged this as the
+       deliberate follow-up: the sidecar's `voice_not_designed` 409 (raised
+       for EVERY engine — server/tts-sidecar/main.py's generic /synthesize
+       handler, not a Qwen-specific path) used to reach the caller as an
+       opaque 502 (4xx never passes through that helper) with the sidecar's
+       raw JSON body as the message. A lazily-derived engine (most commonly
+       an xtts slot nobody has rendered a chapter on yet) hits this exactly
+       the way a stale/never-designed qwen slot always could — translate it
+       to a clean, engine-aware 409 instead, mirroring the sibling
+       POST /api/voices/:voiceId/sample (routes/voice-sample.ts). */
+    const msg = (e as Error).message ?? '';
+    if (engine && /voice_not_designed|not been designed yet/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_not_designed',
+        message: `This voice hasn't been prepared on ${engine === 'coqui' ? 'Coqui' : 'Qwen'} yet.`,
+      });
+    }
     console.error('[voice-library] sample failed', e);
     return res
       .status(httpStatusForSidecarError(e))

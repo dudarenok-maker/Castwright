@@ -709,7 +709,7 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(res.body.url).toContain('qwen3-tts-0.6b');
   });
 
-  it('rejects a modelKey that does not route to Qwen', async () => {
+  it('rejects a modelKey that does not route to a clone-capable engine', async () => {
     await vl.writeEntry(makeEntry());
 
     const res = await request(app)
@@ -717,6 +717,79 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
       .send({ modelKey: 'kokoro-v1' });
 
     expect(res.status).toBe(400);
+  });
+
+  /* fs-38 Wave 3c, Task 27 — before this task the route hardcoded
+     `voiceName='qwen-<uuid>'`/`cacheScope='qwen-<uuid>'` regardless of the
+     requested modelKey, so a `coqui-xtts-v2` request still auditioned the
+     QWEN artifact. `engine` (the resolved TtsEngine) is asserted via the
+     synth call's `voiceName` AND the returned url's cache scope — both
+     must equal `cloneStorageKey('coqui', uuid)` == `xtts-<uuid>`, derived,
+     not just shaped like it. */
+  it('auditions the requested engine — a coqui-xtts-v2 request synthesises the xtts-<uuid> artifact', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-coqui', name: 'Nova' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-coqui/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/^\/audio\/voices\/xtts-sample-coqui-coqui-xtts-v2-[a-z0-9]+\.mp3$/);
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    const synthArgs = synthesize.mock.calls[0][0] as { voiceName: string; modelKey: string };
+    expect(synthArgs.voiceName).toBe('xtts-sample-coqui');
+    expect(synthArgs.modelKey).toBe('coqui-xtts-v2');
+  });
+
+  /* Proves the qwen and coqui auditions of the SAME library voice land on
+     DISTINCT cache scopes (and so never collide/share a file), which is
+     also what makes Task 13's per-engine storageKey purge able to reach
+     each independently. */
+  it('a qwen and a coqui audition of the same voice cache under distinct storageKey scopes', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-both', name: 'Nova' }));
+
+    const qwenRes = await request(app)
+      .post('/api/voice-library/sample-both/sample')
+      .send({ modelKey: 'qwen3-tts-0.6b' });
+    const coquiRes = await request(app)
+      .post('/api/voice-library/sample-both/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(qwenRes.status).toBe(200);
+    expect(coquiRes.status).toBe(200);
+    expect(qwenRes.body.url).not.toBe(coquiRes.body.url);
+    expect(qwenRes.body.url).toContain('qwen-sample-both');
+    expect(coquiRes.body.url).toContain('xtts-sample-both');
+    expect(synthesize).toHaveBeenCalledTimes(2);
+  });
+
+  /* fs-38 Wave 3c, Task 27 — an engine whose artifact has never been
+     derived (the sidecar's generic /synthesize handler 409s
+     `voice_not_designed` for EVERY engine, per server/tts-sidecar/main.py)
+     used to reach the caller as an opaque 502 (httpStatusForSidecarError
+     only passes through 5xx) carrying the sidecar's raw JSON body as the
+     message. It must now surface as a clean 409 naming the ENGINE that
+     isn't ready — not a generic/qwen-flavoured message reused verbatim
+     for coqui. */
+  it('an un-derived engine returns a clear "not prepared yet" 409, not an opaque 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-undeer', name: 'Nova' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Local voice engine returned 409: {"detail":"Voice \'xtts-sample-undeer\' has not been designed yet.","code":"voice_not_designed"}',
+        ),
+        { transient: false, status: 409, poisoned: false },
+      ),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-undeer/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('voice_not_designed');
+    expect(res.body.message).toMatch(/coqui/i);
+    expect(res.body.message).not.toMatch(/\{"detail"/); // not the raw sidecar body
   });
 });
 
