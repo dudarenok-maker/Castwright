@@ -68,7 +68,12 @@ if (!sidecarOnly) {
   // Suite B — GPU-free assembly golden (real ffmpeg, recorded PCM fixture).
   run('assembly (Suite B)', 'npm', ['--prefix', 'server', 'run', 'test:golden'], {
     shell: true,
-    env: bless ? { GOLDEN_BLESS: '1' } : {},
+    // Explicit `undefined` (not `{}`) so an ambient GOLDEN_BLESS=1 exported in
+    // the shell can't leak through on the non-bless path and silently turn an
+    // ordinary assert run into a bless that overwrites committed fixtures —
+    // `run()`'s `{ ...process.env, ...env }` spread only clears an inherited
+    // key when this object explicitly sets it to `undefined`.
+    env: { GOLDEN_BLESS: bless ? '1' : undefined },
   });
 }
 
@@ -79,7 +84,8 @@ if (!assemblyOnly) {
     'sidecar (Suite A)',
     process.execPath,
     ['scripts/run-powershell.mjs', 'server/tts-sidecar/run-golden-tests.ps1', ...pytestArgs],
-    { env: bless ? { GOLDEN_BLESS: '1' } : {} },
+    // Same ambient-leak guard as the Suite B call above.
+    { env: { GOLDEN_BLESS: bless ? '1' : undefined } },
   );
 }
 
