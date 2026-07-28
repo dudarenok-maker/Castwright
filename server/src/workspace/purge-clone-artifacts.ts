@@ -92,7 +92,16 @@ function isSidecarNotRunning(err: unknown): boolean {
     reclaim of its own to fall back on. Still never retried here — see the
     caller-side note on `purgeCloneArtifacts`'s `failed` accumulator for
     why. The one exception is `isSidecarNotRunning` above (fix round 1,
-    MEDIUM-1) — a refused connection reports clean, not failed. */
+    MEDIUM-1) — a refused connection reports clean, not failed.
+
+    M24 (review) — `res.ok` on `/xtts/evict-voice` is narrower than it
+    reads: main.py's own docstring on that route spells out that `{"ok":
+    true}` means only "the cache entry and epoch are updated", NOT "any
+    in-flight render for this voice has stopped" (a render already past
+    its epoch check when the call lands still completes and returns
+    audio). This module reads only the JSON `{ok, evicted}` shape, never
+    main.py, so that caveat is otherwise invisible from here — recorded
+    at the one Node-side call site both engines' evicts share. */
 async function evictSidecarVoice(
   route: 'qwen' | 'xtts',
   voiceId: string,
