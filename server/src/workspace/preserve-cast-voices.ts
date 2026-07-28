@@ -15,8 +15,29 @@
    NOT preserved — those have legitimate clear flows (unlink) and are hydrated
    separately by `denormaliseCastReusedVoices`. */
 
-import { isCloneEngine, manifestSlotFor, type CloneEngine } from '../tts/clone-engines.js';
+import {
+  CLONE_ENGINE_LIST,
+  hasClonedProvenance,
+  isCloneEngine,
+  manifestSlotFor,
+  type CloneEngine,
+} from '../tts/clone-engines.js';
 import type { TtsEngine } from '../tts/index.js';
+
+/** A cast write this module REFUSED on consent grounds — as opposed to one
+    that failed. GATE 2 (owner-directed): the #1899 refusal used to throw a
+    plain `Error` into the route's generic catch and surface as HTTP 500, so a
+    client could not tell "we refused you" from "we broke". The route maps this
+    class to 409, matching the other deliberate refusals it already sends
+    (the empty-sentence-list overwrite and the Author/Series/Title collision),
+    and matching the consent refusals the dedicated voice routes send
+    (`voices.ts`'s cloned-clear 409, `voice-library.ts`'s revoked-consent 409). */
+export class CastVoiceConsentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CastVoiceConsentError';
+  }
+}
 
 /** Voice-DESIGN fields the analyzer / persistence never legitimately clears, so
     a write that omits them is an accidental strip, not an intentional change. */
@@ -120,7 +141,9 @@ export function rejectForeignCloneKeys(
 
       const label = typeof inc.name === 'string' ? inc.name : inc.id;
       const refuse = (reason: string): never => {
-        throw new Error(`Character "${label}" — refusing to write its ${engine} voice: ${reason}`);
+        throw new CastVoiceConsentError(
+          `Character "${label}" — refusing to write its ${engine} voice: ${reason}`,
+        );
       };
 
       const libraryUuid = slot.libraryUuid;
@@ -143,4 +166,95 @@ export function rejectForeignCloneKeys(
       }
     }
   }
+}
+
+/** True when the incoming slot is byte-for-byte the same voice identity as the
+    stored one. Compares the three fields that decide what actually renders —
+    `name` (the literal storage key for a coqui slot with no libraryUuid),
+    `libraryUuid` (which drives resolution when present) and `provenance`
+    (which is what makes the slot cloned at all). Compared with `===`, NOT
+    case-folded: a case-varied storage key resolves to the same artifact on
+    NTFS/APFS but hashes to a different audition cache scope and a different
+    sidecar latents key, so it is a DIFFERENT value here and gets refused
+    rather than normalised through — the same refuse-don't-normalise choice
+    the sidecar makes for a case-varied clone-key prefix. */
+function sameStoredVoice(oldSlot: unknown, incomingSlot: unknown): boolean {
+  if (!oldSlot || typeof oldSlot !== 'object') return false;
+  if (!incomingSlot || typeof incomingSlot !== 'object') return false;
+  const o = oldSlot as Record<string, unknown>;
+  const n = incomingSlot as Record<string, unknown>;
+  return o.name === n.name && o.libraryUuid === n.libraryUuid && o.provenance === n.provenance;
+}
+
+/** [GATE 2 C-B1] — the erase/replace half of the same threat model #1899's
+    `rejectForeignCloneKeys` (above) closed the plant/restamp half of.
+
+    That guard only ever inspects what an incoming write ADDS. It says nothing
+    about what a write REMOVES, and `preserveDesignedVoicesOnCastWrite` restores
+    `overrideTtsVoices` only when the field is wholly absent — a PRESENT map wins
+    slot-by-slot. So an incoming character whose map omits the cloned engine slot,
+    or replaces it with an ordinary catalogue name, passed both guards and was
+    persisted with a 2xx: the clone marker gone from disk, no refusal, no warning,
+    and the next render reading a real person's lines in a catalogue voice. That
+    is Property 1's named failure mode verbatim ("never 'handled' by deleting its
+    marker upstream so a later stage sees an ordinary character").
+
+    The contract, per the repo owner:
+
+      | incoming map                              | behaviour                    |
+      | omits the cloned slot                     | restore the stored slot, 200 |
+      | carries a DIFFERENT value for that slot   | refuse (409), persist nothing|
+      | carries the SAME value                    | accept, 200                  |
+
+    The rationale for treating an omission as an accident rather than an
+    unassign: unassigning a library voice now has its own dedicated route
+    (`DELETE /api/voice-library/:voiceUuid/assign`), so a wholesale cast PUT
+    never legitimately needs to drop a cloned voice. An omission is a client
+    that simply didn't send it (a stale tab, a partial cast, a plain API call);
+    an explicit different value is a restamp attempt. Neither is a consent
+    decision this funnel is entitled to make.
+
+    Cloned-ness is decided by the FAIL-SAFE `hasClonedProvenance` — provenance
+    only, no `libraryUuid` validation — because this is a guard that PRESERVES:
+    a malformed cloned slot (missing/non-string libraryUuid) is still a real
+    person's consented voice and must be protected too. Do NOT swap in the
+    uuid-validating `clonedSlotForEngine`/`libraryVoiceForEngine` here; a
+    malformed slot would then read as "not cloned" and be silently erased,
+    which is the exact defect this function exists to close.
+
+    Runs on the incoming map only when it is PRESENT — a wholly-absent map is
+    `preserveDesignedVoicesOnCastWrite`'s case and is restored there.
+    Designed/imported slots are untouched: they keep the existing
+    incoming-wins contract. */
+export function preserveClonedSlotsOnCastWrite<
+  T extends { id: string; name?: unknown; overrideTtsVoices?: unknown },
+>(existing: ReadonlyArray<{ id: string } & Record<string, unknown>>, incoming: T[]): T[] {
+  if (!existing.length) return incoming;
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  return incoming.map((inc) => {
+    const old = byId.get(inc.id);
+    if (!old) return inc;
+    const incSlots = inc.overrideTtsVoices;
+    if (!incSlots || typeof incSlots !== 'object') return inc;
+    const oldSlots = old.overrideTtsVoices as Record<string, unknown> | undefined;
+
+    let merged: Record<string, unknown> | undefined;
+    for (const engine of CLONE_ENGINE_LIST) {
+      if (!hasClonedProvenance({ overrideTtsVoices: oldSlots }, engine)) continue;
+      const oldSlot = oldSlots?.[engine];
+      const incSlot = (incSlots as Record<string, unknown>)[engine];
+      if (incSlot === undefined) {
+        merged = { ...(merged ?? (incSlots as Record<string, unknown>)), [engine]: oldSlot };
+        continue;
+      }
+      if (!sameStoredVoice(oldSlot, incSlot)) {
+        const label = typeof inc.name === 'string' ? inc.name : inc.id;
+        throw new CastVoiceConsentError(
+          `Character "${label}" — refusing to replace its ${engine} voice: it carries a consented ` +
+            `cloned voice, and a cast save is not how one is removed. Unassign it explicitly instead.`,
+        );
+      }
+    }
+    return merged ? ({ ...(inc as Record<string, unknown>), overrideTtsVoices: merged } as T) : inc;
+  });
 }

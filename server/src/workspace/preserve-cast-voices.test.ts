@@ -13,7 +13,12 @@
    clear flows (unlink) and are already hydrated by denormaliseCastReusedVoices. */
 
 import { describe, it, expect } from 'vitest';
-import { preserveDesignedVoicesOnCastWrite, rejectForeignCloneKeys } from './preserve-cast-voices.js';
+import {
+  CastVoiceConsentError,
+  preserveClonedSlotsOnCastWrite,
+  preserveDesignedVoicesOnCastWrite,
+  rejectForeignCloneKeys,
+} from './preserve-cast-voices.js';
 
 type C = Record<string, unknown> & { id: string };
 
@@ -167,5 +172,123 @@ describe('rejectForeignCloneKeys', () => {
     const existing: C[] = [{ id: 'x' }];
     expect(() => rejectForeignCloneKeys(existing, [{ id: 'x' }])).not.toThrow();
     expect(() => rejectForeignCloneKeys(existing, [{ id: 'x', overrideTtsVoices: {} }])).not.toThrow();
+  });
+});
+
+/* [GATE 2 C-B1] — the erase/replace half of #1899's threat model. The guard
+   above only inspects what a write ADDS; `preserveDesignedVoicesOnCastWrite`
+   only restores a WHOLLY absent map. A present map that drops (or overwrites)
+   a stored cloned slot passed both and was persisted with a 2xx — the clone
+   marker gone from disk with no refusal, so the next render read a real
+   person's lines in a catalogue voice.
+
+   Each fixture below stores a CLONED coqui slot and varies only what the
+   incoming map does with it, so nothing here can pass by accident: the
+   omit case must come back carrying the stored slot, and the replace cases
+   must throw. */
+describe('preserveClonedSlotsOnCastWrite', () => {
+  const clonedSlot = { name: 'xtts-real-person', libraryUuid: 'lib-123', provenance: 'cloned' };
+  const storedCloned: C[] = [
+    { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { ...clonedSlot } } },
+  ];
+
+  it('[C-B1] restores a stored cloned slot the incoming map omits (present map, missing slot)', () => {
+    const incoming = [{ id: 'wren', name: 'Wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } }];
+    const out = preserveClonedSlotsOnCastWrite(storedCloned, incoming);
+    expect(out[0].overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-wren' },
+      coqui: clonedSlot,
+    });
+  });
+
+  it('[C-B1] refuses a catalogue name written over a stored cloned slot', () => {
+    const incoming = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { name: 'Ana Florence' } } },
+    ];
+    expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).toThrow(
+      CastVoiceConsentError,
+    );
+    expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).toThrow(
+      /consented cloned voice/,
+    );
+  });
+
+  it('[C-B1] refuses a slot that keeps the name but strips the cloned provenance/libraryUuid', () => {
+    /* The subtlest erase shape: the storage key still looks right, so a
+       name-only comparison would wave it through — but with `provenance`
+       gone the slot is no longer a clone marker to any downstream guard. */
+    const incoming = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { name: 'xtts-real-person' } } },
+    ];
+    expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).toThrow(
+      /consented cloned voice/,
+    );
+  });
+
+  it('[C-B1] refuses a case-varied storage key rather than normalising it through', () => {
+    /* NTFS/APFS resolve `XTTS-lib-123.pt` to the real artifact, so this
+       renders — but it hashes to an audition cache scope and a sidecar
+       latents key that revoke can never compute. Refuse, don't fold. */
+    const incoming = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        overrideTtsVoices: { coqui: { ...clonedSlot, name: 'XTTS-real-person' } },
+      },
+    ];
+    expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).toThrow(
+      /consented cloned voice/,
+    );
+  });
+
+  it('[C-B1] accepts an unchanged round-trip of the same cloned slot', () => {
+    const incoming = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { ...clonedSlot } } },
+    ];
+    const out = preserveClonedSlotsOnCastWrite(storedCloned, incoming);
+    expect(out[0].overrideTtsVoices).toEqual({ coqui: clonedSlot });
+  });
+
+  it('[C-B1] protects a MALFORMED cloned slot too (fail-safe: provenance only, no uuid validation)', () => {
+    /* The discriminating case between the fail-safe predicate this guard
+       must use and the uuid-validating resolution predicates: with
+       `clonedSlotForEngine` here, a cloned slot carrying no usable
+       libraryUuid would read as "not cloned" and be silently erased. */
+    const malformed: C[] = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { name: 'xtts-x', provenance: 'cloned' } } },
+    ];
+    const incoming = [
+      { id: 'wren', name: 'Wren', overrideTtsVoices: { coqui: { name: 'Ana Florence' } } },
+    ];
+    expect(() => preserveClonedSlotsOnCastWrite(malformed, incoming)).toThrow(
+      /consented cloned voice/,
+    );
+  });
+
+  it('[C-B1] leaves a DESIGNED slot on the existing incoming-wins contract', () => {
+    const designed: C[] = [
+      {
+        id: 'wren',
+        overrideTtsVoices: { coqui: { name: 'xtts-designed', libraryUuid: 'd-1', provenance: 'designed' } },
+      },
+    ];
+    const incoming = [{ id: 'wren', overrideTtsVoices: { coqui: { name: 'Ana Florence' } } }];
+    const out = preserveClonedSlotsOnCastWrite(designed, incoming);
+    expect(out[0].overrideTtsVoices).toEqual({ coqui: { name: 'Ana Florence' } });
+  });
+
+  it('[C-B1] leaves a wholly-absent map to preserveDesignedVoicesOnCastWrite', () => {
+    const incoming: C[] = [{ id: 'wren', name: 'Wren' }];
+    const out = preserveClonedSlotsOnCastWrite(storedCloned, incoming);
+    expect(out[0].overrideTtsVoices).toBeUndefined();
+    /* …which then restores the whole map, cloned slot included. */
+    expect(preserveDesignedVoicesOnCastWrite(storedCloned, out)[0].overrideTtsVoices).toEqual({
+      coqui: clonedSlot,
+    });
+  });
+
+  it('[C-B1] leaves a character that has no on-disk record untouched', () => {
+    const incoming = [{ id: 'brand-new', overrideTtsVoices: { coqui: { name: 'Ana Florence' } } }];
+    expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).not.toThrow();
   });
 });

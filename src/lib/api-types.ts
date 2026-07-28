@@ -2146,7 +2146,24 @@ export interface paths {
          *     permissive rather than duplicating those large shapes.
          */
         get: operations["getBookState"];
-        put?: never;
+        /**
+         * Persist one slice of a book's on-disk state
+         * @description The generic wholesale write the persistence middleware funnels every
+         *     slice through: `cast` (cast.json), `manuscript` (manuscript-edits.json),
+         *     `revisions`, `changeLog`, and `state` (state.json's editorial fields).
+         *     `patch` is the whole slice, not a delta — the named file is replaced.
+         *
+         *     The `cast` slice is guarded on the way in (fs-38 Wave 3c / #1899): a
+         *     character's stored **cloned** voice slot cannot be planted, restamped,
+         *     replaced, or dropped through this route, because a cloned voice is a
+         *     real person's consented likeness and this funnel carries no consent
+         *     context. A slot the incoming map simply omits is restored from disk and
+         *     the write still succeeds; an incoming slot that carries a *different*
+         *     value for a stored cloned slot is refused with `409` and nothing is
+         *     persisted. Removing a cloned assignment has its own dedicated route
+         *     (`DELETE /api/voice-library/{voiceUuid}/assign`).
+         */
+        put: operations["putBookState"];
         post?: never;
         delete?: never;
         options?: never;
@@ -8745,6 +8762,61 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putBookState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
+                    /** @description The whole slice payload; shape depends on `slice`. */
+                    patch: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Slice written */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/unknown `slice` or `patch`, or a malformed manuscript patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Refused (nothing was written). Either the write would have replaced
+             *     a character's consented cloned voice, or it would have overwritten an
+             *     analysed manuscript with an empty sentence list, or the new
+             *     Author/Series/Title path is already taken.
+             */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
