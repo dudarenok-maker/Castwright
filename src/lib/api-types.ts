@@ -4124,9 +4124,12 @@ export interface components {
          */
         ChapterLoudness: {
             /**
-             * @description Measured integrated loudness (LUFS). In two-pass mode this is
-             *     the FIRST-pass measurement of the source PCM; in single-pass
-             *     mode it is the nominal target (no re-measurement is done).
+             * @description Measured integrated loudness (LUFS). In two-pass mode this is the
+             *     POST-normalisation value ffmpeg's second pass reports as
+             *     `output_i` — what the chapter actually sounds like. In single-pass
+             *     mode it is the nominal target (no re-measurement is done). If the
+             *     second-pass JSON fails to parse, the encoder falls back to
+             *     persisting the first-pass input-side measurement here.
              */
             i: number;
             /** @description Measured loudness range (LU). Same single-pass caveat as `i`. */
@@ -4146,6 +4149,14 @@ export interface components {
              *     are NOT post-filter measurements.
              */
             twoPass: boolean;
+            /**
+             * @description Which mode loudnorm's second pass used. Absent for single-pass
+             *     output, for sidecars written by scripts/relufs-existing.mjs, and
+             *     for a two-pass encode whose second-pass JSON failed to parse —
+             *     so consumers MUST NOT infer presence from `twoPass`.
+             * @enum {string}
+             */
+            normalizationType?: "linear" | "dynamic";
             /**
              * Format: date-time
              * @description ISO-8601 timestamp the measurement was taken (encode time).

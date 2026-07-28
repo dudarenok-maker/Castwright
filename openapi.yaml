@@ -5380,9 +5380,12 @@ components:
         i:
           type: number
           description: |
-            Measured integrated loudness (LUFS). In two-pass mode this is
-            the FIRST-pass measurement of the source PCM; in single-pass
-            mode it is the nominal target (no re-measurement is done).
+            Measured integrated loudness (LUFS). In two-pass mode this is the
+            POST-normalisation value ffmpeg's second pass reports as
+            `output_i` — what the chapter actually sounds like. In single-pass
+            mode it is the nominal target (no re-measurement is done). If the
+            second-pass JSON fails to parse, the encoder falls back to
+            persisting the first-pass input-side measurement here.
         lra:
           type: number
           description: |
@@ -5404,6 +5407,14 @@ components:
             `false` for single-pass streaming normalisation. UI consumers
             MUST gate drift comparisons on this — single-pass `i`/`lra`/`tp`
             are NOT post-filter measurements.
+        normalizationType:
+          type: string
+          enum: [linear, dynamic]
+          description: |
+            Which mode loudnorm's second pass used. Absent for single-pass
+            output, for sidecars written by scripts/relufs-existing.mjs, and
+            for a two-pass encode whose second-pass JSON failed to parse —
+            so consumers MUST NOT infer presence from `twoPass`.
         measuredAt:
           type: string
           format: date-time

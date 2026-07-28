@@ -245,8 +245,14 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
       .mockImplementationOnce(() => fakeFfmpegChild({ stderr: secondPassStderr }));
 
     const { encodePcmToAudio } = await import('./mp3.js');
-    let sidecar: { i: number; lra: number; tp: number; twoPass: boolean; target: number } | null =
-      null;
+    let sidecar: {
+      i: number;
+      lra: number;
+      tp: number;
+      twoPass: boolean;
+      target: number;
+      normalizationType?: 'linear' | 'dynamic';
+    } | null = null;
     await encodePcmToAudio(Buffer.alloc(2), 24_000, {
       quality: 2,
       loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
@@ -263,6 +269,10 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
     expect(sidecar!.i).toBe(-16.02);
     expect(sidecar!.lra).toBe(8.4);
     expect(sidecar!.tp).toBe(-1.51);
+    /* ops-36: the parsed mode now survives to disk. L2 in the golden-assembly
+       tier pins it, because a silent dynamic->linear flip changes how the
+       chapter sounds while leaving integrated loudness near target. */
+    expect(sidecar!.normalizationType).toBe('linear');
   });
 
   it('falls back to input_i when the second-pass stderr lacks a JSON block', async () => {
@@ -296,6 +306,38 @@ describe('encodePcmToAudio two-pass sidecar payload', () => {
       );
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it('leaves normalizationType undefined on the second-pass fallback path', async () => {
+    /* The provisional sidecar is stamped twoPass:true BEFORE the encode
+       (mp3.ts:296-304) and the fallback branches leave it untouched, so
+       `twoPass === true` does NOT imply a mode is present. Consumers must
+       treat absence as "the second-pass JSON was not parsed", which is a
+       DIFFERENT bug from a mode flip. */
+    spawnMock
+      .mockImplementationOnce(() => fakeFfmpegChild({ stderr: firstPassStderr }))
+      .mockImplementationOnce(() => fakeFfmpegChild({ stderr: 'no json here' }));
+
+    /* The fallback path warns on console. Silence it as the sibling fallback
+       test in this file does, so the suite output stays readable. */
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { encodePcmToAudio } = await import('./mp3.js');
+      let sidecar: { twoPass: boolean; normalizationType?: 'linear' | 'dynamic' } | null = null;
+      await encodePcmToAudio(Buffer.alloc(2), 24_000, {
+        quality: 2,
+        loudnorm: { target: -16, lra: 11, tp: -1.5, twoPass: true },
+        onLoudnessMeasured: (s) => {
+          sidecar = s;
+        },
+      });
+
+      expect(sidecar).not.toBeNull();
+      expect(sidecar!.twoPass).toBe(true);
+      expect(sidecar!.normalizationType).toBeUndefined();
+    } finally {
+      warn.mockRestore();
     }
   });
 

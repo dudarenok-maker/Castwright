@@ -445,6 +445,12 @@ export async function encodePcmToAudio(
             tp: secondPass.output_tp,
             target: opts.loudnorm.target,
             twoPass: true,
+            normalizationType:
+              secondPass.normalization_type === 'linear'
+                ? 'linear'
+                : secondPass.normalization_type === 'dynamic'
+                  ? 'dynamic'
+                  : undefined,
             measuredAt: pendingSidecar.measuredAt,
           };
         } else {

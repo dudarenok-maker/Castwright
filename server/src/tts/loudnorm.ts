@@ -81,6 +81,17 @@ export interface LoudnormSidecarJson {
   target: number;
   /** Whether two-pass measure-then-apply was used. */
   twoPass: boolean;
+  /** Which mode loudnorm's second pass actually used. `linear` applies a single
+   *  gain offset and preserves the source envelope; `dynamic` compresses on the
+   *  fly, which ffmpeg falls back to when the linear gain would breach the
+   *  true-peak ceiling.
+   *
+   *  OPTIONAL, and absence is meaningful in two ways: single-pass mode never
+   *  has one, and a two-pass encode whose second-pass JSON failed to parse
+   *  falls back WITHOUT one while still reporting `twoPass: true`. Do NOT infer
+   *  presence from `twoPass`. Sidecars written by
+   *  `scripts/relufs-existing.mjs` also omit it (ebur128 has no mode). */
+  normalizationType?: 'linear' | 'dynamic';
   /** ISO-8601 timestamp the measurement was taken. */
   measuredAt: string;
 }
