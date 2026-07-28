@@ -437,6 +437,23 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {
+  /* GATE 1 fix (C3) — the purge's `failed` array now DECIDES whether the
+     manifest dir comes off and whether the route answers `deleted: true`, so
+     the sidecar-evict outcome is load-bearing in this describe where it
+     previously was not. Left unstubbed, these tests would depend on whatever
+     happens to be listening on the dev box's sidecar port. Pin it to the
+     honest default for a test environment — nothing listening, which Node's
+     fetch surfaces as ECONNREFUSED and `isSidecarNotRunning` (Task 14a
+     MEDIUM-1) correctly treats as "no cache to lose", i.e. a clean purge.
+     Individual tests below re-stub it where the evict outcome IS the
+     subject. */
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   /** Seeds every artifact a real designed library voice would have on disk:
       the manifest dir (Task 3), the global qwen `.pt` + sidecar `.json`
       (mirrors `qwen-voice.ts`'s design-route output), and a cached sample
@@ -518,14 +535,23 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
      `__1.7b.pt` copy, so an unstubbed test here could pass against
      un-fixed Node-side code as long as a sidecar happened to be reachable.
      Rejecting the sidecar call proves the file is gone via the Node-side
-     `rm`, not the sidecar. */
+     `rm`, not the sidecar.
+
+     GATE 1 fix (C3) — the rejection is now an ECONNREFUSED one rather than a
+     generic `Error('sidecar unreachable')`. That is what "unreachable" (this
+     test's own stated scenario) actually looks like from Node's fetch, and
+     it is the only rejection shape that still counts as a CLEAN purge — a
+     generic error now means "cache state unknown", which deliberately
+     retains the entry dir. The test's real subject (the `__1.7b.pt` unlink
+     happening Node-side with no sidecar involved) is unchanged: fetch still
+     rejects on every evict. */
   it('erases the qwen-<uuid>__1.7b.pt clone variant on delete (Node-side, sidecar unreachable)', async () => {
     const artifacts = await seedFullVoiceArtifacts('unused-17b');
     const qwenName = `qwen-unused-17b`;
     const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
     writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
     try {
       const res = await request(app).delete('/api/voice-library/unused-17b');
 
@@ -578,6 +604,71 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     };
     expect(cast.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
     expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({ name: 'preset-voice' });
+  });
+
+  /* GATE 1 fix (C3). The bypass under test is NOT "does the response mention
+     the failure" — it is that a DELETE whose purge left an artifact behind
+     used to remove `voice.json`, the manifest BOTH consent gates read
+     (`clonedVoiceLacksConsent` returns false for a null entry), leaving the
+     survivor LESS gated after the delete than before it and with nothing left
+     to revoke. So the test asserts the survivor is still gateable: it drives
+     a real revoke through the retained entry afterwards and proves the
+     /sample gate then 403s.
+
+     The unlink is failed WITHOUT mocking `rm`: the `.pt` path is replaced by
+     a directory, which `rm(path, { force: true })` (no `recursive`) rejects
+     on — the same throw-from-rm path a Windows EBUSY takes into
+     `unlinkTracked`'s catch, with no stub that could drift from real fs
+     behaviour. */
+  it('GATE 1 C3: a purge that leaves an artifact keeps the entry, reports deleted:false, and stays gateable', async () => {
+    const voiceUuid = 'cloned-partial-1';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready' } },
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+    const qwenName = `qwen-${voiceUuid}`;
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    const ptPath = qwenVoice.qwenVoicePtPath(qwenName);
+    // A directory where the `.pt` should be — `rm` without `recursive` can't
+    // remove it, so this artifact genuinely survives the purge.
+    mkdirSync(ptPath, { recursive: true });
+    writeFileSync(join(ptPath, 'holds-it-open'), 'x');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).delete(`/api/voice-library/${voiceUuid}`);
+    warnSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(false); // never claims more than happened
+    expect(res.body.artifactPurgeIncomplete).toBe(true);
+    expect(res.body.artifactPurgeFailedPaths).toContain(ptPath);
+    expect(existsSync(ptPath)).toBe(true); // the artifact really did survive
+
+    // The manifest — the ONLY thing the consent gates can read — is retained.
+    const retained = await vl.readEntry(voiceUuid);
+    expect(retained).not.toBeNull();
+    expect(retained?.provenance).toBe('cloned');
+
+    // ...and it is still revocable, so the survivor can still be gated.
+    const revoke = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+    expect(revoke.status).toBe(200);
+    expect((await vl.readEntry(voiceUuid))?.consent?.revokedAt).toBeTruthy();
+
+    // The gate now actually fires on the voice whose artifact is still there.
+    const sample = await request(app)
+      .post(`/api/voice-library/${voiceUuid}/sample`)
+      .send({ text: 'Hello.' });
+    expect(sample.status).toBe(403);
   });
 });
 

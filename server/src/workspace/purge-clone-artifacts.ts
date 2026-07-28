@@ -258,9 +258,7 @@ export async function purgeCloneArtifacts(
     const hash6 = djb2(storageKey).toString(36).slice(0, 6);
     purgeVoiceSamples(`raw-${engine}-${hash6}`);
   }
-  if (opts.deleteEntryDir) {
-    await removeEntryDir(voiceUuid);
-  } else if (opts.deleteMasterClip) {
+  if (opts.deleteMasterClip && !opts.deleteEntryDir) {
     /* User-directed (revoke must also erase the recording) — this is still
        revoke, not delete: the manifest + entry dir are kept so the card
        stays visible with its revoked state, but the person's actual
@@ -269,9 +267,10 @@ export async function purgeCloneArtifacts(
        the `qwen-<uuid>*` naming convention the `files` list above uses —
        it's whatever `clipFile` the ingest step wrote), unlink it, then clear
        `master` so the manifest never points at a file that's gone. A plain
-       delete (`deleteEntryDir`, above) doesn't need any of this — it removes
-       the whole entry dir, clip included, in one shot. No-op when the entry
-       or its `master` field is already absent.
+       delete (`deleteEntryDir`, moved BELOW the evicts by the GATE 1 C3 fix)
+       doesn't need any of this — it removes the whole entry dir, clip
+       included, in one shot. No-op when the entry or its `master` field is
+       already absent.
 
        fs-38 Wave 3c, Task 14 — read+clear+write through the shared, per-uuid
        -locked `updateEntry` rather than a bare readEntry/writeEntry pair, so
@@ -333,6 +332,40 @@ export async function purgeCloneArtifacts(
         `the voice until the sidecar process restarts:`,
       xttsEvictResult.detail,
     );
+  }
+  /* GATE 1 fix (C3) — the manifest dir comes off LAST, and ONLY when every
+     other step came back clean. Repo-owner ruling, settled; do not
+     re-litigate.
+
+     Why conditional: `voice.json` is what both consent gates read
+     (`clonedVoiceLacksConsent` in voice-library.ts, called from
+     routes/voice-sample.ts and routes/voice-library.ts's /sample). A `null`
+     entry reads as "not blocked". So removing the manifest while an artifact
+     survived the purge left that survivor LESS gated after the delete than
+     before it — the entry could no longer even be revoked, because there was
+     nothing left to stamp `revokedAt` on. Retaining it keeps the card
+     visible and the voice recoverable: the user can retry the delete, or
+     revoke, and either one can still reach the artifact that stayed behind.
+
+     Why after the evicts (unlike the engine-artifact unlinks, which the
+     module header deliberately keeps FIRST): whether the manifest may go at
+     all depends on the FULL `failed` set, and a lost sidecar evict leaves the
+     voice resident in `CoquiEngine._latents_cache` — a surviving artifact
+     that needs gating exactly like a surviving `.pt`. Safe to reorder because
+     the sidecar never reads the voice-library entry dir (only
+     `voices/{qwen,xtts}`), so the header's "unlink before evict, or the
+     sidecar may lazily reload from disk" rationale does not apply to it. */
+  if (opts.deleteEntryDir) {
+    if (failed.length === 0) {
+      await removeEntryDir(voiceUuid);
+    } else {
+      console.warn(
+        `[purge-clone-artifacts] KEEPING the voice-library manifest for "${voiceUuid}" — ` +
+          `${failed.length} artifact(s) survived the purge, and removing the manifest would ` +
+          `leave them ungated (the consent gates read it). Retry the delete, or revoke:`,
+        failed,
+      );
+    }
   }
   return { failed };
 }

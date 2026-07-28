@@ -1343,9 +1343,16 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
    for "every consent-scoped clone artifact" — including the `__1.7b.pt`
    variant this route's prior ad-hoc erasure missed. `deleteEntryDir: true`
    also removes the manifest dir (voice.json + master.wav), unlike the
-   revoke route above. */
-async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
-  await purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
+   revoke route above — but only when the purge came back CLEAN; see the C3
+   comment in purge-clone-artifacts.ts.
+
+   GATE 1 fix (C3) — the `failed` array is no longer discarded here. It was
+   the same report the revoke route already forwards as
+   `artifactPurgeIncomplete`, thrown away on the delete path so the route
+   could answer an unconditional `{ deleted: true }`. Returning it is what
+   lets the handler stop claiming more erasure than happened. */
+async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: string[] }> {
+  return purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
 }
 
 /* DELETE /api/voice-library/:voiceUuid
@@ -1355,7 +1362,20 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
    matches this voice is reported via 409 unless the caller passes
    `?confirm=1`; on confirm (or when unused) the matching override slots are
    cleared first — leaving those characters voiceless on that engine, which
-   the fe-46 gate surfaces — THEN every derived artifact is erased. */
+   the fe-46 gate surfaces — THEN every derived artifact is erased.
+
+   GATE 1 fix (C3) — a purge that could not erase everything answers
+   `{ deleted: false, artifactPurgeIncomplete: true, artifactPurgeFailedPaths }`
+   instead of the old unconditional `{ deleted: true }`, and the entry
+   SURVIVES (purge-clone-artifacts.ts keeps the manifest whenever `failed` is
+   non-empty — see the C3 comment there for why removing it would leave the
+   surviving artifact ungated). `deleted: false` is therefore literal, not
+   cosmetic: the card is still in the library and the user can retry the
+   delete or revoke instead. Still 200 — the reference-clearing and the
+   artifact sweep both genuinely ran; this is a partial outcome, not an
+   error. `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` are the same
+   two fields the revoke route above already carries (Task 14a), deliberately
+   reused rather than a second, delete-only signal. */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -1373,7 +1393,19 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
     if (usage.length > 0) {
       await clearLibraryVoiceReferences(voiceUuid);
     }
-    await eraseLibraryVoiceArtifacts(voiceUuid);
+    const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
+    if (purgeResult.failed.length > 0) {
+      console.warn(
+        `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+          `un-erased — the entry is RETAINED so the consent gates still cover them:`,
+        purgeResult.failed,
+      );
+      return res.status(200).json({
+        deleted: false,
+        artifactPurgeIncomplete: true,
+        artifactPurgeFailedPaths: purgeResult.failed,
+      });
+    }
 
     res.status(200).json({ deleted: true });
   } catch (e) {
