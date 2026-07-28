@@ -8575,6 +8575,18 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     default: 120,
   },
   {
+    key: 'sidecar.coquiIdleTtl',
+    group: 'gpu-lifecycle',
+    label: 'Coqui (XTTS) idle TTL (s)',
+    help: 'Seconds of Coqui inactivity before a VRAM-starved operation may reclaim the resident XTTS model (~3 GB). Unlike the other idle TTLs there is no background watchdog — this only ever fires when another operation would otherwise fail for want of VRAM. Raise it if a mixed-engine book keeps reloading XTTS between chapters (a reload costs ~90s); lower it if renders still fail while an idle Coqui is loaded. Values below 5 fall back to the default (30) to avoid reload thrash.',
+    type: 'integer',
+    min: 0,
+    apply: 'restart-sidecar',
+    risk: 'high',
+    isPrompt: false,
+    default: 30,
+  },
+  {
     key: 'sidecar.asrIdleTtl',
     group: 'gpu-lifecycle',
     label: 'ASR (Whisper) idle TTL (s)',

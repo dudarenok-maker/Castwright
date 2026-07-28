@@ -1156,6 +1156,18 @@ class CoquiEngine(Engine):
         # call would race past the `_tts is None` check and load XTTS twice.
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
+        # Serialises the synth forward against unload() (#1894). A threading
+        # .Lock, NOT the asyncio `_load_lock` above: both /synthesize and
+        # /unload reach this class through `asyncio.to_thread`, i.e. on worker
+        # threads, so an asyncio primitive would not serialise them. Mirrors
+        # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
+        # `_drop_model_locked()`, never `unload()`.
+        self._synth_lock = threading.Lock()
+        # Read lock-free by `maybe_free_idle` so a busy engine short-circuits
+        # without blocking the admission path on a forward that may run for
+        # seconds.
+        self._synth_in_flight = 0
+        self._last_used = 0.0
         self._language = os.environ.get("COQUI_LANGUAGE", "en")
         self._device = _read_device_env("COQUI_DEVICE") or "auto"  # auto | cpu | cuda | cuda:N
         self._requested_device = self._device  # preserved before any auto-resolution
@@ -1291,6 +1303,25 @@ class CoquiEngine(Engine):
         # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
         # and only casts the ops where fp16 is safe (matmuls, attention),
         # which is where the speedup lives anyway.
+        #
+        # Stamp `_last_used` BEFORE publishing `_tts`, not after the rest of
+        # this method's bookkeeping (#1894 fix-round-1 Important-1): no lock
+        # is held across this whole tail, and `_ensure_loaded` runs on a
+        # worker thread while the event loop stays free to run
+        # `maybe_free_idle` concurrently. A stamp placed after `self._device
+        # = device` below leaves a window where another thread can already
+        # see `_tts is not None` with a STALE `_last_used` (0.0 on a first
+        # load, or the pre-evict timestamp on a reload) — long enough for
+        # `maybe_free_idle` to fire and run `_drop_model_locked()`, which
+        # restores `self._device = self._requested_device`, only for this
+        # thread to then overwrite it right back to the just-admitted card
+        # a few lines down. That reverts the #1730 gap-3 fix and pins the
+        # engine to a stale placement with `_tts` freshly `None`. Stamping
+        # first closes the window: any thread that observes `_tts is not
+        # None` necessarily observes a fresh timestamp too, and while this
+        # method is still running, `_tts` is `None` so `maybe_free_idle`'s
+        # fast-out already declines.
+        self._last_used = time.monotonic()
         self._tts = tts
         self._torch = torch
         self._resolved_device = device
@@ -1329,9 +1360,35 @@ class CoquiEngine(Engine):
         Used by POST /unload when the UI's Stop button fires (or when the
         Analysing screen's Load button auto-evicts the TTS model to make
         room for the analyzer LLM). Idempotent — safe to call when nothing
-        is loaded."""
+        is loaded.
+
+        Acquires `_synth_lock` so it cannot null `_tts` out from under an
+        in-flight forward (#1894): the route offloads both this and
+        /synthesize to the worker pool, so they genuinely overlap. MUST NOT
+        be called while already holding `_synth_lock` — it is non-reentrant.
+        Internal holders call `_drop_model_locked()` + `_reclaim_after_drop()`.
+        """
+        with self._synth_lock:
+            dropped, torch_module = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop(torch_module)
+
+    def _drop_model_locked(self) -> tuple[bool, Any]:
+        """Reset every field the loaded model owns. CALLER MUST HOLD
+        `_synth_lock`. Returns `(dropped, torch_module)` — the torch handle is
+        returned rather than used here because the reclaim runs outside the
+        lock (see `_reclaim_after_drop`).
+
+        Split out (#1894) so `maybe_free_idle` reuses the FULL teardown rather
+        than nulling `_tts` inline the way QwenEngine's
+        `maybe_free_idle_design` does. Qwen can null inline because `_design`
+        carries no paired state; Coqui's teardown also restores
+        `self._device = self._requested_device` (the #1730 gap-3 fix), and
+        skipping it would leave the next lazy /synthesize cold-loading onto
+        the last admitted card, bypassing placement entirely.
+        """
         if self._tts is None:
-            return
+            return (False, None)
         torch_module = self._torch
         self._tts = None
         self._torch = None
@@ -1342,17 +1399,24 @@ class CoquiEngine(Engine):
         # re-resolve from the ORIGINAL request (e.g. 'auto'), not the last card.
         self._device = self._requested_device
         self._use_half = False
+        return (True, torch_module)
+
+    def _reclaim_after_drop(self, torch_module: Any) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_synth_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        `gc.collect()`/`empty_cache()` runs on the event loop either way,
+        lock held or not); it's released because holding `_synth_lock` across
+        this multi-second reclaim would block concurrent synth calls that
+        only need the lock briefly, for no benefit.
+        """
         # Break the dropped model's reference cycles NOW (see
         # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
         # a lagging cyclic GC under load is what leaked host RAM (2026-05-30).
         gc.collect()
         # `torch.cuda.empty_cache()` releases the cached allocator blocks
-        # back to the driver. Python's GC will reclaim the model's tensors
-        # once `self._tts = None` drops the last reference, but the cached
-        # allocator can hold those blocks for the next allocation — calling
-        # empty_cache makes the freed VRAM visible to other processes (e.g.
-        # the Ollama daemon) immediately, which is the whole point of the
-        # auto-evict-on-load flow.
+        # back to the driver, making the freed VRAM visible to other processes
+        # immediately — the whole point of the auto-evict-on-load flow.
         if torch_module is not None:
             try:
                 if torch_module.cuda.is_available():
@@ -1361,9 +1425,83 @@ class CoquiEngine(Engine):
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model unloaded.")
 
+    def maybe_free_idle(self, ttl_seconds: float) -> bool:
+        """Free the resident XTTS model when it has been idle longer than
+        `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict` on
+        the admission path (#1894) — Coqui deliberately has NO background
+        watchdog, unlike the Qwen/ASR/ECAPA idle-evicts, so this only ever
+        runs when another op is genuinely starved for VRAM.
+
+        The idle test is re-validated UNDER `_synth_lock` and skipped while a
+        synth is in flight, so admission can never free the model out from
+        under an active forward. Mirrors
+        `QwenEngine.maybe_free_idle_design`, with one deliberate difference:
+        it calls `_drop_model_locked()` rather than nulling `_tts` inline,
+        because Coqui's teardown also restores `_device` (#1730 gap 3) and
+        clears the cached speaker manifest.
+
+        The reclaim runs AFTER the lock is released, and this method is called
+        synchronously on the event loop by `_idle_evict` — see
+        `_reclaim_after_drop`.
+        """
+        # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
+        # used recently. Skipping the lock here matters — a forward can run
+        # for seconds and admission must not block on it.
+        if self._tts is None or self._synth_in_flight > 0:
+            return False
+        if time.monotonic() - self._last_used <= ttl_seconds:
+            return False
+        # Re-validate under the lock: `synthesize` claims `_synth_in_flight`
+        # and refreshes `_last_used` BEFORE taking the lock, so a check that
+        # still finds it idle here cannot be racing a forward.
+        with self._synth_lock:
+            if self._tts is None or self._synth_in_flight > 0:
+                return False
+            if time.monotonic() - self._last_used <= ttl_seconds:
+                return False
+            dropped, torch_module = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop(torch_module)
+        return True
+
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
+        # Load OUTSIDE the lock: a cold XTTS pull takes ~90s and holding
+        # `_synth_lock` across it would block /unload (the Stop button) for
+        # that whole window.
         self._ensure_loaded(model)
-        assert self._tts is not None
+        # Claim BEFORE the acquire. The counter alone is NOT enough and neither
+        # is the timestamp — main.py:3835-3838 spells out the same TOCTOU for
+        # Qwen: an evict can read a stale `_last_used` and free the model in the
+        # gap between the ensure above and the acquire below. The pair
+        # (`_synth_in_flight` set here + the re-ensure under the lock) closes it.
+        # Decremented in the finally so a failure can't leave the guard stuck.
+        self._synth_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._synth_lock:
+                # Re-ensure under the lock: a concurrent /unload or admission
+                # evict holds `_synth_lock` to null the model, so one ensured
+                # before the lock can be gone in the gap. No-op on the warm
+                # path (`_ensure_loaded` early-returns when `_tts` is set).
+                self._ensure_loaded(model)
+                return self._synthesize_locked(model, voice, text, language)
+        finally:
+            self._synth_in_flight -= 1
+            self._last_used = time.monotonic()
+
+    def _synthesize_locked(
+        self, model: str, voice: str, text: str, language: Optional[str] = None
+    ) -> SynthResult:
+        """The forward itself. CALLER MUST HOLD `_synth_lock`.
+
+        Binds `self._tts` to a local up front so the forward never re-reads an
+        attribute a concurrent unload could null. The assert is a cheap
+        invariant, NOT the race guard — the guard is the caller's
+        `_synth_in_flight` claim plus its re-ensure under the lock.
+        """
+        tts = self._tts
+        assert tts is not None
         effective_language = language or self._language
 
         # Pre-flight validation. If the caller's `voice` isn't in this model's
@@ -1400,18 +1538,18 @@ class CoquiEngine(Engine):
         # inference on a model that wasn't trained mixed-precision.
         if self._use_half and self._torch is not None:
             with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
-                audio = self._tts.tts(
+                audio = tts.tts(
                     text=text,
                     speaker=actual_voice,
                     language=effective_language,
                 )
         else:
-            audio = self._tts.tts(
+            audio = tts.tts(
                 text=text,
                 speaker=actual_voice,
                 language=effective_language,
             )
-        sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
+        sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
 
@@ -2284,7 +2422,7 @@ class PlacementController:
         footprints: Optional["FootprintTable"] = None,
         ledger: Optional["ReservationLedger"] = None,
         reserve_mb: Optional[Callable[[], int]] = None,
-        idle_evict: Optional[Callable[[str], bool]] = None,
+        idle_evict: Optional[Callable[[str, str], bool]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
     ) -> None:
         self.probe = probe
@@ -2294,7 +2432,7 @@ class PlacementController:
         # the actual per-device cushion is `_device_reserve_mb(total, cap)`,
         # min(5% of that device's own VRAM, this cap). See `_device_reserve_mb`.
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
-        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key: False)
+        self.idle_evict = idle_evict if idle_evict is not None else (lambda device_key, engine: False)
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
 
     @staticmethod
@@ -2372,7 +2510,7 @@ class PlacementController:
             return {"device": "cpu"}
 
         worst = self._worst_device_key(devices)
-        if worst is not None and self.idle_evict(worst):
+        if worst is not None and self.idle_evict(worst, engine):
             devices = self.probe()
             candidates = self._gpu_candidates(devices, constraint)
             key = self.ledger.best_fit(candidates, peak, reserve_cap)
@@ -2447,7 +2585,7 @@ class PlacementController:
         held = self.ledger.try_hold(candidates, peak, reserve_cap)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
-            if worst is not None and self.idle_evict(worst):
+            if worst is not None and self.idle_evict(worst, engine):
                 devices = self.probe()
                 candidates = self._gpu_candidates(devices, constraint)
                 held = self.ledger.try_hold(candidates, peak, reserve_cap)
@@ -2541,7 +2679,7 @@ def _same_card(resident: Optional[str], target: str) -> bool:
     return (idx_r or 0) == (idx_t or 0)
 
 
-def _idle_evict(device_key: str) -> bool:
+def _idle_evict(device_key: str, engine: str) -> bool:
     """PlacementController.idle_evict: best-effort attempt to free idle
     transient GPU state to make room for the admitting op on `device_key`.
     Tries each idle-evictable engine (Qwen VoiceDesign + 1.7B-Base share the
@@ -2555,7 +2693,12 @@ def _idle_evict(device_key: str) -> bool:
     on the target card, so freeing it couldn't admit this op. The device strings
     match how the rest of the sidecar reasons about residency (`_is_resident`,
     `shares_device`) — Qwen's design/base17 both live on the shared
-    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`."""
+    `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`.
+
+    `engine` is the ADMITTING op's engine. The engines evicted here are
+    transient or secondary, so freeing them can never be self-defeating —
+    except Coqui (#1894), which is a primary synth engine: a starved Coqui op
+    must not evict the model it is about to reload. See its branch below."""
     freed = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine) and _same_card(qwen._device, device_key):
@@ -2577,6 +2720,17 @@ def _idle_evict(device_key: str) -> bool:
             freed = SPK.maybe_free_idle(0.0) or freed
         except Exception:
             pass
+    # Coqui (#1894). Unlike everything above, this is a PRIMARY synth engine —
+    # so it is skipped when the admitting op is itself Coqui (evicting would
+    # unload the model that op is about to reload), and it uses a real idle TTL
+    # rather than the 0.0 the transient models take.
+    if engine != "coqui":
+        coqui = ENGINES.get("coqui")
+        if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
+            try:
+                freed = coqui.maybe_free_idle(_coqui_idle_ttl()) or freed
+            except Exception:
+                pass
     return freed
 
 
@@ -4783,6 +4937,9 @@ class WhisperEngine:
         # CTranslate2 inference isn't guaranteed reentrant; serialise forwards
         # the same way QwenEngine guards its Base model with `_synth_lock`.
         self._infer_lock = threading.Lock()
+        # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
+        # without blocking the admission path on a whole forward (#1894).
+        self._infer_in_flight = 0
         # Monotonic timestamp of the last transcribe — drives the idle watchdog.
         self._last_used: float = 0.0
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
@@ -4865,20 +5022,31 @@ class WhisperEngine:
         load, so nothing reads the shared `self._device` across the unlocked
         route→load gap; `None` is the pre-admission path."""
         self._ensure_loaded(device=device)
-        assert self._model is not None
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
-        with self._infer_lock:
+        self._infer_in_flight += 1
+        self._last_used = time.monotonic()
+        try:
+            with self._infer_lock:
+                # Re-ensure under the lock: an idle-evict holds `_infer_lock`
+                # to null the model, so one ensured before the lock can be gone
+                # in the gap. No-op on the warm path.
+                self._ensure_loaded(device=device)
+                model = self._model
+                assert model is not None
+                self._last_used = time.monotonic()
+                segments, info = model.transcribe(
+                    audio,
+                    language=language,
+                    beam_size=1,                     # greedy
+                    temperature=0.0,                 # deterministic → idempotent verdicts
+                    condition_on_previous_text=word_timestamps,  # True only for captions
+                    vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+                    word_timestamps=word_timestamps,
+                )
+                segs = list(segments)
+        finally:
+            self._infer_in_flight -= 1
             self._last_used = time.monotonic()
-            segments, info = self._model.transcribe(
-                audio,
-                language=language,
-                beam_size=1,                     # greedy
-                temperature=0.0,                 # deterministic → idempotent verdicts
-                condition_on_previous_text=word_timestamps,  # True only for captions
-                vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
-                word_timestamps=word_timestamps,
-            )
-            segs = list(segments)
         text = " ".join((s.text or "").strip() for s in segs).strip()
         logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
         no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
@@ -4900,25 +5068,76 @@ class WhisperEngine:
             "words": words,
         }
 
-    def unload(self) -> bool:
-        """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees)."""
+    def _drop_model_locked(self) -> bool:
+        """Reset the model field. CALLER MUST HOLD `_infer_lock`. Returns
+        whether a model was actually dropped, so callers skip the reclaim +
+        log when there was nothing to drop.
+
+        Split out (#1894) so `maybe_free_idle` can re-validate + drop under
+        the lock without going through the public `unload()` — `_infer_lock`
+        is non-reentrant, so calling `unload()` while already holding it
+        would self-deadlock. Mirrors `CoquiEngine._drop_model_locked`.
+        """
         if self._model is None:
             return False
         self._model = None
+        return True
+
+    def _reclaim_after_drop(self) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_infer_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        the `gc.collect()`-scale work here runs on the event loop either way,
+        lock held or not); it's released because holding `_infer_lock` across
+        this multi-second reclaim would block concurrent transcribe calls
+        that only need the lock briefly, for no benefit."""
         _reclaim_host_and_vram()
         log.info("Whisper ASR model unloaded.")
-        return True
+
+    def unload(self) -> bool:
+        """Drop the model + reclaim. Idempotent. Returns True iff a model was
+        actually freed, reporting whether a model was freed to the callers
+        (`maybe_free_idle` and the test suite).
+
+        Acquires `_infer_lock` so it cannot null the model out from under an
+        in-flight transcribe (#1894). The reclaim runs after the lock is
+        released — this is reached from `_idle_evict` on the event loop.
+        """
+        with self._infer_lock:
+            dropped = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop()
+        return dropped
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL — mirrors
         `QwenEngine.maybe_free_idle_design`. Matters mainly on the cuda path
-        (reclaims VRAM); on cpu it just frees host RAM. No-op while in use."""
-        if self._model is None:
+        (reclaims VRAM); on cpu it just frees host RAM. No-op while in use.
+
+        Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
+        used recently — skipping the lock here matters, a forward can run
+        for seconds and admission must not block on it. Re-validated UNDER
+        the lock before dropping (#1894): `transcribe` claims
+        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        so a counter that flips to nonzero WHILE this is queued on the lock
+        is otherwise invisible to the cheap check above. Calls
+        `_drop_model_locked()` directly rather than `unload()` — re-entering
+        `_infer_lock` here would self-deadlock.
+        """
+        if self._model is None or self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
-        return self.unload()
+        with self._infer_lock:
+            if self._model is None or self._infer_in_flight > 0:
+                return False
+            if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+                return False
+            dropped = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop()
+        return True
 
 
 # ASR is a standalone singleton (not a synth `Engine`) — audio in, text out.
@@ -4936,6 +5155,9 @@ class SpeakerEngine:
         self._model = None
         self._load_lock = asyncio.Lock()
         self._infer_lock = threading.Lock()
+        # Claimed BEFORE `_infer_lock` so `maybe_free_idle` can fast-out
+        # without blocking the admission path on a whole forward (#1894).
+        self._infer_in_flight = 0
         # Monotonic timestamp of the last embed — drives the idle watchdog.
         self._last_used: float = 0.0
         self.device = os.environ.get("SPK_DEVICE", "cpu")
@@ -4996,31 +5218,98 @@ class SpeakerEngine:
             audio = np.interp(np.linspace(0, len(audio), n, endpoint=False),
                               np.arange(len(audio)), audio).astype(np.float32)
         t = torch.from_numpy(audio).unsqueeze(0)
-        with self._infer_lock, torch.no_grad():
-            emb = self._model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        self._infer_in_flight += 1
         self._last_used = time.monotonic()
+        try:
+            with self._infer_lock, torch.no_grad():
+                # `ensure_loaded` is async here, so unlike WhisperEngine we
+                # cannot reload under the lock — re-check and surface the
+                # documented precondition. The `_infer_in_flight` claim above
+                # is what actually stops an idle-evict getting here (#1894).
+                model = self._model
+                if model is None:
+                    raise RuntimeError("model was unloaded during embed()")
+                emb = model.encode_batch(t).squeeze().cpu().numpy().astype(np.float32)
+        finally:
+            self._infer_in_flight -= 1
+            self._last_used = time.monotonic()
         norm = float(np.linalg.norm(emb))
         return (emb / norm if norm > 0 else emb).tolist()
 
-    def unload(self) -> bool:
-        """Drop the model + reclaim. Idempotent. Returns True iff a model was
-        actually freed (so the watchdog can log only real frees)."""
+    def _drop_model_locked(self) -> bool:
+        """Reset the model field. CALLER MUST HOLD `_infer_lock`. Returns
+        whether a model was actually dropped, so callers skip the reclaim +
+        log when there was nothing to drop.
+
+        Split out (#1894) so `maybe_free_idle` can re-validate + drop under
+        the lock without going through the public `unload()` — `_infer_lock`
+        is non-reentrant, so calling `unload()` while already holding it
+        would self-deadlock. Mirrors `CoquiEngine._drop_model_locked`.
+        """
         if self._model is None:
             return False
         self._model = None
+        return True
+
+    def _reclaim_after_drop(self) -> None:
+        """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
+        `_infer_lock` RELEASED — NOT because it protects the event loop
+        (`reservation()` is a plain @contextmanager entered synchronously, so
+        the `gc.collect()`-scale work here runs on the event loop either way,
+        lock held or not); it's released because holding `_infer_lock` across
+        this multi-second reclaim would block concurrent embed calls that
+        only need the lock briefly, for no benefit."""
         _reclaim_host_and_vram()
         log.info("ECAPA speaker model unloaded.")
-        return True
+
+    def unload(self) -> bool:
+        """Drop the model + reclaim. Idempotent. Returns True iff a model was
+        actually freed, reporting whether a model was freed to the callers
+        (`maybe_free_idle` and the test suite).
+
+        Acquires `_infer_lock` so it cannot null the model out from under an
+        in-flight embed (#1894). The reclaim runs after the lock is
+        released — this is reached from `_idle_evict` on the event loop.
+        """
+        with self._infer_lock:
+            dropped = self._drop_model_locked()
+        if dropped:
+            self._reclaim_after_drop()
+        return dropped
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
         the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
-        freeing ~80–200 MB of host RAM. No-op while recently used."""
+        freeing ~80–200 MB of host RAM. No-op while recently used.
+
+        Cheap, lock-free fast-outs first (cuda-only guard, then nothing
+        loaded / mid-forward / used recently) — skipping the lock matters, a
+        forward can run for seconds and admission must not block on it.
+        Re-validated UNDER the lock before dropping (#1894): `embed` claims
+        `_infer_in_flight` and refreshes `_last_used` BEFORE taking the lock,
+        so a counter that flips to nonzero WHILE this is queued on the lock
+        is otherwise invisible to the cheap check above. Calls
+        `_drop_model_locked()` directly rather than `unload()` — re-entering
+        `_infer_lock` here would self-deadlock.
+        """
         if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            return False
+        if self._infer_in_flight > 0:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
-        return self.unload()
+        with self._infer_lock:
+            if _parse_device(self.device)[0] != "cuda" or self._model is None:
+                return False
+            if self._infer_in_flight > 0:
+                return False
+            if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+                return False
+            dropped = self._drop_model_locked()
+        if not dropped:
+            return False
+        self._reclaim_after_drop()
+        return True
 
 
 # SPK is a standalone singleton (not a synth `Engine`) — audio in, embedding out.
@@ -5189,6 +5478,30 @@ def _spk_idle_ttl() -> float:
     except (TypeError, ValueError):
         return _SPK_IDLE_TTL_DEFAULT
     return ttl if ttl >= 5.0 else _SPK_IDLE_TTL_DEFAULT
+
+
+# Default seconds of Coqui inactivity before an ADMISSION-PATH evict may free
+# the resident XTTS model (#1894). Override via COQUI_IDLE_TTL. Must match the
+# registry sidecar.coquiIdleTtl default.
+#
+# 30, not the 120 its neighbours use, because Coqui deliberately has NO
+# background watchdog: those TTLs answer "how long before we reclaim
+# proactively", while this one only answers "was this in use just now", and it
+# is consulted solely when another op is already starved. At 120 the lever
+# would refuse in most real chapter gaps and the starved op would fail instead.
+_COQUI_IDLE_TTL_DEFAULT = 30.0
+
+
+def _coqui_idle_ttl() -> float:
+    """Resolve COQUI_IDLE_TTL (seconds) with a safe default + 5 s floor —
+    mirrors `_spk_idle_ttl`. Too small and a mixed-engine book evicts XTTS
+    between groups and pays the ~90 s reload; too large and the lever declines
+    while a render fails for want of the VRAM."""
+    try:
+        ttl = float(os.environ.get("COQUI_IDLE_TTL", _COQUI_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _COQUI_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _COQUI_IDLE_TTL_DEFAULT
 
 
 async def _spk_idle_watchdog() -> None:
