@@ -2234,9 +2234,10 @@ paths:
           description: No library entry, book, or character matching the request
         '409':
           description: |
-            The library entry is a cloned voice, but the character would route to a
-            non-Qwen engine (cloned voices only render on Qwen) — or the entry's
-            consent has been revoked, or the entry hasn't finished deriving yet.
+            The entry's consent has been revoked, or the entry hasn't finished
+            deriving on Qwen yet, or (cloned entries only) the character would
+            route to an engine that isn't clone-capable — cloned voices render
+            on Qwen or Coqui XTTS v2, never on a third engine.
           content:
             application/json:
               schema:
@@ -2308,7 +2309,7 @@ paths:
                     `xtts` slot. Omitted defaults to qwen3-tts-0.6b.
       responses:
         '200':
-          description: Sample is ready (either cached or freshly synthesised)
+          description: Sample is ready
           content:
             application/json:
               schema:
@@ -2316,6 +2317,7 @@ paths:
                 required: [url]
                 properties:
                   url: { type: string }
+                  cached: { type: boolean, description: Whether this response served a previously-synthesised sample rather than synthesising a fresh one. }
         '400':
           description: modelKey is present but does not route to a clone-capable engine (qwen or coqui)
           content:
@@ -2325,10 +2327,16 @@ paths:
                 properties:
                   code: { type: string }
                   message: { type: string }
+        '403':
+          description: This cloned voice's consent has been revoked — it cannot be played
         '404':
           description: No library entry with that voiceUuid
         '409':
-          description: The requested engine's artifact has not been prepared (derived/designed) for this voice yet
+          description: |
+            Either the requested engine's artifact has not been prepared
+            (derived/designed) for this voice yet, or (Coqui only) the voice is
+            prepared but the loaded XTTS model can't speak the requested
+            language — re-preparing it will not help in that case.
           content:
             application/json:
               schema:

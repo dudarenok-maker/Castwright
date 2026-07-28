@@ -7996,9 +7996,10 @@ export interface operations {
                 content?: never;
             };
             /**
-             * @description The library entry is a cloned voice, but the character would route to a
-             *     non-Qwen engine (cloned voices only render on Qwen) — or the entry's
-             *     consent has been revoked, or the entry hasn't finished deriving yet.
+             * @description The entry's consent has been revoked, or the entry hasn't finished
+             *     deriving on Qwen yet, or (cloned entries only) the character would
+             *     route to an engine that isn't clone-capable — cloned voices render
+             *     on Qwen or Coqui XTTS v2, never on a third engine.
              */
             409: {
                 headers: {
@@ -8083,7 +8084,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sample is ready (either cached or freshly synthesised) */
+            /** @description Sample is ready */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8091,6 +8092,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         url: string;
+                        /** @description Whether this response served a previously-synthesised sample rather than synthesising a fresh one. */
+                        cached?: boolean;
                     };
                 };
             };
@@ -8106,6 +8109,13 @@ export interface operations {
                     };
                 };
             };
+            /** @description This cloned voice's consent has been revoked — it cannot be played */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description No library entry with that voiceUuid */
             404: {
                 headers: {
@@ -8113,7 +8123,12 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The requested engine's artifact has not been prepared (derived/designed) for this voice yet */
+            /**
+             * @description Either the requested engine's artifact has not been prepared
+             *     (derived/designed) for this voice yet, or (Coqui only) the voice is
+             *     prepared but the loaded XTTS model can't speak the requested
+             *     language — re-preparing it will not help in that case.
+             */
             409: {
                 headers: {
                     [name: string]: unknown;
