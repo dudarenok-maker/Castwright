@@ -507,8 +507,17 @@ def test_steps_run_cheapest_reload_first(monkeypatch):
     tried first — reload costs: ECAPA ~200 MB / ~1 s, ASR ~400 MB / ~1 s,
     Qwen VoiceDesign + 1.7B-Base seconds, Coqui XTTS ~3 GB / ~90 s.
 
+    Also pins the #1920B ledger-guard wiring: spk/asr/coqui MUST carry their
+    real `reserved_key` (the ledger can attribute a reservation to them), while
+    the two Qwen steps MUST stay `None` (the ledger's per-engine granularity
+    can't tell Qwen's models apart — see the long comment in
+    `_idle_evict_steps`). Losing either half is a real regression: dropping
+    the real keys re-enables an evict of an already-admitted model out from
+    under its own worker thread; giving Qwen a real key makes one Qwen op's
+    reservation starve a second Qwen op into a needless ~90s Coqui reload.
+
     Fails against a build that puts Coqui (or any of the transient engines)
-    out of cheapest-first order."""
+    out of cheapest-first order, OR that gets any step's `reserved_key` wrong."""
     qwen = _FakeStepQwen("cuda:0")
     coqui = _FakeStepCoqui("cuda:0")
     asr = type("A", (), {"_device": "cuda:0", "maybe_free_idle": lambda self, ttl: True})()
@@ -518,8 +527,14 @@ def test_steps_run_cheapest_reload_first(monkeypatch):
     monkeypatch.setattr(main, "ASR", asr)
     monkeypatch.setattr(main, "SPK", spk)
 
-    names = [s.name for s in main._idle_evict_steps("cuda:0", "asr")]
-    assert names == ["spk", "asr", "qwen.design", "qwen.base17", "coqui"]
+    steps = main._idle_evict_steps("cuda:0", "asr")
+    assert [(s.name, s.reserved_key) for s in steps] == [
+        ("spk", "spk"),
+        ("asr", "asr"),
+        ("qwen.design", None),
+        ("qwen.base17", None),
+        ("coqui", "coqui"),
+    ]
 
 
 def test_try_hold_is_atomic_under_concurrency():

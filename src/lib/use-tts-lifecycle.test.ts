@@ -465,6 +465,76 @@ describe('useTtsLifecycle', () => {
     });
   });
 
+  it("clears Kokoro's pending override on ITS OWN probe even while Coqui's Stop is still outstanding (F3)", async () => {
+    /* F3: inFlightOps used to be a SINGLE counter shared by all four engines.
+       Stop Coqui (can hang up to 90s per #1894/#1921), then Load Kokoro:
+       Kokoro's own /health probe (fired by its own onLoad, via
+       setHealthProbeKey) confirms kokoroLoaded=true, but a shared counter
+       still reads nonzero (Coqui's Stop hasn't resolved) — so the poll's
+       guard skips clearing ANY pending override, and Kokoro's pill stays
+       stuck on the optimistic 'loading' state until the UNRELATED Coqui
+       unload finally resolves.
+
+       Fails against a single shared `inFlightOps` counter: the waitFor below
+       times out because kokoro.state never reaches 'ready' while Coqui's
+       Stop is still in flight. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: true,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+    });
+
+    let resolveUnload: (v: { status: string }) => void = () => {};
+    mocks.unloadSidecar.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveUnload = r;
+      }),
+    );
+
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.coqui.state).toBe('ready'));
+    expect(result.current.kokoro.state).toBe('idle');
+
+    /* Start the long-running Coqui Stop — it hangs, matching the up-to-90s
+       #1894 wait for the in-flight forward to drain. */
+    let stopPromise: Promise<void> = Promise.resolve();
+    await act(async () => {
+      stopPromise = result.current.coqui.onStop();
+      await Promise.resolve();
+    });
+    expect(result.current.coqui.state).toBe('unloading');
+
+    /* The NEXT /health probe — fired by Kokoro's own Load via
+       setHealthProbeKey — confirms Kokoro is now resident. */
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: true,
+      kokoroLoaded: true,
+      kokoroLoading: false,
+    });
+
+    await act(async () => {
+      await result.current.kokoro.onLoad();
+    });
+
+    /* Kokoro's own probe confirmed residency — its pending override must
+       clear even though Coqui's Stop is still outstanding. */
+    await waitFor(() => expect(result.current.kokoro.state).toBe('ready'));
+    /* Coqui's pending override is untouched by Kokoro's unrelated probe. */
+    expect(result.current.coqui.state).toBe('unloading');
+
+    /* Release the hang so the test cleans up. */
+    await act(async () => {
+      resolveUnload({ status: 'ok' });
+      await stopPromise;
+    });
+  });
+
   it('exposes the GPU capacity-wait queue depth from /api/gpu/queue on the same tick', async () => {
     /* Hook polls /api/gpu/queue alongside /api/sidecar/health so the
        top-bar pill can prefix "GPU busy · N waiting ·". When queueDepth > 0

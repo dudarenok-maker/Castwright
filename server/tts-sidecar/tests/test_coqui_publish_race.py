@@ -182,6 +182,63 @@ def test_a_normal_load_still_publishes_every_field(monkeypatch):
     assert eng._use_half is True
 
 
+def test_publish_loaded_locked_stamps_last_used_before_publishing_tts():
+    """#1894 fix-round-1 ordering invariant, pinned directly against
+    `_publish_loaded_locked` rather than through the whole `_ensure_loaded`
+    load path.
+
+    The method's own docstring says the `_last_used` stamp MUST run BEFORE
+    `self._tts` is published: an admission-path `maybe_free_idle(ttl=0.0)`
+    reads `_last_used` to decide whether a model is idle, and if `_tts` were
+    already live while `_last_used` still read 0.0, that call would read the
+    model as idle and evict it mid-publish.
+
+    `test_a_normal_load_still_publishes_every_field` above only asserts
+    `_last_used > 0.0` AFTER the call returns — both stamp-orderings satisfy
+    that post-hoc check. This test instead observes `_last_used` AT THE
+    MOMENT `self._tts` is actually assigned, via a `_tts` property override
+    that records `self._last_used` on every set — mirroring the
+    `RecordingLock` technique in
+    test_coqui_idle_evict.py::test_synthesize_restamps_last_used_before_the_in_flight_drop.
+    `_last_used` is reset to the 0.0 sentinel right before the call, so the
+    recorded stamp at `_tts`'s write time can only be nonzero if the real
+    stamp ran first.
+
+    Fails against a build that moves `self._last_used = time.monotonic()`
+    below `self._tts = tts`: the recorded stamp reads 0.0 instead."""
+
+    class _RecordingCoqui(main.CoquiEngine):
+        @property
+        def _tts(self):
+            return self.__dict__.get("_tts_value")
+
+        @_tts.setter
+        def _tts(self, value):
+            self.__dict__.setdefault("_tts_set_stamps", []).append(
+                self.__dict__.get("_last_used")
+            )
+            self.__dict__["_tts_value"] = value
+
+    eng = _RecordingCoqui()
+    eng._last_used = 0.0  # reset the __init__-time value to the sentinel
+
+    published = eng._publish_loaded_locked(
+        eng._load_epoch,
+        object(),  # stand-in "tts" — never called, only assigned
+        torch_module=None,
+        device="cuda:0",
+        use_half=False,
+        speakers=[],
+    )
+
+    assert published is True
+    stamp_at_publish = eng.__dict__["_tts_set_stamps"][-1]
+    assert stamp_at_publish is not None and stamp_at_publish > 0.0, (
+        "_last_used still read the pre-publish sentinel (0.0) at the moment "
+        "_tts was set — the stamp ran AFTER the publish, not before"
+    )
+
+
 def test_the_reensure_under_the_lock_does_not_deadlock(monkeypatch):
     """`synthesize` calls `_ensure_loaded` while HOLDING `_synth_lock`; a publish
     that unconditionally acquires that non-reentrant lock self-deadlocks.

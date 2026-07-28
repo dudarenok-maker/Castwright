@@ -11,7 +11,7 @@ import { uiSlice } from '../store/ui-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { upgradeSlice } from '../store/upgrade-slice';
 import { ModelManagerView } from './model-manager';
-import { api, type ModelInventoryResponse } from '../lib/api';
+import { api, type ModelControlResult, type ModelInventoryResponse } from '../lib/api';
 import type { UserSettings } from '../lib/types';
 
 /* Hoisted so individual tests can override just the engine states (spread
@@ -247,6 +247,53 @@ describe('ModelManagerView — inventory', () => {
     const kokoro = await screen.findByTestId('model-row-kokoro');
     within(kokoro).getByRole('button', { name: /stop/i }).click();
     await waitFor(() => expect(mockUnload).toHaveBeenCalledWith({ engine: 'kokoro' }));
+  });
+
+  it('shows a "Stopping…" state (not "Loading…") while a Stop is in flight, and still shows "Loading…" for a Load', async () => {
+    /* F2 regression: this view has its OWN busy tracking independent of
+       use-tts-lifecycle, and used to collapse load and stop into a single
+       busyId — so pressing Stop rendered the pill as though it were loading.
+       This PR takes the Stop window from ≤2s to ≤90s (F1921's own fix), which
+       makes that mislabel far more visible to a tester exercising A20. */
+    let resolveUnload!: (v: ModelControlResult) => void;
+    mockUnload.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveUnload = resolve;
+        }),
+    );
+    renderManager();
+    const kokoro = await screen.findByTestId('model-row-kokoro');
+    within(kokoro).getByRole('button', { name: /stop/i }).click();
+
+    await waitFor(() =>
+      expect(within(kokoro).getByRole('button', { name: /stopping/i })).toBeDisabled(),
+    );
+    expect(within(kokoro).queryByText(/^loading kokoro/i)).not.toBeInTheDocument();
+    expect(within(kokoro).getByText(/^stopping kokoro/i)).toBeInTheDocument();
+
+    resolveUnload({ status: 'idle' });
+    await waitFor(() => expect(mockUnload).toHaveBeenCalledWith({ engine: 'kokoro' }));
+
+    /* A separate Load elsewhere still renders 'Loading…', not 'Stopping…'. */
+    let resolveLoad!: (v: ModelControlResult) => void;
+    mockLoad.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    const qwen = await screen.findByTestId('model-row-qwen-base');
+    within(qwen).getByRole('button', { name: /load model/i }).click();
+
+    await waitFor(() =>
+      expect(within(qwen).getByRole('button', { name: /^loading/i })).toBeDisabled(),
+    );
+    expect(within(qwen).getByText(/^loading qwen/i)).toBeInTheDocument();
+    expect(within(qwen).queryByText(/^stopping qwen/i)).not.toBeInTheDocument();
+
+    resolveLoad({ status: 'ready' });
+    await waitFor(() => expect(mockLoad).toHaveBeenCalledWith({ engine: 'qwen' }));
   });
 
   it('offers no Load control for a not-installed model', async () => {

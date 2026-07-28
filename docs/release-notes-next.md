@@ -338,7 +338,7 @@ history at cut time.
   button fired mid-render, and the same unguarded-unload race in the Whisper
   (ASR) and ECAPA speaker engines — which, unlike Coqui, were already being
   auto-evicted, so that one was reachable in production.
-- **The five engine in-flight counters are now lock-guarded** (#1917, PR #NNNN).
+- **The five engine in-flight counters are now lock-guarded** (#1917, PR #1930).
   `x += 1` on a plain attribute is not atomic — CPython can switch threads at
   any bytecode boundary — so a concurrent forward could lose a decrement and
   leave that engine's counter stuck above zero, silently disabling its idle
@@ -352,7 +352,7 @@ history at cut time.
   re-stamping `_last_used` on the way out, leaving a window where the
   admission path could see an idle-looking engine mid-forward and evict it.
 - **A Stop pressed mid-load no longer leaves Coqui XTTS pinned to a stale GPU**
-  (#1918, PR #NNNN). Loading a fresh model used to publish seven fields with
+  (#1918, PR #1930). Loading a fresh model used to publish seven fields with
   no lock while `unload()` took the lock and reset those same fields, so a Stop
   during the ~90 s cold load could have the still-running loader overwrite the
   unload's resets — leaving a live model whose `_device` never got restored to
@@ -361,7 +361,7 @@ history at cut time.
   epoch, and a load that finishes after losing the race discards its
   result instead of publishing on top of a teardown.
 - **VRAM eviction now stops as soon as a request fits, and never throws away a
-  reserved model** (#1920, PR #NNNN). Previously a small request (e.g. a
+  reserved model** (#1920, PR #1930). Previously a small request (e.g. a
   400 MB ASR call) ran every eviction branch unconditionally, so it could free
   several GB from Qwen and still unload a resident Coqui XTTS — a ~90 s reload
   — for no reason. Eviction is now an ordered, cheapest-reload-first step list
@@ -370,7 +370,7 @@ history at cut time.
   engine whose operation has already been admitted, closing a window where an
   in-flight, already-reserved model could be evicted out from under it.
 - **Pressing Stop no longer reports a timeout while the model unloads anyway**
-  (#1921, PR #NNNN). `POST /api/sidecar/unload` previously ran under the same
+  (#1921, PR #1930). `POST /api/sidecar/unload` previously ran under the same
   2 s budget as the sidecar health probe, so stopping a model mid-render
   reported an error a couple of seconds in and then unloaded for real up to a
   minute later. The unload route now gets its own 90 s budget (mirroring the

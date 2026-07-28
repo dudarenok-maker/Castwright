@@ -121,8 +121,26 @@ export function useTtsLifecycle(): TtsLifecycle {
      clear the optimistic 'unloading' override and the pill would flip back
      to the stale (still-resident) 'ready' reading — the same lie #1921 is
      about, delayed by 30 seconds. Incremented at the top of doLoad/doStop,
-     decremented in a finally; the poll only clears when it reads zero. */
-  const inFlightOps = useRef(0);
+     decremented in a finally; the poll only clears a given engine's pending
+     override when THAT engine reads zero.
+
+     Per-engine (F3): a single shared counter would make e.g. a 90 s Coqui
+     Stop hold the Kokoro pill's pending 'loading' override hostage — Kokoro's
+     own Load finishes and its probe would confirm the transition, but the
+     guard above saw a nonzero total and skipped clearing ANY engine's
+     pending, so Kokoro's pill stays stuck reading 'loading' until the
+     unrelated Coqui unload resolves. */
+  const inFlightOps = useRef<Record<EngineId, number>>({ coqui: 0, kokoro: 0, qwen: 0, qwen1_7b: 0 });
+
+  /* Clears each engine's pending override independently — only the engines
+     with no in-flight Load/Stop of their own. See the inFlightOps comment
+     above for why this must be per-engine rather than a single guard. */
+  const clearSettledPendings = () => {
+    if (inFlightOps.current.coqui === 0) setPendingCoqui(null);
+    if (inFlightOps.current.kokoro === 0) setPendingKokoro(null);
+    if (inFlightOps.current.qwen === 0) setPendingQwen(null);
+    if (inFlightOps.current.qwen1_7b === 0) setPendingQwen17b(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -132,22 +150,12 @@ export function useTtsLifecycle(): TtsLifecycle {
         .then((h) => {
           if (cancelled) return;
           setSidecarHealth(h);
-          if (inFlightOps.current === 0) {
-            setPendingCoqui(null);
-            setPendingKokoro(null);
-            setPendingQwen(null);
-            setPendingQwen17b(null);
-          }
+          clearSettledPendings();
         })
         .catch(() => {
           if (cancelled) return;
           setSidecarHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
-          if (inFlightOps.current === 0) {
-            setPendingCoqui(null);
-            setPendingKokoro(null);
-            setPendingQwen(null);
-            setPendingQwen17b(null);
-          }
+          clearSettledPendings();
         });
 
       /* GPU queue state — same cadence, separate endpoint. Permissive
@@ -227,7 +235,7 @@ export function useTtsLifecycle(): TtsLifecycle {
   };
 
   const doLoad = async (engine: EngineId) => {
-    inFlightOps.current += 1;
+    inFlightOps.current[engine] += 1;
     try {
       setPending(engine, 'loading');
       setEvictionNotice(null);
@@ -274,12 +282,12 @@ export function useTtsLifecycle(): TtsLifecycle {
       }
       setHealthProbeKey((k) => k + 1);
     } finally {
-      inFlightOps.current -= 1;
+      inFlightOps.current[engine] -= 1;
     }
   };
 
   const doStop = async (engine: EngineId) => {
-    inFlightOps.current += 1;
+    inFlightOps.current[engine] += 1;
     try {
       setPending(engine, 'unloading');
       setEvictionNotice(null);
@@ -300,7 +308,7 @@ export function useTtsLifecycle(): TtsLifecycle {
       }
       setHealthProbeKey((k) => k + 1);
     } finally {
-      inFlightOps.current -= 1;
+      inFlightOps.current[engine] -= 1;
     }
   };
 
