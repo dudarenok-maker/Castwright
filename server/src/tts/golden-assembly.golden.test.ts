@@ -39,6 +39,8 @@ import {
   md5,
   toInt16,
   selectMode,
+  compareEnvelope,
+  rmsError,
   TOL,
   type AssemblyBaseline,
 } from './golden-baseline.js';
@@ -386,12 +388,6 @@ describe('golden assembly (GPU-free)', () => {
       readFileSync(join(art.audioRoot, `${SLUG}.segments.json`), 'utf8'),
     ) as { segments: unknown[] };
     expect(segFile.segments).toHaveLength(meta.segments.length);
-
-    /* Superseded by L2 in a later task — kept here only so this refactor
-       changes no assertions. */
-    expect(art.sidecar).not.toBeNull();
-    expect(art.sidecar!.i).toBeGreaterThan(-30);
-    expect(art.sidecar!.i).toBeLessThan(-10);
   });
 
   it('L1 — ffmpeg first-pass loudnorm measurement matches the baseline', () => {
@@ -466,5 +462,88 @@ describe('golden assembly (GPU-free)', () => {
           `chapter sounds while leaving integrated loudness near ` +
           `target.${modeLine()}`,
     ).toBe(b.normalizationType);
+  });
+
+  it('L3 — decoded length is exact and the RMS envelope matches', () => {
+    if (BLESS) return;
+    const bytes = art.decoded.length * 2;
+    expect(
+      bytes,
+      `L3: decoded length ${bytes} B vs baseline ${baseline!.decoded.bytes} B. ` +
+        `The encode/decode round-trip is length-preserving from a seekable ` +
+        `input, so a change here is a duration/resampler change, not codec ` +
+        `noise.${modeLine()}`,
+    ).toBe(baseline!.decoded.bytes);
+
+    const v = compareEnvelope(baseline!.envelope100ms, art.envelope);
+
+    /* The skipped set must not silently grow: a regression that quietens a
+       loud window would otherwise escape through the -50 dBFS floor. */
+    expect(
+      v.skipped,
+      `L3: ${v.skipped} window(s) fell below ${TOL.quietFloorDbfs} dBFS on one ` +
+        `side or the other; the baseline recorded ` +
+        `${baseline!.decoded.quietWindowsSkipped}. A GROWN count means audio ` +
+        `that used to be there went quiet, which is itself the ` +
+        `regression.${modeLine()}`,
+    ).toBe(baseline!.decoded.quietWindowsSkipped);
+
+    /* The opposite direction. A window the baseline recorded as silent that
+       this run made audible keeps `skipped` unchanged AND is skipped by the
+       relative check, so nothing above would see it — and on the LOOSE path a
+       -20 dBFS beep contributes only ~15 % rmse, under L4's 16 % gate. */
+    expect(
+      v.loudInQuietIndex,
+      `L3: window ${v.loudInQuietIndex} (t=${(v.loudInQuietIndex * 0.1).toFixed(1)}s) ` +
+        `is ${v.loudInQuietDbfs.toFixed(1)} dBFS but the baseline recorded it as ` +
+        `silent. Something audible — a click, hum, or uninitialised buffer — ` +
+        `landed in a pause. Ceiling is ${TOL.quietCeilingDbfs} dBFS.${modeLine()}`,
+    ).toBe(-1);
+
+    expect(
+      v.ok,
+      `L3 envelope drift: ${(v.worstRelDelta * 100).toFixed(1)} % at window ` +
+        `${v.worstIndex} (t=${v.worstAtSec.toFixed(1)}s), tol ` +
+        `${TOL.envelopeRel * 100} %. ${v.skipped} quiet window(s) ` +
+        `skipped.${modeLine()}`,
+    ).toBe(true);
+  });
+
+  it('L4 — the encoded MP3 matches the baseline', () => {
+    if (BLESS) return;
+    if (isTight()) {
+      /* Same ffmpeg build: the encode is byte-identical across runs, so this
+         is exact. Strongest assertion in the tier. */
+      expect(
+        art.mp3Md5,
+        `L4 (TIGHT): MP3 md5 ${art.mp3Md5} vs baseline ${baseline!.mp3Md5}. ` +
+          `The ffmpeg banner matches the baseline exactly, so the encode ` +
+          `should be byte-identical — this is a real output change.${modeLine()}`,
+      ).toBe(baseline!.mp3Md5);
+      return;
+    }
+
+    /* Different build: LAME framing legitimately varies, so compare the
+       decoded audio instead. This is the WEAKEST layer — its threshold is
+       calibrated on encoder-quality steps as a proxy for a build change, and
+       its noise floor (10.55 %) and target signal (24.79 %) are only 2.35x
+       apart. L3's envelope is the sound LOOSE instrument. */
+    const ref = toInt16(readFileSync(DECODED_PATH));
+    /* L3 owns the length assertion, but L3 and L4 are deliberately independent
+       `it`s — so if L3 failed, L4 would silently compare truncated arrays and
+       report a reassuring number. Assert it here too. */
+    expect(
+      ref.length,
+      `L4 (LOOSE): the reference PCM is ${ref.length} samples but this run ` +
+        `decoded ${art.decoded.length}. RMS-error over a truncated overlap is ` +
+        `meaningless — see L3 for the real verdict.${modeLine()}`,
+    ).toBe(art.decoded.length);
+    const err = rmsError(ref, art.decoded);
+    expect(
+      err,
+      `L4 (LOOSE): decoded RMS-error ${(err * 100).toFixed(2)} % vs tol ` +
+        `${TOL.rmseLoose * 100} %. Note this layer cannot see drift below ` +
+        `~1.2 LU — L1 covers that range at +/-0.1 LU.${modeLine()}`,
+    ).toBeLessThan(TOL.rmseLoose);
   });
 });
