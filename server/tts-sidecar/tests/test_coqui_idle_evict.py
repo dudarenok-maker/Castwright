@@ -15,16 +15,22 @@ main = importlib.import_module("main")
 class _FakeTts:
     """Stands in for the loaded XTTS model. `tts()` signals that it has entered
     the forward, then blocks until released — so a test can hold a forward open
-    and race unload() against it deterministically, with no sleeps."""
+    and race unload() against it deterministically, with no sleeps. `on_enter`,
+    if given, is called (with no args) once the forward has started — lets a
+    test observe engine state exactly while the synth is mid-flight, which a
+    post-call assertion can't distinguish from a no-op implementation."""
 
-    def __init__(self, entered=None, release=None):
+    def __init__(self, entered=None, release=None, on_enter=None):
         self.entered = entered
         self.release = release
+        self.on_enter = on_enter
         self.synthesizer = type("S", (), {"output_sample_rate": 24000})()
 
     def tts(self, text, speaker, language):
         if self.entered is not None:
             self.entered.set()
+        if self.on_enter is not None:
+            self.on_enter()
         if self.release is not None:
             self.release.wait(timeout=5)
         return [0.0, 0.1, -0.1]
@@ -90,15 +96,31 @@ def test_unload_waits_for_an_in_flight_synth(monkeypatch):
 
 def test_synthesize_tracks_in_flight_and_last_used(monkeypatch):
     """`maybe_free_idle` (Task 2) fast-outs on these two fields, so the synth
-    path has to maintain them."""
-    eng = _loaded_coqui(monkeypatch, _FakeTts())
+    path has to maintain them. Both fields read back to their pre-call resting
+    state (0 / a valid timestamp) whether or not `synthesize` ever actually
+    maintained them — so this asserts the MID-FORWARD state, observed from
+    inside the fake's `tts()`, which a no-op ("declare the field, never touch
+    it") implementation cannot fake."""
+    observed_in_flight: list[int] = []
+    eng = _loaded_coqui(
+        monkeypatch,
+        _FakeTts(on_enter=lambda: observed_in_flight.append(eng._synth_in_flight)),
+    )
     assert eng._synth_in_flight == 0
 
-    before = time.monotonic()
+    # Sentinel instead of `before = time.monotonic()` + a strict `>` after: on
+    # Windows/Python 3.12, time.monotonic() is backed by GetTickCount64
+    # (~15.6ms granularity — QPC-backed monotonic only lands in 3.13), and a
+    # synth against a fake completes in microseconds, so before/after routinely
+    # read the IDENTICAL float and a strict `>` would flake. Zeroing first and
+    # asserting `> 0.0` after is exact, timing-independent, and still fails
+    # against an implementation that never re-stamps `_last_used`.
+    eng._last_used = 0.0
     eng.synthesize("xtts", "Claribel Dervla", "hello")
 
+    assert observed_in_flight == [1]  # incremented BEFORE the forward, not after
     assert eng._synth_in_flight == 0  # decremented on the way out
-    assert eng._last_used >= before
+    assert eng._last_used > 0.0
 
 
 @pytest.mark.xfail(raises=AttributeError, strict=False)
