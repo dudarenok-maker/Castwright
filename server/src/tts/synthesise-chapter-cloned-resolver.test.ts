@@ -314,7 +314,11 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     }
 
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
-    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine' }]);
+    // GATE 1 I-2 — `engine` is now carried on a wrong-engine entry too (it
+    // names the engine the clone LIVES on, i.e. the one to switch the book
+    // to). Here the clone is on qwen, so the remedy still reads "Qwen".
+    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine', engine: 'qwen' }]);
+    expect(thrown?.message).toContain('switch the book to Qwen');
     expect(provider.calls).toHaveLength(0);
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
   });
@@ -717,9 +721,56 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass, coqui generalisa
     }
 
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
-    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine' }]);
+    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine', engine: 'qwen' }]);
     expect(provider.calls).toHaveLength(0); // never a catalog voice
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  /* GATE 1 I-2 — the mirror of the case above, and the one the hardcoded
+     remedy got exactly backwards. 'Wren' is cloned on COQUI; the book was
+     switched to Qwen, so `routeFor(c).engine === 'qwen'`, `clonedEngineFor`
+     resolves 'coqui', and the chapter fails `wrong-engine`. The old copy
+     said "switch the book to Qwen" — the book is ALREADY on Qwen, so
+     following the remedy was a no-op while the real fix (switch back to
+     Coqui) went unsaid. Asserting the message text is what distinguishes
+     fixed from reverted here: the `broken` list and the thrown type are
+     identical either way. */
+  it('GATE 1 I-2: a COQUI-cloned character on a Qwen book reports wrong-engine with the remedy naming Coqui, not Qwen', async () => {
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-clone', libraryUuid: 'lib-clone', provenance: 'cloned' },
+        },
+      },
+    ];
+    const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-clone' ? baseEntry() : null));
+    const deriveEngineArtifact = vi.fn();
+
+    let thrown: UnresolvableClonedVoiceError | undefined;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'wren')],
+        cast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        cloneResolverDepsOverride: {
+          readEntry,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      });
+    } catch (e) {
+      thrown = e as UnresolvableClonedVoiceError;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect(thrown?.broken).toEqual([{ name: 'Wren', reason: 'wrong-engine', engine: 'coqui' }]);
+    expect(thrown?.message).toContain('switch the book to Coqui');
+    expect(thrown?.message).not.toContain('switch the book to Qwen');
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('a chapter with no clones at all runs the resolver pre-pass zero times', async () => {

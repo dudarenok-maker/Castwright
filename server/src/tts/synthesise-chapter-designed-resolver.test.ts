@@ -445,6 +445,122 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
     expect(result.segments.length).toBeGreaterThan(0);
   });
 
+  /* GATE 1 I-3 — the `!entry` / non-`designed` early-continue used to bail
+     BEFORE `ptExists` was consulted and without reporting the uuid, so the
+     dangling `xtts-<uuid>` slot survived into the render and the sidecar's
+     no-fallback cached-latents branch hard-failed the chapter — a NEW hard
+     failure on the fail-SOFT arm (D-F). Reachable in production: `/assign`
+     does not require `castConfirmed` while `clearLibraryVoiceReferences`
+     only walks CONFIRMED casts, so deleting the library voice between
+     assign and confirm leaves exactly this state.
+
+     Load-bearing assertion is the RENDERED voiceName, not "no error": the
+     fake provider happily renders a dangling `xtts-<uuid>`, so only the
+     catalogue name distinguishes fixed from reverted. */
+  it('[I-3] a missing voice-library entry with no artifact on disk soft-fails: the chapter renders a catalogue voice instead of hard-failing on a dangling xtts-<uuid>', async () => {
+    const provider = makeProvider();
+    const readEntry = vi.fn(async () => null); // library entry deleted out from under the cast slot.
+    const ptExists = vi.fn(async () => false); // …and nothing on disk backs it.
+    const readDesignedMasterPcm = vi.fn(async () => null);
+    const deriveEngineArtifact = vi.fn();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+        readDesignedMasterPcm,
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(readEntry).toHaveBeenCalledWith('lib-designed');
+    expect(ptExists).toHaveBeenCalledWith('xtts-lib-designed'); // consulted, not skipped past.
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    expect(provider.calls[0].voiceName).not.toBe('xtts-lib-designed');
+    expect(COQUI_CATALOG_NAMES.has(provider.calls[0].voiceName)).toBe(true);
+    expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  it('[I-3] a library entry whose provenance drifted to `imported` soft-fails the same way', async () => {
+    const provider = makeProvider();
+    const entry = { ...designedEntry(), provenance: 'imported' as const };
+    const readEntry = vi.fn(async () => entry);
+    const ptExists = vi.fn(async () => false);
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+      },
+    });
+
+    expect(COQUI_CATALOG_NAMES.has(provider.calls[0].voiceName)).toBe(true);
+  });
+
+  /* The carve-out, and the reason the I-3 fix is not an unconditional
+     soft-fail: `[DELTA-verified]` gives this arm slot-REMOVAL power and
+     explicitly forbids it reaching a CLONED voice. If the library entry says
+     `cloned` while the cast slot says `designed` (out-of-band drift),
+     removing the slot would substitute a catalogue voice for a real
+     person — Property 1. D-F's answer for a cloned voice is fail LOUD, i.e.
+     leave the slot in place and let the sidecar raise. */
+  it('[I-3] a library entry that is CLONED keeps its slot — never soft-removed into a catalogue substitution', async () => {
+    const provider = makeProvider();
+    const entry = { ...designedEntry(), provenance: 'cloned' as const };
+    const readEntry = vi.fn(async () => entry);
+    const ptExists = vi.fn(async () => false);
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+      },
+    });
+
+    // The slot survived: the render still reaches for the real artifact key
+    // (which the sidecar then fails loud on) rather than a stranger's voice.
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-designed');
+    expect(COQUI_CATALOG_NAMES.has(provider.calls[0].voiceName)).toBe(false);
+  });
+
+  /* The other half of the F1 rule, applied to the I-3 branches: a
+     stale-but-PRESENT artifact renders correctly today, so a missing library
+     entry must not downgrade it either. */
+  it('[I-3] a missing library entry with the artifact still ON DISK keeps its slot (F1 rule), rendering the existing latents', async () => {
+    const provider = makeProvider();
+    const readEntry = vi.fn(async () => null);
+    const ptExists = vi.fn(async () => true); // present!
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: coquiDesignedCast,
+      provider,
+      modelKey: 'coqui-xtts-v2',
+      engine: 'coqui',
+      designedResolverDepsOverride: {
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        ptExists,
+      },
+    });
+
+    expect(provider.calls[0].voiceName).toBe('xtts-lib-designed');
+  });
+
   /* Task 20a fix round 1 (F3) — the removal loop must re-check provenance,
      not just match on a bare libraryUuid. Two characters share the SAME
      uuid: one carries it as `cloned`, the other as `designed`. Only the

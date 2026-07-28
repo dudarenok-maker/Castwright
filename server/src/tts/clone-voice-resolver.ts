@@ -59,12 +59,39 @@ export interface BrokenClonedVoice {
     | 'misconfigured'
     | 'wrong-engine';
   /** fs-38 Wave 3c, Task 18 — which engine this voice was being resolved on,
-      set ONLY for `reason: 'engine-unavailable'` (the one reason whose
-      remedy text below actually names an engine). Left unset for every
-      other reason so `toEqual` against a pre-3c literal (no `engine` key)
-      still matches — `toEqual` treats a missing key and an explicit
-      `undefined` the same way. */
+      set for the two reasons whose remedy text below actually names an
+      engine: `engine-unavailable` (Task 18) and `wrong-engine` (GATE 1 I-2).
+      Left unset for every other reason so `toEqual` against a pre-3c literal
+      (no `engine` key) still matches — `toEqual` treats a missing key and an
+      explicit `undefined` the same way.
+
+      The two reasons name the engine for OPPOSITE purposes, and conflating
+      them is the I-2 defect: for `engine-unavailable` the engine is the one
+      to RE-ENABLE; for `wrong-engine` it is the one the cloned voice
+      actually lives on, i.e. the one to SWITCH THE BOOK TO. */
   engine?: CloneEngine;
+}
+
+/** Task 18 + GATE 1 I-2 — the shared engine-label builder for the remedy
+    sentences below. Collects the engines carried by every `broken` entry with
+    the given `reason` and renders them as user-facing copy.
+
+    M-6 (review) — a Set preserves INSERTION order, so joining one directly
+    made the label depend on which engine's broken entry came first in
+    `broken` (caller-supplied order), not on anything meaningful. Sort by
+    `CLONE_ENGINE_LIST`'s canonical order instead, so the copy is stable
+    regardless of report order.
+
+    Falls back to 'Qwen' when no entry of that reason carries an `engine` at
+    all — the pre-3c shape, and the shape the legacy single-name constructor
+    produces — so that copy stays byte-identical to the old hardcoded text. */
+function engineLabelFor(broken: BrokenClonedVoice[], reason: BrokenClonedVoice['reason']): string {
+  const engines = new Set(broken.filter((b) => b.reason === reason).map((b) => b.engine ?? 'qwen'));
+  return (
+    CLONE_ENGINE_LIST.filter((e) => engines.has(e))
+      .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
+      .join(' or ') || 'Qwen'
+  );
 }
 
 /* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
@@ -112,30 +139,28 @@ export class UnresolvableClonedVoiceError extends Error {
     const remedies: string[] = [];
     if (hasOtherReason) {
       /* Task 18 — engine-aware remedy: name whichever engine(s) were
-         actually reported unavailable ('engine-unavailable' is the only
-         reason `engine` is set for — see BrokenClonedVoice's doc comment)
-         instead of hardcoding "Qwen", which misdiagnoses a broken-on-coqui
-         voice. Falls back to 'Qwen' when no `engine`-carrying entry is
-         present (the pre-3c shape: revoked/missing-master/etc. with no
-         engine-unavailable entries at all, or the legacy single-name
-         constructor's un-engine-tagged item) — byte-identical to the old
-         hardcoded text for that case. */
-      const unavailableEngines = new Set(
-        broken.filter((b) => b.reason === 'engine-unavailable').map((b) => b.engine ?? 'qwen'),
+         actually reported unavailable instead of hardcoding "Qwen", which
+         misdiagnoses a broken-on-coqui voice. Falls back to 'Qwen' when no
+         `engine`-carrying entry is present (the pre-3c shape:
+         revoked/missing-master/etc. with no engine-unavailable entries at
+         all, or the legacy single-name constructor's un-engine-tagged item)
+         — byte-identical to the old hardcoded text for that case. */
+      remedies.push(
+        `Re-enable ${engineLabelFor(broken, 'engine-unavailable')} or restore the missing voice(s)`,
       );
-      /* M-6 (review) — a Set preserves INSERTION order, so joining it
-         directly made the label depend on which engine's broken entry came
-         first in `broken` (caller-supplied order), not on anything
-         meaningful. Sort by CLONE_ENGINE_LIST's canonical order instead, so
-         the copy is stable regardless of report order. */
-      const engineLabel =
-        CLONE_ENGINE_LIST.filter((e) => unavailableEngines.has(e))
-          .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
-          .join(' or ') || 'Qwen';
-      remedies.push(`Re-enable ${engineLabel} or restore the missing voice(s)`);
     }
     if (hasWrongEngine) {
-      remedies.push('switch the book to Qwen');
+      /* GATE 1 I-2 — this remedy used to be hardcoded to "switch the book to
+         Qwen", which is exactly BACKWARDS for a coqui-cloned character: the
+         reachable trigger is a book that was on Coqui and got switched TO
+         Qwen, so the message told the user to do the very thing that broke
+         it. Name the engine the cloned voice actually lives on — the same
+         `request.engine` the classifier decided `wrong-engine` against
+         (`clonedEngineFor`, synthesise-chapter.ts) — reusing Task 18's
+         engine-label mechanism rather than a parallel one. Still falls back
+         to 'Qwen' for an un-engine-tagged entry (the pre-3c shape and the
+         `fromList` unit-test shape), so that copy is unchanged. */
+      remedies.push(`switch the book to ${engineLabelFor(broken, 'wrong-engine')}`);
     }
     remedies.push('reassign the character(s)');
     const message =
@@ -422,10 +447,14 @@ export async function resolveClonedVoicesForChapter(
       broken.push({
         name: characterName,
         reason: classification.reason!,
-        // Task 18 — only 'engine-unavailable' names an engine in its remedy
-        // text (UnresolvableClonedVoiceError.fromList); every other reason
-        // leaves `engine` unset so pre-3c `.broken` assertions keep matching.
-        ...(classification.reason === 'engine-unavailable' ? { engine } : {}),
+        // Task 18 + GATE 1 I-2 — 'engine-unavailable' and 'wrong-engine' are
+        // the two reasons that name an engine in their remedy text
+        // (UnresolvableClonedVoiceError.fromList); every other reason leaves
+        // `engine` unset so pre-3c `.broken` assertions keep matching.
+        ...(classification.reason === 'engine-unavailable' ||
+        classification.reason === 'wrong-engine'
+          ? { engine }
+          : {}),
       });
       continue;
     }
@@ -506,13 +535,37 @@ export async function resolveClonedVoicesForChapter(
         // revoke landing between the (failed) derive attempt and this
         // write must not have its revokedAt clobbered by the stale
         // pre-derive snapshot.
-        const written = await deps.updateEntry(
-          libraryUuid,
-          statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
-            ...fresh,
-            engines: { ...fresh.engines, [slotKey]: { ...fresh.engines[slotKey], status: 'failed' } },
-          })),
-        );
+        /* GATE 1 M-6 — the `updateEntry` call below is a persistence
+           side-effect, not the diagnosis. If IT throws (disk full, a lock
+           timeout, a corrupt manifest), the throw used to escape
+           `resolveClonedVoicesForChapter` entirely, discarding every
+           `broken` entry accumulated so far: the caller saw one opaque raw
+           error instead of the structured `UnresolvableClonedVoiceError`,
+           and the "report every unresolvable voice in one throw" contract
+           silently degraded to "report the first one that also failed to
+           persist". Still fail-loud either way — no substitution — so this
+           is about the quality of the report, not safety. Report the voice
+           broken regardless of whether the `failed` stamp landed; a stamp
+           that didn't persist just means the next run re-classifies it,
+           which the transient branch above already tolerates by design. */
+        let written: VoiceLibraryEntry | null = null;
+        try {
+          written = await deps.updateEntry(
+            libraryUuid,
+            statusStampMutate(deps, libraryUuid, characterName, broken, (fresh) => ({
+              ...fresh,
+              engines: { ...fresh.engines, [slotKey]: { ...fresh.engines[slotKey], status: 'failed' } },
+            })),
+          );
+        } catch (stampErr) {
+          console.warn(
+            `[clone-voice-resolver] cloned voice "${characterName}" (${libraryUuid}) failed a permanent ` +
+              `(4xx) derive AND its 'failed' status stamp could not be persisted:`,
+            stampErr,
+          );
+          broken.push({ name: characterName, reason: 'derive-failed' });
+          continue;
+        }
         if (written) {
           broken.push({ name: characterName, reason: 'derive-failed' });
         }
@@ -763,19 +816,56 @@ export async function resolveDesignedVoicesForChapter(
            stops it from ever reaching a cloned voice's slot on purpose,
            rather than by the pre-3c naming-convention coincidence. */
         const entry = await deps.readEntry(libraryUuid);
-        if (!entry || entry.provenance !== 'designed') continue;
-
         const storageKey = cloneStorageKey('coqui', libraryUuid);
         const ptExists = await deps.ptExists(storageKey);
         coquiPtExists = ptExists;
+
+        if (!entry || entry.provenance !== 'designed') {
+          /* GATE 1 I-3 — these two branches used to `continue` outright,
+             BEFORE `ptExists` was consulted and without reporting the uuid.
+             The character therefore kept its `overrideTtsVoices.coqui` slot,
+             `pickVoiceForEngine('coqui', …)` resolved `xtts-<uuid>`
+             (voice-mapping.ts), and the sidecar's cached-latents branch —
+             which has no catalogue fallback — hard-failed the chapter. Pre-3c
+             the same character resolved a catalogue coqui voice and the
+             chapter rendered, so that was a NEW HARD FAILURE on the
+             fail-SOFT (designed) arm, which D-F forbids.
+
+             Reachable in production: `/voice-library/:uuid/assign` does not
+             require `castConfirmed`, while `clearLibraryVoiceReferences`
+             (workspace/voice-library-usage.ts) only walks CONFIRMED casts.
+             So assign a designed library voice on a book whose cast isn't
+             confirmed yet, DELETE the library voice, then confirm the cast
+             and generate: the slot survives, `readEntry` returns null, and
+             the chapter dies. `readEntry` also returns null for an
+             unparseable or structurally-invalid manifest, which is the same
+             shape.
+
+             The `cloned` carve-out is load-bearing, not defensive padding.
+             `[DELTA-verified]` (see ResolveDesignedVoiceDeps.readEntry) makes
+             this arm's slot-REMOVAL power explicitly unable to reach a cloned
+             voice. If the LIBRARY entry says `cloned` while the CAST slot says
+             `designed` (out-of-band drift), soft-removing the slot would swap
+             a real person's voice for a catalogue pick — a Property-1
+             violation. D-F's answer for a cloned voice is fail LOUD, which is
+             exactly what leaving the slot alone produces here. */
+          if (!ptExists && entry?.provenance !== 'cloned') {
+            softFailedUuids.add(libraryUuid);
+            console.warn(
+              `[clone-voice-resolver] designed coqui voice for "${characterName}" (${libraryUuid}) ` +
+                `has no voice-library entry backing it (${entry ? `provenance '${entry.provenance}'` : 'entry missing'}) ` +
+                `and no artifact on disk — removing its coqui slot for this chapter.`,
+            );
+          }
+          continue;
+        }
+
         /* [DELTA-I3] — unlike qwen's presence-only check, the coqui arm
            ALSO re-derives on a coquiVersion bump, via the SAME shared
            comparand the cloned resolver's classifier uses — never a
            locally re-derived one. */
-        const stale = isArtifactVersionStale(
-          entry.engines.xtts?.coquiVersion,
-          deps.currentArtifactVersion('coqui'),
-        );
+        const currentCoquiVersion = deps.currentArtifactVersion('coqui');
+        const stale = isArtifactVersionStale(entry.engines.xtts?.coquiVersion, currentCoquiVersion);
         if (ptExists && !stale) continue; // present and current — leave alone.
 
         const master = await deps.readDesignedMasterPcm(libraryUuid, 'coqui');
@@ -824,7 +914,23 @@ export async function resolveDesignedVoicesForChapter(
            baseModel (that field is the qwen arm's, below). Best-effort,
            same rationale as the qwen arm's stamp write: a write failure
            here must not turn a successful re-derive (the `.pt` IS on disk
-           now) into a reported self-heal failure. */
+           now) into a reported self-heal failure.
+
+           GATE 1 M-2 — this used to be an unconditional
+           `coquiVersion: result.coquiVersion ?? ''`. `deriveEngineArtifact`
+           stamps `coquiVersion` as `''` when the sidecar omits the
+           `X-Coqui-Version` header (an older sidecar), and `??` only guards
+           null/undefined — so that `''` was written straight OVER a
+           previously-recorded real version. `isArtifactVersionStale` reads an
+           empty STORED version as "never stale", which silently and
+           permanently disabled the very staleness check [DELTA-I3] added for
+           this arm. Two inconsistencies made it look accidental: the cloned
+           arm's own stamp already uses `|| currentArtifactVersion`, and the
+           `modelId` key one line down already guards against exactly this
+           overwrite. Both fixed here — prefer the derive's own value, fall
+           back to the current-version oracle, and omit the key entirely when
+           both are empty so the spread's LHS (the existing slot) survives. */
+        const nextCoquiVersion = result.coquiVersion || currentCoquiVersion;
         try {
           await deps.updateEntry(libraryUuid, (fresh) =>
             fresh
@@ -835,7 +941,7 @@ export async function resolveDesignedVoicesForChapter(
                     xtts: {
                       ...fresh.engines.xtts,
                       status: 'ready',
-                      coquiVersion: result.coquiVersion ?? '',
+                      ...(nextCoquiVersion ? { coquiVersion: nextCoquiVersion } : {}),
                       ...(result.modelId ? { modelId: result.modelId } : {}),
                     },
                   },

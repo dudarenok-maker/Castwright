@@ -52,6 +52,38 @@ describe('UnresolvableClonedVoiceError', () => {
     expect(e.message).toContain('switch the book to Qwen');
   });
 
+  /* GATE 1 I-2 — the wrong-engine remedy is engine-aware, reusing Task 18's
+     `engine` field + label ordering rather than a parallel mechanism. */
+  it('[I-2] fromList names the engine the clone LIVES on in the wrong-engine remedy', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+    ]);
+    expect(e.message).toContain('switch the book to Coqui');
+    expect(e.message).not.toContain('switch the book to Qwen');
+  });
+
+  it('[I-2] fromList orders a two-engine wrong-engine label by CLONE_ENGINE_LIST, not report order', () => {
+    const coquiFirst = UnresolvableClonedVoiceError.fromList([
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+      { name: 'Marlow', reason: 'wrong-engine', engine: 'qwen' },
+    ]);
+    const qwenFirst = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'wrong-engine', engine: 'qwen' },
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+    ]);
+    expect(coquiFirst.message).toContain('switch the book to Qwen or Coqui');
+    expect(qwenFirst.message).toContain('switch the book to Qwen or Coqui');
+  });
+
+  it('[I-2] the two engine-naming remedies stay independent: coqui-unavailable + qwen-wrong-engine', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'engine-unavailable', engine: 'coqui' },
+      { name: 'Wren', reason: 'wrong-engine', engine: 'qwen' },
+    ]);
+    expect(e.message).toContain('Re-enable Coqui or restore the missing voice(s)');
+    expect(e.message).toContain('switch the book to Qwen');
+  });
+
   it('the legacy single-name constructor still works (3b1 backstop)', () => {
     const e = new UnresolvableClonedVoiceError('Marlow');
     expect(e.broken).toEqual([{ name: 'Marlow', reason: 'engine-unavailable' }]);
@@ -958,6 +990,67 @@ describe('resolveClonedVoicesForChapter', () => {
       // I-1: a write that succeeded but whose canonical re-read comes back
       // null/undefined must still be reported — not silently dropped.
       expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+    });
+
+    /* GATE 1 M-6 — the harder sibling: `updateEntry` ITSELF throws (disk
+       full, lock timeout, corrupt manifest) inside the permanent-4xx catch.
+       That throw used to escape `resolveClonedVoicesForChapter` entirely,
+       discarding every `broken` entry accumulated so far — the caller got
+       one opaque raw error instead of the structured
+       `UnresolvableClonedVoiceError`, silently degrading the "report every
+       unresolvable voice in one throw" contract. Two characters, so the
+       DISCARD is what the assertion sees: a single-character fixture would
+       pass either way.
+
+       Still fail-loud in both shapes (no substitution), so this is about
+       the quality of the report, not safety. */
+    it('[M-6] a throw from updateEntry itself must not discard the broken list accumulated for OTHER characters', async () => {
+      const readEntry = vi.fn(async (uuid: string) =>
+        uuid === 'u1'
+          ? baseEntry({
+              voiceUuid: 'u1',
+              consent: {
+                personName: 'x',
+                relationship: 'self',
+                permittedUse: 'personal',
+                attestedAt: '2026-01-01T00:00:00Z',
+                attestedBy: 'x',
+                revokedAt: '2026-02-01T00:00:00Z',
+              },
+            })
+          : baseEntry({ voiceUuid: 'u2', name: 'Reeve', master: MASTER }),
+      );
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+        updateEntry: vi.fn(async () => {
+          throw new Error('EBUSY: voice.json is locked');
+        }),
+      });
+
+      let thrown: unknown;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+          ],
+          deps,
+        );
+      } catch (e) {
+        thrown = e;
+      }
+
+      // Pre-fix this was the raw `EBUSY` Error and Marlow's revoked report
+      // was gone entirely.
+      expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect((thrown as UnresolvableClonedVoiceError).broken).toEqual([
+        { name: 'Marlow', reason: 'revoked' },
+        { name: 'Reeve', reason: 'derive-failed' },
+      ]);
     });
   });
 
@@ -1922,6 +2015,77 @@ describe('resolveDesignedVoicesForChapter', () => {
       expect(deps.writeSidecarManifest).not.toHaveBeenCalled();
     });
 
+    /* GATE 1 M-2 — the stamp used to be `coquiVersion: result.coquiVersion ?? ''`.
+       `deriveEngineArtifact` returns `''` (not undefined) when the sidecar
+       omits `X-Coqui-Version`, and `??` only guards null/undefined — so an
+       older sidecar's derive wrote `''` straight over a previously-recorded
+       real version, and `isArtifactVersionStale` reads an empty STORED
+       version as "never stale". That permanently disabled [DELTA-I3]'s
+       staleness check for the voice. The fixture is the discriminating one:
+       an EXISTING real coquiVersion plus an EMPTY derive response. */
+    it('[M-2] an older sidecar (no X-Coqui-Version) must not overwrite a previously-recorded real coquiVersion with an empty one', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        writeEntry,
+        ptExists: vi.fn(async () => false), // missing artifact -> a real derive runs.
+        currentArtifactVersion: vi.fn(() => ''), // boot window: the oracle hasn't answered either.
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: '', // the older-sidecar shape derive-engine-artifact.ts produces.
+          modelId: '',
+        })),
+      });
+
+      await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts?.status).toBe('ready');
+      // The real version survived — [DELTA-I3]'s staleness check still works.
+      expect(written.engines.xtts?.coquiVersion).toBe('v2.0.3');
+    });
+
+    it('[M-2] a derive that reports no version still adopts the current-version oracle when one is known', async () => {
+      const entry = designedEntry();
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        writeEntry,
+        ptExists: vi.fn(async () => false),
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: '',
+        })),
+      });
+
+      await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts?.coquiVersion).toBe('v2.0.5');
+    });
+
     it('the load-bearing case — a derive failure is swallowed (never throws) and reports the uuid via softFailedUuids so the call site can remove the slot', async () => {
       const entry = designedEntry();
       const deps = makeDesignedDeps({
@@ -1996,16 +2160,29 @@ describe('resolveDesignedVoicesForChapter', () => {
         deps,
       );
 
+      /* The invariant this fixture exists for, unchanged by GATE 1 I-3: a
+         cloned-provenance entry is NEVER soft-removed (that would substitute
+         a catalogue voice for a real person — Property 1) and NEVER derived
+         by this fail-soft machinery. What I-3 changed is only WHEN the
+         cheap `ptExists` stat runs: it now precedes the provenance branch so
+         the two non-designed branches can apply the F1 "keep a present
+         artifact" rule. A stat is not a mutation — the cloned voice's state
+         is still untouched. */
       expect(result).toEqual({ softFailedUuids: [] });
-      // Not merely "didn't derive" — never even progressed past the
-      // provenance check, so a cloned voice's `.pt` presence/staleness was
-      // never touched by this fail-soft machinery at all.
-      expect(ptExists).not.toHaveBeenCalled();
       expect(readDesignedMasterPcm).not.toHaveBeenCalled();
       expect(deriveEngineArtifact).not.toHaveBeenCalled();
     });
 
-    it('a missing entry (deleted from the library) is skipped entirely, same as a cloned one', async () => {
+    /* GATE 1 I-3 — this used to assert `softFailedUuids: []` for a deleted
+       library entry, pinning the defect: the slot survived into the render,
+       `pickVoiceForEngine('coqui', …)` resolved `xtts-<uuid>`, and the
+       sidecar's no-fallback latents branch hard-failed the chapter. That is
+       a NEW hard failure on the fail-SOFT arm, which D-F forbids (pre-3c the
+       same character resolved a catalogue voice and the chapter rendered).
+       Reachable in production: `/voice-library/:uuid/assign` does not
+       require `castConfirmed`, `clearLibraryVoiceReferences` only walks
+       CONFIRMED casts. */
+    it('[I-3] a missing entry (deleted from the library) with NO artifact on disk soft-fails, so the slot is dropped for this chapter', async () => {
       const deps = makeDesignedDeps({
         readEntry: vi.fn(async () => null),
         ptExists: vi.fn(async () => false),
@@ -2016,8 +2193,40 @@ describe('resolveDesignedVoicesForChapter', () => {
         deps,
       );
 
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      expect(deps.ptExists).toHaveBeenCalledWith('xtts-lib-designed');
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    /* The F1 rule applied to the same branch: a present artifact still
+       renders correctly, so a missing library entry must not downgrade it. */
+    it('[I-3] a missing entry whose artifact IS on disk keeps its slot (F1), never soft-failed', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => null),
+        ptExists: vi.fn(async () => true),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
       expect(result).toEqual({ softFailedUuids: [] });
-      expect(deps.ptExists).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    it('[I-3] an `imported`-provenance entry with no artifact soft-fails, like a missing one', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => designedEntry({ provenance: 'imported' })),
+        ptExists: vi.fn(async () => false),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
     });
 
     /* [DELTA-I3] — the direct contrast with the qwen arm's pinned
