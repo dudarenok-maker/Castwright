@@ -281,12 +281,12 @@ def test_maybe_free_idle_runs_the_reclaim_outside_the_lock(monkeypatch):
     lock_was_held_during_reclaim = []
     real_reclaim = eng._reclaim_after_drop
 
-    def spy_reclaim(torch_module):
+    def spy_reclaim(torch_module, reason="unloaded"):
         acquired = eng._synth_lock.acquire(blocking=False)
         lock_was_held_during_reclaim.append(not acquired)
         if acquired:
             eng._synth_lock.release()
-        real_reclaim(torch_module)
+        real_reclaim(torch_module, reason)
 
     monkeypatch.setattr(eng, "_reclaim_after_drop", spy_reclaim)
 
