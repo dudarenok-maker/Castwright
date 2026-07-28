@@ -141,8 +141,11 @@ thread pollutes both. The issue-comment handoff lets an implementation thread
 ### The trivial bar
 
 **One definition, three uses.** Clearing this bar is what lets a change skip the
-worktree + branch, skip the subagent, and skip the design thread. Nothing else
-does.
+worktree, skip the subagent, and skip the design thread. Nothing else does.
+
+Clearing it skips the worktree, the subagent, and the design thread — it does
+**not** skip the branch or the PR, which `main`'s required status checks make
+unavoidable for every change (see Branching workflow → The two carve-outs).
 
 A change is trivial when **nothing can break and nothing needs review**:
 
@@ -179,8 +182,9 @@ opportunistically fix.** Judgement stays in the main thread:
    narrowly scoped: one finding, one fix, one paired test, briefed from the
    report. Not "and while you're there."
 4. **Doesn't clear it → file it** and move on: a GitHub issue in the same round,
-   plus the thin `docs/BACKLOG.md` row, per "The backlog". A finding parked only
-   in a plan's "suggested follow-ups" is a finding being lost.
+   labelled and boarded per "The backlog" — plus a `docs/BACKLOG.md` row *only*
+   if it is `type:feature`, since chores and bugs never render there. A finding
+   parked only in a plan's "suggested follow-ups" is a finding being lost.
 
 **The fix-now bar.** All four must hold:
 
@@ -412,9 +416,12 @@ which is the **canonical detail home** — What / Acceptance / Key files /
 Depends on / Benefit live in the issue, not in BACKLOG.md. The `<prefix>-<n>`
 ID stays the durable cross-reference for code/commits/plans; the issue `#NN`
 is the GitHub-native auto-close hook. A numeric `Priority` field on the board
-drives intra-tier ordering. **Bugs are GitHub issues with the `bug`
-label and stay off `docs/BACKLOG.md`** (still out-of-band — the user files
-them as they hit them). The label taxonomy, issue forms, and the full
+drives intra-tier ordering. **`docs/BACKLOG.md` renders `type:feature` issues
+only.** `npm run backlog:sync` filters to `type:feature` with board Status not
+`Done`; **`type:chore` issues and `bug` issues never appear there** — they live
+on the board's "Bugs & Chores" view, which is their complete home. So a chore
+needs no BACKLOG row, and its absence is not drift. (Bugs remain out-of-band
+besides: the user files them as they hit them.) The label taxonomy, issue forms, and the full
 convention live in [CONTRIBUTING.md "Issues"](CONTRIBUTING.md#issues); plan
 [241](docs/features/archive/241-github-projects-kanban-board.md) is the rationale
 (supersedes [166](docs/features/archive/166-github-issues-backlog-integration.md)).
@@ -428,9 +435,12 @@ When you ship a backlog item:
    plan is now `stable`, move it to `docs/features/archive/`.
 
 When you discover a new outstanding item (e.g. a "Suggested follow-up"
-added to a plan), file a Backlog-item issue (it gets `area:`/`moscow:`/`type:`
-labels) **and** add the thin row to `docs/BACKLOG.md` linking it, in the same
-round — the backlog is only useful while it stays current.
+added to a plan), file a Backlog-item issue in the same round — it gets
+`area:`/`moscow:`/`type:` labels and is auto-added to the board by
+`.github/workflows/add-to-project.yml`. **If it is `type:feature`, also
+re-run `npm run backlog:sync`** so its row lands in `docs/BACKLOG.md`; a
+`type:chore` or `bug` issue is complete at the board and needs no row (see
+above). The backlog is only useful while it stays current.
 
 ## Planning-mode behaviour
 
@@ -757,11 +767,18 @@ junction and its target rather than trusting an exit code.
 
 ### The two carve-outs
 
-**Trivial changes may go direct to `main`** — same [trivial
+**Trivial changes may skip the worktree** — same [trivial
 bar](#the-trivial-bar) as the Execution model's, no separate definition. Nothing
 can break, nothing needs review, and you would not want a `code-review` pass on
-it. **Announce it in the end-of-turn summary** so the user can redirect to a
-branch if they disagree. This should be rare; when in doubt, branch.
+it. Commit on a branch in the primary checkout, PR it, merge. **Announce the
+shortcut in the end-of-turn summary** so the user can redirect if they disagree.
+This should be rare; when in doubt, take the worktree.
+
+**Note what this carve-out does NOT buy: landing on `main` directly.** That path
+does not exist here — `main`'s rulesets apply `required_status_checks`, so a
+pushed commit with no passing checks is rejected outright. Every change reaches
+`main` through a PR regardless of how trivial it is. What the bar actually
+skips is the worktree, the subagent, and the design thread.
 
 **Git-ignored artifacts are produced in the primary checkout, not a worktree.**
 `brand/`, `mockups/`, marketing captures, and anything else outside version
