@@ -92,6 +92,7 @@ async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
     const health = await probeSidecarHealthIfRegistered();
     if (!health) return [];
     return describeVramBlockers({
+      coquiLoaded: health.modelLoaded,
       kokoroLoaded: health.kokoroLoaded,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
