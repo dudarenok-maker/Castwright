@@ -40,7 +40,9 @@ def _loaded_coqui(monkeypatch, fake_tts):
     load stamps it too (see Task 2) — leaving it 0.0 would make the engine look
     infinitely idle and mask TTL bugs."""
     eng = main.CoquiEngine()
-    monkeypatch.setattr(eng, "_ensure_loaded", lambda model: None)
+    monkeypatch.setattr(
+        eng, "_ensure_loaded", lambda model, device=None, *, lock_held=False: None
+    )
     eng._tts = fake_tts
     eng._speakers = ["Claribel Dervla"]
     eng._resolved_device = "cuda:0"
@@ -99,9 +101,9 @@ def test_synthesize_tracks_in_flight_and_last_used(monkeypatch):
     observed_in_flight: list[int] = []
     eng = _loaded_coqui(
         monkeypatch,
-        _FakeTts(on_enter=lambda: observed_in_flight.append(eng._synth_in_flight)),
+        _FakeTts(on_enter=lambda: observed_in_flight.append(eng._in_flight.value)),
     )
-    assert eng._synth_in_flight == 0
+    assert eng._in_flight.value == 0
 
     # Sentinel instead of `before = time.monotonic()` + a strict `>` after: on
     # Windows/Python 3.12, time.monotonic() is backed by GetTickCount64
@@ -114,8 +116,66 @@ def test_synthesize_tracks_in_flight_and_last_used(monkeypatch):
     eng.synthesize("xtts", "Claribel Dervla", "hello")
 
     assert observed_in_flight == [1]  # incremented BEFORE the forward, not after
-    assert eng._synth_in_flight == 0  # decremented on the way out
+    assert eng._in_flight.value == 0  # decremented on the way out
     assert eng._last_used > 0.0
+
+
+def test_synthesize_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """Exit-ordering regression (#1917 Global Constraint): the `_last_used`
+    re-stamp on the way out must happen BEFORE the in-flight claim's own
+    decrement, never after. A decrement-then-restamp order opens a window
+    where `.busy` reads False while `_last_used` is still the pre-forward
+    value — which `maybe_free_idle`'s admission-path call (`ttl=0.0`) reads
+    as idle and evicts.
+
+    `test_synthesize_tracks_in_flight_and_last_used` above does NOT pin this:
+    it asserts `_last_used > 0.0` only after the whole call has returned, and
+    both orderings satisfy that post-hoc check. This test instead observes
+    `_last_used` AT THE MOMENT of each in-flight-lock acquire, via an
+    injectable lock that records it — `claim()` takes that lock once for the
+    increment and once for the decrement, so `stamps == [entry-time,
+    exit-time]` for a single call.
+
+    The sentinel is zeroed from INSIDE the forward, not before the call, and
+    that is the whole discriminator. `synthesize` stamps `_last_used` on the
+    way IN (first statement inside the claim), so a sentinel set before the
+    call is destroyed before the forward even starts — `stamps[1] > 0.0`
+    would then be satisfied by that entry stamp under BOTH orderings, and the
+    test would pass against the very bug it names. Measured: an earlier
+    revision of this test did exactly that and passed against a faithful
+    decrement-then-restamp revert. Zeroing inside the forward means the only
+    write that can make `stamps[1]` non-zero is the exit re-stamp, and it
+    only lands there if it runs BEFORE the decrement."""
+    fake = _FakeTts()
+    eng = _loaded_coqui(monkeypatch, fake)
+    fake.on_enter = lambda: setattr(eng, "_last_used", 0.0)
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.synthesize("xtts", "Claribel Dervla", "hello")
+
+    # A sentinel rather than a strict `>` against a freshly sampled clock —
+    # time.monotonic() has ~15.6 ms granularity on Python 3.12/Windows, so
+    # entry and exit stamps can be the same float for a fake forward.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
 
 
 def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
@@ -129,7 +189,7 @@ def test_synthesize_survives_an_evict_that_wins_the_ensure_gap(monkeypatch):
     eng = _loaded_coqui(monkeypatch, _FakeTts())
     eng._last_used = 0.0  # look infinitely idle so the evict will fire
 
-    def ensure_then_evict(model):
+    def ensure_then_evict(model, device=None, *, lock_held=False):
         # Simulate the racing evict landing right after the caller's ensure.
         if eng._tts is None:
             eng._tts = _FakeTts()  # the "reload" a real _ensure_loaded performs
@@ -178,9 +238,13 @@ def test_maybe_free_idle_skips_an_in_flight_synth(monkeypatch):
     free a model that is mid-use."""
     eng = _loaded_coqui(monkeypatch, _FakeTts())
     eng._last_used = time.monotonic() - 120.0
-    eng._synth_in_flight = 1
-    assert eng.maybe_free_idle(30.0) is False
-    assert eng._tts is not None
+    claim = eng._in_flight.claim()
+    claim.__enter__()  # hold a real claim open, mirroring an in-flight forward
+    try:
+        assert eng.maybe_free_idle(30.0) is False
+        assert eng._tts is not None
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def test_maybe_free_idle_restores_the_device_preference(monkeypatch):
@@ -217,12 +281,12 @@ def test_maybe_free_idle_runs_the_reclaim_outside_the_lock(monkeypatch):
     lock_was_held_during_reclaim = []
     real_reclaim = eng._reclaim_after_drop
 
-    def spy_reclaim(torch_module):
+    def spy_reclaim(torch_module, reason="unloaded"):
         acquired = eng._synth_lock.acquire(blocking=False)
         lock_was_held_during_reclaim.append(not acquired)
         if acquired:
             eng._synth_lock.release()
-        real_reclaim(torch_module)
+        real_reclaim(torch_module, reason)
 
     monkeypatch.setattr(eng, "_reclaim_after_drop", spy_reclaim)
 
@@ -231,14 +295,16 @@ def test_maybe_free_idle_runs_the_reclaim_outside_the_lock(monkeypatch):
 
 
 def test_maybe_free_idle_frees_with_a_negative_in_flight_counter(monkeypatch):
-    """Pins the `> 0` predicate specifically (not `!= 0`): `_synth_in_flight`
-    is incremented/decremented OUTSIDE `_synth_lock` in `synthesize`, so a
-    GIL switch mid `+=`/`-=` can in principle drift it negative. Under `!=
-    0` a negative value would wedge eviction off permanently; `maybe_free_idle`
-    must still free past the TTL."""
+    """Pins the `> 0` predicate specifically (not `!= 0`). `_in_flight` is now
+    an `InFlightCounter` (#1917) whose mutation is guarded by its own lock, so
+    a lost decrement is far harder to reach than it was on the old plain int —
+    but the predicate is still deliberately `> 0`, never `!= 0`, as a last-line
+    defence against whatever drift does slip through. Poke the raw `_n`
+    directly to simulate that drift; `maybe_free_idle` must still free past
+    the TTL."""
     eng = _loaded_coqui(monkeypatch, _FakeTts())
     eng._last_used = time.monotonic() - 120.0
-    eng._synth_in_flight = -1
+    eng._in_flight._n = -1
 
     assert eng.maybe_free_idle(30.0) is True
     assert eng._tts is None

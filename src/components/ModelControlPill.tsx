@@ -7,6 +7,9 @@
    States:
    - `idle`        — model is reachable but no weights loaded → action: Load.
    - `loading`     — /load is in flight → action: spinner, disabled.
+   - `unloading`   — /unload is in flight → action: spinner, disabled. Since
+                      #1894 an unload waits for the in-flight forward, so
+                      this can last a whole sentence (#1921).
    - `ready`       — weights resident, no active stream → action: Stop.
    - `streaming`   — analyzer is mid-chunk (NDJSON heartbeat firing) → action:
                       Stop, but disabled because killing the model mid-stream
@@ -21,7 +24,7 @@
 import type { ReactNode } from 'react';
 
 export type ModelKind = 'tts' | 'analyzer';
-export type ModelControlState = 'idle' | 'loading' | 'ready' | 'streaming' | 'unreachable';
+export type ModelControlState = 'idle' | 'loading' | 'unloading' | 'ready' | 'streaming' | 'unreachable';
 
 export interface StreamingDetail {
   /* Pre-formatted size string (e.g. "12.4 KB" or "84 KB"). Matches the
@@ -95,6 +98,12 @@ const TONES: Record<ModelControlState, Tone> = {
     pulse: true,
     button: 'bg-amber-100 text-amber-700 cursor-not-allowed',
   },
+  unloading: {
+    pill: 'bg-amber-50 text-amber-700 border border-amber-200',
+    dot: 'bg-amber-500',
+    pulse: true,
+    button: 'bg-amber-100 text-amber-700 cursor-not-allowed',
+  },
   ready: {
     pill: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
     dot: 'bg-emerald-500',
@@ -125,6 +134,7 @@ function labelFor(
   const noun = engineLabel ?? kindNoun(kind);
   if (state === 'idle') return `${noun} idle`;
   if (state === 'loading') return `Loading ${noun.toLowerCase()}…`;
+  if (state === 'unloading') return `Stopping ${noun.toLowerCase()}…`;
   if (state === 'ready') return `${noun} ready`;
   if (state === 'unreachable') return unreachableLabel ?? `${noun} unavailable`;
   /* state === 'streaming' */
@@ -150,6 +160,8 @@ function actionFor(state: ModelControlState): {
       return { label: 'Load model', handler: 'load', disabled: false };
     case 'loading':
       return { label: 'Loading…', handler: 'load', disabled: true };
+    case 'unloading':
+      return { label: 'Stopping…', handler: 'stop', disabled: true };
     case 'ready':
       return { label: 'Stop', handler: 'stop', disabled: false };
     case 'streaming':

@@ -427,6 +427,64 @@ def test_clone_voice_survives_idle_evict_landing_in_the_ensure_lock_gap(
     )
 
 
+def test_maybe_free_idle_declines_while_clone_voice_holds_its_claim(
+    monkeypatch, tmp_path
+) -> None:
+    """The claim `clone_voice` takes must be the SAME one the evictor reads.
+
+    `clone_voice`'s TOCTOU guard is only worth anything if `maybe_free_idle`
+    can actually observe it. `synthesize` and `maybe_free_idle` both go
+    through the shared `InFlightCounter` (`_in_flight`, #1917); a `clone_voice`
+    that bumped a private counter instead would claim something nobody
+    consults — the derive would look idle to the admission path, the evict
+    would proceed, and the race the guard closes would silently reopen.
+
+    Observed from INSIDE the claim, at the re-ensure — which runs after the
+    claim is taken and before `clone_voice` acquires `_synth_lock`, so
+    `maybe_free_idle`'s lock-free fast-out is reached without deadlocking on
+    the same thread. `_last_used` is zeroed right there so the engine looks
+    INFINITELY IDLE: that neutralises the timestamp half of the guard, leaving
+    the in-flight claim as the only thing that can make the evict decline.
+    Without it the test would pass on the timestamp alone and prove nothing.
+
+    Fails against a `clone_voice` that claims a counter of its own:
+    `maybe_free_idle(0.0)` returns True, `_tts` is dropped mid-derive, and
+    `clone_voice` then raises the loud "unloaded before this clone finished"
+    RuntimeError."""
+    eng, _voices_dir, _tts_instance = _make_engine(monkeypatch, tmp_path)
+
+    real_ensure = eng._ensure_loaded
+    calls = {"n": 0}
+    observed: dict[str, Any] = {}
+
+    def _ensure_then_probe_the_evictor(model: str, device: Any = None) -> None:
+        calls["n"] += 1
+        real_ensure(model, device=device)
+        if calls["n"] == 2:  # the re-ensure — inside the claim, outside the lock
+            observed["busy"] = eng._in_flight.busy
+            observed["value"] = eng._in_flight.value
+            eng._last_used = 0.0  # look infinitely idle: only the claim can save it
+            observed["freed"] = eng.maybe_free_idle(0.0)
+            observed["tts_after"] = eng._tts is not None
+
+    monkeypatch.setattr(eng, "_ensure_loaded", _ensure_then_probe_the_evictor)
+
+    result = eng.clone_voice("xtts-claim-visible", _ref_audio(), 24000, "an audition line")
+
+    assert isinstance(result, main.SynthResult)
+    assert observed["busy"] is True, (
+        "`_in_flight.busy` read False while clone_voice was mid-derive — the "
+        "derive claimed a counter the evictor does not consult"
+    )
+    assert observed["value"] >= 1
+    assert observed["freed"] is False, (
+        "maybe_free_idle evicted the model out from under an in-flight derive"
+    )
+    assert observed["tts_after"] is True, "the model was dropped mid-derive"
+    assert eng._tts is not None
+    assert eng._in_flight.value == 0, "the claim was not released on the way out"
+
+
 def test_clone_voice_raises_loud_error_not_assertionerror_when_unload_wins_final_gap(
     monkeypatch, tmp_path
 ) -> None:

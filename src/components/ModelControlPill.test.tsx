@@ -19,6 +19,7 @@ describe('ModelControlPill — label per state', () => {
   it.each<[ModelControlState, RegExp]>([
     ['idle', /Voice engine idle/i],
     ['loading', /loading voice engine/i],
+    ['unloading', /stopping voice engine/i],
     ['ready', /Voice engine ready/i],
     ['unreachable', /Voice engine unavailable/i],
   ])('renders the canonical label for state %s', (state, labelRegex) => {
@@ -151,6 +152,21 @@ describe('ModelControlPill — action routing', () => {
     fireEvent.click(screen.getByRole('button', { name: /stop/i }));
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onLoad).not.toHaveBeenCalled();
+  });
+
+  it('renders a Stopping state with the action disabled (#1921)', () => {
+    /* #1921: `doStop` used to flip the optimistic state straight to 'idle', so
+       the pill read "Voice engine idle · Load model" while the model was still
+       resident for up to a minute — and the Load button was live, inviting a
+       load against a model that had not gone yet.
+
+       Fails against the wrong implementation: with state='unloading' unhandled,
+       actionFor() falls through and the button renders 'Load model', enabled. */
+    const { onLoad, onStop } = makeHandlers();
+    render(<ModelControlPill kind="tts" state="unloading" onLoad={onLoad} onStop={onStop} />);
+    expect(screen.getByText(/stopping voice engine/i)).toBeInTheDocument();
+    const button = screen.getByRole('button');
+    expect(button).toBeDisabled();
   });
 
   it('disables the action while loading is in flight (no double-load)', () => {

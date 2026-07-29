@@ -144,7 +144,13 @@ function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number>
   const [inv, setInv] = useState<ModelInventoryResponse | null>(null);
   const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  /* Tracks BOTH which row is busy and whether the in-flight call is a load or
+     a stop — the pill renders a different label/state for each (F2 fix: a
+     Stop press used to render 'loading' too, so a ≤2s mislabel that this PR's
+     90s Stop budget stretched into a much longer-lived wrong "Loading…"). */
+  const [busyAction, setBusyAction] = useState<{ id: string; kind: 'load' | 'stop' } | null>(
+    null,
+  );
   const [confirmItem, setConfirmItem] = useState<ModelInventoryItem | null>(null);
 
   const refetch = useCallback(async () => {
@@ -228,14 +234,14 @@ function ModelInventory({ keepAliveMap }: { keepAliveMap: Record<string, number>
           modelsStatus,
           refetchModelsStatus,
           keepAliveMap,
-          busy: busyId === item.id,
-          onAction: async (action: () => Promise<unknown>) => {
-            setBusyId(item.id);
+          busyKind: busyAction?.id === item.id ? busyAction.kind : null,
+          onAction: async (action: () => Promise<unknown>, kind: 'load' | 'stop') => {
+            setBusyAction({ id: item.id, kind });
             try {
               await action();
               await refetch();
             } finally {
-              setBusyId(null);
+              setBusyAction(null);
             }
           },
           onChanged: refetch,
@@ -489,7 +495,7 @@ function ModelRow({
   modelsStatus,
   refetchModelsStatus,
   keepAliveMap,
-  busy,
+  busyKind,
   onAction,
   onChanged,
   onRemove,
@@ -499,8 +505,8 @@ function ModelRow({
   modelsStatus: ModelsStatus | null;
   refetchModelsStatus: () => void;
   keepAliveMap: Record<string, number>;
-  busy: boolean;
-  onAction: (action: () => Promise<unknown>) => Promise<void>;
+  busyKind: 'load' | 'stop' | null;
+  onAction: (action: () => Promise<unknown>, kind: 'load' | 'stop') => Promise<void>;
   onChanged: () => void;
   onRemove: () => void;
 }) {
@@ -541,11 +547,13 @@ function ModelRow({
   const reachable = isAnalyzer ? true : sidecarReachable;
   const controlState: ModelControlState = !reachable
     ? 'unreachable'
-    : busy
-      ? 'loading'
-      : item.loaded
-        ? 'ready'
-        : 'idle';
+    : busyKind === 'stop'
+      ? 'unloading'
+      : busyKind === 'load'
+        ? 'loading'
+        : item.loaded
+          ? 'ready'
+          : 'idle';
   const controlKind: ModelKind = isAnalyzer ? 'analyzer' : 'tts';
 
   /* Ollama tags contain colons (ollama:qwen3.5:4b) — slice the prefix, never
@@ -573,16 +581,20 @@ function ModelRow({
     saveKeepAlive({ ...keepAliveMap, [analyzerModel]: secs });
   };
   const doLoad = () =>
-    onAction(() =>
-      engine
-        ? api.loadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
-        : api.loadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+    onAction(
+      () =>
+        engine
+          ? api.loadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
+          : api.loadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+      'load',
     );
   const doStop = () =>
-    onAction(() =>
-      engine
-        ? api.unloadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
-        : api.unloadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+    onAction(
+      () =>
+        engine
+          ? api.unloadSidecar({ engine, ...(loadModel ? { model: loadModel } : {}) })
+          : api.unloadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+      'stop',
     );
 
   return (

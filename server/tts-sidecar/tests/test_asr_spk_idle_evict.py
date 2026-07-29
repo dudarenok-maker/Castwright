@@ -2,7 +2,7 @@
 
 Both engines hold `_infer_lock` across their forward but their `unload()`
 never acquires it, and `maybe_free_idle` calls `unload()` directly. Since both
-are already driven by `_idle_evict(0.0)`, an admission-path evict can null the
+are already driven by `_idle_evict_steps(0.0)`, an admission-path evict can null the
 model mid-forward. Same defect the Coqui work fixed, one layer over.
 
 Round-1 review (#1894) added two further pins:
@@ -11,10 +11,11 @@ Round-1 review (#1894) added two further pins:
     + CUDA init is not a reliable proxy for "was blocked" (it can simply be
     slow, in either direction, on either engine).
   - `maybe_free_idle` needs a THIRD leg mirroring `CoquiEngine`: re-validate
-    `_infer_in_flight` (not just `self._model`) under the lock, not only via
+    `_in_flight` (not just `self._model`) under the lock, not only via
     the lock-free fast-out. Without it, a counter that goes from 0 -> 1 while
     `maybe_free_idle` is queued on the lock is invisible to it, and it evicts
-    a model a forward has already claimed.
+    a model a forward has already claimed. `_in_flight` is an `InFlightCounter`
+    (#1917), not a plain int — see main.py.
 """
 import importlib, os, sys, threading, time
 
@@ -76,14 +77,69 @@ def test_asr_unload_waits_for_an_in_flight_transcribe(monkeypatch):
     assert eng._model is None
 
 
+def test_asr_transcribe_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """ASR twin of `CoquiEngine`'s
+    `test_synthesize_restamps_last_used_before_the_in_flight_drop` (#1917
+    Global Constraint): the `_last_used` re-stamp on the way out must happen
+    BEFORE the in-flight claim's own decrement, never after — see that test
+    for the full rationale — including why the sentinel MUST be zeroed from
+    inside the forward rather than before the call. `transcribe` stamps
+    `_last_used` both on the way in and again under `_infer_lock`, so a
+    sentinel set before the call is overwritten twice before the forward
+    ends and the assertion would hold under either ordering.
+
+    Observes `_last_used` AT THE MOMENT of each in-flight-lock acquire via an
+    injectable lock; `stamps == [entry-time, exit-time]` for a single call."""
+    eng = main.WhisperEngine()
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda device=None: None)
+    monkeypatch.setattr(eng, "_pcm_to_float32_16k", lambda pcm, sr: [0.0])
+
+    def _fake_transcribe(self, audio, **kw):
+        # Last write before the forward returns — see the docstring.
+        eng._last_used = 0.0
+        return ([], type("I", (), {"language": "en"})())
+
+    eng._model = type("M", (), {"transcribe": _fake_transcribe})()
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.transcribe(b"\x00\x00", 16000)
+
+    # Sentinel rather than a strict `>` against a freshly sampled clock —
+    # ~15.6 ms monotonic granularity on Python 3.12/Windows.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
+
+
 def test_asr_maybe_free_idle_skips_an_in_flight_transcribe(monkeypatch):
     """The fast-out must exist, or admission blocks on the whole forward."""
     eng = main.WhisperEngine()
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0  # long idle
-    eng._infer_in_flight = 1
-    assert eng.maybe_free_idle(120.0) is False
-    assert eng._model is not None
+    claim = eng._in_flight.claim()
+    claim.__enter__()  # hold a real claim open, mirroring an in-flight forward
+    try:
+        assert eng.maybe_free_idle(120.0) is False
+        assert eng._model is not None
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch):
@@ -94,7 +150,7 @@ def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
     eng = main.WhisperEngine()
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0  # long idle
-    eng._infer_in_flight = 0
+    assert eng._in_flight.value == 0  # the InFlightCounter's own default
 
     lock_acquired = threading.Event()
     set_counter = threading.Event()
@@ -105,7 +161,7 @@ def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
         with eng._infer_lock:
             lock_acquired.set()
             set_counter.wait(timeout=5)
-            eng._infer_in_flight = 1
+            eng._in_flight._n = 1  # simulate a concurrent forward's claim
             counter_set.set()
             holder_release.wait(timeout=5)
 
@@ -201,14 +257,80 @@ def test_spk_unload_waits_for_an_in_flight_embed(monkeypatch):
     assert eng._model is None
 
 
+def test_spk_embed_restamps_last_used_before_the_in_flight_drop(monkeypatch):
+    """SPK twin of `CoquiEngine`'s
+    `test_synthesize_restamps_last_used_before_the_in_flight_drop` (#1917
+    Global Constraint) — see that test for the full rationale, including why
+    the sentinel MUST be zeroed from inside the forward: `embed` stamps
+    `_last_used` on the way in, so a sentinel set before the call is gone
+    before `encode_batch` runs and the assertion would hold under either
+    ordering. `stamps == [entry-time, exit-time]`."""
+    import numpy as np
+
+    class _FakeOut:
+        def __init__(self, arr):
+            self._arr = arr
+
+        def squeeze(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self._arr.squeeze()
+
+        def astype(self, dt):
+            return self._arr.squeeze().astype(dt)
+
+    class _FakeEncoder:
+        def encode_batch(self, t):
+            # Last write before the forward returns — see the docstring.
+            eng._last_used = 0.0
+            return _FakeOut(np.ones((1, 4), dtype="float32"))
+
+    eng = main.SpeakerEngine()
+    eng._model = _FakeEncoder()
+
+    class RecordingLock:
+        def __init__(self):
+            self._l = threading.Lock()
+            self.stamps: list[float] = []
+
+        def __enter__(self):
+            self._l.acquire()
+            self.stamps.append(eng._last_used)
+            return self
+
+        def __exit__(self, *a):
+            self._l.release()
+            return False
+
+    lock = RecordingLock()
+    eng._in_flight = main.InFlightCounter(lock=lock)
+
+    eng.embed(b"\x00\x00" * 160, 16000)
+
+    # Sentinel rather than a strict `>` against a freshly sampled clock —
+    # ~15.6 ms monotonic granularity on Python 3.12/Windows.
+    assert lock.stamps[1] > 0.0, (
+        "`_last_used` still read the in-forward sentinel when the in-flight "
+        "count dropped — the re-stamp ran AFTER the decrement"
+    )
+
+
 def test_spk_maybe_free_idle_skips_an_in_flight_embed(monkeypatch):
     eng = main.SpeakerEngine()
     monkeypatch.setattr(main, "_parse_device", lambda d: ("cuda", 0))
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0
-    eng._infer_in_flight = 1
-    assert eng.maybe_free_idle(120.0) is False
-    assert eng._model is not None
+    claim = eng._in_flight.claim()
+    claim.__enter__()  # hold a real claim open, mirroring an in-flight forward
+    try:
+        assert eng.maybe_free_idle(120.0) is False
+        assert eng._model is not None
+    finally:
+        claim.__exit__(None, None, None)
 
 
 def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch):
@@ -219,7 +341,7 @@ def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
     monkeypatch.setattr(main, "_parse_device", lambda d: ("cuda", 0))
     eng._model = object()
     eng._last_used = time.monotonic() - 600.0
-    eng._infer_in_flight = 0
+    assert eng._in_flight.value == 0  # the InFlightCounter's own default
 
     lock_acquired = threading.Event()
     set_counter = threading.Event()
@@ -230,7 +352,7 @@ def test_spk_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
         with eng._infer_lock:
             lock_acquired.set()
             set_counter.wait(timeout=5)
-            eng._infer_in_flight = 1
+            eng._in_flight._n = 1  # simulate a concurrent forward's claim
             counter_set.set()
             holder_release.wait(timeout=5)
 

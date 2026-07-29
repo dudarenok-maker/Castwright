@@ -149,6 +149,10 @@
   handles this itself now, the out-of-memory message no longer asks you to go
   and stop Coqui by hand. And stopping Coqui mid-render can no longer interrupt
   the chapter being recorded.
+- **Pressing Stop on a voice engine now tells you the truth while it works.** It used to
+  report an error a couple of seconds in and then quietly finish stopping the model on its
+  own, up to a minute later. Now the button says "Stopping…" and waits — no false error,
+  no guessing whether it worked.
 - Chapter loudness figures on the Listen view are now measured from the finished audio. The
   loudness-range and true-peak numbers were previously reported by the normaliser rather than
   measured, so they could be well off — the integrated loudness reading was always right.

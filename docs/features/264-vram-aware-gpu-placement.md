@@ -237,15 +237,20 @@ OOM — see the status header:
 - **`idle_evict` ignores the target device** (over-evicts on a true multi-GPU box).
 
   > **CLOSED (#1721).** Fixed on branch `fix/sidecar-idle-evict-device-target`:
-  > `_idle_evict(device_key)` now gates each candidate (Qwen VoiceDesign +
-  > 1.7B-Base share `qwen._device`, ASR on `ASR._device`, ECAPA on `SPK.device`)
-  > through a new `_same_card()` helper, so it only frees an engine whose resident
-  > card matches the admitting op's target — a multi-GPU box no longer evicts an
-  > idle engine on a *different* card, and a cpu-resident engine (which holds no
-  > VRAM on the target card) is skipped entirely. `_same_card` is `shares_device`'s
-  > card-comparison tail without the torch import / auto-resolution (both inputs
-  > are already concrete in this path). Regression coverage: `test_devices.py`
+  > `_idle_evict_steps(device_key, engine)` now gates each candidate (Qwen
+  > VoiceDesign + 1.7B-Base share `qwen._device`, ASR on `ASR._device`, ECAPA on
+  > `SPK.device`) through a new `_same_card()` helper, so it only includes an
+  > eviction step for an engine whose resident card matches the admitting op's
+  > target — a multi-GPU box no longer evicts an idle engine on a *different*
+  > card, and a cpu-resident engine (which holds no VRAM on the target card) is
+  > skipped entirely. `_same_card` is `shares_device`'s card-comparison tail
+  > without the torch import / auto-resolution (both inputs are already
+  > concrete in this path). Regression coverage: `test_devices.py`
   > (`test_idle_evict_*`, `test_same_card_*`). Efficiency-only, never an OOM.
+  > **Renamed to `_idle_evict_steps` and changed from "evict + return bool" to
+  > "return an ordered list of `EvictStep` candidates" by #1920** (2026-07-28
+  > sidecar-evict-hardening) — see
+  > `docs/superpowers/specs/2026-07-28-sidecar-evict-hardening-design.md` §4.
 - **`_observed_mb` reads `max_memory_allocated` without `reset_peak_memory_stats`**
   → the learned footprint drifts to the device-wide high-water (over-conservative,
   never an OOM).

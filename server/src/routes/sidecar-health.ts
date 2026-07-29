@@ -52,6 +52,14 @@ const PROBE_TIMEOUT_MS = 2_000;
    leaving the UI with a phantom error and a model that's about to be ready. */
 const LOAD_TIMEOUT_MS = 90_000;
 
+/* `/unload` is not a probe. Since #1894 `CoquiEngine.unload()` waits for any
+   in-flight forward before dropping the model, so a Stop pressed mid-render
+   blocks for the length of that sentence. The 2s PROBE_TIMEOUT_MS aborted and
+   returned 503 while the unload completed anyway a moment later — the user saw
+   a failure for something that worked (#1921). Same budget as LOAD_TIMEOUT_MS,
+   for the same reason: this is a model-lifecycle call, not a health check. */
+const UNLOAD_TIMEOUT_MS = 90_000;
+
 /* When the sidecar PROCESS is down, Node's fetch rejects with the opaque
    `TypeError: fetch failed` (the real reason — ECONNREFUSED — hides in
    `.cause.code`). That bare "fetch failed" was leaking straight into the
@@ -495,12 +503,12 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
    NOT a fast path any more (#1894): `CoquiEngine.unload()` now acquires
    `_synth_lock` before dropping the model, so an unload that lands during an
    in-flight synth blocks for the length of that forward — tens of seconds to
-   minutes, not the sub-second case the 2s `PROBE_TIMEOUT_MS` below assumes.
-   The probe can time out and this route returns its unreachable/timeout
-   error to the caller while the unload keeps waiting on the sidecar side and
-   completes afterwards regardless — the Stop pill can report a failure for
-   an unload that in fact succeeds a little late. That behaviour trade is
-   filed separately; not changed here.
+   minutes, not the sub-second case a health probe assumes. That's why this
+   route gets its own `UNLOAD_TIMEOUT_MS`, matching `/load`'s budget: this is
+   a model-lifecycle call, not a health check, and the caller's contract is
+   "when this returns, the VRAM is free" — the Analysing screen's analyzer
+   auto-evict depends on that being true, not just eventually true. A forward
+   that runs longer than 90s still reports a timeout (#1921).
 
    Body: `{ engine?: 'coqui' | 'kokoro' | 'qwen' }`, default `'coqui'`. We
    forward the full body so the sidecar can dispatch — the Kokoro / Qwen
@@ -509,7 +517,7 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/unload`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), UNLOAD_TIMEOUT_MS);
   try {
     const upstream = await fetch(target, {
       method: 'POST',
@@ -533,7 +541,7 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
     return res.status(503).json({
       status: 'error',
       error: isTimeout
-        ? `Sidecar /unload did not respond within ${PROBE_TIMEOUT_MS}ms.`
+        ? `Sidecar /unload did not respond within ${UNLOAD_TIMEOUT_MS}ms.`
         : friendlyUnreachableError(err),
     });
   }
