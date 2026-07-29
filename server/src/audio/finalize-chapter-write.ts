@@ -214,7 +214,22 @@ export async function finalizeChapterAudioWrite(
      When `realLoudness` is present (the overwhelmingly common case) it feeds
      BOTH fields, unconditionally — shape doesn't matter. Absent that, only
      Shape A's `i` is trustworthy enough to judge on; `tp` NEVER falls back,
-     because no shape of `loudnormStats.tp` is a real measurement. */
+     because no shape of `loudnormStats.tp` is a real measurement.
+
+     Not exhaustive: two more states exist beyond the three above.
+       - A fourth shape: a two-pass encode whose second-pass JSON parses and
+         passes `isSecondPassMeasurementUseable` (mp3.ts:436-455) but whose
+         `normalization_type` is absent/unrecognised yields
+         `normalizationType: undefined` while `i` is genuinely `output_i` —
+         a real post-filter measurement. The `shapeA` discriminator below
+         then misclassifies it as Shape B and sets `qaLufs = null`, silently
+         skipping the near-silent check. Fails closed (never fabricates a
+         measured figure), and today's ffmpeg always emits `linear`/`dynamic`,
+         so this is a doc gap, not a live bug.
+       - A fifth state: the first-pass measurement is unusable (dead-silent
+         input) → `pendingSidecar` stays `null` → `onLoudnessMeasured` never
+         fires → no sidecar and no QA figure at all. Handled correctly by the
+         `if (loudnormStats)` guard above. */
   const measured = loudnormStats as LoudnormSidecarJson | null;
   const shapeA = measured?.normalizationType !== undefined;
   const qaLufs = realLoudness

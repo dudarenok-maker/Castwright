@@ -248,9 +248,13 @@ chapterAudioRouter.get(
        LUFS report card and per-chapter drift badge can compute drift
        from the target. Missing file → `null` — the chapter wasn't
        loudnormed (legacy chapter / AUDIO_LOUDNORM_ENABLED=false /
-       silent-source fallthrough). The frontend MUST also gate any
-       drift-vs-ground-truth comparison on `lufs.twoPass === true`;
-       single-pass values are the nominal target, not a real measurement. */
+       silent-source fallthrough). Plan 274: the frontend gates any
+       drift-vs-ground-truth comparison on `lufs.measurementSource`
+       (`'ebur128'` = real measurement; `'loudnorm'` = the re-measurement
+       failed and the figures are loudnorm's self-reports, not real —
+       render neutral), falling back to the legacy `twoPass === true`
+       rule only when `measurementSource` itself is absent (a sidecar
+       written before this field existed). */
     const lufs = await readLufsOrNull(found.lufsPath);
     res.json({
       url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
