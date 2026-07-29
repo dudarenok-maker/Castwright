@@ -838,10 +838,63 @@ describe('AnalysingView — analyzer pill Stop/Load in-flight guard (#1929)', ()
     }
   });
 
+  it('keeps the "unloading" pill across a poll tick whose health probe itself rejects (fetch failure) while the analyzer unload is still in flight', async () => {
+    /* Same fake-timers rationale as the sibling `.then` test above — mirrors
+       it exactly but drives the poll's OTHER branch: `getOllamaHealth()`
+       itself REJECTING (a dead fetch), not merely resolving with a
+       'reachable' status. No prior test drove this branch, so a mutation
+       deleting the in-flight guard from the poll's `.catch` handler
+       (analysing.tsx) killed nothing. */
+    vi.useFakeTimers();
+    try {
+      let resolveUnload: (v: { status: string }) => void = () => {};
+      unloadAnalyzerSpy.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveUnload = r;
+        }),
+      );
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const stopBtn = screen.getByRole('button', { name: /^stop \(analyzer\)$/i });
+      await act(async () => {
+        fireEvent.click(stopBtn);
+        await Promise.resolve();
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      /* The NEXT getOllamaHealth() call — the 30s poll tick below — rejects
+         outright, landing in the probe's `.catch`, while the unload is
+         STILL pending. Fails against an unguarded `.catch`: the pill would
+         flip away from "Stopping analyzer…" (to the 'unreachable' reading)
+         even though the unload the user asked for hasn't resolved yet. */
+      getOllamaHealthSpy.mockRejectedValueOnce(new Error('probe failed'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUnload({ status: 'unloaded' });
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not leak the in-flight counter when handleStopAnalyzer\'s own catch throws (non-Error rejection)', async () => {
-    /* `catch (e) { ...(e as Error).message... }` throws a TypeError when `e`
-       is not an Error (e.g. a bare `undefined` rejection) — a real edge case
-       this code already has to survive. That throw escapes past the inner
+    /* `catch (e) { ...(e as Error).message... }` would throw a TypeError if
+       `e` were not an Error — but production can't actually reach that:
+       both `realUnloadAnalyzer` (src/lib/api.ts:7833) and
+       `realGetOllamaHealth` only reject when `fetch` itself rejects, which
+       throws a TypeError or DOMException — both of which carry `.message`.
+       This test drives the throw with a synthetic `undefined` rejection
+       (`mockRejectedValueOnce(undefined)`) purely to exercise the
+       MECHANISM at that level: that throw escapes past the inner
        try/catch; only an outer try/finally around the whole handler can
        still decrement the in-flight counter. Without it, the counter is
        stuck at 1 forever and the poll's in-flight guard permanently refuses

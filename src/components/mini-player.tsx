@@ -699,7 +699,7 @@ export function MiniPlayer({
             <button
               onClick={() => setPlaying(!playing)}
               aria-label={playing ? 'Pause' : 'Play'}
-              className="w-11 h-11 sm:w-10 sm:h-10 rounded-full bg-canvas text-ink grid place-items-center hover:bg-white"
+              className="w-10 h-10 min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 rounded-full bg-canvas text-ink grid place-items-center hover:bg-white"
             >
               {playing ? (
                 <IconPause className="w-4 h-4" />

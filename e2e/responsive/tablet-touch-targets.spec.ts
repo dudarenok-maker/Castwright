@@ -16,8 +16,14 @@
    Runs across all three projects via the e2e/responsive testMatch glob
    (playwright.config.ts):
      - chromium (required `test:e2e` CI gate): fine pointer, no touch —
-       proves the fix does NOT oversize the control for mouse users, and
-       that the shrink is pointer-driven, not the old width-driven bug.
+       proves the fix does NOT oversize the control for mouse users. At the
+       pinned 768px viewport this does NOT by itself prove the shrink is
+       pointer-driven rather than the old width-driven bug: both the old
+       `sm:`/`md:` classes and the new `fine-pointer:` classes shrink under a
+       fine pointer at 768px, so a regression back to the old width-driven
+       classes would still pass every assertion at this viewport. The
+       narrow-viewport (400px) tests below close that gap — see their own
+       comment for why 400px specifically discriminates the two.
      - mobile-chrome / tablet-chrome (opt-in `test:e2e:mobile`): coarse
        pointer — proves the 44px floor actually holds on a touch device.
    The viewport is pinned to 768px (tablet width, ≥ both the old `sm:` (640)
@@ -27,6 +33,19 @@
 import { test, expect } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
 import { waitForListenViewReady, goToConfirm, waitForConfirmViewReady } from '../helpers';
+
+/* mobile-chrome forces the same 768px viewport as tablet-chrome below (both
+   are coarse-pointer projects), so it exercises exactly the same assertions
+   for zero extra signal — skip it here rather than pay for a duplicate run. */
+// Playwright's fixture-detection heuristic requires the literal
+// object-destructuring shape here, even with no fixture actually used.
+// eslint-disable-next-line no-empty-pattern
+test.beforeEach(async ({}, testInfo) => {
+  test.skip(
+    testInfo.project.name === 'mobile-chrome',
+    'this spec forces a 768px tablet viewport; mobile-chrome duplicates tablet-chrome at that same viewport for zero extra signal',
+  );
+});
 
 async function measure(locator: Locator) {
   return locator.evaluate((el) => ({
@@ -96,7 +115,7 @@ test.describe('tablet-range touch targets (#1935)', () => {
 });
 
 /* Five more sites carrying the same superseded `sm:`/`md:` width-breakpoint
-   pattern, reported (not fixed) in fe053a34's commit body as out-of-scope
+   pattern, reported (not fixed) in 720fb64f's commit body as out-of-scope
    for #1935's three-control fix. Same treatment, same two-sided proof. */
 test.describe('tablet-range touch targets — five more sites', () => {
   test('chapter play/pause button stays ≥44px on any touch device', async ({
@@ -180,5 +199,92 @@ test.describe('tablet-range touch targets — five more sites', () => {
     // suspect segments (seeded in mockGetChapterAudio — see api.ts).
     const nextIssue = page.getByTestId('mini-player-next-issue');
     await assertTouchTarget(nextIssue, 'mini-player Next-issue button', true);
+  });
+});
+
+/* A sixth survivor of the same defect, found by independent review of this
+   PR rather than by 720fb64f's own grep — which searched for `md:` +
+   `min-*-0` + `w-8`/`w-9` shapes specifically, a pattern `sm:w-10 sm:h-10`
+   doesn't match. Same treatment, same two-sided proof. */
+test.describe('tablet-range touch targets — a sixth survivor', () => {
+  test('mini-player Play/Pause button stays ≥44px on any touch device', async ({
+    page,
+  }: {
+    page: Page;
+  }) => {
+    test.setTimeout(30_000);
+    await page.setViewportSize({ width: 768, height: 1024 });
+    // Same stub as the Next-issue test above — suppress real playback so
+    // the stub MP3 never fires timeupdate events during the measurement.
+    await page.addInitScript(() => {
+      (HTMLMediaElement.prototype as { play: () => Promise<void> }).play = () => Promise.resolve();
+    });
+    await page.goto('/#/books/sb/generate');
+    await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 10_000 });
+    await page
+      .getByRole('button', { name: /^Preview$/ })
+      .first()
+      .click();
+
+    // Exact match ("Play"/"Pause") — distinct from the chapter row's own
+    // "Play chapter 1"/"Pause chapter 1" button covered above.
+    const playPause = page.getByRole('button', { name: /^(Play|Pause)$/ }).first();
+    await assertTouchTarget(playPause, 'mini-player Play/Pause button', true);
+  });
+});
+
+/* Closes a gap in the required (chromium-only) CI gate. At the pinned 768px
+   viewport used by every test above, BOTH the pre-fix width-driven classes
+   (`sm:`/`md:`) and the post-fix pointer-driven classes (`fine-pointer:`)
+   shrink under a fine pointer — verified experimentally: the pre-fix
+   classes pass all 6 chromium (`--project=chromium`, fine-pointer) cases
+   above at 768px, because `assertTouchTarget`'s fine-pointer branch only
+   asserts "stays compact", which is true either way. So a regression back
+   to the width-driven classes would not, by itself, fail the required
+   `test:e2e` gate.
+
+   Below BOTH the old `sm:` (640) and `md:` (768) breakpoints, the two
+   implementations diverge: the width-driven classes never activate their
+   shrink at all — the control stays at its unshrunk base size (>=44px)
+   regardless of pointer type, because `sm:`/`md:` are gated on viewport
+   width alone. The pointer-driven classes shrink under a fine pointer at
+   ANY viewport width, because `fine-pointer:` is gated on pointer type, not
+   width. So at 400px under a fine pointer: width-driven classes measure
+   >=44px (would fail the assertion below), pointer-driven classes measure
+   compact (passes). This single assertion is what turns the required
+   chromium leg into a genuine regression gate for this defect class.
+   Mutation-verified: reverting mini-player.tsx's Next-issue button to its
+   pre-fix classes (`min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0
+   md:p-2`) fails this test. */
+test.describe('tablet-range touch targets — narrow-viewport regression gate', () => {
+  test('mini-player Next-issue button shrinks under a fine pointer even below the old sm:/md: breakpoints (400px)', async ({
+    page,
+  }: {
+    page: Page;
+  }) => {
+    test.setTimeout(30_000);
+    await page.setViewportSize({ width: 400, height: 900 });
+    await page.addInitScript(() => {
+      (HTMLMediaElement.prototype as { play: () => Promise<void> }).play = () => Promise.resolve();
+    });
+    await page.goto('/#/books/sb/generate');
+    await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 10_000 });
+    await page
+      .getByRole('button', { name: /^Preview$/ })
+      .first()
+      .click();
+
+    const nextIssue = page.getByTestId('mini-player-next-issue');
+    await expect(nextIssue).toBeVisible({ timeout: 5_000 });
+    const { height, isCoarse } = await measure(nextIssue);
+    // Only discriminates old (width-driven) vs new (pointer-driven) shrink
+    // under a FINE pointer (see header comment above) — a coarse-pointer
+    // project reads >=44px for both implementations at this width, so skip
+    // rather than assert something meaningless there.
+    test.skip(
+      isCoarse,
+      'only discriminates old (width-driven) vs new (pointer-driven) shrink under a fine pointer',
+    );
+    expect(height, 'mini-player Next-issue height at 400px under a fine pointer').toBeLessThan(44);
   });
 });
