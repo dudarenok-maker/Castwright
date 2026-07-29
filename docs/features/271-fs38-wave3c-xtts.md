@@ -683,6 +683,52 @@ CLAUDE.md's Before-shipping checklist step 3.
 
 ## Ship notes
 
-_(fill in when this branch merges: shipped date, commit SHA, any behaviour
-delta vs. the plan — including whether Tasks 10a/14a/27 landed in the same
-PR or a follow-up.)_
+**Shipped 2026-07-29** via [PR #1936](https://github.com/dudarenok-maker/Castwright/pull/1936),
+merge commit `6a2e4e17`. `Refs #624` — fs-38 is multi-wave and Wave 2 remains
+deferred, so this is a partial delivery of the epic, matching Waves 3a
+([#1807](https://github.com/dudarenok-maker/Castwright/pull/1807)), 3b1
+([#1809](https://github.com/dudarenok-maker/Castwright/pull/1809)) and 3b2
+([#1827](https://github.com/dudarenok-maker/Castwright/pull/1827)).
+
+**Status stays `active`, not `stable`** — live-GPU acceptance is owed (row A1 of
+[`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md),
+criteria in [`docs/testing/fs38-wave3-onbox-acceptance.md`](../testing/fs38-wave3-onbox-acceptance.md)).
+This plan is therefore **not** archived yet, following the same convention as
+plan 249. It moves to `docs/features/archive/` when that walkthrough runs and
+its result is recorded — not before.
+
+### Delta vs. the plan
+
+- **Tasks 10a, 14a and 27 all landed in this same PR**, not a follow-up, along
+  with 6a, 8a and 11a — six defects found mid-implementation and folded in
+  rather than deferred.
+- **Two whole-branch review gates ran, the second blind.** GATE 2's four
+  reviewers were given no sight of GATE 1's findings, and turned up 2 Critical,
+  11 Important and 10 Minor — including two Criticals GATE 1 had missed: a
+  wholesale cast write could still erase a cloned slot, and a voice reachable
+  under a non-canonical key survived revoke while the API reported total
+  erasure. Both are fixed here, each with a test watched failing first.
+- **Owner-decided behaviour added during the fold**, beyond the plan as written:
+  a cast PUT restores an omitted cloned slot and refuses a replacement (409); a
+  bulk design sweep skips already-cloned characters and names them rather than
+  retargeting them off their clone; the #1899 consent refusal returns 409 rather
+  than 500.
+- **Coqui VRAM eviction ships as two complementary mechanisms**, deliberately:
+  this wave's Node-side evict after the last Coqui chapter (reactive, local,
+  driven by the generation plan) alongside `main`'s sidecar-side idle reclaim
+  from [#1894](https://github.com/dudarenok-maker/Castwright/issues/1894)
+  (idle-driven, global, driven by demand at admission). Consolidation is owed
+  and tracked as [#1932](https://github.com/dudarenok-maker/Castwright/issues/1932).
+
+### Follow-ups filed rather than folded in
+
+[#1932](https://github.com/dudarenok-maker/Castwright/issues/1932) (consolidate
+the two evict mechanisms) ·
+[#1933](https://github.com/dudarenok-maker/Castwright/issues/1933) (assign
+readiness gate is Qwen-only — fail-closed, so it over-blocks) ·
+[#1934](https://github.com/dudarenok-maker/Castwright/issues/1934) (the six
+design SSE endpoints are absent from `openapi.yaml`) ·
+[#1935](https://github.com/dudarenok-maker/Castwright/issues/1935) (three
+controls below the 44 px touch target on tablets). Each was split out on the
+fix-now bar rather than by severity: they need a design decision or a
+verification pass this PR could not carry.
