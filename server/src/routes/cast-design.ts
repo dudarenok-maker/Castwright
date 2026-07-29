@@ -42,6 +42,7 @@ import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import { applyOverrideToCastFiles } from './voices.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
@@ -161,6 +162,15 @@ interface DesignFailure {
   error: string;
 }
 
+/** GATE 2 fix-lane-1b — a character skipped by the clone-protection guard
+    below (never designed at all, not even attempted), distinct from an
+    ordinary freshness-skip or a mid-run character_failed: the sweep must
+    REPORT who it protected, not just fold them silently into `skipped`. */
+interface ClonedSkip {
+  characterId: string;
+  name: string;
+}
+
 interface DesignJob {
   controller: AbortController;
   subscribers: Set<DesignSubscriber>;
@@ -169,6 +179,7 @@ interface DesignJob {
   total: number;
   done: number;
   skipped: number;
+  clonedSkips: ClonedSkip[];
   failures: DesignFailure[];
   currentCharacterId: string | null;
   currentName: string | null;
@@ -298,7 +309,14 @@ async function runDesignJob(
 ): Promise<void> {
   await runPersonaPrePass(job, tasks);
   if (job.controller.signal.aborted) {
-    endJob(job, { type: 'idle', done: job.done, total: job.total, skipped: job.skipped, failures: job.failures });
+    endJob(job, {
+      type: 'idle',
+      done: job.done,
+      total: job.total,
+      skipped: job.skipped,
+      clonedSkips: job.clonedSkips,
+      failures: job.failures,
+    });
     return;
   }
 
@@ -324,6 +342,33 @@ async function runDesignJob(
       if (character.overrideTtsVoices?.qwen?.name) {
         job.skipped += 1;
         broadcast(job, { type: 'character_skipped', characterId });
+        continue;
+      }
+
+      /* GATE 2 fix-lane-1b — a design sweep must not retarget a cloned
+         character off its clone. The applyOverrideToCastFiles call below
+         pins ttsEngine = 'qwen' unconditionally; if this character already
+         carries a cloned voice on coqui (the fail-safe, provenance-only
+         characterHasClonedSlot test — the same guard I-B1 used at the
+         voice-override route, not the uuid-validating resolution
+         predicates in clone-engines.ts), that pin would silently retarget
+         it off its clone while the marker stays intact — the wave's core
+         never-silent-substitution property failing in disguise. The
+         freshness-skip above already guarantees qwen itself has no name
+         here, so a positive here can only be the OTHER clone-capable
+         engine (coqui). The owner's decision (GATE 2 review): skip this
+         character and report it — refusing the whole sweep would let one
+         cloned character block designing the rest; retargeting is the
+         defect itself. */
+      if (characterHasClonedSlot(character)) {
+        job.skipped += 1;
+        job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+        broadcast(job, {
+          type: 'character_skipped',
+          characterId,
+          name: character.name ?? characterId,
+          reason: 'already_cloned',
+        });
         continue;
       }
     } else {
@@ -531,6 +576,7 @@ async function runDesignJob(
     done: job.done,
     total: job.total,
     skipped: job.skipped,
+    clonedSkips: job.clonedSkips,
     failures: job.failures,
   });
 }
@@ -668,6 +714,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     total: tasks.length,
     done: 0,
     skipped: 0,
+    clonedSkips: [],
     failures: [],
     currentCharacterId: null,
     currentName: null,
@@ -701,6 +748,7 @@ castDesignRouter.get('/:bookId/cast/design/status', (req: Request, res: Response
     total: job.total,
     done: job.done,
     skipped: job.skipped,
+    clonedSkips: job.clonedSkips,
     currentName: job.currentName,
     state: 'running',
     failures: job.failures,

@@ -266,6 +266,187 @@ history at cut time.
   `library-slice.ts` already exports a `LANGUAGE_LABELS` and it is deliberately different
   (endonyms — 'Русский', 'Deutsch' — for the book-library pills, against this one's exonyms),
   so the two must not be confusable at an import site.
+- **fs-38 Wave 3c — cloned + designed voices on Coqui XTTS v2, refs #624.** Extends 268's
+  never-substitute/total-erasure machinery to a second engine. `CoquiEngine.clone_voice`
+  (`server/tts-sidecar/main.py`) derives XTTS conditioning latents (`get_conditioning_latents`,
+  hand-rolled rather than the built-in `CloningMixin` — the built-in's non-atomic `torch.save`
+  to a path we don't control would defeat reliable purge), persisted via the pre-existing
+  `_atomic_torch_save` under a `_synth_lock` shared with `/synthesize` (clone and synthesise are
+  now two serialized concurrent entry points into the model, matching Qwen's existing pattern —
+  not a throughput regression). An epoch-guarded `_latents_cache` (`_evict_epoch`/
+  `_bump_evict_epoch`) backs `POST /xtts/clone-voice` and `POST /xtts/evict-voice`, mirroring the
+  Qwen pair; a re-clone of the same voice_id correctly invalidates a racing render's stale
+  latents. `pickVoiceForEngine`, `clone-voice-resolver.ts`'s classifier + both orchestrators, and
+  `purgeCloneArtifacts` are now engine-parametric instead of Qwen-hardcoded — the artifact set
+  per cloned Coqui voice is three deterministic paths (`.pt`, `.json`, and a reference-audio temp
+  WAV that is the person's actual source clip, not a derived artifact), all purged on revoke and
+  delete via the same `evictSidecarVoice()` helper the Qwen sweep already used. A mid-wave scope
+  widening (delivered at the user's explicit direction) adds a **fail-soft** designed-voice-on-
+  Coqui derive arm — the opposite policy from cloned's fail-loud, kept in a genuinely separate
+  code path at every review pass, since a designed voice isn't a real person's identity and
+  falling back to the stock catalogue on a bad derive is today's acceptable behaviour, not a
+  regression; a designed entry with no retained calibration clip gets no Coqui slot at all and
+  renders byte-for-byte as before this wave. `POST /:voiceUuid/assign` now writes both
+  clone-capable slots when the entry can actually render on both (cloned, or designed with a
+  retained clip) — closing a real Critical an earlier review round caught, where an unconditional
+  dual-slot write meant an engine switch could silently drop a real person's identity to a stock
+  catalogue voice. Also closes a real, reachable defect the engine-parametric refactor exposed:
+  on a remote/LAN sidecar, Coqui availability used to fall back to a local disk stat that's always
+  absent on the box the *server* runs on, aborting chapter 1 of every book on a Coqui-installed-
+  and-working sidecar — fixed with a wire fact (`coqui_weights_present` on `/health`, mirroring
+  the existing `qwen_weights_present`). Golden-audio gate (`test:golden-audio:sidecar`) now covers
+  Coqui (`test_coqui_sanity` previously never fired on a Coqui-only box — a Kokoro-shaped
+  weights-path probe never matched Coqui's lazy-fetched weights) plus new `test_xtts_clone_sanity`
+  / `test_xtts_designed_sanity` loose-check cases, including a long-sentence case for the
+  `enable_text_splitting` crash class. **One planned task did not land in this delivery** — an
+  engine-aware library sample route, so the card's Play button always auditioned the Qwen
+  artifact even for a Coqui-primary card
+  ([#1887](https://github.com/dudarenok-maker/Castwright/issues/1887)). The route itself gained
+  engine-awareness before this entry was first written; the remaining gap — the My-voices card's
+  own Play button never asking for Coqui — is closed by the follow-up campaign below. Two other
+  consent-adjacent gaps this wave's review surfaced — a manual cast-link route that bypassed the
+  library consent check ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)), and
+  a wholesale `PUT /api/books/:bookId {slice:'cast'}` route that let a client restamp a character's
+  `voiceUuid`/engine-slot pair with no guard at all
+  ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899), found during this wave's
+  own review) — were **all closed by the follow-up campaign below**, not left open. Roughly
+  twenty further pre-existing or adjacent gaps this wave's review surfaced —
+  most still untriaged in the implementation ledger's Minor roll-up — are catalogued in the plan's
+  Known limitations, with follow-up issues for the load-bearing ones. **GATE 1 of the whole-branch
+  review gates has since run on this branch and closed a cluster of cloned-voice correctness
+  findings** — see the follow-up campaign entry below; **GATE 2 (independent review) and GATE 3
+  (verify/push/PR/CI) remain outstanding.** Plan: `docs/features/271-fs38-wave3c-xtts.md`.
+  Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md` §2.3/§3.2/§5.3/§5.6.
+  Live-GPU acceptance owed — see the plan's "Owed on-box acceptance" and Section E of
+  `docs/testing/fs38-wave3-onbox-acceptance.md`.
+- **fs-38 Wave 3c follow-up campaign — consent hardening, a preparing-voice phase, and a dozen
+  smaller fixes** (refs #624). Landed after the Wave 3c entry above was first written.
+  - **Consent hardening.** Three fail-safe-only fixes (no clone predicate widened) close every
+    path this wave's review surfaced by which a cloned voice's consent state could be
+    bypassed. A manual cast-link (`cast-link-prior.ts`) and the series-reuse chain-walk
+    (`hydrate-reused-voice.ts`) no longer denormalise a voice onto a character that carries a
+    cloned slot on the *target* side of the link, closing the gap the manual-link route left
+    open ([#1885](https://github.com/dudarenok-maker/Castwright/issues/1885)). The wholesale
+    `PUT /api/books/:bookId {slice:'cast'}` cast-save route now keeps `voiceUuid` and any
+    reserved clone-storage-key server-owned, rejecting a client-supplied value that disagrees
+    with what is already on disk — replicating the already-reviewed
+    `voice-override-linked.ts` pattern rather than inventing new policy
+    ([#1899](https://github.com/dudarenok-maker/Castwright/issues/1899)). And a legacy cloned
+    slot carrying a `libraryUuid` with no `provenance` field — invisible to the render-time
+    revocation check because only `pickVoiceForEngine`'s Qwen branch resolves a bare
+    `libraryUuid` — is now included in the resolver pre-pass's revocation check, Qwen-only
+    since Coqui has no such exemption
+    ([#1891](https://github.com/dudarenok-maker/Castwright/issues/1891)).
+  - **GATE 1 whole-branch review — cloned-voice correctness findings, now closed.** The wave's
+    first whole-branch review pass surfaced and closed a cluster of correctness gaps in the
+    cloned/designed-voice paths on both engines. Most serious: **persona redesign could silently
+    overwrite a cloned voice's identity** — `/redesign` and its `/promote` had no provenance gate,
+    so editing a cloned card's persona overwrote its `.pt` in place with a stranger's synthesised
+    voice while every cast slot still read `provenance: 'cloned'` — no error, no badge change, the
+    chapter then rendering that stranger's voice under the cloned speaker's name. Both routes now
+    403 outright on a cloned entry (fail-closed by owner ruling; a re-consent flow is left as a
+    future decision). Alongside it: case-folding for the clone-key comparisons that decide whether
+    a request lands on a real clone or falls through to a substituted catalogue voice is now
+    applied at the last sites that had missed it — the substitution guard, and the one route that
+    actually plays audio (the sample-consent check, previously bypassable with `XTTS-<uuid>`) — plus
+    the equivalent gate inside the sidecar's own latents lookup. Crash-orphaned temp artifacts (a
+    staging file the sidecar's atomic-save leaves behind when the process is hard-killed mid-write
+    — a scenario this project has already hit) are now swept on clone purge, closing a gap where
+    revoke reported clean erasure while conditioning latents or the person's raw reference clip
+    survived on disk. A designed voice's Coqui slot that outlives its library entry (deleted
+    between assign and confirm, or an unparseable manifest) now fails soft back to the catalogue
+    instead of hard-failing the chapter, and reuse hydration no longer overrides a character's own
+    designed Coqui slot with a source book's Qwen voice when the character carries no `qwen`
+    override at all. The **My-voices card's Preview button now plays on whichever engine's
+    artifact is actually ready** rather than always requesting Qwen — previously a Coqui-ready/
+    Qwen-stale entry 409'd on every preview despite being genuinely playable — closing the
+    remaining gap [#1887](https://github.com/dudarenok-maker/Castwright/issues/1887) left after
+    Task 27 made the route itself engine-aware. The sidecar's own `voice_language_unsupported` 409
+    (the voice IS cloned and loaded, but the XTTS model doesn't list the requested language) is
+    now mapped through both Node sample routes instead of falling through to a generic 502 whose
+    remedy copy ("design it first") cannot work for this case. Six smaller hardening fixes landed
+    in `CoquiEngine`'s cloned-voice path (a safe tensor-only latents load, an unload race, an
+    evict-epoch miscount, an atomic manifest write, and rejecting a clone stored under the wrong id
+    prefix), plus one error-message consistency fix — the unavailable-engine remedy now names Qwen
+    before Coqui regardless of report order. (refs #624)
+  - **Assign now reports what it actually wrote; a voice can be taken back off a character; DELETE
+    stops overclaiming erasure.** `POST /:voiceUuid/assign` used to answer a bare `{ updated: 1 }`,
+    so the profile drawer mirrored a Coqui assignment into redux on every 200 even when the entry
+    had no retained reference clip to derive from — a designed voice with no retained clip
+    displayed as a Coqui "My voice" assignment `cast.json` never actually carried. The route now
+    reports `written: CloneEngine[]` (derived from the same `shouldWriteCoquiSlot` flag the write
+    itself uses, so the two cannot disagree), and the drawer reconciles its optimistic write
+    against it, surfacing an inline notice when the routed engine's slot was declined. A new
+    `DELETE /:voiceUuid/assign?bookId=&characterId=` route gives the profile drawer a **"Remove
+    voice" control** — the first way to take a library voice back OFF a character: `PUT
+    /api/voices/:voiceId/override` refuses to clear a cloned slot outright and preserves cloned
+    provenance on a set, so picking a stock voice over a clone previously still rendered the clone.
+    Unassign never refuses — it destroys no artifact, only the character's `overrideTtsVoices`
+    slot(s), and works even against a revoked or already-deleted entry. Separately, `DELETE
+    /:voiceUuid` (the library entry itself) no longer answers an unconditional `{ deleted: true }`:
+    when `purgeCloneArtifacts` fails to erase every artifact, the manifest entry is now
+    deliberately **retained** (`{ deleted: false, artifactPurgeIncomplete,
+    artifactPurgeFailedPaths }`) rather than removed — deleting the manifest on a partial purge
+    would have left a surviving artifact *less* gated than before the delete, since the consent
+    checks key off that entry existing. A sibling fix keeps the manifest's `master` clip pointer
+    intact when a revoke's clip unlink fails (Windows `EBUSY` can leave the file present with
+    nothing naming it), so a retried revoke genuinely re-attempts the unlink instead of reporting a
+    clean erasure that didn't happen. (refs #624)
+  - **XTTS is now evicted at the end of a chapter's Coqui phase, not just kept off Qwen's.**
+    fs-60's mixed-engine dispatch evicted Qwen FOR the Coqui phase but never freed Coqui back — so
+    XTTS (~3.5 GB) stayed resident for the rest of the render, including a following chapter with
+    no further Coqui work at all, which on a Qwen-default book is the common case. This is a
+    **second, complementary** mechanism to the sidecar-side idle reclaim
+    ([#1894](https://github.com/dudarenok-maker/Castwright/issues/1894), `CoquiEngine.maybe_free_idle`)
+    already shipped on `main`: that one is admission-time and demand-driven (global — it frees an
+    idle XTTS the moment *any* starved GPU operation needs the room); this one is **Node-side and
+    reactive**, firing at the one point in `synthesiseChapter` where "no further Coqui work is
+    queued this chapter" is a known fact rather than a guess — mirroring the existing Qwen-side
+    evict under the identical mixed-engine gate. Fail-soft: every group is already synthesised by
+    the time it runs, so a sidecar recycle window must not destroy completed work. Consolidating
+    the two mechanisms into one is a deliberate, deferred owner decision, filed as
+    [#1932](https://github.com/dudarenok-maker/Castwright/issues/1932) (`side-18`, `type:chore`).
+  - **fs-38 issue #1813 — a `preparing-voice` phase for the resolver pre-pass.** The Wave 3b2/
+    3c resolver pre-pass can spend several seconds transparently re-deriving a Repairable
+    cloned voice or self-healing a designed one, before the first synth call — previously a
+    dead pause with no UI signal (`docs/testing/fs38-wave3-onbox-acceptance.md`'s KL-f). Both
+    request interfaces (`ClonedVoiceRequest`/`DesignedVoiceRequest`) gain `characterId`; a new
+    `onVoicePrepare` callback fires at each pre-derive call site in both the cloned (fail-loud)
+    and designed (fail-soft) arms independently, threaded through `SynthesiseChapterOpts` to a
+    new `generation.ts` `emitPreparingVoice` tick (mirroring `emitVerifying`/`emitRecovering`)
+    and a new `chapter_preparing_voice` `GenerationTick` type. The Generation view gains a
+    "Preparing voice — `{character}`…" caption and pill beside `recovering`'s, with matching
+    `ChapterProgressBar` busy-styling. A `withVoicePrepareHeartbeat` wrapper re-fires the last
+    payload on the existing heartbeat interval so a long derive doesn't look stalled. Design:
+    `docs/superpowers/specs/2026-07-26-resolver-prepass-progress-phase-design.md`. Closes
+    [#1813](https://github.com/dudarenok-maker/Castwright/issues/1813).
+  - **Smaller fixes.** A voice-library `promote` handler (both the library route and the
+    character `design-voice` route) now `stat`s the preview artifact before deleting the live
+    one, closing a data-loss window where a double-promote deleted the live `.pt` before
+    discovering the preview it was meant to replace it with was already gone
+    ([#1804](https://github.com/dudarenok-maker/Castwright/issues/1804)). The golden-audio
+    gate's PowerShell runner no longer crashes on the Qwen probe's benign stderr line (a
+    `torchaudio`→`sox`-absent warning tripped under `$ErrorActionPreference = 'Stop'`), so
+    `test:golden-audio:sidecar` now actually reaches pytest instead of erroring out before it
+    starts ([#1892](https://github.com/dudarenok-maker/Castwright/issues/1892)) — the same guard
+    was missing on the script's sibling Coqui-presence probe (`import TTS`) and is now applied
+    there too, closing the second instance of the same bug class in the same script.
+    `spawn-sidecar.ts`'s `QWEN_VOICES_DIR`/`XTTS_VOICES_DIR` env vars now route through the
+    same `paths.ts` helpers the rest of the codebase uses instead of a parallel literal `join`,
+    closing a latent drift risk this wave's own review flagged
+    ([#1890](https://github.com/dudarenok-maker/Castwright/issues/1890)). The voice-library
+    panel's "My voices" assign action now surfaces a rejected `assignVoice` dispatch inline
+    instead of swallowing it silently
+    ([#1896](https://github.com/dudarenok-maker/Castwright/issues/1896)). A Wave 3a
+    deferred-minor sweep closed nine smaller items — per-field consent-structure test
+    coverage, a direct test for the sample route's `!entry.consent` 403 branch, a `cloneSample`
+    thunk unit test, three OpenAPI status-code omissions, a `mockRevokeVoiceLibraryEntry`
+    `.find()!` guard, static imports replacing a dynamic one in a test, a redundant re-spread,
+    and an `aria-describedby` association from the clone-capture panel's attest checkbox to its
+    sentence text ([#1808](https://github.com/dudarenok-maker/Castwright/issues/1808)). And the
+    `VoiceProvenanceBadge` docstring now names its real consuming surface — the My-voices card's
+    `ProvenanceMarker`, added by this wave — rather than the stale claim that it has none
+    ([#1803](https://github.com/dudarenok-maker/Castwright/issues/1803)).
 
 - **fs-60 follow-up — profile-drawer engine-seed clamp + one shared fallback-engine derivation**
   (#1534). Two review Minors from the fs-60 whole-branch pass, both now closed. **(1)** The profile
@@ -389,6 +570,35 @@ history at cut time.
   published array was short one leading row, `resolveSegmentForSec`'s index no longer matched the
   on-disk index the splice route addresses, so Listen-view "Fix this line" targeted the line before
   the marked one.
+
+- **The audio-QA repair endpoint finally has a frontend consumer** (plan 179). `POST
+  …/chapters/{id}/audio-qa-repair` shipped with its "Scan & repair" affordance listed as a
+  follow-up, and never got one — a grep for the path or any `qaRepair`-shaped symbol across
+  `src/` and `e2e/` hit only the generated types. That also meant the `voice_language_mismatch`
+  advisory the route emits went nowhere at all. Adds `api.streamQaRepair` (real + mock),
+  `qa-repair-slice`, and `qa-repair-runner-middleware` — deliberately mirroring
+  `splice-runner-middleware` rather than inventing a third SSE-consumption idiom, since the
+  repair runs through the fs-26 splice engine server-side anyway — plus a repair button on the
+  Listen view's chapter row, gated on the srv-27 `suspect` verdict so it can't invite a
+  pointless GPU pass on healthy audio. The middleware toasts the stream's `warning` frame the
+  way `generation-stream-runner` toasts its own, refreshes the row's duration + cache-bust
+  stamp on completion, and reports failures. It does NOT enqueue an A/B revision: a repair
+  spans whichever characters owned the flagged sentences and `revisions` is keyed by a single
+  characterId. Coverage: `qa-repair-runner-middleware.test.ts` (warning-emitted vs. not),
+  `listen-player-region.test.tsx` (affordance gating + store-driven start), and
+  `e2e/qa-repair.spec.ts` walking row → middleware → mock stream → rendered toast. No OpenAPI
+  change was needed — the QA-repair response schema already carried every field consumed.
+
+- **The splice stream's `warning` frame no longer falls on the floor.** `chapter-splice.ts`
+  has always emitted a `warning` frame when `clearMismatchedDesignedVoices` drops a reused
+  designed voice whose baked manifest language differs from the book's — but `warning` was in
+  neither the splice endpoint's OpenAPI `type` enum nor the hand-written `SpliceTick` union, so
+  `splice-runner-middleware`'s `onTick` parsed the advisory and silently discarded it. Adds the
+  member to both (plus the `code`/`message` fields it carries, mirroring the QA-repair stream's)
+  and toasts it the way `generation-stream-runner` toasts its own, deduped by `code` so a
+  multi-chapter batch raises one advisory rather than one per chapter. Pre-existing drift,
+  unrelated to voice cloning — fixed here because it is the same defect class this wave already
+  closed twice.
 
 - **Series-memory's hardcoded-dark surfaces no longer borrow the theme's accent** (#1832). The
   three `src/components/series-memory/` surfaces pin a `#1b1714` background that never follows the
@@ -618,3 +828,92 @@ history at cut time.
   'dynamic'`, whose absence is meaningful (single-pass output, a failed second-pass JSON parse, or
   a `scripts/relufs-existing.mjs` rewrite) rather than a bug. Plan:
   [`docs/features/272-golden-assembly-comparison.md`](https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/272-golden-assembly-comparison.md).
+- **fs-38 Wave 3c GATE 2 fix lane — an independent review's Critical/Important
+  findings, closed** (refs #624). Landed after the follow-up campaign entry
+  above.
+  - **A wholesale cast write can no longer damage a cloned voice.**
+    `PUT /api/books/:bookId {slice:'cast'}` used to accept a cast payload
+    that simply omitted a character's cloned engine slot, silently dropping
+    it — and it accepted a payload that swapped the clone for a different
+    value outright. `preserveClonedSlotsOnCastWrite` now restores the
+    stored slot when it's merely missing from the incoming write (204), and
+    refuses the whole write (409) when the incoming value actually differs
+    from what's on disk — a client that wants to *replace* a cloned slot
+    has to go through the dedicated unassign/reassign routes instead.
+  - **A voice reachable under a differently-cased key can no longer survive
+    revoke while it reports complete success.** `POST /:voiceUuid/sample`
+    (the profile-drawer audition route) resolved a voice-library entry
+    case-insensitively but the audition cache and the sidecar's own latents
+    lookup keyed off the raw, case-sensitive string — so `xtts-<uuid>` and
+    `XTTS-<UUID>` could each accumulate their own cached audition/latents
+    for what a purge treats as a single artifact, leaving one playable
+    after a revoke that reported everything gone. The route now refuses a
+    non-canonical spelling of a voice's own key (400) instead of resolving
+    and rendering it.
+  - **A bulk "Design full cast" no longer retargets a cloned character off
+    its clone**, and designing a single already-cloned character is refused
+    with a reason instead of a hollow success. Both `applyOverrideToCastFiles`
+    callers pinned `ttsEngine` to Qwen unconditionally, so a character
+    already carrying a Coqui-cloned voice caught in a design sweep kept its
+    clone marker on disk but silently rendered off it. The bulk sweep now
+    skips a cloned character and names it in the run's terminal summary
+    ("already cloned: Anna, Viktor"); a single "first design" on an
+    already-cloned character refuses outright (409) before any GPU work
+    runs, rather than reporting a design that was never safe to persist.
+  - **A consent refusal on a cast save now reads as a refusal, not a server
+    error** — the wholesale-cast-write consent guards above now answer
+    `409` instead of falling through to a generic `500`, so a client (or a
+    person watching the network tab) can tell "this was refused" from
+    "this broke".
+  - **Assigning a voice from the library panel now tells you when only
+    part of the assign landed.** The panel's "My voices" assign action
+    only ever showed an error on an outright rejection; a 200 that wrote
+    fewer engine slots than the character actually needs (e.g. a designed
+    entry with no retained clip, assigned to a Coqui-routed character) closed
+    the popover with no notice at all and no reflection in the cast state.
+    It now reconciles against the slots the server actually wrote and shows
+    the same partial-success notice the profile drawer already had.
+  - **Preview now plays the voice the book will actually render.** Setting
+    a character's voice override used to keep a stale `libraryUuid`/
+    `provenance` pair on the client even when the server had already
+    dropped it (because the *previous* slot wasn't actually a clone) — so
+    the profile drawer could preview a "cloned" voice the server no longer
+    considers cloned. The client now mirrors the server's own rule exactly:
+    those markers only carry forward when the slot being replaced was
+    itself cloned.
+  - **A background QA repair (and a splice) can no longer stamp the wrong
+    book's chapter.** Both runner middlewares dispatched their
+    chapter-updated action keyed only by chapter id — which repeats across
+    every book — with no check that the user was still looking at the book
+    the repair/splice belonged to. A repair or splice finishing after a
+    book switch could mark a different book's same-numbered chapter as
+    freshly rendered. Both now guard on the currently-open book before
+    dispatching.
+  - **A failed background QA repair no longer strands the spinner running
+    forever.** An unexpected error during the repair stream (a network
+    drop, a bad frame) used to reject past the cleanup step entirely,
+    leaving `Repairing…` showing with no way back short of a reload. The
+    stream call is now wrapped so any failure still runs the same cleanup
+    and summary toast a normal finish does.
+  - **The QA-repair control now meets the 44 px touch target on tablets.**
+    It collapsed to 32 px at `md:` widths — squarely the tablet range —
+    same class of gap the mobile-testing protocol exists to catch.
+  - **Operator-visible: a voice-clone derive that collided with an idle
+    eviction or an explicit Stop used to crash with an opaque 500.** The
+    sidecar's `clone_voice` never marked itself "in flight" the way
+    `synthesize()` does, so an idle-driven evict or a manual unload landing
+    mid-derive dropped the model out from under it and hit a bare assertion.
+    It now re-ensures the model is loaded across the same gap `synthesize()`
+    already guards, and the one residual window an explicit unload can still
+    win now raises a clear "model was unloaded — retry" error instead of an
+    assertion failure.
+
+  Two known-limitation items were opened rather than fixed here, both
+  fail-closed (nothing unsafe ships either way): consolidating the two
+  Coqui VRAM-eviction mechanisms this wave's earlier entry already
+  describes as deliberately separate
+  ([#1932](https://github.com/dudarenok-maker/Castwright/issues/1932)), and
+  the assign readiness gate checking only Qwen's slot status even when a
+  cloned entry would actually route to Coqui — an over-block, not an
+  under-block
+  ([#1933](https://github.com/dudarenok-maker/Castwright/issues/1933)).

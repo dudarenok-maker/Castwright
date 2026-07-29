@@ -761,6 +761,21 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(res.status).toBe(409);
   });
 
+  it('promote-voice 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'LIVE');
+    // No preview `.pt` staged — mirrors a double-promote (second click after
+    // the first already consumed the preview).
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(409);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true); // live artifact must survive
+    expect(readFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'utf8')).toBe('LIVE');
+  });
+
   it('promote-voice 400s on a previewVoiceId that is not this character’s preview', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)

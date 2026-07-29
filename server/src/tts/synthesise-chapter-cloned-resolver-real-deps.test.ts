@@ -201,4 +201,122 @@ describe('synthesise-chapter cloned-voice resolver pre-pass — REAL production 
     expect(provider.calls.length).toBeGreaterThan(0); // then the chapter synthesises normally
     expect(result.segments.length).toBeGreaterThan(0);
   });
+
+  /* #1813, placebo trap (design doc's own "Wiring" test) — a hand-built
+     ResolveChapterDeps could pass `onVoicePrepare` straight through and prove
+     nothing about production: the actual bug was `reportProgress: undefined`
+     baked into `buildDefaultCloneResolverDeps` itself. This drives the SAME
+     repairable-derive scenario as the case above through `synthesiseChapter`
+     with `onVoicePrepare` on `opts` and NO `cloneResolverDepsOverride` touching
+     it, so the only way this can pass is if `synthesiseChapter` really threads
+     `opts.onVoicePrepare` into the real `buildDefaultCloneResolverDeps`. */
+  it('opts.onVoicePrepare fires through the REAL buildDefaultCloneResolverDeps wiring for a repairable derive', async () => {
+    const pcm = sine(1.0, 24000);
+    const wav = encodePcmToWav(pcm, 24000);
+    const dirForEntry = voiceLibrary.entryDir(UUID);
+    mkdirSync(dirForEntry, { recursive: true });
+    writeFileSync(join(dirForEntry, 'master.wav'), wav);
+    await voiceLibrary.writeEntry(
+      baseEntry({
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24000,
+          durationSeconds: 1,
+          transcript: 'A retained reference clip.',
+          transcriptSource: 'whisper',
+          captureMethod: 'upload',
+        },
+      }),
+    );
+    // No .pt written — ptExists() resolves false -> repairable.
+
+    const provider = makeProvider();
+    const onVoicePrepare = vi.fn();
+    const deriveEngineArtifact = vi.fn(async (..._args: unknown[]) => ({
+      previewPcm: Buffer.alloc(10),
+      sampleRate: 24000,
+      baseModel: 'qwen3-tts-0.6b',
+    }));
+
+    await mod.synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast: clonedCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      onVoicePrepare,
+      // Only the sidecar-calling derive step is overridden — onVoicePrepare
+      // itself is NOT overridden via cloneResolverDepsOverride, so it can
+      // only reach the resolver through the real buildDefaultCloneResolverDeps.
+      cloneResolverDepsOverride: {
+        deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+      },
+    });
+
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'wren', characterName: 'Wren' });
+  });
+});
+
+/* fix wave (Task 18 review, CRITICAL-1) — `defaultPtExists` must resolve a
+   `xtts-<uuid>` storage key through `xttsVoiceLatentsPath` (voices/xtts/),
+   NOT `qwenVoicePtPath` (voices/qwen/): the two are different directories
+   (workspace/paths.js), and stat()-ing the wrong one always misses, which
+   the resolver reads as "missing" and drives a full GPU derive on EVERY
+   chapter of every book for an already-healthy coqui-cloned voice. This is
+   invisible through `synthesiseChapter` itself today — the sole production
+   call site still hardcodes `engine: 'qwen'` for every cloned-voice request
+   (Task 20 lifts that literal) — so `defaultPtExists` is exported and driven
+   directly here, against REAL files written at the REAL path-helper
+   locations (never a hand-typed path string), per the review's explicit
+   ask. */
+describe('defaultPtExists resolves the RIGHT per-engine directory (fs-38 Wave 3c, Task 18 fix wave CRITICAL-1)', () => {
+  it('a coqui storage key (xtts-<uuid>) resolves true when the .pt exists under xttsVoicesDir()', async () => {
+    mkdirSync(paths.xttsVoicesDir(), { recursive: true });
+    const storageKey = `xtts-${UUID}`;
+    writeFileSync(paths.xttsVoiceLatentsPath(storageKey), 'fake-latents-bytes');
+
+    expect(await mod.defaultPtExists(storageKey)).toBe(true);
+  });
+
+  it('a coqui storage key does NOT read true from a same-named file under qwenVoicesDir() — the exact CRITICAL-1 bug', async () => {
+    const storageKey = `xtts-${UUID}`;
+    // The WRONG directory has a same-named file — reproduces the bug
+    // reported by review: qwenVoicePtPath('xtts-<uuid>') exists but
+    // xttsVoiceLatentsPath('xtts-<uuid>') does not.
+    writeFileSync(paths.qwenVoicePtPath(storageKey), 'fake-bytes-in-the-wrong-dir');
+
+    expect(await mod.defaultPtExists(storageKey)).toBe(false);
+  });
+
+  it('a qwen storage key (qwen-<uuid>) still resolves through qwenVoicePtPath, unchanged', async () => {
+    const storageKey = `qwen-${UUID}`;
+    writeFileSync(paths.qwenVoicePtPath(storageKey), 'fake-pt-bytes');
+
+    expect(await mod.defaultPtExists(storageKey)).toBe(true);
+  });
+
+  it('a qwen storage key with no .pt anywhere resolves false', async () => {
+    expect(await mod.defaultPtExists(`qwen-${UUID}`)).toBe(false);
+  });
+});
+
+/* fs-38 Wave 3c, Task 19 — buildDefaultCloneResolverDeps's currentArtifactVersion
+   wiring, driven directly (see the export's doc comment: no production or
+   test call site routes a cloned voice through 'coqui' via synthesiseChapter
+   itself yet, so this is the ONLY way to exercise the coqui arm today). */
+describe('buildDefaultCloneResolverDeps — currentArtifactVersion per-engine oracle (fs-38 Wave 3c Task 19)', () => {
+  it("qwen still reads currentQwenBaseModel() — unaffected by adding the coqui arm", async () => {
+    const modelPaths = await import('./model-paths.js');
+    const deps = mod.buildDefaultCloneResolverDeps(undefined);
+    expect(deps.currentArtifactVersion('qwen')).toBe(modelPaths.currentQwenBaseModel());
+  });
+
+  it("coqui reads getLastKnownCoquiVersion() — '' before the sidecar has ever answered, and the seeded value once it has", async () => {
+    const coquiVersionState = await import('./coqui-version-state.js');
+    const deps = mod.buildDefaultCloneResolverDeps(undefined);
+    expect(deps.currentArtifactVersion('coqui')).toBe(''); // boot window
+    coquiVersionState.setLastKnownCoquiVersion('0.27.5');
+    expect(deps.currentArtifactVersion('coqui')).toBe('0.27.5');
+  });
 });

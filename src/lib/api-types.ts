@@ -1546,7 +1546,21 @@ export interface paths {
         put?: never;
         /** Assign a library voice to a character */
         post: operations["assignVoiceLibraryEntry"];
-        delete?: never;
+        /**
+         * Remove a library voice's assignment from one character
+         * @description The inverse of the assign above: drops every `overrideTtsVoices` slot on
+         *     that ONE character in that ONE book whose `libraryUuid` is this voice,
+         *     returning the character to "no voice assigned" (the engine's ordinary
+         *     catalogue/attribute inference takes over).
+         *
+         *     Never refuses — unassigning destroys no artifact, so it works even for a
+         *     revoked or already-deleted library entry, which is precisely when a
+         *     character is most likely to be stuck holding a dangling assignment. It is
+         *     also the only way off a cloned slot: `PUT /api/voices/{voiceId}/override`
+         *     preserves cloned provenance by design, so a stock-voice pick over a clone
+         *     still renders the clone.
+         */
+        delete: operations["unassignVoiceLibraryEntry"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2132,7 +2146,24 @@ export interface paths {
          *     permissive rather than duplicating those large shapes.
          */
         get: operations["getBookState"];
-        put?: never;
+        /**
+         * Persist one slice of a book's on-disk state
+         * @description The generic wholesale write the persistence middleware funnels every
+         *     slice through: `cast` (cast.json), `manuscript` (manuscript-edits.json),
+         *     `revisions`, `changeLog`, and `state` (state.json's editorial fields).
+         *     `patch` is the whole slice, not a delta — the named file is replaced.
+         *
+         *     The `cast` slice is guarded on the way in (fs-38 Wave 3c / #1899): a
+         *     character's stored **cloned** voice slot cannot be planted, restamped,
+         *     replaced, or dropped through this route, because a cloned voice is a
+         *     real person's consented likeness and this funnel carries no consent
+         *     context. A slot the incoming map simply omits is restored from disk and
+         *     the write still succeeds; an incoming slot that carries a *different*
+         *     value for a stored cloned slot is refused with `409` and nothing is
+         *     persisted. Removing a cloned assignment has its own dedicated route
+         *     (`DELETE /api/voice-library/{voiceUuid}/assign`).
+         */
+        put: operations["putBookState"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3457,6 +3488,16 @@ export interface components {
              *     on a 10 s heartbeat so the client's 30 s stall detector stays fed, and
              *     surfaces a "Recovering …" phase so the row reads as healthy recovery
              *     rather than a silent stall.
+             *     `chapter_preparing_voice` (#1813) is emitted while the cloned/designed
+             *     voice resolver pre-pass re-derives a Repairable cloned voice, or
+             *     self-heals a missing/stale designed voice, before any synth call for
+             *     the chapter fires — another real, multi-second sidecar round trip
+             *     that previously showed no UI signal at all (known-limitation KL-f).
+             *     `characterId` names the character whose voice is being prepared
+             *     (reusing the field above, never null on this tick type). Holds
+             *     `progress`/`currentLine` at their last real value rather than
+             *     resetting them, and re-fires on the same 10 s heartbeat as
+             *     `chapter_recovering` for the identical stall-detector reason.
              *     `resume_from` is emitted as the FIRST event on every new subscriber
              *     (cold connect AND reconnect after `tsx watch` restart or server
              *     bounce) and carries a snapshot of completed chapter ids for the
@@ -3482,7 +3523,7 @@ export interface components {
              *     needed — same as every other tick type here).
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm" | "scoring_started" | "scoring_progress" | "scoring_complete";
+            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_preparing_voice" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm" | "scoring_started" | "scoring_progress" | "scoring_complete";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
@@ -6680,8 +6721,20 @@ export interface operations {
                     "application/json": components["schemas"]["VoiceSample"];
                 };
             };
-            /** @description Invalid model key */
+            /**
+             * @description Invalid model key, or (`code: noncanonical_clone_key`) a cloned-voice
+             *     key whose uuid tail is not that voice's own canonical spelling —
+             *     refused rather than rendered, because it would cache under a scope
+             *     revoke can never erase.
+             */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This cloned voice has no valid consent and cannot be played */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7174,7 +7227,7 @@ export interface operations {
                 content: {
                     "text/event-stream": {
                         /** @enum {string} */
-                        type?: "splice_start" | "chapter_assembling" | "splice_complete" | "chapter_failed";
+                        type?: "splice_start" | "progress" | "chapter_assembling" | "warning" | "splice_complete" | "chapter_failed";
                         chapterId?: number;
                         characterId?: string;
                         /** @enum {string} */
@@ -7184,6 +7237,22 @@ export interface operations {
                         hasPreviousAudio?: boolean;
                         progress?: number;
                         errorReason?: string;
+                        /**
+                         * @description Only on `warning` — a stable machine-readable warning code
+                         *     (today only `voice_language_mismatch`), matching the
+                         *     GenerationTick field of the same name so a caller can
+                         *     dedupe and route warnings without parsing `message`.
+                         */
+                        code?: string;
+                        /**
+                         * @description Only on `warning` — the human-readable advisory text. A
+                         *     `warning` is non-fatal: the splice still proceeds. Emitted
+                         *     when a non-English book's reused DESIGNED voices were
+                         *     cleared because their baked manifest language differs from
+                         *     the book's, mirroring the same advisory the generation and
+                         *     QA-repair streams already send for that clear.
+                         */
+                        message?: string;
                     };
                 };
             };
@@ -7226,7 +7295,7 @@ export interface operations {
                 content: {
                     "text/event-stream": {
                         /** @enum {string} */
-                        type?: "qa_scan" | "splice_start" | "progress" | "chapter_assembling" | "qa_repair_complete" | "chapter_failed";
+                        type?: "qa_scan" | "splice_start" | "progress" | "chapter_assembling" | "warning" | "qa_repair_complete" | "chapter_failed";
                         chapterId?: number;
                         dryRun?: boolean;
                         flaggedCount?: number;
@@ -7246,6 +7315,22 @@ export interface operations {
                         hasPreviousAudio?: boolean;
                         progress?: number;
                         errorReason?: string;
+                        /**
+                         * @description Only on `warning` — a stable machine-readable warning code
+                         *     (today only `voice_language_mismatch`), matching the
+                         *     GenerationTick field of the same name so a caller can
+                         *     dedupe and route warnings without parsing `message`.
+                         */
+                        code?: string;
+                        /**
+                         * @description Only on `warning` — the human-readable advisory text. A
+                         *     `warning` is non-fatal: the repair still proceeds. Emitted
+                         *     when a non-English book's reused DESIGNED voices were
+                         *     cleared because their baked manifest language differs from
+                         *     the book's, mirroring the same advisory the generation and
+                         *     splice streams already send for that clear.
+                         */
+                        message?: string;
                     };
                 };
             };
@@ -7563,15 +7648,29 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Entry deleted */
+            /**
+             * @description Two outcomes, discriminated by `deleted` (fs-38 Wave 3c).
+             *
+             *     `deleted: true` — the artifact purge was clean and the manifest
+             *     entry is gone.
+             *
+             *     `deleted: false` + `artifactPurgeIncomplete: true` — at least one
+             *     derived artifact could NOT be erased, so the manifest entry is
+             *     deliberately RETAINED: the consent gates key off that entry, and
+             *     dropping it would leave the surviving artifact LESS gated than it
+             *     was before the delete. The client should keep showing the entry
+             *     and let the user retry. `deleted: false` is literal, not an error
+             *     code — the request itself succeeded.
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        /** @enum {boolean} */
-                        deleted: true;
+                        deleted: boolean;
+                        artifactPurgeIncomplete?: boolean;
+                        artifactPurgeFailedPaths?: string[];
                     };
                 };
             };
@@ -7867,7 +7966,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Character's overrideTtsVoices slot updated */
+            /** @description Character's overrideTtsVoices slot(s) updated */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7875,6 +7974,17 @@ export interface operations {
                 content: {
                     "application/json": {
                         updated: number;
+                        /**
+                         * @description The engine slots this assign actually PERSISTED (fs-38 Wave 3c).
+                         *     `qwen` is always written; `coqui` only when the entry is
+                         *     clone-capable there too (a cloned entry always is; a designed
+                         *     entry only while it still has its retained reference clip on
+                         *     disk; an imported entry never). Clients that mirror the assign
+                         *     into local state MUST reconcile against this rather than
+                         *     assuming the engine they asked for was written — otherwise the
+                         *     UI shows an assignment the server declined to make.
+                         */
+                        written: ("qwen" | "coqui")[];
                     };
                 };
             };
@@ -7886,9 +7996,10 @@ export interface operations {
                 content?: never;
             };
             /**
-             * @description The library entry is a cloned voice, but the character would route to a
-             *     non-Qwen engine (cloned voices only render on Qwen) — or the entry's
-             *     consent has been revoked, or the entry hasn't finished deriving yet.
+             * @description The entry's consent has been revoked, or the entry hasn't finished
+             *     deriving on Qwen yet, or (cloned entries only) the character would
+             *     route to an engine that isn't clone-capable — cloned voices render
+             *     on Qwen or Coqui XTTS v2, never on a third engine.
              */
             409: {
                 headers: {
@@ -7899,6 +8010,50 @@ export interface operations {
                         error: string;
                     };
                 };
+            };
+        };
+    };
+    unassignVoiceLibraryEntry: {
+        parameters: {
+            query: {
+                bookId: string;
+                characterId: string;
+            };
+            header?: never;
+            path: {
+                voiceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description Slots cleared. `cleared: []` means the character was not carrying this
+             *     voice — the requested end state already held, which is not an error.
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        cleared: ("qwen" | "coqui")[];
+                    };
+                };
+            };
+            /** @description bookId or characterId missing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No book or character matching the request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -7917,7 +8072,11 @@ export interface operations {
                     /** @description Optional preview text. Omitted defaults to a built-in sample line for the entry's persona/name. */
                     text?: string;
                     /**
-                     * @description The Qwen tier to preview at (#1842). Must route to the qwen engine or the request 400s. Omitted defaults to qwen3-tts-0.6b.
+                     * @description The tier/engine to preview at (#1842, widened fs-38 Wave 3c Task 27
+                     *     to select the ENGINE too, not just the Qwen tier). Must route to a
+                     *     clone-capable engine (qwen or coqui) or the request 400s — a
+                     *     library entry's artifacts only ever exist under a `qwen` and/or
+                     *     `xtts` slot. Omitted defaults to qwen3-tts-0.6b.
                      * @enum {string}
                      */
                     modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
@@ -7925,7 +8084,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sample is ready (either cached or freshly synthesised) */
+            /** @description Sample is ready */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7933,10 +8092,12 @@ export interface operations {
                 content: {
                     "application/json": {
                         url: string;
+                        /** @description Whether this response served a previously-synthesised sample rather than synthesising a fresh one. */
+                        cached?: boolean;
                     };
                 };
             };
-            /** @description modelKey is present but does not route to the qwen engine */
+            /** @description modelKey is present but does not route to a clone-capable engine (qwen or coqui) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7948,12 +8109,36 @@ export interface operations {
                     };
                 };
             };
+            /** @description This cloned voice's consent has been revoked — it cannot be played */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description No library entry with that voiceUuid */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /**
+             * @description Either the requested engine's artifact has not been prepared
+             *     (derived/designed) for this voice yet, or (Coqui only) the voice is
+             *     prepared but the loaded XTTS model can't speak the requested
+             *     language — re-preparing it will not help in that case.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code?: string;
+                        message?: string;
+                    };
+                };
             };
         };
     };
@@ -8611,6 +8796,61 @@ export interface operations {
             };
         };
     };
+    putBookState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    slice: "cast" | "manuscript" | "revisions" | "state" | "changeLog";
+                    /** @description The whole slice payload; shape depends on `slice`. */
+                    patch: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Slice written */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/unknown `slice` or `patch`, or a malformed manuscript patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Refused (nothing was written). Either the write would have replaced
+             *     a character's consented cloned voice, or it would have overwritten an
+             *     analysed manuscript with an empty sentence list, or the new
+             *     Author/Series/Title path is already taken.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     markNotLinkedTo: {
         parameters: {
             query?: never;
@@ -9109,6 +9349,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Upload exceeds the 25 MB sample size limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     cloneVoice: {
@@ -9192,9 +9439,13 @@ export interface operations {
              * @description Revoked — `revokedAt` is always set and rendering is always blocked
              *     regardless of artifact-erasure outcome. `artifactPurgeIncomplete` /
              *     `artifactPurgeFailedPaths` (review I-2) are present only when some
-             *     on-disk clone artifact could not be removed (e.g. a file held open
-             *     by the sidecar) — a partial erasure that must not read as a silent
-             *     total success.
+             *     erasure step failed — a partial erasure that must not read as a
+             *     silent total success. `artifactPurgeFailedPaths` entries are NOT
+             *     all on-disk file paths (fs-38 Wave 3c, Task 14a): a failed
+             *     sidecar in-process cache-evict is recorded as a synthetic
+             *     `sidecar:<qwen|xtts>:<voiceId>` marker alongside any real file
+             *     path that could not be removed (e.g. a file held open by the
+             *     sidecar).
              */
             200: {
                 headers: {
@@ -9209,6 +9460,20 @@ export interface operations {
             };
             /** @description No such entry / disabled */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Entry has no consent record to revoke */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revoke failed (write or artifact-purge error) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

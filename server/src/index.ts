@@ -57,6 +57,7 @@ import {
   getResolvedAutoStartSidecar,
   getResolvedTtsModelKey,
   setLastKnownQwenInstallState,
+  setLastKnownCoquiInstallState,
 } from './workspace/user-settings.js';
 import {
   createSidecarSupervisor,
@@ -65,6 +66,7 @@ import {
 } from './tts/sidecar-supervisor.js';
 import { enforceSingleSidecarOwner, releaseSidecarOwnership } from './tts/sidecar-owner.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
+import { detectCoquiInstallStateOnDisk } from './tts/coqui-install-detect.js';
 import {
   shouldSpawnMdnsResponder,
   spawnMdnsResponder,
@@ -272,6 +274,12 @@ async function main(): Promise<void> {
        the conditional default falls back to Kokoro. The /health poll refreshes
        this continuously once the sidecar is up. */
     setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
+    /* fs-38 Wave 3c Task 19 — same seed for Coqui, into the same per-engine
+       store (does not feed getResolvedTtsModelKey — Coqui is never the
+       auto-selected default — it feeds the cloned-voice resolver's per-engine
+       "is this engine unavailable this run" signal, Task 20). Also refreshed
+       on every reachable /health poll (routes/sidecar-health.ts). */
+    setLastKnownCoquiInstallState(detectCoquiInstallStateOnDisk(bootRepoRoot));
     /* #1030 — refuse to boot if another LIVE server already owns the :9000
        sidecar, so two stacks can't fight over it (the recycle storm). Only when
        THIS server will actually manage the sidecar (autoStart on); a no-autostart

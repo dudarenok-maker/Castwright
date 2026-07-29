@@ -22,7 +22,7 @@ const CHAPTERS: Chapter[] = [
   { id: 2, title: 'Two', duration: '2:00', state: 'done', progress: 1, characters: { castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
-function makeStore() {
+function makeStore(currentBookId = 'bk1') {
   return configureStore({
     reducer: {
       splice: spliceSlice.reducer,
@@ -31,7 +31,7 @@ function makeStore() {
       notifications: notificationsSlice.reducer,
     },
     preloadedState: {
-      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
+      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
     },
     middleware: (getDefault) => getDefault().concat(spliceRunnerMiddleware()),
   });
@@ -109,5 +109,112 @@ describe('spliceRunnerMiddleware', () => {
     await flush();
     expect(streamSpliceSpy).toHaveBeenCalledTimes(2);
     expect(store.getState().splice.batches.b2).toMatchObject({ succeeded: 1, failed: 1, status: 'done' });
+  });
+
+  /* [#1889 follow-up] chapter-splice.ts has always sent a `warning` frame when
+     clearMismatchedDesignedVoices drops a reused designed voice, but the frame
+     was in neither the splice openapi enum nor SpliceTick, so onTick parsed it
+     and dropped it on the floor. These two cases pin the frame the ROUTE sends
+     reaching a real toast — not enum membership. */
+  const WARN_MESSAGE =
+    '1 designed voice(s) were cleared because they were designed for a different language ' +
+    'than this book — re-design Castor Allred before generating.';
+
+  it('surfaces a warning frame from the splice stream as a warn toast', async () => {
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      args.onTick({
+        type: 'warning',
+        code: 'voice_language_mismatch',
+        message: WARN_MESSAGE,
+      } as SpliceTick);
+      args.onTick({
+        type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId,
+        mode: args.mode, durationSec: 120, segmentCount: 1, hasPreviousAudio: true,
+      } as SpliceTick);
+    });
+    const store = makeStore();
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b3', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'rerecord',
+        modelKey: 'kokoro-v1', chapterIds: [1, 2],
+      }),
+    );
+    await flush();
+
+    const warned = store
+      .getState()
+      .notifications.toasts.filter((t) => t.dedupeKey === 'splice-warning:voice_language_mismatch');
+    /* Exactly one despite TWO chapters each emitting the frame — the dedupeKey
+       collapses the batch into a single advisory. */
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ kind: 'warn', message: WARN_MESSAGE });
+    /* The batch itself still succeeded — the advisory is non-fatal. */
+    expect(store.getState().splice.batches.b3).toMatchObject({ succeeded: 2, failed: 0 });
+  });
+
+  it('pushes no language-mismatch toast when the stream sends no warning frame', async () => {
+    /* Negative arm — without this, an unconditional pushToast would pass the
+       positive case above and still be wrong. */
+    const store = makeStore();
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b4', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix',
+        gainDb: 2, chapterIds: [1, 2],
+      }),
+    );
+    await flush();
+
+    expect(
+      store.getState().notifications.toasts.filter((t) => t.kind === 'warn'),
+    ).toHaveLength(0);
+  });
+
+  it('does not stamp audio update when splice completes for a different book than current', async () => {
+    /* Guard on currentBookId: a splice for book bk1 should not mark chapter
+       audio as updated if the user has since navigated to book bk2. Without
+       the guard, it would stamp bk2's chapter 1 with bk1's audio duration,
+       confusing the user. This test verifies the guard by starting a splice
+       for bk1, switching to bk2 before completion, and asserting bk2's
+       chapter 1 is NOT updated. */
+    const completionCallbackHolder: { fn: (() => void) | null } = { fn: null };
+    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
+      /* Defer the completion callback so we can switch books before it fires. */
+      completionCallbackHolder.fn = () => {
+        args.onTick({
+          type: 'splice_complete',
+          chapterId: args.chapterId,
+          characterId: args.characterId,
+          mode: args.mode,
+          durationSec: 333,
+          segmentCount: 1,
+          hasPreviousAudio: true,
+        } as SpliceTick);
+      };
+    });
+
+    const store = makeStore('bk1');
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b5', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix',
+        gainDb: 2, chapterIds: [1],
+      }),
+    );
+    /* Let the splice start (mock is called but completion deferred). */
+    await flush();
+
+    /* Now switch to a different book before completion fires. */
+    store.dispatch({ type: 'chapters/setCurrentBookId', payload: 'bk2' });
+
+    /* Now fire the completion callback — the middleware should NOT update
+       chapter 1 because currentBookId is now bk2, not bk1. Verify the mock
+       actually set the callback; if not, the test would pass vacuously. */
+    expect(completionCallbackHolder.fn).not.toBeNull();
+    completionCallbackHolder.fn?.();
+    await flush();
+
+    /* Verify: chapter 1 should NOT have been stamped with the new audio time. */
+    const chapter1 = store.getState().chapters.chapters.find((c) => c.id === 1)!;
+    expect(chapter1.audioRenderedAt).toBeUndefined();
+    expect(chapter1.duration).toBe('2:00'); /* Original duration, unchanged. */
   });
 });

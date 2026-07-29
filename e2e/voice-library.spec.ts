@@ -320,5 +320,95 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
     const clonedPlayBtn = clonedDrawer.getByRole('button', { name: /Play 12s sample/i });
     await expect(clonedPlayBtn).toBeEnabled({ timeout: 5_000 });
     await expect(clonedDrawer.getByTestId('profile-drawer-my-voices-error')).toHaveCount(0);
+
+    /* ── Step 7: Coqui XTTS v2 (fs-38 Wave 3c, Task 30, headline case added
+       Task 41) — appended at the very end so it can't shift the four
+       hardcoded voice-library-card counts earlier in this file (6/7/8/9 at
+       Steps 1/2/5/6 above).
+
+       `lib-cloned-demo` (src/mocks/voice-library.ts) is the one fixture Task
+       29 gave a READY `xtts` slot alongside its `qwen` one, specifically so
+       the card can show BOTH engines' readiness chips (below) and so an
+       assign routed to Coqui has something ready to succeed against.
+
+       Task 41 re-mirrored `_mockAssignGuardError` (src/lib/api.ts) against
+       the real assign route as Task 24 left it on this branch: Coqui joined
+       `CLONE_CAPABLE_ENGINES`, so a cloned voice with a ready `xtts` slot now
+       assigns cleanly on a Coqui-routed character — the headline "assigns on
+       Coqui and succeeds" case Task 30 could not write because the mock
+       still rejected it then. See the negative case below for what replaces
+       the old wrong-engine 409 assertion, and why. ── */
+
+    // The card shows readiness chips for BOTH engines.
+    await page.goto('/#/voices');
+    await waitForRouteReady(page);
+    const myVoicesTabCoqui = page.getByRole('button', { name: 'My voices', exact: true });
+    await expect(myVoicesTabCoqui).toBeVisible({ timeout: 10_000 });
+    await myVoicesTabCoqui.click();
+    const clonedDemoCard = page.getByTestId('voice-library-card-lib-cloned-demo');
+    await expect(clonedDemoCard).toBeVisible({ timeout: 10_000 });
+    await expect(
+      clonedDemoCard.getByTestId('voice-library-engine-qwen-lib-cloned-demo'),
+    ).toBeVisible();
+    await expect(
+      clonedDemoCard.getByTestId('voice-library-engine-coqui-lib-cloned-demo'),
+    ).toBeVisible();
+
+    /* Positive (headline case): assigning that cloned voice to a
+       Coqui-routed character now SUCCEEDS. Driven through the
+       profile-drawer's My-voices picker, same as the Step 3/4/6 assigns —
+       `useMyVoice` catches/surfaces `libraryActionError` on failure and
+       clears the sample gate on success, same observable stand-in used
+       throughout this spec (see the file-level doc comment). Halloran is
+       untouched by every earlier step here, so this can't interact with any
+       prior assignment. */
+    await page.goto('/#/books/ns/cast');
+    await waitForRouteReady(page);
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-halloran')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('cast-row-halloran').click();
+
+    const hallorranDrawer = page.locator('[data-tour-id="profile-drawer"]');
+    await expect(hallorranDrawer).toBeVisible({ timeout: 10_000 });
+    await hallorranDrawer.getByLabel('Voice engine for this character').selectOption('coqui');
+    const clonedDemoPickCoqui = hallorranDrawer.getByTestId('profile-drawer-my-voice-lib-cloned-demo');
+    await expect(clonedDemoPickCoqui).toBeVisible({ timeout: 5_000 });
+    await clonedDemoPickCoqui.click();
+
+    const hallorranPlayBtn = hallorranDrawer.getByRole('button', { name: /Play 12s sample/i });
+    await expect(hallorranPlayBtn).toBeEnabled({ timeout: 5_000 });
+    await expect(hallorranDrawer.getByTestId('profile-drawer-my-voices-error')).toHaveCount(0);
+
+    /* Negative: the existing negative case (a specific-error-string assign
+       rejection) still has to keep working here, but NOT as a wrong-engine
+       409 any more — the "Or use a voice from My voices" picker above only
+       ever renders when `effectiveEngine` is 'qwen' or 'coqui'
+       (profile-drawer.tsx, gated the same as `CLONE_CAPABLE_ENGINES`), so a
+       non-clone-capable engine (Kokoro/Gemini/Piper) never even shows the
+       picker — there is no UI path left to reach the wrong-engine guard
+       through this surface post-Task-26 (it's still covered directly at the
+       unit level: `_mockAssignGuardError`'s kokoro case in
+       src/lib/api.voice-library.test.ts). The consent-revoked guard fires
+       BEFORE the wrong-engine check regardless of engine (see the route's
+       guard order), so `lib-cloned-revoked` — cloned, ready `qwen` slot,
+       revoked consent — is a genuinely reachable 409 that still asserts a
+       specific error string. Narrator is untouched by every earlier step
+       here, so this can't interact with any prior assignment. */
+    await page.goto('/#/books/ns/cast');
+    await waitForRouteReady(page);
+    await expect(page.locator('[data-tour-id="cast-roster"]')).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByTestId('cast-row-narrator')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId('cast-row-narrator').click();
+
+    const narratorDrawer = page.locator('[data-tour-id="profile-drawer"]');
+    await expect(narratorDrawer).toBeVisible({ timeout: 10_000 });
+    await narratorDrawer.getByLabel('Voice engine for this character').selectOption('qwen');
+    const revokedPick = narratorDrawer.getByTestId('profile-drawer-my-voice-lib-cloned-revoked');
+    await expect(revokedPick).toBeVisible({ timeout: 5_000 });
+    await revokedPick.click();
+
+    const revokedAssignError = narratorDrawer.getByTestId('profile-drawer-my-voices-error');
+    await expect(revokedAssignError).toBeVisible({ timeout: 5_000 });
+    await expect(revokedAssignError).toContainText('Consent for this voice has been revoked.');
   });
 });

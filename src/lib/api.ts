@@ -59,8 +59,9 @@ import type {
   AnalyzerDeviceResponse,
   BookQaReport,
 } from './types';
-import type { components as ApiComponents } from './api-types';
+import type { components as ApiComponents, paths as ApiPaths } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
+import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { initialCharacters } from '../data/characters';
@@ -623,6 +624,11 @@ export type SpliceTick =
   | { type: 'splice_start'; chapterId: number; mode: 'remix' | 'rerecord'; characterId: string }
   | { type: 'progress'; chapterId: number; characterId?: string; progress: number }
   | { type: 'chapter_assembling'; chapterId: number; progress: number }
+  /* Non-fatal advisory the splice route emits when a non-English book's reused
+     DESIGNED voices were cleared (their baked manifest language ≠ the book's).
+     The splice still proceeds — but the user must be told, so the runner
+     middleware toasts it the same way generation-stream-runner does. */
+  | { type: 'warning'; code?: string; message: string }
   | {
       type: 'splice_complete';
       chapterId: number;
@@ -648,6 +654,40 @@ export interface SpliceArgs {
   modelKey?: TtsModelKey;
   onTick: (ev: SpliceTick) => void;
   /** Optional cancellation (e.g. user cancels a multi-chapter batch). */
+  signal?: AbortSignal;
+}
+
+/** Plan 179 — one SSE frame from the per-chapter audio-QA scan-and-repair
+    endpoint. Frame names mirror the openapi `type` enum for
+    `audioQaRepairChapter`; only the fields this frontend actually reads are
+    modelled (the stream also carries per-segment scan detail the Listen-view
+    consumer has no surface for). */
+export type QaRepairTick =
+  | { type: 'qa_scan'; chapterId: number; flaggedCount: number }
+  | { type: 'splice_start'; chapterId: number }
+  | { type: 'progress'; chapterId: number; progress: number }
+  | { type: 'chapter_assembling'; chapterId: number; progress: number }
+  /* Non-fatal advisory: a non-English book's reused DESIGNED voices were
+     cleared because their baked manifest language differs from the book's.
+     The repair still proceeds — but the re-recorded line will come back in a
+     different voice than the one that was cleared, so the user must be told.
+     Handled exactly like the generation and splice streams' `warning` arms. */
+  | { type: 'warning'; code?: string; message: string }
+  | {
+      type: 'qa_repair_complete';
+      chapterId: number;
+      dryRun: boolean;
+      repaired?: number[];
+      stillSuspect?: number[];
+      durationSec?: number;
+    }
+  | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
+
+export interface QaRepairArgs {
+  bookId: string;
+  chapterId: number;
+  onTick: (ev: QaRepairTick) => void;
+  /** Optional cancellation. */
   signal?: AbortSignal;
 }
 
@@ -1682,6 +1722,38 @@ async function mockStreamSplice({
     durationSec: 120,
     segmentCount: 1,
     hasPreviousAudio: true,
+  });
+}
+
+/* Plan 179 mock — emits the scan → repair → complete arc so mock-mode (e2e /
+   unit) drives the QA-repair flow without a backend.
+
+   The `warning` frame is emitted on EVERY mock run on purpose: the real server
+   only sends it for a non-English book whose reused designed voices were
+   cleared, which mock mode has no way to reach, and this is the only frame
+   whose whole point is that it must reach the user. Emitting it here keeps the
+   frontend advisory path exercised in mock mode and in the e2e spec. */
+async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<void> {
+  onTick({ type: 'qa_scan', chapterId, flaggedCount: 2 });
+  await wait(60);
+  onTick({ type: 'splice_start', chapterId });
+  onTick({
+    type: 'warning',
+    code: 'voice_language_mismatch',
+    message:
+      '1 designed voice(s) were cleared because they were designed for a different language ' +
+      'than this book — re-design Eliza Carrick before generating.',
+  });
+  await wait(60);
+  onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
+  await wait(60);
+  onTick({
+    type: 'qa_repair_complete',
+    chapterId,
+    dryRun: false,
+    repaired: [3, 7],
+    stillSuspect: [],
+    durationSec: 222,
   });
 }
 
@@ -5510,6 +5582,70 @@ async function realStreamSplice({
   }
 }
 
+/* Plan 179 — per-chapter audio-QA scan-and-repair. Same short-lived SSE-POST
+   shape as realStreamSplice (the repair runs THROUGH the fs-26 splice engine
+   server-side), so it deliberately reuses that frame-parsing idiom rather than
+   introducing a third one. `dryRun: false` — the Listen-view affordance is
+   "fix it", not "tell me about it"; `modelKey` is omitted so the server
+   defaults to the model the chapter was actually rendered with. */
+async function realStreamQaRepair({
+  bookId,
+  chapterId,
+  onTick,
+  signal,
+}: QaRepairArgs): Promise<void> {
+  try {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio-qa-repair`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+        signal,
+      },
+    );
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '');
+      onTick({
+        type: 'chapter_failed',
+        chapterId,
+        errorReason: `Audio repair failed (${res.status}): ${detail || res.statusText}`,
+      });
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLines = raw
+          .split('\n')
+          .filter((l) => l.startsWith('data: '))
+          .map((l) => l.slice(6));
+        if (!dataLines.length) continue;
+        try {
+          onTick(JSON.parse(dataLines.join('\n')) as QaRepairTick);
+        } catch (e) {
+          console.warn('[api] malformed qa-repair tick:', dataLines.join('\n'), e);
+        }
+      }
+    }
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') return;
+    onTick({
+      type: 'chapter_failed',
+      chapterId,
+      errorReason: (e as Error).message ?? 'Audio repair failed.',
+    });
+  }
+}
+
 /* Real Pause endpoint. Posted by generation-stream-middleware on
    setPaused(true) so the server stops the in-flight run cleanly — the
    server-side abort flips synthesiseChapter's signal, the loop breaks,
@@ -5588,6 +5724,12 @@ export interface CastDesignCallbacks {
     done: number;
     total: number;
     skipped: number;
+    /** GATE 2 C-6 — the subset of `skipped` that the clone-protection guard
+        refused to touch (already cloned on qwen or coqui), named so the
+        terminal summary can say WHO was protected and why, not just fold
+        them into the bare `skipped` count. `server/src/routes/cast-design.ts`
+        `job.clonedSkips`. */
+    clonedSkips: Array<{ characterId: string; name: string }>;
     failures: Array<{ characterId: string; name: string; error: string }>;
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
@@ -5620,6 +5762,8 @@ interface CastDesignStreamEvent {
   total?: number;
   done?: number;
   skipped?: number;
+  /** GATE 2 C-6 — carried on the `idle` frame; see `CastDesignCallbacks.onIdle`. */
+  clonedSkips?: Array<{ characterId: string; name: string }>;
   currentName?: string | null;
   characterId?: string;
   name?: string;
@@ -5761,6 +5905,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
           done: e.done ?? 0,
           total: e.total ?? 0,
           skipped: e.skipped ?? 0,
+          clonedSkips: e.clonedSkips ?? [],
           failures: e.failures ?? [],
         });
         break;
@@ -5909,11 +6054,11 @@ async function mockStartSingleDesign(
       voiceId: `qwen-${args.characterId}`,
     });
   }
-  cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockSubscribeSingleDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
-  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockGetSingleDesignStatus(_bookId: string): Promise<SingleDesignStatus> {
@@ -5975,12 +6120,12 @@ async function mockStartCastDesign(
       done += 1;
     }
   }
-  cb.onIdle?.({ done, total, skipped: 0, failures: [] });
+  cb.onIdle?.({ done, total, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockSubscribeCastDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
   /* No live job to re-attach to under mocks — idle immediately. */
-  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, clonedSkips: [], failures: [] });
 }
 
 async function mockGetCastDesignStatus(_bookId: string): Promise<CastDesignStatus> {
@@ -9390,6 +9535,30 @@ export interface VoiceLibraryPatch {
   pinned?: boolean;
   persona?: string;
 }
+/* fs-38 Wave 3c — DELETE /api/voice-library/:voiceUuid no longer always
+   erases. When the artifact purge leaves anything behind, the route KEEPS the
+   manifest entry (the consent gates key off it — dropping it would leave the
+   surviving artifact less gated than before the delete) and answers
+   `deleted: false` + `artifactPurgeIncomplete`. So `deleted` is a real
+   boolean, not the `enum: [true]` the contract used to pin; see the
+   openapi.yaml description on that response. */
+export interface VoiceLibraryDeleteResult {
+  deleted: boolean;
+  artifactPurgeIncomplete?: boolean;
+  artifactPurgeFailedPaths?: string[];
+}
+/* fs-38 Wave 3c GATE 1 [F1] — the assign response now names the engine slots
+   the server ACTUALLY persisted. `qwen` is always written; `coqui` only when
+   the entry is clone-capable there too. Callers that mirror an assign into
+   local state must reconcile against this, never against the engine they
+   asked for. Both shapes are pinned to the generated OpenAPI types so the
+   client can't drift from the contract. */
+export type CloneEngineSlot =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['post']['responses']['200']['content']['application/json']['written'][number];
+export type AssignLibraryVoiceResult =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['post']['responses']['200']['content']['application/json'];
+export type UnassignLibraryVoiceResult =
+  ApiPaths['/api/voice-library/{voiceUuid}/assign']['delete']['responses']['200']['content']['application/json'];
 
 async function realListVoiceLibrary(): Promise<{ voices: VoiceLibraryEntry[] }> {
   const res = await fetch('/api/voice-library');
@@ -9419,7 +9588,7 @@ async function realPatchVoiceLibrary(
 async function realDeleteVoiceLibrary(
   voiceUuid: string,
   opts?: { confirm?: boolean },
-): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+): Promise<VoiceLibraryDeleteResult | { usage: VoiceLibraryUsageEntry[] }> {
   const qs = opts?.confirm ? '?confirm=1' : '';
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}${qs}`, {
     method: 'DELETE',
@@ -9517,7 +9686,7 @@ async function realPromoteToLibrary(body: {
 async function realAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
-): Promise<{ updated: number }> {
+): Promise<AssignLibraryVoiceResult> {
   const res = await fetch(`/api/voice-library/${encodeURIComponent(voiceUuid)}/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -9535,6 +9704,25 @@ async function realAssignLibraryVoice(
   if (!res.ok)
     throw new Error(
       `Voice library assign failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* GATE 1, owner-decided — the explicit "Remove voice" affordance's wire call.
+   Query params (not a DELETE body) to match this file's other DELETE callers
+   and the route's own `?confirm=1` convention. */
+async function realUnassignLibraryVoice(
+  voiceUuid: string,
+  args: { bookId: string; characterId: string },
+): Promise<UnassignLibraryVoiceResult> {
+  const qs = new URLSearchParams({ bookId: args.bookId, characterId: args.characterId });
+  const res = await fetch(
+    `/api/voice-library/${encodeURIComponent(voiceUuid)}/assign?${qs.toString()}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Voice library unassign failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -9634,7 +9822,7 @@ export async function mockPatchVoiceLibrary(
 export async function mockDeleteVoiceLibrary(
   voiceUuid: string,
   opts?: { confirm?: boolean },
-): Promise<{ deleted: true } | { usage: VoiceLibraryUsageEntry[] }> {
+): Promise<VoiceLibraryDeleteResult | { usage: VoiceLibraryUsageEntry[] }> {
   await wait(60);
   if (voiceUuid === 'lib-used' && !opts?.confirm) {
     return { usage: MOCK_VOICE_LIBRARY_USAGE };
@@ -9728,14 +9916,104 @@ export async function mockPromoteToLibrary(body: {
   return entry;
 }
 
+/* fs-38 Wave 3c, Task 41 — mirrors the three 409 guards on
+   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler,
+   re-verified against that route as it stands after Task 24 made it
+   engine-aware: revoked consent, then a cloned voice that hasn't finished
+   deriving (still gated on the `qwen` slot specifically — Task 24 didn't
+   touch that guard, only the wrong-engine one below and the both-slots
+   write), then a cloned voice assigned onto a non-clone-capable engine.
+   Task 24 widened the wrong-engine rejection from "must be qwen" to "must
+   be qwen OR coqui" (Coqui XTTS v2 is now clone-capable too — see
+   `CLONE_CAPABLE_ENGINES`, tts/clone-engines.ts) — a cloned entry with a
+   ready `xtts` slot now assigns cleanly on a coqui-routed character (see
+   the `lib-cloned-demo` fixture and its now-passing coqui-assign test;
+   Task 29's original "deliberate lag" test for this case is gone — see
+   that test's replacement below for why).
+
+   The real guard also weighs the target character's own `ttsEngine`
+   override and the persisted account default, via
+   `resolveCharacterEngine`/`getResolvedTtsModelKey()` server-side. This
+   mock has no persisted cast or account-default store to read (mock-mode
+   characters live in the redux `cast` slice, never round-tripped through
+   `api.*`), so it only looks at the caller's own explicit `modelKey` —
+   every real caller already sends its pending engine choice (see
+   profile-drawer.tsx's `useMyVoice`) — falling back to 'qwen' (the common
+   case) when omitted.
+
+   Exported so the guard itself can be unit-tested directly against ad-hoc
+   entries, without growing the shared `MOCK_VOICE_LIBRARY_ENTRIES` fixture
+   list (and the e2e voice-library card-count assertions that count it).
+   Returns the error message to reject with, or null when the assign is
+   allowed. */
+export function _mockAssignGuardError(
+  entry: VoiceLibraryEntry,
+  modelKey: TtsModelKey | undefined,
+): string | null {
+  if (entry.consent?.revokedAt) {
+    return 'Consent for this voice has been revoked.';
+  }
+  if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
+    return 'Cloned voice is not ready to assign yet.';
+  }
+  if (entry.provenance === 'cloned') {
+    const routedEngine = modelKey ? engineForModelKey(modelKey) : 'qwen';
+    if (routedEngine !== 'qwen' && routedEngine !== 'coqui') {
+      return `Cloned voices render on Qwen or Coqui XTTS v2, but this book is set to ${routedEngine}. Switch the book's engine to Qwen or Coqui XTTS v2 before assigning this character.`;
+    }
+  }
+  return null;
+}
+
+/* GATE 1 [F1] — the mock's mirror of the real route's `shouldWriteCoquiSlot`
+   (server/src/routes/voice-library.ts). The qwen slot is unconditional there
+   and here.
+
+   The coqui arm is an APPROXIMATION, deliberately: the real route decides a
+   DESIGNED entry by `stat`-ing its retained reference clip on disk
+   (`hasRetainedDesignedClip`), and mock mode has no filesystem to stat. The
+   nearest observable proxy on the entry itself is whether it carries an
+   `xtts` artifact slot at all — a designed voice that has already derived on
+   Coqui necessarily had a clip to derive from. So the two can disagree for
+   one case the mock cannot represent (a designed entry that still has its
+   clip but has never derived); every mock fixture is unambiguous. CLONED
+   entries always qualify and IMPORTED never do — those two arms are exact.
+
+   Exported for direct unit testing, same rationale as `_mockAssignGuardError`
+   above. */
+export function _mockAssignWrittenSlots(entry: VoiceLibraryEntry): CloneEngineSlot[] {
+  const coqui =
+    entry.provenance === 'cloned' ||
+    (entry.provenance === 'designed' && !!entry.engines?.xtts);
+  return coqui ? ['qwen', 'coqui'] : ['qwen'];
+}
+
 export async function mockAssignLibraryVoice(
   voiceUuid: string,
-  _body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
-): Promise<{ updated: number }> {
+  body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
+): Promise<AssignLibraryVoiceResult> {
   await wait(60);
   const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
-  return { updated: 1 };
+  const guardError = _mockAssignGuardError(entry, body.modelKey);
+  if (guardError) throw new Error(guardError);
+  return { updated: 1, written: _mockAssignWrittenSlots(entry) };
+}
+
+/* GATE 1 — mock "Remove voice". Mock mode keeps characters in the redux cast
+   slice, never round-tripped through `api.*`, so this has no cast.json to
+   inspect and cannot narrow `cleared` to the slots that really pointed at
+   this voice. It therefore names BOTH clone-capable slots, and correctness is
+   carried by the reducer that consumes it: `castActions.clearOverrideVoiceSlot`
+   applies the SAME `slot.libraryUuid === voiceUuid` predicate the real route
+   applies server-side, so an over-broad `cleared` still cannot remove a slot
+   holding a different library voice. */
+export async function mockUnassignLibraryVoice(
+  _voiceUuid: string,
+  _args: { bookId: string; characterId: string },
+): Promise<UnassignLibraryVoiceResult> {
+  await wait(60);
+  return { cleared: ['qwen', 'coqui'] };
 }
 
 export async function mockSampleLibraryVoice(
@@ -9822,7 +10100,9 @@ export async function mockRevokeVoiceLibraryEntry(voiceUuid: string): Promise<Vo
       ? { ...e, consent: { ...e.consent, revokedAt: new Date().toISOString() } }
       : e,
   );
-  return mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid)!;
+  const entry = mockVoiceLibraryEntries.find((e) => e.voiceUuid === voiceUuid);
+  if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  return entry;
 }
 
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
@@ -9921,6 +10201,7 @@ const real = {
   getBaseVoiceSample: realGetBaseVoiceSample,
   streamGeneration: realStreamGeneration,
   streamSplice: realStreamSplice,
+  streamQaRepair: realStreamQaRepair,
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
   startCastDesign: realStartCastDesign,
@@ -10124,6 +10405,7 @@ const real = {
   discardLibraryRedesign: realDiscardLibraryRedesign,
   promoteToLibrary: realPromoteToLibrary,
   assignLibraryVoice: realAssignLibraryVoice,
+  unassignLibraryVoice: realUnassignLibraryVoice,
   sampleLibraryVoice: realSampleLibraryVoice,
   cloneVoiceSample: realCloneVoiceSample,
   cloneVoice: realCloneVoice,
@@ -10224,6 +10506,7 @@ const mock = {
   getBaseVoiceSample: mockGetBaseVoiceSample,
   streamGeneration: mockStreamGeneration,
   streamSplice: mockStreamSplice,
+  streamQaRepair: mockStreamQaRepair,
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
   startCastDesign: mockStartCastDesign,
@@ -10416,6 +10699,7 @@ const mock = {
   discardLibraryRedesign: mockDiscardLibraryRedesign,
   promoteToLibrary: mockPromoteToLibrary,
   assignLibraryVoice: mockAssignLibraryVoice,
+  unassignLibraryVoice: mockUnassignLibraryVoice,
   sampleLibraryVoice: mockSampleLibraryVoice,
   cloneVoiceSample: mockCloneVoiceSample,
   cloneVoice: mockCloneVoice,

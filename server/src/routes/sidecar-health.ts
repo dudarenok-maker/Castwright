@@ -5,13 +5,19 @@
    lives here. */
 
 import { Router } from 'express';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Request, Response } from '../http.js';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
 import {
   getResolvedSidecarUrl,
   setLastKnownQwenInstallState,
+  setLastKnownCoquiInstallState,
   type QwenInstallState,
+  type CloneEngineInstallState,
 } from '../workspace/user-settings.js';
+import { detectCoquiInstallStateOnDisk, coquiWeightsPresent } from '../tts/coqui-install-detect.js';
+import { setLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
@@ -22,6 +28,16 @@ import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 
 export const sidecarHealthRouter = Router();
+
+/* server/src/routes/sidecar-health.ts → repo root is three levels up. Mirrors
+   routes/coqui-install.ts's REPO_ROOT resolution — needed here too because
+   the health-poll refresh below FALLS BACK to re-probing coqui's WEIGHTS
+   presence off this repo's disk when the wire body doesn't carry
+   `coqui_weights_present` (an older sidecar) or omits `coqui_package_installed`
+   entirely (see deriveCoquiInstallState). This local probe only agrees with
+   reality when the sidecar's venv is on this same box — a caveat the wire
+   field (Task 20 fix round 1) closes for any sidecar new enough to send it. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /* Short by design — a hung sidecar shouldn't pin a UI polling request. The
    sidecar's /health route is a trivial dict return that responds in <50ms
@@ -88,8 +104,20 @@ interface SidecarHealthBody {
   /* Task 8 — per-engine pip-importability booleans from the sidecar's
      find_spec probe. Absent on an older sidecar → false (default-safe). */
   coqui_package_installed?: boolean;
+  /* fs-38 Wave 3c, Task 20 fix round 1 (IMPORTANT-1) — the wire counterpart
+     of `qwen_weights_present`: a real stat() of the XTTS v2 `model.pth`
+     blob, from the sidecar's OWN box. Absent on an older sidecar predating
+     this field → `deriveCoquiInstallState` falls back to a local disk
+     probe (see that function's doc comment). */
+  coqui_weights_present?: boolean;
   kokoro_package_installed?: boolean;
   whisper_package_installed?: boolean;
+  /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version
+     (importlib.metadata, no `import TTS`), the clone-voice resolver's
+     currentArtifactVersion('coqui') oracle. null when the sidecar couldn't
+     resolve it OR is older than this field; absent entirely on an even
+     older sidecar reads the same as null via the `?? null` below. */
+  coqui_version?: string | null;
   /* ASR content-QA Whisper engine (srv-31). Display-only in the model-watch
      pill — no per-engine Load/Stop (ASR loads lazily on /transcribe and
      idle-evicts). `asr_device` is 'cpu' | 'cuda' (where Whisper runs). Absent on
@@ -195,6 +223,60 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
   return normaliseQwenInstallState(body.qwen_install_state);
 }
 
+/* fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-1), Task 20 fix round 1
+   (IMPORTANT-1) — Coqui's health-poll refresh, mirroring
+   deriveQwenInstallState's shape but not its mechanism: unlike Qwen, the
+   sidecar does not report a full coqui_install_state enum. It DOES report
+   `coqui_package_installed` + (as of this fix round) `coqui_weights_present`
+   — real booleans from the venv/disk the sidecar is actually running
+   against — and `model_loaded`/`loading` (which the sidecar reuses for
+   Coqui specifically — see SidecarHealthBody's `model_loaded` doc above).
+   Trust the wire for what the wire knows — getResolvedSidecarUrl's SSRF
+   guard permits any private/LAN host, not just loopback, so "the sidecar's
+   venv/disk" and "this repo's local disk" are DIFFERENT machines for a
+   remote-sidecar deployment (a LAN box, or a Pinokio install with its own
+   venv); a local-only disk probe would pin `not-installed`/`weights-missing`
+   forever on a box where Coqui works fine.
+
+     - `model_loaded: true` is the strongest "definitely usable" proof (same
+       as `qwen_loaded`), and is always correct regardless of where the
+       sidecar runs — it overrides everything else.
+     - `coqui_package_installed: false` is equally trustworthy — a real
+       find_spec() result from the sidecar's own venv — so it's `not-installed`
+       immediately, no local probe involved.
+     - `coqui_package_installed: true`: read `coqui_weights_present` off the
+       SAME wire body when the sidecar sent it (a real `os.path.isfile`
+       stat() of `model.pth` under the SIDECAR's own resolved TTS user-data
+       dir — `main.py`'s `_coqui_weights_present()`, which mirrors this
+       module's `coquiWeightsPresent()` field-for-field so the two probes
+       can never disagree on WHERE to look, only on WHICH box they're
+       looking at). This closes the exact bug the pre-fix version of this
+       comment flagged as "a real, undisclosed-nowhere-else gap": a remote
+       sidecar with Coqui fully `ready` used to read `weights-missing` here
+       forever (no self-correction — Coqui isn't loaded until first synth,
+       which the cloned-voice pre-pass precedes), hard-failing every
+       coqui-cloned chapter. `coqui_weights_present` absent on the body
+       (an older sidecar predating this field) falls back to the LOCAL
+       `coquiWeightsPresent()` stat() — correct only when the sidecar's venv
+       is on this same box, same caveat as before, but strictly an upgrade
+       path now rather than the only option.
+     - `coqui_package_installed` absent (an even older sidecar predating
+       BOTH fields): no wire signal for EITHER half, so this falls back to
+       the full local disk probe — unchanged from this function's original
+       (pre-fix-round) behaviour, and no worse than it was. */
+function deriveCoquiInstallState(body: SidecarHealthBody): CloneEngineInstallState {
+  if (body.model_loaded === true) return 'loaded';
+  if (body.coqui_package_installed === false) return 'not-installed';
+  if (body.coqui_package_installed === true) {
+    const weightsPresent =
+      typeof body.coqui_weights_present === 'boolean'
+        ? body.coqui_weights_present
+        : coquiWeightsPresent();
+    return weightsPresent ? 'ready' : 'weights-missing';
+  }
+  return detectCoquiInstallStateOnDisk(REPO_ROOT);
+}
+
 /* Shape returned by probeSidecarHealth(). The /health route forwards this
    verbatim; the /api/diagnostics aggregator (fs-18) consumes it in-process so
    it never has to HTTP self-call this route (and never double-fires the
@@ -220,6 +302,11 @@ export interface SidecarHealthResult {
   coquiPackageInstalled?: boolean;
   kokoroPackageInstalled?: boolean;
   whisperPackageInstalled?: boolean;
+  /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version,
+     forwarded verbatim from the sidecar body's coqui_version. '' (not null)
+     when unknown, matching getLastKnownCoquiVersion()'s own empty-string
+     "no oracle yet" convention. */
+  coquiVersion?: string;
   /* ASR (Whisper) model-watch state (srv-31). `asrEnabled` is the SERVER's
      SEG_ASR_ENABLED (not from the sidecar body) — drives whether the model-watch
      shows an ASR pill at all. `asrLoaded` = the Whisper model is resident in the
@@ -269,6 +356,18 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
        a reachable response — an unreachable poll leaves the last-known state
        intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
     setLastKnownQwenInstallState(qwenInstallState);
+    /* fs-38 Wave 3c Task 19 — same per-poll refresh for Coqui, into the same
+       per-engine store (see deriveCoquiInstallState's doc above for why this
+       is a disk re-probe rather than a wire-reported enum). Only updated on
+       a reachable response, same "don't downgrade on a transient timeout"
+       rule as Qwen. */
+    setLastKnownCoquiInstallState(deriveCoquiInstallState(body));
+    /* fs-38 Wave 3c Task 19 — the current-coqui-version oracle. Only updated
+       on a reachable response, same rule as every other cache fed off this
+       poll (setLastKnownVram/setLastKnownEngineDevices below). */
+    const coquiVersion =
+      typeof body.coqui_version === 'string' ? body.coqui_version : null;
+    setLastKnownCoquiVersion(coquiVersion);
     setLastKnownVram({
       totalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
     });
@@ -293,6 +392,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       coquiPackageInstalled: typeof body.coqui_package_installed === 'boolean' ? body.coqui_package_installed : undefined,
       kokoroPackageInstalled: typeof body.kokoro_package_installed === 'boolean' ? body.kokoro_package_installed : undefined,
       whisperPackageInstalled: typeof body.whisper_package_installed === 'boolean' ? body.whisper_package_installed : undefined,
+      coquiVersion: coquiVersion ?? '',
       asrEnabled: asrEnabled(),
       asrLoaded: body.asr_loaded === true,
       asrDevice: typeof body.asr_device === 'string' ? body.asr_device : null,

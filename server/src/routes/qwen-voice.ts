@@ -27,7 +27,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile } from 'node:fs/promises';
+import { rename, rm, copyFile, stat } from 'node:fs/promises';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
@@ -622,15 +622,18 @@ qwenVoiceRouter.post(
 
     /* Move the staged embedding onto the stable id. rm-then-rename so a Windows
        rename over an existing file can't EPERM. A missing preview `.pt` means
-       nothing was staged (e.g. a double-promote) → 409. */
+       nothing was staged (e.g. a double-promote) → 409 — checked via `stat`
+       BEFORE the live `.pt` is removed (#1804), so a double-promote can't
+       delete a live artifact when the replacement was never staged. */
     try {
-      await rm(qwenVoicePtPath(realVoiceId), { force: true });
-      await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
+      await stat(qwenVoicePtPath(previewVoiceId));
     } catch (e) {
       return res
         .status(409)
         .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
     }
+    await rm(qwenVoicePtPath(realVoiceId), { force: true });
+    await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
     await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
       () => {},

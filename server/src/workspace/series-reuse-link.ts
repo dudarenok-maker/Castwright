@@ -42,6 +42,7 @@ import { scoreOne, type CharacterMatchInput, type LibraryVoice } from '../routes
 import { resolveReusedVoiceFields, type CastLoader } from '../tts/hydrate-reused-voice.js';
 import { createWorkspaceCastLoader } from '../tts/hydrate-reused-voice-workspace.js';
 import type { TtsEngine } from '../tts/index.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 /* Memoize a per-bookId async lookup within one linkSeriesReuseAtAnalysis /
    pruneStaleReuseLinks call. Each of resolveAuthorSeries/isStandaloneBookId/
@@ -79,7 +80,12 @@ export interface LinkableCharacter {
   voiceUuid?: string;
   voiceState?: 'generated' | 'tuned' | 'reused' | 'locked';
   ttsEngine?: TtsEngine | null;
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** [ADV-C3][EX-10] — widened to carry `libraryUuid`/`provenance` so a
+      cloned slot's identity is type-visible here too, mirroring the
+      canonical shape in voice-mapping.ts and hydrate-reused-voice.ts. */
+  overrideTtsVoices?: Partial<
+    Record<TtsEngine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  > | null;
   voiceStyle?: string;
   matchedFrom?: {
     bookId?: string;
@@ -189,13 +195,37 @@ export interface LinkSeriesReuseOptions {
 
 /* Revert a stale-linked character. A pure reuse row's voice was denormalised
    FROM the now-stale link, so it reverts to a fresh, unlinked voice; a user-
-   owned voice (tuned/locked) keeps its voice and only loses the dead badge. */
+   owned voice (tuned/locked) keeps its voice and only loses the dead badge.
+
+   GATE 2 D-2 — a CLONED voice keeps its voice too. This unconditional delete
+   was the last unguarded destructive write on the consent surface: any
+   `voiceState: 'reused'` character whose link went stale had its
+   overrideTtsVoices / voiceStyle / ttsEngine / voiceUuid wiped, cloned slot
+   included, silently and at analysis time. A real person's consented voice
+   would simply be gone from the book the next time it was re-analysed, with
+   no refusal and nothing in the response to notice — and the next render
+   would read their lines in a catalogue voice.
+
+   Guarded consistently with this file's own sibling path: the denormalise
+   side routes through `resolveReusedVoiceFields`, which refuses to hydrate a
+   character carrying a cloned slot (hydrate-reused-voice.ts:133) using the
+   FAIL-SAFE `characterHasClonedSlot` — provenance only, no libraryUuid
+   validation, because a guard that decides whether to PRESERVE must protect a
+   malformed cloned slot too. Same predicate here, so the two halves of the
+   reuse machinery agree on what a clone is.
+
+   The dead link itself is still cleared for a cloned character (matchedFrom,
+   matchFactors, and the reuse identity), so the row stops advertising a
+   source that no longer qualifies — mirroring the resolver, which declines to
+   COPY the voice without pretending the link is still live. Only the voice
+   fields are preserved; they are the character's own, not the link's. */
 function clearStaleLink(c: LinkableCharacter): void {
   delete c.matchedFrom;
   delete c.matchFactors;
   if (c.voiceState === 'reused') {
     c.voiceId = c.id;
     c.voiceState = 'generated';
+    if (characterHasClonedSlot(c)) return;
     delete c.overrideTtsVoices;
     delete c.voiceStyle;
     delete c.ttsEngine;

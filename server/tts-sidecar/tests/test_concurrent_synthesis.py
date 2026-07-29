@@ -34,6 +34,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -419,3 +420,129 @@ def test_concurrent_sample_rate_header_matches_per_response(kokoro_client: TestC
             f"response for {text!r} carried sample-rate header {by_text[text]!r}, "
             f"expected {expected}. Header may have cross-bled from a sibling."
         )
+
+
+# ── Coqui `_synth_lock` — load racing a synth (Task 8, fs-38 Wave 3c) ─
+#
+# The fakes above (`_FakeCoquiEngine`) override `synthesize()` wholesale, so
+# they never exercise the REAL `CoquiEngine._ensure_loaded`/`synthesize`
+# bodies — they only pin the route's asyncio.to_thread fan-out. The race
+# `_synth_lock` closes lives inside those real methods (a /load click and a
+# /synthesize call both reaching `_ensure_loaded` on separate worker
+# threads with no shared serialisation before this task), so it has to be
+# exercised against the real `CoquiEngine` class directly, with a fake
+# `TTS.api.TTS`/`torch` installed via sys.modules (same technique as
+# test_runtime_wiring.py's `load_stubs`, inlined here to keep this file's
+# fixtures self-contained).
+
+class _SlowFakeTtsInstance:
+    """Stands in for `TTS.api.TTS(model_id)`. Construction sleeps for
+    `delay_sec` so a concurrent `_ensure_loaded`/`synthesize` call has an
+    actual window to race into if `_synth_lock` doesn't close it."""
+
+    def __init__(self, delay_sec: float, speaker_names: list[str]) -> None:
+        time.sleep(delay_sec)
+
+        class _SpeakerManager:
+            name_to_id = {n: i for i, n in enumerate(speaker_names)}
+
+        class _TtsModel:
+            speaker_manager = _SpeakerManager()
+
+        class _Synthesizer:
+            tts_model = _TtsModel()
+            output_sample_rate = 24000
+
+        self.synthesizer = _Synthesizer()
+
+    def to(self, device: str) -> "_SlowFakeTtsInstance":
+        return self
+
+    def tts(self, text: str, speaker: str, language: str) -> list[float]:
+        return [0.0, 0.0]
+
+
+@pytest.fixture
+def coqui_load_stubs(monkeypatch):
+    """Installs a fake `TTS.api.TTS` + `torch` into `sys.modules` so
+    `CoquiEngine._ensure_loaded`'s lazy imports resolve without the real
+    ~3 GB model. Returns `(tts_calls, known_speakers)`: `tts_calls['count']`
+    is the constructor's invocation count — the single-flight proof the
+    race test below asserts on."""
+    tts_calls = {"count": 0}
+    known_speakers = ["Claribel Dervla", "Other"]
+
+    def _fake_tts_ctor(model_id: str, *args, **kwargs) -> _SlowFakeTtsInstance:
+        tts_calls["count"] += 1
+        return _SlowFakeTtsInstance(delay_sec=0.2, speaker_names=known_speakers)
+
+    fake_tts_api = types.ModuleType("TTS.api")
+    fake_tts_api.TTS = _fake_tts_ctor
+    fake_tts = types.ModuleType("TTS")
+    fake_tts.api = fake_tts_api
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+        @staticmethod
+        def empty_cache() -> None:
+            pass
+
+    fake_torch = types.ModuleType("torch")
+    fake_torch.cuda = _FakeCuda
+    fake_torch.float16 = "FAKE_FLOAT16"
+
+    monkeypatch.setitem(sys.modules, "TTS", fake_tts)
+    monkeypatch.setitem(sys.modules, "TTS.api", fake_tts_api)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setenv("COQUI_DEVICE", "cpu")
+
+    return tts_calls, known_speakers
+
+
+def test_coqui_load_racing_synth_never_double_loads_or_half_loads(coqui_load_stubs) -> None:
+    """A `/load` click racing a `/synthesize` call must single-flight the
+    cold load under `_synth_lock`: the second caller blocks on the lock and,
+    once it acquires it, observes the FULLY loaded model (both `self._tts`
+    AND the populated speaker manifest) — never a state where `self._tts` is
+    set but `self._speakers` is still `[]`.
+
+    Without the lock, both threads pass `_ensure_loaded`'s initial
+    `self._tts is None` check before either publishes `self._tts` (the fake
+    constructor sleeps 0.2s to hold that window open), so the ~3 GB XTTS
+    constructor runs TWICE — wasteful, and a race on whose `self._tts`
+    assignment lands last. This is the regression test for Task 8's
+    `_synth_lock`."""
+    tts_calls, known_speakers = coqui_load_stubs
+    engine = main.CoquiEngine()
+
+    outcome: dict[str, object] = {}
+
+    def _load() -> None:
+        engine._ensure_loaded("xtts_v2")
+
+    def _synth() -> None:
+        outcome["result"] = engine.synthesize("xtts_v2", known_speakers[0], "hello")
+
+    t_load = threading.Thread(target=_load)
+    t_synth = threading.Thread(target=_synth)
+    t_load.start()
+    time.sleep(0.05)  # let the load begin before the synth call races in
+    t_synth.start()
+    t_load.join(timeout=5)
+    t_synth.join(timeout=5)
+
+    assert tts_calls["count"] == 1, (
+        f"TTS() constructor called {tts_calls['count']} times — a /load "
+        "racing a /synthesize double-loaded the model instead of "
+        "single-flighting under _synth_lock."
+    )
+    result = outcome.get("result")
+    assert result is not None, "synthesize() did not complete"
+    assert result.substituted_from is None, (
+        "synthesize() substituted the requested (known) speaker — it must "
+        "have observed a half-loaded model whose speaker manifest wasn't "
+        "populated yet, i.e. a load racing a synth was NOT fully serialised."
+    )

@@ -3,47 +3,71 @@
    Mirrors design-voice-core's postDesignAndCacheAudition transport (capacity
    retry + SidecarDesignError propagation) but for the clip-distil endpoint:
    POSTs the caller's normalized master PCM + the X-* headers to
-   /qwen/clone-voice and returns the audition preview PCM. Unlike the design
+   /<slot>/clone-voice and returns the audition preview PCM. Unlike the design
    core, it does NOT write the audition cache — the /clone route owns preview
-   persistence. The `engine` param is 'qwen' only in 3b1; 3c adds the xtts
-   branch here (a clean seam). */
+   persistence. The `engine` param was 'qwen' only in 3b1; 3c (this file) adds
+   the coqui/xtts branch on the same seam.
+
+   Qwen and Coqui diverge on the wire: Qwen's clone prompt needs a transcript
+   (`X-Ref-Text`, required — validated below) and returns `X-Base-Model`;
+   Coqui's `get_conditioning_latents` is purely acoustic (no transcript sent
+   at all) and returns `X-Coqui-Version` + `X-Model-Id` instead. `refText` is
+   therefore optional on the shared input, and `baseModel`/`coquiVersion`/
+   `modelId` are all optional on the shared result — each populated only by
+   the branch that produces it. */
 
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
 import { SidecarDesignError } from './design-voice-core.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { CLONE_CAPABLE_ENGINES, cloneStorageKey, manifestSlotFor, type CloneEngine } from './clone-engines.js';
 
 export interface DeriveArtifactInput {
   masterPcm: Buffer;
   sampleRate: number;
-  refText: string;
+  /** Required for a qwen derive (its clone prompt needs a transcript);
+      unused for a coqui derive (XTTS's conditioning-latents extraction is
+      purely acoustic). Validated inside the qwen branch only, at call time —
+      see below. */
+  refText?: string;
   auditionText?: string;
 }
 
 export interface DeriveArtifactResult {
   previewPcm: Buffer;
   sampleRate: number;
-  baseModel: string;
+  /** qwen only. */
+  baseModel?: string;
+  /** coqui only. */
+  coquiVersion?: string;
+  /** coqui only — the FULL resolved model string (e.g.
+      "tts_models/multilingual/multi-dataset/xtts_v2"), not a short alias. */
+  modelId?: string;
 }
 
 export async function deriveEngineArtifact(
   voiceUuid: string,
-  engine: 'qwen',
+  engine: CloneEngine,
   input: DeriveArtifactInput,
   opts: { signal?: AbortSignal; sidecarUrl?: string } = {},
 ): Promise<DeriveArtifactResult> {
-  if (engine !== 'qwen') {
-    // 3c wires the xtts/coqui branch here; 3b1 is Qwen-only.
+  if (!CLONE_CAPABLE_ENGINES.has(engine)) {
     throw new SidecarDesignError(`Unsupported clone engine "${engine}".`, 400);
   }
+  if (engine === 'qwen' && !input.refText) {
+    throw new SidecarDesignError('`refText` is required for a Qwen clone derive.', 400);
+  }
+
   const sidecarUrl = (opts.sidecarUrl ?? getResolvedSidecarUrl()).replace(/\/+$/, '');
-  const target = `${sidecarUrl}/qwen/clone-voice`;
+  const target = `${sidecarUrl}/${manifestSlotFor(engine)}/clone-voice`;
   const headers: Record<string, string> = {
     'Content-Type': 'audio/L16',
     'X-Sample-Rate': String(input.sampleRate),
-    'X-Voice-Id': `qwen-${voiceUuid}`,
-    'X-Ref-Text': Buffer.from(input.refText, 'utf8').toString('base64'),
+    'X-Voice-Id': cloneStorageKey(engine, voiceUuid),
   };
+  if (engine === 'qwen') {
+    headers['X-Ref-Text'] = Buffer.from(input.refText as string, 'utf8').toString('base64');
+  }
   if (input.auditionText) {
     headers['X-Audition-Text'] = Buffer.from(input.auditionText, 'utf8').toString('base64');
   }
@@ -52,7 +76,7 @@ export async function deriveEngineArtifact(
   try {
     upstream = await withCapacityRetry(
       (s) => fetch(target, { method: 'POST', signal: s ?? opts.signal, headers, body: input.masterPcm }),
-      { engine: 'qwen', signal: opts.signal },
+      { engine, signal: opts.signal },
     );
   } catch (e) {
     if (e instanceof NoCapacityError) {
@@ -87,7 +111,12 @@ export async function deriveEngineArtifact(
     );
   }
   const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? String(input.sampleRate)) || input.sampleRate;
-  const baseModel = upstream.headers.get('X-Base-Model') ?? '';
   const previewPcm = Buffer.from(await upstream.arrayBuffer());
-  return { previewPcm, sampleRate, baseModel };
+  if (engine === 'qwen') {
+    const baseModel = upstream.headers.get('X-Base-Model') ?? '';
+    return { previewPcm, sampleRate, baseModel };
+  }
+  const coquiVersion = upstream.headers.get('X-Coqui-Version') ?? '';
+  const modelId = upstream.headers.get('X-Model-Id') ?? '';
+  return { previewPcm, sampleRate, coquiVersion, modelId };
 }

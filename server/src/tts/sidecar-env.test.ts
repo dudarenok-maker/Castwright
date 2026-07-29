@@ -8,8 +8,20 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../workspace/user-settings.js', () => ({ readConfigOverrides: vi.fn(() => ({})) }));
+/* #1890 — QWEN_VOICES_DIR/XTTS_VOICES_DIR must be sourced from paths.ts's
+   `qwenVoicesDir()`/`xttsVoicesDir()` helpers, not a local literal `join()`
+   that happens to compute the same value today. Partial-mock so the
+   describe block below can swap in sentinel return values and prove
+   buildSidecarEnv's output actually tracks them — a plain equality check
+   against the real helpers would pass even on the pre-fix literal-join code
+   (the two are byte-identical today), so it wouldn't fail before the fix. */
+vi.mock('../workspace/paths.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/paths.js')>();
+  return { ...actual, qwenVoicesDir: vi.fn(actual.qwenVoicesDir), xttsVoicesDir: vi.fn(actual.xttsVoicesDir) };
+});
 import { buildSidecarEnv } from './spawn-sidecar.js';
 import * as us from '../workspace/user-settings.js';
+import * as paths from '../workspace/paths.js';
 import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
@@ -198,5 +210,27 @@ describe('buildSidecarEnv hands the sidecar a UUID device pin verbatim (#1857)',
   it('leaves a device knob at its registry default unset', () => {
     const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
     expect(env.QWEN_DEVICE).toBeUndefined();
+  });
+});
+
+/* #1890 — spawn-sidecar.ts's voice-dir env vars must be sourced from
+   paths.ts's qwenVoicesDir()/xttsVoicesDir(), the same single source of
+   truth purgeCloneArtifacts and the resolver read. A literal `join()` that
+   happens to compute an identical path today would silently diverge the
+   moment either side changes independently — a Property-2 ("erasure is
+   total") hole. */
+describe('buildSidecarEnv sources QWEN_VOICES_DIR/XTTS_VOICES_DIR from paths.ts (#1890)', () => {
+  beforeEach(() => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
+  });
+
+  it('reflects an overridden qwenVoicesDir()/xttsVoicesDir() return value', () => {
+    (paths.qwenVoicesDir as ReturnType<typeof vi.fn>).mockReturnValue('/sentinel/qwen-voices');
+    (paths.xttsVoicesDir as ReturnType<typeof vi.fn>).mockReturnValue('/sentinel/xtts-voices');
+
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+
+    expect(env.QWEN_VOICES_DIR).toBe('/sentinel/qwen-voices');
+    expect(env.XTTS_VOICES_DIR).toBe('/sentinel/xtts-voices');
   });
 });

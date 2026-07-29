@@ -37,7 +37,7 @@ import { MIN_DURATION_SEC } from '../audio/render-integrity/constants.js';
 import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { getResolvedSidecarUrl, getLastKnownCoquiInstallState } from '../workspace/user-settings.js';
 import {
   UnresolvableClonedVoiceError,
   resolveClonedVoicesForChapter,
@@ -45,12 +45,33 @@ import {
   type ResolveChapterDeps,
   type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
-import { readEntry, writeEntry, entryDir, type VoiceLibraryEntry } from '../workspace/voice-library.js';
+import {
+  readEntry,
+  writeEntry,
+  updateEntry,
+  entryDir,
+  type VoiceLibraryEntry,
+} from '../workspace/voice-library.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import { getLastKnownCoquiVersion } from './coqui-version-state.js';
+import {
+  manifestSlotFor,
+  type CloneEngine,
+  CLONE_ENGINE_LIST,
+  isCloneEngine,
+  characterHasClonedSlot,
+  hasClonedProvenance,
+  libraryVoiceForEngine,
+} from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
-import { qwenVoicePtPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
+import {
+  qwenVoicePtPath,
+  qwenVoiceSidecarPath,
+  qwenVoiceWavPath,
+  xttsVoiceLatentsPath,
+} from '../workspace/paths.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -595,6 +616,18 @@ export interface SynthesiseChapterOpts {
       SPK pass. The route wires it to the no-progress watchdog so a long
       CPU-bound embed pass keeps the chapter alive (sibling of #1029). */
   onEmbedProgress?: () => void;
+  /** #1813 — fired by the cloned/designed voice resolver pre-pass
+      (clone-voice-resolver.ts) immediately before it starts re-deriving a
+      Repairable cloned voice, or self-healing a missing/stale designed
+      voice `.pt` — both a real, multi-second sidecar clone-distil round
+      trip that ran with NO UI signal before this (known-limitation KL-f):
+      `reportProgress` was wired `undefined` in both `buildDefault*Deps`
+      below because no typed channel existed. Threaded into
+      `buildDefaultCloneResolverDeps`/`buildDefaultDesignedResolverDeps` as
+      `onVoicePrepare`, and re-fired on the `groupHeartbeatMs` cadence
+      (`withVoicePrepareHeartbeat` below) while a derive is in flight, the
+      same "stall detector" concern `onGroupStart`'s heartbeat exists for. */
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void;
   /** Optional abort signal — checked between groups and forwarded to the
       provider so an in-flight TTS call can be cancelled mid-call. Used by
       the per-bookId server mutex to stop a stale generation handler when a
@@ -616,7 +649,16 @@ export interface SynthesiseChapterOpts {
       (`src/views/listen.tsx:139`). The picker falls through to a
       narrator-voice bucket when the character has no gender / age / tone
       hints, which is the correct routing for the title regardless of
-      whether the cast actually contains a `'narrator'` row. */
+      whether the cast actually contains a `'narrator'` row.
+
+      fs-38 Wave 3c, Task 23 — this id is a HINT, not gospel: if the cast has
+      no row under this exact id but DOES carry one under the other
+      recognised narrator id (`'narrator'`/`'char-narrator'` — the same pair
+      `voice-mapping.ts`'s `inferProfile` treats as narrator), the real row
+      is used instead. Every route today passes the literal `'narrator'`
+      unconditionally, so a book whose narrator row is `'char-narrator'`
+      needs this re-resolution to ever reach its real overrides — see
+      the resolution right after `castById` is built. */
   narratorCharacterId?: string;
   /** Tick BEFORE the chapter-title TTS call begins. Lets the SSE route emit
       a "Synthesising chapter title…" hint so the client's stall detector
@@ -881,17 +923,45 @@ export function buildHintFromCast(c: CastCharacter): CharacterHint {
    locks), not a Node-side mutex. This does NOT check activeGenerationBooks/
    refuse when a render is active: it's deliberately called *during* an active
    render, as part of this chapter's own sequencing. */
-async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
+/* fs-38 Wave 3c, Task 22 fix round 1 (F5) — shared implementation. Task 15
+   was rejected on this branch for re-deriving shared vocabulary locally
+   (`manifestSlotFor`); the same standard applies here — the mirror pair
+   below is warranted (two distinct, named call sites read better than one
+   parameterised call at each site), but the fetch/error-message body is
+   not, so a future timeout or error-message change lands in one place.
+
+   The `signal` parameter is #1893's, kept through Wave 3c's generalisation:
+   this `/unload` takes the sidecar's `_synth_lock`, so it can legitimately
+   queue behind ANOTHER book's in-flight synth. Without a signal it was
+   uncancellable and could stall a chapter forever. Every call site must
+   forward the chapter's signal AND bound the call — see the callers. */
+async function evictEngineForPhase(engine: CloneEngine, signal?: AbortSignal): Promise<void> {
   const url = getResolvedSidecarUrl();
   const res = await fetch(`${url}/unload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ engine: 'qwen' }),
+    body: JSON.stringify({ engine }),
     signal,
   });
   if (!res.ok) {
     throw new Error(`Sidecar /unload returned ${res.status} ${res.statusText}`);
   }
+}
+
+async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
+  return evictEngineForPhase('qwen', signal);
+}
+
+/* fs-38 Wave 3c, Task 22 [FAB-I2] — the mirror of `evictQwenForCoquiPhase`
+   above: evicts Coqui so a subsequent Qwen derive/render doesn't run with
+   XTTS (~3.5 GB) still resident, the same co-residency hazard mirrored the
+   other direction. Used ONLY by the cloned/designed-voice resolver pre-pass
+   (below) to hand off from "coqui derive phase" back to "qwen phase" — see
+   the pre-pass's own Task 22 comment for why this fires only when a qwen
+   load is about to happen afterward (evicting XTTS unconditionally would
+   unload it right before every Coqui-only chapter's groups reload it). */
+async function evictCoquiForQwenPhase(signal?: AbortSignal): Promise<void> {
+  return evictEngineForPhase('coqui', signal);
 }
 
 /* fs-38 Wave 3b2 — read a cloned voice's retained reference clip (its
@@ -922,15 +992,87 @@ async function readMasterPcmDefault(
   return { pcm, sampleRate: entry.master.sampleRate, refText: entry.master.transcript };
 }
 
+/* fix wave (Task 18 review, CRITICAL-1) — the coqui artifact lives under
+   `xttsVoicesDir()`, a different directory from `qwenVoicesDir()`
+   (workspace/paths.js), so a storage key of `xtts-<uuid>` must resolve
+   through `xttsVoiceLatentsPath`, not `qwenVoicePtPath` — stat()-ing the
+   wrong directory always misses, which reads as "missing" and drives every
+   healthy coqui-cloned voice through a full GPU derive on every chapter.
+   Dispatched on the storage key's prefix (derived from `manifestSlotFor`,
+   never hand-built — Task 15's local `manifestSlotFor` copy was rejected for
+   exactly this reason) rather than threading `engine` through the
+   `ResolveChapterDeps.ptExists(storageKey)` signature, since this same
+   function also backs the designed-voice resolver's qwen-only `ptExists`. */
+const COQUI_STORAGE_KEY_PREFIX = `${manifestSlotFor('coqui')}-`; // 'xtts-'
+
 /** Shared by both the cloned- and designed-voice resolver deps builders — a
-    real stat() of the cached `.pt` under the given storage key. */
-async function defaultPtExists(storageKey: string): Promise<boolean> {
+    real stat() of the cached artifact under the given storage key, resolved
+    to the right per-engine directory (see the comment above). */
+// fix wave (Task 18 review, CRITICAL-1) — exported so a real-deps test can
+// exercise the per-engine path resolution directly (writing a fixture file
+// at the REAL `xttsVoiceLatentsPath`/`qwenVoicePtPath` locations) rather than
+// only indirectly through `synthesiseChapter`, whose sole production call
+// site still hardcodes `engine: 'qwen'` (Task 20 lifts that literal) and so
+// cannot reach the coqui branch of this function today.
+export async function defaultPtExists(storageKey: string): Promise<boolean> {
+  const path = storageKey.startsWith(COQUI_STORAGE_KEY_PREFIX)
+    ? xttsVoiceLatentsPath(storageKey)
+    : qwenVoicePtPath(storageKey);
   try {
-    await stat(qwenVoicePtPath(storageKey));
+    await stat(path);
     return true;
   } catch {
     return false;
   }
+}
+
+/* fs-38 Wave 3c, Task 14 — `cloneResolverDepsOverride`/
+   `designedResolverDepsOverride` are documented as a SHALLOW merge over the
+   real deps ("a test can replace just the pieces it needs to fake").
+   `updateEntry` is a NEW primitive that performs its OWN internal
+   readEntry+writeEntry — so a test overriding `readEntry`/`writeEntry` (to
+   fake the voice-library store) but not `updateEntry` would, under a bare
+   shallow merge, silently keep the REAL `updateEntry` from
+   `buildDefault*ResolverDeps`, which reads/writes the REAL on-disk
+   workspace and ignores the test's fakes entirely — reporting the test's
+   requested voice as missing rather than whatever the fake `readEntry`
+   intended. Recompose `updateEntry` from the FINAL `readEntry`/`writeEntry`
+   whenever either was overridden and `updateEntry` itself wasn't,
+   preserving the "just the pieces it needs" contract for this primitive
+   too. A no-op (returns `merged` unchanged) whenever the caller supplied
+   its own `updateEntry` override or overrode neither read nor write. */
+function withDerivedUpdateEntry<
+  T extends {
+    readEntry(uuid: string): Promise<VoiceLibraryEntry | null>;
+    writeEntry(entry: VoiceLibraryEntry): Promise<void>;
+    updateEntry(
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ): Promise<VoiceLibraryEntry | null>;
+  },
+>(merged: T, override: Partial<T> | undefined): T {
+  if (!override || override.updateEntry || (!override.readEntry && !override.writeEntry)) {
+    return merged;
+  }
+  const { readEntry: mergedReadEntry, writeEntry: mergedWriteEntry } = merged;
+  return {
+    ...merged,
+    updateEntry: async (uuid, mutate) => {
+      const fresh = await mergedReadEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await mergedWriteEntry(next);
+      // Fix wave (review I-1) — mirrors production's `updateEntry`
+      // fallback (workspace/voice-library.ts): null must mean ONLY
+      // "mutate declined", never "the canonical re-read merely failed" —
+      // e.g. a fixed-value `readEntry` mock that can't observe its own
+      // fake write (M-3). Falling back to `next` keeps this recomposed
+      // primitive's contract identical to the real one.
+      return (await mergedReadEntry(uuid)) ?? next;
+    },
+  };
 }
 
 /* fs-38 Wave 3b2 — the resolver pre-pass's real (production) dependency
@@ -938,21 +1080,43 @@ async function defaultPtExists(storageKey: string): Promise<boolean> {
    clone-derive call, and a real stat() of the cached `.pt`. `synthesiseChapter`
    merges `opts.cloneResolverDepsOverride` shallowly over this so a test can
    replace just the pieces it needs to fake (see that opt's doc comment). */
-function buildDefaultCloneResolverDeps(signal: AbortSignal | undefined): ResolveChapterDeps {
+/* Exported (previously module-private) so fs-38 Wave 3c Task 19's
+   currentArtifactVersion wiring can be driven directly — no production or
+   test call site routes a cloned voice through the 'coqui' engine via
+   synthesiseChapter yet (the sole caller still hardcodes `engine: 'qwen'`
+   per-request; generalising that is Task 20's job), so nothing else
+   exercises this function's coqui arm. Mirrors defaultPtExists's own
+   Task-18-fix-wave export for the identical reason. */
+export function buildDefaultCloneResolverDeps(
+  signal: AbortSignal | undefined,
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void,
+): ResolveChapterDeps {
   return {
     readEntry,
     writeEntry,
+    updateEntry,
     ptExists: defaultPtExists,
     deriveEngineArtifact,
     readMasterPcm: readMasterPcmDefault,
-    currentBaseModel: currentQwenBaseModel,
+    /* fs-38 Wave 3c, Task 18 — qwen keeps its existing oracle
+       (`currentQwenBaseModel()`, an env-configured Node-side constant).
+       Task 19 gives Coqui its own oracle: `getLastKnownCoquiVersion()`,
+       fed by the sidecar's /health poll (routes/sidecar-health.ts) via
+       `main.py`'s `_coqui_installed_version()` — the installed coqui-tts
+       PACKAGE version isn't a Node-side constant like Qwen's; it can only be
+       observed from the running sidecar process. Before the first reachable
+       poll (the boot window) it reads '' — the SAME structural no-op Task 18
+       shipped: `isArtifactVersionStale` (clone-engines.ts) treats an unknown
+       CURRENT version as "not stale", so a cold-started server never forces
+       a spurious re-derive of every cloned coqui voice on its first chapter.
+       See clone-voice-resolver.ts's ClassifyInput doc comment for the full
+       reasoning. */
+    currentArtifactVersion: (engine) =>
+      engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
     purgeCloneArtifacts,
-    /* No free-text progress channel exists on SynthesiseChapterOpts today —
-       only typed per-group/per-title ticks (onGroupStart/onTitleStart etc.).
-       Forcing a "Preparing voice…" message through one of those would misuse
-       a differently-shaped callback, so this stays unwired (undefined) until
-       a real channel exists. */
-    reportProgress: undefined,
+    /* #1813 — retires the old `reportProgress: undefined` placeholder: see
+       `SynthesiseChapterOpts.onVoicePrepare`'s doc comment for the chain. */
+    onVoicePrepare,
     signal,
   };
 }
@@ -983,8 +1147,20 @@ const DESIGNED_MASTER_SAMPLE_RATE = 24_000;
    shape on a successful re-derive, dropping `instruct`/`designModel`/
    `mintMethod`/`fallbackFor` entirely — the caller needs this PRE-derive
    snapshot to restore those fields afterwards. */
+/* fs-38 Wave 3c, Task 20a [DELTA-M1] — `engine` gates whether an empty
+   `refText` disqualifies the read. A QWEN derive needs a transcript
+   (`deriveEngineArtifact` validates `refText` at call time for `engine ===
+   'qwen'`); a COQUI derive is purely acoustic and never sends `refText` on
+   the wire at all, so gating a coqui self-heal on `refText` presence would
+   misreport "no retained clip" for a design whose manifest merely lacks
+   one — the master.wav clip itself is still perfectly usable. The storage
+   key stays hardcoded to the `qwen-` prefix regardless of `engine`: the
+   retained clip is a property of the DESIGN (minted once, only ever via
+   qwen VoiceDesign), not of whichever engine later derives an artifact
+   from it. */
 async function readDesignedMasterPcmDefault(
   uuid: string,
+  engine: CloneEngine,
 ): Promise<
   { pcm: Buffer; sampleRate: number; refText: string; manifest: Record<string, unknown> } | null
 > {
@@ -997,8 +1173,9 @@ async function readDesignedMasterPcmDefault(
      have rendered fine. */
   try {
     const manifest = await readJson<Record<string, unknown>>(qwenVoiceSidecarPath(storageKey));
+    if (!manifest) return null;
     const refText = typeof manifest?.refText === 'string' ? (manifest.refText as string).trim() : '';
-    if (!manifest || !refText) return null;
+    if (engine === 'qwen' && !refText) return null;
     const raw = await readFile(qwenVoiceWavPath(`${storageKey}__master`));
     const pcm = await decodeAudioToPcm(raw, DESIGNED_MASTER_SAMPLE_RATE);
     return { pcm, sampleRate: DESIGNED_MASTER_SAMPLE_RATE, refText, manifest };
@@ -1024,6 +1201,7 @@ async function writeSidecarManifestDefault(
    `buildDefaultCloneResolverDeps` above. */
 function buildDefaultDesignedResolverDeps(
   signal: AbortSignal | undefined,
+  onVoicePrepare?: (e: { characterId: string; characterName: string }) => void,
 ): ResolveDesignedVoiceDeps {
   return {
     ptExists: defaultPtExists,
@@ -1031,8 +1209,17 @@ function buildDefaultDesignedResolverDeps(
     writeSidecarManifest: writeSidecarManifestDefault,
     readEntry,
     writeEntry,
+    updateEntry,
     deriveEngineArtifact,
-    reportProgress: undefined,
+    /* fs-38 Wave 3c, Task 20a — coqui arm only (DELTA-I3 staleness check);
+       identical wiring to buildDefaultCloneResolverDeps's own
+       currentArtifactVersion above, so the two resolvers can never
+       independently drift on what "current" means per engine. */
+    currentArtifactVersion: (engine) =>
+      engine === 'coqui' ? getLastKnownCoquiVersion() : currentQwenBaseModel(),
+    /* #1813 — retires the old `reportProgress: undefined` placeholder: see
+       `SynthesiseChapterOpts.onVoicePrepare`'s doc comment for the chain. */
+    onVoicePrepare,
     signal,
   };
 }
@@ -1056,6 +1243,7 @@ export async function synthesiseChapter(
     onGroupRetry,
     onBatchComplete,
     onEmbedProgress,
+    onVoicePrepare,
     signal,
     chapterTitleNarration,
     narratorCharacterId = 'narrator',
@@ -1133,44 +1321,61 @@ export async function synthesiseChapter(
     voiceName: string,
     detail?: string,
   ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
-    /* C1 — a cloned voice is exempt from fallback: if Qwen is unavailable this
-       run, raise instead of rerouting (never substitute a real person). A
-       cloned voice with a healthy Qwen + a real voiceName falls through
-       unchanged and renders normally.
+    /* C1 — a cloned voice is exempt from fallback/reroute on ANY clone-capable
+       engine, not just Qwen (fs-38 Wave 3c, Task 21 — this guard used to be
+       hardcoded to `route.engine === 'qwen'`, so a coqui-routed clone got NO
+       exemption at all): if the character is cloned on its OWN routed engine
+       and that engine can't actually carry it this run (no resolvable
+       voiceName, OR the routed engine itself reads unavailable), raise
+       instead of ever rerouting (never substitute a real person). A cloned
+       voice with a healthy routed engine + a real voiceName falls through
+       unchanged and renders normally. Built on `hasClonedProvenance` — the
+       FAIL-SAFE, uuid-agnostic test (see clone-engines.ts) — deliberately,
+       not `clonedSlotForEngine`/`libraryVoiceForEngine`: a malformed cloned
+       slot (missing/non-string libraryUuid) must still count as cloned and
+       still be protected here, or a malformed-but-real clone could slip
+       through and get rerouted, which is the exact defect class this wave
+       exists to close.
+
+       GATE 1 M-3 — that predicate choice is right, but do NOT read the
+       paragraph above as "this branch catches the malformed case". The
+       THROW below also requires `(!voiceName || routeEngineUnavailable)`,
+       and a malformed cloned slot resolves through `pickVoiceForEngine` to
+       its non-empty human-readable `name` — so with a HEALTHY routed engine
+       `voiceName` is truthy and this backstop does not fire at all. Live
+       coverage for the malformed case comes from the pre-pass (which
+       extracts the uuid through `libraryVoiceForEngine` and hard-fails
+       `misconfigured`), not from here. The Task 21 test that covers this
+       shape (`synthesise-chapter-cloned-exemption.test.ts`) passes only
+       because it ALSO leaves coqui install-state unset, satisfying the
+       second disjunct. The predicate still matters for the case this
+       branch DOES catch — an unavailable routed engine — where treating a
+       malformed slot as not-cloned would let it reroute.
 
        Defence-in-depth, not the live guard: the cloned-voice resolver
        pre-pass above (`resolveClonedVoicesForChapter`, ~:1119) now runs
        BEFORE any group reaches this function, over exactly the same
-       cloned+qwen-routed characters this branch checks (including the
+       cloned-and-routed characters this branch checks (including the
        orphaned-characterId narrator substitution — see the IMPORTANT-1
-       fix on `rendersNarrator` above). Task 6b split its single
-       `engineUnavailable` input into two: `wrongEngine` (`routedEngine !==
-       'qwen'`) and `engineUnavailable` (`qwenUnavailable`) — together a
-       strict superset of this branch's `route.engine === 'qwen' &&
-       qwenUnavailable` trigger, and `classifyClonedVoice` treats either as
-       broken unconditionally (before any entry-health check) — so the
-       pre-pass always throws `UnresolvableClonedVoiceError` first in
-       production.
+       fix on `rendersNarrator` above). Task 20 generalised its
+       `engineUnavailableFor` signal to both qwen and coqui, so the pre-pass
+       already throws `UnresolvableClonedVoiceError` first in production for
+       either engine, same as it always did for qwen alone.
        This branch is retained as a backstop for any future caller that
        reaches `applyQwenFallback` without going through the pre-pass
        first (e.g. a direct unit-test harness, or a future refactor that
        adds another call site) — see `synthesise-chapter-cloned-exemption
-       .test.ts` case 1, which now documents (rather than exercises) this
-       gap between the two guards. */
-    const cloned = c.overrideTtsVoices?.qwen?.provenance === 'cloned';
-    const needsFallback =
-      route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
-    /* Review I-3 — this must fire for EITHER reason `needsFallback` would
-       fire (empty `voiceName` OR `qwenUnavailable`), not just
-       `qwenUnavailable`. The prior `qwenUnavailable`-only check left a gap:
-       a cloned slot that resolves to an empty voiceName (e.g. a
-       libraryUuid-only slot with a missing `name` — the I-3 voice-mapping
-       fix closes the one known way that happens) with Qwen otherwise
-       HEALTHY would fall through past this guard and hit `needsFallback`
-       below, silently rerouting a real person's voice to Kokoro. */
-    if (route.engine === 'qwen' && cloned && needsFallback) {
+       .test.ts`'s Task 21 cases, which defeat the pre-pass (mocking
+       `characterHasClonedSlot`) specifically to exercise this backstop in
+       isolation, proving it's real and not just shadowed by the pre-pass. */
+    const routeEngine = route.engine;
+    const clonedOnRoute = isCloneEngine(routeEngine) && hasClonedProvenance(c, routeEngine);
+    const routeEngineUnavailable = isCloneEngine(routeEngine) && engineUnavailableFor(routeEngine);
+    if (clonedOnRoute && (!voiceName || routeEngineUnavailable)) {
       throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
     }
+    const needsFallback =
+      route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
     /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
        read the book's language through an English-only voice. fs-60 — if
@@ -1197,6 +1402,28 @@ export async function synthesiseChapter(
   };
 
   const castById = new Map(cast.map((c) => [c.id, c]));
+
+  /* fs-38 Wave 3c, Task 23 — resolve the narrator's REAL cast row when one
+     exists, instead of trusting the caller's `narratorCharacterId` blindly.
+     Every route (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
+     hardcodes the literal 'narrator', but a book's narrator row can
+     legitimately carry the id 'char-narrator' instead — the id
+     `voice-mapping.ts`'s `inferProfile` already recognises as narrator.
+     Trusting 'narrator' unconditionally on such a book made every
+     stub-fallback site below (the title beat, the orphaned-characterId
+     safety net, and the in-chapter-id gate that decides which characters
+     enter the cloned-voice pre-pass) resolve from a synthetic no-overrides
+     stub instead of the real row — silently dropping to a catalogue voice
+     AND, because `cast.filter`/`inChapterCharacterIds.has` can't match a
+     synthetic id against the real one, skipping cloned-voice validation
+     entirely (a Property-1 violation: never a silent substitution). Only
+     re-resolve when the CALLER's own id has no cast match — a caller that
+     legitimately points `narratorCharacterId` at some other real row keeps
+     its own choice untouched. */
+  const resolvedNarratorCharacterId = castById.has(narratorCharacterId)
+    ? narratorCharacterId
+    : (['narrator', 'char-narrator'].find((id) => castById.has(id)) ?? narratorCharacterId);
+
   const groups = buildSentenceGroups(sentences);
 
   /* Chapter-title narration (moved up from its original site just above the
@@ -1227,60 +1454,549 @@ export async function synthesiseChapter(
      with an orphaned-characterId sentence and no title narration would let a
      cloned-but-stale narrator voice render past the gate untouched. */
   const rendersNarrator = Boolean(titleText) || groups.some((g) => !castById.has(g.characterId));
-  if (rendersNarrator) inChapterCharacterIds.add(narratorCharacterId);
+  if (rendersNarrator) inChapterCharacterIds.add(resolvedNarratorCharacterId);
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — per-engine "is this clone-capable
+     engine unavailable this run" signal, generalising the qwen-only
+     `qwenUnavailable` opt (still the source of truth for qwen — it's the
+     caller's own resolved value, computed from more run context than a bare
+     install-state read, see routes/generation.ts) to coqui via Task 19's
+     per-engine install-state store. Coqui carries no caller-supplied
+     run-level opt — nothing pre-3c ever needed one — so its signal reads
+     straight off `getLastKnownCoquiInstallState()`: 'ready'/'loaded' means
+     usable, everything else (including the cold-boot 'not-installed'
+     default) reads unavailable, mirroring `qwenUnavailable`'s own
+     not-ready-or-loaded-means-unavailable shape (routes/generation.ts). */
+  const engineUnavailableFor = (e: CloneEngine): boolean => {
+    if (e === 'qwen') return qwenUnavailable;
+    const state = getLastKnownCoquiInstallState();
+    return state !== 'ready' && state !== 'loaded';
+  };
+
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — which clone-capable engine "owns" this
+     character's cloned voice, for building the ONE resolver request per
+     character the brief calls for. Prefers the character's ACTUAL routed
+     engine this run when IT carries the cloned slot (the common case — the
+     character renders through its own clone, `wrongEngine` false). Falls
+     back to whichever clone-capable engine (`CLONE_ENGINE_LIST` order —
+     qwen first, the same tie-break `resolveClonedRetargetEngine` uses) DOES
+     carry `provenance: 'cloned'` when the routed engine doesn't — that
+     fallback is what makes `wrongEngine` diagnosable at all (Task 6b): a
+     character cloned on qwen but routed to coqui/kokoro/etc. this run must
+     still resolve to its qwen library entry (for the revoked check) even
+     though this run's render will never touch qwen. */
+  const clonedEngineFor = (c: CastCharacter, routedEngine: TtsEngine): CloneEngine => {
+    if (isCloneEngine(routedEngine) && hasClonedProvenance(c, routedEngine)) return routedEngine;
+    /* MINOR-3 (review) — the `.find()` below can never actually return
+       undefined: every caller of `clonedEngineFor` (below) has already
+       filtered `c` on `characterHasClonedSlot(c)`, which is `true` iff
+       `hasClonedProvenance(c, e)` holds for at least one `e` in
+       `CLONE_CAPABLE_ENGINES` — the same members `CLONE_ENGINE_LIST`
+       iterates (see its own doc comment). TS still needs a fallback
+       because `.find()`'s return type is `CloneEngine | undefined`; an
+       explicit throw is less misleading than silently defaulting to
+       'qwen', which would read as a real decision rather than "this
+       should be impossible." */
+    const found = CLONE_ENGINE_LIST.find((e) => hasClonedProvenance(c, e));
+    if (!found) {
+      throw new Error(
+        `clonedEngineFor: "${c.name ?? c.id}" has no cloned slot on any clone-capable engine ` +
+          `— caller must filter on characterHasClonedSlot() first.`,
+      );
+    }
+    return found;
+  };
+
+  /* fs-38 Wave 3c, Task 20 [ADV-C1] — the load-bearing filter, generalised
+     from "the routed engine's slot is cloned" to a UNION over every
+     clone-capable slot (`characterHasClonedSlot`, the FAIL-SAFE whole-
+     character test from clone-engines.ts) — a character cloned on Coqui
+     alone now enters this pre-pass too, not just a qwen-cloned one. */
   const clonedVoiceRequests = cast
-    .filter(
-      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'cloned',
-    )
+    .filter((c) => inChapterCharacterIds.has(c.id) && characterHasClonedSlot(c))
     .map((c) => {
       const routedEngine = routeFor(c).engine;
+      const engine = clonedEngineFor(c, routedEngine);
       return {
         characterName: c.name ?? c.id,
-        libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
-        wrongEngine: routedEngine !== 'qwen',
-        engineUnavailable: qwenUnavailable,
+        // #1813 — carried through to onVoicePrepare's payload; see
+        // ClonedVoiceRequest's doc comment.
+        characterId: c.id,
+        /* fs-38 Wave 3c, Task 20 [ADV-C1] — Property-1 hole (Task 16 review):
+           extracted through `libraryVoiceForEngine`, the SAME RESOLUTION
+           predicate `pickVoiceForEngine` (voice-mapping.ts) gates the actual
+           render on — not a raw `.libraryUuid` property read. A
+           `provenance: 'cloned'` slot with an empty/missing/non-string
+           `libraryUuid` therefore resolves to `undefined` HERE exactly as it
+           would for the renderer, which `resolveClonedVoicesForChapter`'s
+           existing `if (!libraryUuid)` guard already turns into a hard
+           `misconfigured` failure — never a silent fall-through to a stock
+           catalogue voice (see clone-voice-resolver.ts's `libraryUuid`
+           handling, unchanged by this task). There is today no coqui
+           analogue of the qwen-only `cloned` exemption guard in
+           `applyQwenFallback` below; routing `libraryUuid` through this
+           validated RESOLUTION test (rather than a raw slot read) is what
+           makes this hard-fail hold for coqui too, without needing new code
+           in clone-voice-resolver.ts. */
+        libraryUuid: libraryVoiceForEngine(c, engine)?.libraryUuid,
+        engine,
+        wrongEngine: routedEngine !== engine,
+        engineUnavailable: engineUnavailableFor(engine),
       };
     });
-  if (clonedVoiceRequests.length > 0) {
-    const cloneResolverDeps: ResolveChapterDeps = {
-      ...buildDefaultCloneResolverDeps(signal),
-      ...cloneResolverDepsOverride,
-    };
-    await resolveClonedVoicesForChapter(clonedVoiceRequests, cloneResolverDeps);
-  }
-
+  /* [#1891] — a legacy cast.json slot can carry a qwen `libraryUuid` with NO
+     `provenance` field at all (pre-dates the provenance dimension). Both
+     `characterHasClonedSlot` above and `libraryVoiceForEngine` require
+     `provenance` — correctly, deliberately, for the FAIL-SAFE/RESOLUTION
+     roles they play elsewhere (see clone-engines.ts; five separate reviews
+     have each proposed loosening one of those three predicates for a
+     legacy-shape gap like this one, and each time it reintroduced the
+     malformed-uuid substitution bug this wave's Global Constraints exist to
+     prevent — so this fix does NOT touch them). But `pickVoiceForEngine`'s
+     qwen branch (voice-mapping.ts) resolves a bare `libraryUuid` DIRECTLY,
+     with no provenance check at all (a deliberate, narrower exemption —
+     Review I-3 — for a qwen slot whose `name` can legitimately be blank).
+     So this legacy shape renders from a real library artifact today with
+     ZERO revocation check, purely because it never entered the pre-pass
+     above. Fixed at THIS call site instead: feed it into the SAME resolver
+     the cloned pre-pass already uses, reading the raw `libraryUuid` the
+     same way the renderer will (not through the provenance-gated
+     `libraryVoiceForEngine`) — so revocation is actually checked before any
+     render reaches this data. Scoped to qwen only: coqui's branch of
+     `pickVoiceForEngine` has no such bare-uuid exemption (it goes through
+     the provenance-gated `libraryVoiceForEngine` with nothing to fall back
+     on), so there is no live coqui-equivalent of this gap. A one-time
+     migration stamping `provenance: 'cloned'` onto this legacy data at the
+     source (voice-library.ts) is the OTHER suggested fix shape for #1891 —
+     this is the runtime backstop regardless of whether that migration ever
+     lands. */
+  const legacyQwenLibraryRequests = cast
+    .filter((c) => {
+      if (!inChapterCharacterIds.has(c.id) || characterHasClonedSlot(c)) return false;
+      const qwenSlot = c.overrideTtsVoices?.qwen;
+      return (
+        typeof qwenSlot?.libraryUuid === 'string' &&
+        qwenSlot.libraryUuid.length > 0 &&
+        qwenSlot.provenance === undefined
+      );
+    })
+    .map((c) => ({
+      characterName: c.name ?? c.id,
+      characterId: c.id,
+      libraryUuid: c.overrideTtsVoices!.qwen!.libraryUuid as string,
+      engine: 'qwen' as CloneEngine,
+      wrongEngine: routeFor(c).engine !== 'qwen',
+      engineUnavailable: engineUnavailableFor('qwen'),
+    }));
+  clonedVoiceRequests.push(...legacyQwenLibraryRequests);
   /* fs-38 Wave 3b2, Task 12 (§2.3) — designed-voice orphan self-heal, over the
      SAME in-chapter readiness gate as the cloned pre-pass above. Narrower and
      gentler than the cloned resolver (see resolveDesignedVoicesForChapter's
-     doc comment): only a missing `.pt` is repaired, never a stale one, and a
-     failed self-heal never throws — it just leaves the chapter to whatever
-     happens today for a missing designed voice. Skipped entirely for a
-     character that doesn't actually route to Qwen this run (a book on
+     doc comment): the QWEN arm only repairs a missing `.pt`, never a stale
+     one, and a failed self-heal never throws — it just leaves the chapter to
+     whatever happens today for a missing designed voice. Skipped entirely for
+     a character that doesn't actually route to Qwen this run (a book on
      Kokoro/Coqui, or Qwen globally unavailable) — self-healing a `.pt` that
-     wouldn't be used this render anyway is pure waste. */
-  const designedVoiceRequests = cast
-    .filter(
-      (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'designed',
-    )
-    .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
-    .map((c) => ({
-      characterName: c.name ?? c.id,
-      libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
-    }));
-  if (designedVoiceRequests.length > 0) {
-    /* M-1 (review) — the abort check above (~:1181) only covers the cloned
-       pre-pass; the cloned resolver's own re-derive can run for a while, so
-       the signal may abort meanwhile. Re-check before starting the designed
-       block rather than let a paused/cancelled run keep spending GPU time
-       here. */
+     wouldn't be used this render anyway is pure waste.
+
+     fs-38 Wave 3c, Task 20a [D-B][D-G] — the COQUI arm below is deliberately
+     built on a DIFFERENT selection set, not `routeFor`/`qwenUnavailable`:
+     select on "the character has an xtts slot with provenance 'designed'",
+     full stop. Gating it the same way the qwen arm is gated would leave
+     [DELTA-C2]'s three vectors each hitting a hard 409 where the chapter
+     renders today: (1) fs-60's Qwen->Coqui fallback below reroutes a
+     QWEN-ROUTED character onto coqui — `routeFor` reads 'qwen' for it, so a
+     routeFor-based filter would never validate the coqui slot it's about to
+     render; (2) `qwenUnavailable` has nothing to do with whether COQUI is
+     usable — gating on it would skip the coqui self-heal on every run where
+     Qwen merely happens to be off; (3) `clearMismatchedDesignedVoices`
+     (verify-designed-voice-language.ts) deletes only the qwen slot on a
+     language mismatch, leaving a stranded xtts slot with no `overrideTtsVoices
+     .qwen` at all — `routeFor` still resolves an engine for that character,
+     but never via a qwen-slot check, so this arm must not depend on one. */
+  const designedVoiceRequests = [
+    ...cast
+      .filter(
+        (c) => inChapterCharacterIds.has(c.id) && c.overrideTtsVoices?.qwen?.provenance === 'designed',
+      )
+      .filter((c) => !qwenUnavailable && routeFor(c).engine === 'qwen')
+      .map((c) => ({
+        characterName: c.name ?? c.id,
+        characterId: c.id,
+        libraryUuid: c.overrideTtsVoices?.qwen?.libraryUuid,
+        engine: 'qwen' as const,
+      })),
+    ...cast
+      .filter((c) => inChapterCharacterIds.has(c.id))
+      .flatMap((c) => {
+        const lib = libraryVoiceForEngine(c, 'coqui');
+        if (lib?.provenance !== 'designed') return [];
+        return [
+          {
+            characterName: c.name ?? c.id,
+            characterId: c.id,
+            libraryUuid: lib.libraryUuid,
+            engine: 'coqui' as const,
+          },
+        ];
+      }),
+  ];
+  /* fs-38 Wave 3c, Task 22 [AC-C4][FAB-I2][DELTA-C3] — partition BOTH derive
+     request lists (cloned above, designed here) by engine, instead of
+     running the cloned resolver then the designed resolver each over their
+     own full (qwen+coqui-mixed) request list.
+
+     The hazard: `generation.ts` awaits `ensureReadyOrPause(engine, …)`
+     BEFORE `synthesiseChapter` is ever called, so Qwen is typically already
+     resident the moment this pre-pass starts. Ordering the coqui derives
+     after the qwen ones (or simply relocating today's two whole-list calls
+     without an evict up front) fixes only the pre-pass's END state — what a
+     previous draft of this task claimed and tested — while leaving the
+     window it OPENS with untouched: the very first coqui derive would still
+     load XTTS on top of a warm Qwen. So Qwen is evicted before ANY real
+     coqui derive fires — not "before the coqui block", see fix round 1
+     below for why that distinction matters. The invariant, scoped to THIS
+     PRE-PASS: within it, Coqui and Qwen are never both resident at any
+     point — not merely "the pre-pass ends with only Qwen resident". This
+     does NOT extend past the pre-pass's own return: the anchor group
+     rendered immediately after (a standalone `synthGroup` call, before
+     `synthGroupsSerialized` is ever reached) can still reload XTTS on top
+     of a freshly-evicted-to-Qwen state if it happens to be coqui-routed —
+     `synthGroupsSerialized`'s own evict deliberately doesn't cover it
+     either. Pre-existing, not introduced or worsened by this task; track it
+     in plan 271 alongside this pre-pass's other known-but-out-of-scope gap
+     (two books both mid coqui-derive on the same card — Node serialises
+     nothing across books; the sidecar's placement controller is the only
+     backstop).
+
+     The mirror [FAB-I2]: a "coqui derives -> evict coqui -> qwen derives"
+     ordering with no evict-after-coqui would leave XTTS (~3.5 GB) resident
+     when the chapter's Qwen derives/render start right after — the same
+     defect, mirrored. So the coqui block is ALSO evicted once it finishes —
+     but ONLY when a qwen load is actually about to happen next (fix round 1
+     F2 below), not merely when the chapter's BODY groups happen to route to
+     qwen: `synthGroupsSerialized` below already short-circuits to
+     `synthGroupsBatched` for a chapter that never mixes qwen and coqui
+     groups, and "all characters on coqui" is the normal shape for a Coqui
+     book — evicting XTTS unconditionally here would unload it right before
+     every group reloads it, and Task 11 clears the sidecar's
+     `_latents_cache` on unload, so every `.pt` would be re-read too (the
+     performance-cliff DELTA-I7 exists to avoid).
+
+     fix round 1 (F1/CRITICAL + F3) — the evict is no longer an eager,
+     unconditional call in front of the whole coqui block: `evictQwenFor
+     CoquiPhase` THROWS on a non-2xx response or a connection error, and a
+     chapter with ONLY designed coqui voices (no cloned voice at all) must
+     stay fail-SOFT (§2.3) even when the sidecar is briefly unreachable — a
+     designed self-heal that can't run is supposed to just leave the voice
+     alone, the same as it always did pre-Task-22. Evicting eagerly, for
+     every coqui-engine REQUEST that merely EXISTS (healthy included), also
+     unloaded Qwen for zero benefit on the common "everything's fine, no
+     derive needed" render (F3) — a real per-chapter reload cost across a
+     whole qwen-default book with a few healthy coqui clones.
+
+     Both are fixed the same way: `deriveEngineArtifact`/`deriveEngine
+     Artifact`'s COQUI callers pass a `beforeFirstDerive` hook (see
+     `ResolveChapterDeps`/`ResolveDesignedVoiceDeps` in clone-voice-
+     resolver.ts) that each resolver invokes itself, from INSIDE its own
+     per-request try/catch, immediately before the first REAL coqui derive
+     it's about to issue — never for a healthy or broken/skipped request.
+     A failed evict is therefore reported through each resolver's OWN
+     existing, already-differentiated failure policy: the cloned resolver's
+     catch treats it as an ordinary derive failure (fail-loud — `broken`
+     accumulates, `UnresolvableClonedVoiceError` still throws, satisfying
+     "cloned present + evict fails still raises"); the designed resolver's
+     coqui-arm catch treats it as an ordinary self-heal failure (fail-soft —
+     `softFailedUuids`/keep-stale, never rethrown, satisfying "designed-only
+     + evict fails still completes the chapter"). No separate try/catch is
+     needed here — see `coquiEvict` below.
+
+     fix round 2 [NEW-CRITICAL] — round 1 fixed the LEADING evict's fail-
+     soft contract but left its exact mirror: `evictCoquiForQwenPhase` was
+     STILL a bare top-level `await` with no enclosing try/catch anywhere in
+     this function, reachable with only designed voices in the chapter
+     (leading evict + coqui derive both succeed, THEN the sidecar recycles
+     and the trailing evict itself 502s/ECONNREFUSEDs) — the identical
+     §2.3 violation, just on the other side. Fixed the identical way: see
+     `beforeFirstQwenDerive`/`qwenEvict` below, the QWEN-side mirror of
+     `beforeFirstDerive`/`coquiEvict`. Also (Important) dropped the
+     `coquiEvict.ok`-only gate on the trailing evict — it under-covered the
+     cross-chapter case (a PRIOR chapter left Coqui resident; THIS chapter
+     has only healthy coqui clones, so no new coqui derive ever ran, `ok`
+     stayed false, and the trailing evict silently never fired). See the
+     gate's own comment below for the replacement. */
+  const clonedCoquiRequests = clonedVoiceRequests.filter((r) => r.engine === 'coqui');
+  const clonedQwenRequests = clonedVoiceRequests.filter((r) => r.engine !== 'coqui');
+  const designedCoquiRequests = designedVoiceRequests.filter((r) => r.engine === 'coqui');
+  const designedQwenRequests = designedVoiceRequests.filter((r) => r.engine !== 'coqui');
+
+  /* Memoised once per chapter: the FIRST resolver (cloned or designed,
+     whichever reaches a real coqui derive first) that calls `hook()` pays
+     for the actual evict; every later call — same or the other resolver —
+     reuses the SAME settled promise (success or rejection), so a genuinely
+     unreachable sidecar fails every remaining coqui derive this chapter
+     the same way instead of re-attempting (and re-throwing raw) per
+     request. */
+  const coquiEvict: { promise: Promise<void> | null } = { promise: null };
+  const beforeFirstCoquiDerive = (): Promise<void> => {
+    if (!coquiEvict.promise) {
+      /* #1893 reconciliation (main merge) — bounded + cancellable, like the
+         render-phase evict below. The FAILURE policy here is already correct
+         by construction (each resolver calls this from inside its own
+         try/catch, so a failure is classified by that arm's own fail-loud /
+         fail-soft rule — see this block's Task 22 comment above). What was
+         missing is #1893's OTHER half: this `/unload` takes the sidecar's
+         `_synth_lock`, so it can queue behind another book's in-flight synth,
+         and an unbounded fetch stalled the chapter with no way to cancel.
+         `withCallTimeout` is a hoisted declaration below, so it is in scope
+         here; it forwards the chapter's signal and its ceiling. */
+      coquiEvict.promise = withCallTimeout('qwen-evict-for-coqui-prepass', (sig) =>
+        evictQwenForCoquiPhase(sig),
+      );
+    }
+    return coquiEvict.promise;
+  };
+
+  /* fs-38 Wave 3c, Task 22 fix round 2 [NEW-CRITICAL] — the mirror, QWEN
+     side. `evictCoquiForQwenPhase` used to be a bare top-level `await` with
+     NO enclosing try/catch anywhere in this function — reachable with ONLY
+     designed voices in the chapter (leading evict succeeds, the coqui
+     derive runs or fails soft correctly, then the SIDECAR recycles and the
+     trailing evict itself gets a 502/ECONNREFUSED), which aborted a chapter
+     that pre-Task-22 would have rendered — the same §2.3 violation F1 fixed
+     on the leading side. Fixed the identical way: no standalone top-level
+     evict call at all. Instead, whichever qwen-subset resolver call reaches
+     a REAL qwen derive first pays for it, from inside ITS OWN try/catch, so
+     the failure is classified by that resolver's own existing policy
+     (fail-loud for cloned, fail-soft for designed — see the two call sites
+     in clone-voice-resolver.ts). Memoised the same way as the coqui side,
+     so 15 serial qwen derives in one chapter still cost one `/unload`, not
+     15. A qwen RENDER with no derive at all (every qwen voice healthy or a
+     stock catalogue pick) has no resolver call to hang this off, so it's
+     also primed once, best-effort, right before the qwen block below.
+
+     `hasCoquiPresence` guard (discovered fixing the Important gate below,
+     see its own comment) — a chapter with ZERO coqui-engine requests
+     (`clonedCoquiRequests`/`designedCoquiRequests` both empty) never
+     attempts the evict at all, even when a real qwen derive fires: Qwen is
+     this project's DEFAULT engine, so a naive "always evict Coqui before
+     any qwen derive" reading would hit the sidecar's `/unload` on EVERY
+     qwen-cloned/designed repair in EVERY book, coqui or not — confirmed a
+     real regression against synthesise-chapter.test.ts's plain, zero-coqui
+     fake-timer batching suite while building this fix. Scoping to books
+     that actually touch Coqui somewhere mirrors the leading evict's own
+     scope (only fires when a coqui-engine request exists at all).
+
+     GATE 1 M-5 — precise scope of what dropping the `coquiEvict.ok` gate
+     actually fixed, since the fix-round note below reads broader than the
+     code: it covers the cross-chapter case ONLY WHEN THIS chapter also has
+     coqui-engine REQUESTS. A prior chapter that merely RENDERED coqui
+     groups (catalogue voices — no cloned and no designed library voice)
+     leaves XTTS resident, and a following chapter with zero coqui requests
+     plus a real qwen derive returns early right here, so that derive still
+     runs with XTTS resident. The narrowing is deliberate (see the
+     regression above); `synthGroupsSerialized`'s render-phase evicts are
+     the backstop for the residency itself ([#1894] added the trailing one). */
+  const hasCoquiPresence = clonedCoquiRequests.length > 0 || designedCoquiRequests.length > 0;
+  const qwenEvict: { promise: Promise<void> | null } = { promise: null };
+  const beforeFirstQwenDerive = (): Promise<void> => {
+    if (!hasCoquiPresence) return Promise.resolve();
+    if (!qwenEvict.promise) {
+      /* #1893 reconciliation (main merge) — the qwen-side mirror of
+         `beforeFirstCoquiDerive`'s bound above, for the same reason. */
+      qwenEvict.promise = withCallTimeout('coqui-evict-for-qwen-prepass', (sig) =>
+        evictCoquiForQwenPhase(sig),
+      );
+    }
+    return qwenEvict.promise;
+  };
+
+  /* #1813 — the LAST onVoicePrepare payload either resolver reported, tracked
+     here so `withVoicePrepareHeartbeat` (below) can re-fire it on the
+     `groupHeartbeatMs` cadence while a repair/self-heal derive is in flight —
+     a derive can pull the VoiceDesign model in cold (~4-5 GB), which can
+     exceed the client's 30s STALL_THRESHOLD_MS, and without a re-fire this
+     tick would trip the exact "Worker has gone quiet" false stall this
+     feature exists to prevent (same rationale as chapter_recovering's own
+     10s heartbeat). `fireVoicePrepare`, not the raw `onVoicePrepare` opt, is
+     what gets threaded into both deps builders below, so every onVoicePrepare
+     call — from either arm, on either engine — updates this. */
+  let lastVoicePrepare: { characterId: string; characterName: string } | undefined;
+  const fireVoicePrepare = onVoicePrepare
+    ? (e: { characterId: string; characterName: string }): void => {
+        lastVoicePrepare = e;
+        onVoicePrepare(e);
+      }
+    : undefined;
+  /* Mirrors withHeartbeat's up-front-then-interval shape (below, ~synth
+     phase), but the payload isn't known up front here — it's whatever the
+     resolver's own onVoicePrepare callback last reported, which may be
+     nothing at all (every request healthy) — so this only starts re-firing
+     once at least one has, rather than firing immediately like withHeartbeat
+     does for a group tick. Wraps EACH resolver call (both arms, both
+     engines) independently; never merges cloned's fail-loud propagation with
+     designed's fail-soft return — `fn`'s rejection/resolution passes through
+     untouched. */
+  async function withVoicePrepareHeartbeat<T>(fn: () => Promise<T>): Promise<T> {
+    if (!onVoicePrepare || groupHeartbeatMs <= 0) return fn();
+    const refire = (): void => {
+      if (lastVoicePrepare) onVoicePrepare(lastVoicePrepare);
+    };
+    const heartbeat = setInterval(refire, groupHeartbeatMs);
+    heartbeat.unref?.();
+    try {
+      return await fn();
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
+  const cloneResolverDeps =
+    clonedVoiceRequests.length > 0
+      ? withDerivedUpdateEntry<ResolveChapterDeps>(
+          {
+            ...buildDefaultCloneResolverDeps(signal, fireVoicePrepare),
+            beforeFirstDerive: beforeFirstCoquiDerive,
+            beforeFirstQwenDerive,
+            ...cloneResolverDepsOverride, // an explicit test override still wins, same shallow-merge contract as every other field.
+          },
+          cloneResolverDepsOverride,
+        )
+      : undefined;
+  const designedResolverDeps =
+    designedVoiceRequests.length > 0
+      ? withDerivedUpdateEntry<ResolveDesignedVoiceDeps>(
+          {
+            ...buildDefaultDesignedResolverDeps(signal, fireVoicePrepare),
+            beforeFirstDerive: beforeFirstCoquiDerive,
+            beforeFirstQwenDerive,
+            ...designedResolverDepsOverride, // ditto.
+          },
+          designedResolverDepsOverride,
+        )
+      : undefined;
+
+  /* fs-38 Wave 3c, Task 20a [D-I2] — scope the drop to THIS CHAPTER, never
+     `cast` itself (which `generation.ts` reads once and reuses for every
+     chapter in the run). Unchanged from the pre-Task-22 shape, just
+     extracted so it applies identically after EITHER designed-resolver call
+     below — only the coqui arm ever returns a non-empty `softFailedUuids`
+     (resolveDesignedVoicesForChapter's own doc comment), so applying this
+     after the qwen-subset call too is a no-op there, not a behaviour
+     change. */
+  const applyDesignedSoftFailures = (softFailedUuids: string[]): void => {
+    if (softFailedUuids.length === 0) return;
+    const failed = new Set(softFailedUuids);
+    for (const c of cast) {
+      if (!inChapterCharacterIds.has(c.id)) continue;
+      /* Task 20a fix round 1 (F3) — re-check provenance here too, via the
+         SAME `libraryVoiceForEngine` RESOLUTION predicate the selection
+         set above is built from, so this removal set is provably equal to
+         the selection set. Without it, a uuid SHARED by two characters —
+         one `designed`, one `cloned` — would delete the cloned slot too:
+         `softFailedUuids` only carries uuids, not which slot(s) reported
+         them, so a bare `.libraryUuid` match here would silently swap a
+         real person's clone for a catalogue voice, the exact incidental-
+         invariant shape `[DELTA-verified]` made explicit one function
+         away (clone-voice-resolver.ts). */
+      const coquiLib = libraryVoiceForEngine(c, 'coqui');
+      if (coquiLib?.provenance !== 'designed' || !failed.has(coquiLib.libraryUuid)) continue;
+      const { coqui: _coqui, ...restVoices } = c.overrideTtsVoices ?? {};
+      castById.set(c.id, { ...c, overrideTtsVoices: restVoices });
+    }
+  };
+
+  if (clonedCoquiRequests.length > 0) {
+    await withVoicePrepareHeartbeat(() =>
+      resolveClonedVoicesForChapter(clonedCoquiRequests, cloneResolverDeps!),
+    );
+  }
+  if (designedCoquiRequests.length > 0) {
+    /* M-1 (review, carried over) — a paused/cancelled run must stop here
+       too, not keep spending GPU time on a derive nobody wants anymore. */
     if (signal?.aborted) {
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
-    const designedResolverDeps: ResolveDesignedVoiceDeps = {
-      ...buildDefaultDesignedResolverDeps(signal),
-      ...designedResolverDepsOverride,
-    };
-    await resolveDesignedVoicesForChapter(designedVoiceRequests, designedResolverDeps);
+    const { softFailedUuids } = await withVoicePrepareHeartbeat(() =>
+      resolveDesignedVoicesForChapter(designedCoquiRequests, designedResolverDeps!),
+    );
+    applyDesignedSoftFailures(softFailedUuids);
+  }
+
+  /* Task 22 fix round 1 (F2) — a qwen-routed BODY group is not the only way
+     a qwen load is about to happen next: `inChapterCharacterIds` (above)
+     deliberately adds the narrator when `chapterTitleNarration` is set, so
+     a coqui book with a qwen-routed title narrator can have ZERO qwen
+     *groups* while still queuing a real qwen derive in `clonedQwenRequests`/
+     `designedQwenRequests` below. `groups`-only mirrored
+     synthGroupsSerialized's render-phase check but missed that title-beat
+     case — OR in the more direct predicate: a qwen load is about to happen
+     whenever either qwen-subset request list is non-empty, in addition to
+     any qwen body group. */
+  const chapterHasQwenGroups = groups.some((g) => {
+    const character =
+      castById.get(g.characterId) ??
+      castById.get(resolvedNarratorCharacterId) ?? {
+        id: resolvedNarratorCharacterId,
+        name: 'Narrator',
+      };
+    return routeFor(character).engine === 'qwen';
+  });
+  /* fix round 2 (Important) — this used to also require `coquiEvict.ok` (a
+     REAL coqui derive must have SUCCEEDED THIS chapter), which under-covers
+     the cross-chapter case: see `hasCoquiPresence`'s own comment above
+     (`beforeFirstQwenDerive`) for the replacement condition and why a
+     naive "any qwen load, full stop" reading regressed a plain zero-coqui
+     Qwen chapter. The `clonedCoquiRequests`/`designedCoquiRequests` check
+     here is belt-and-braces with that guard (avoids even entering the try
+     below when there's nothing to protect) — the guard alone is sufficient
+     for correctness.
+
+     [NEW-CRITICAL] this priming call is deliberately best-effort: caught
+     and logged, NEVER rethrown, so a sidecar recycle window here can't
+     abort the chapter (the same fail-soft-by-default fix as the leading
+     evict). It shares `beforeFirstQwenDerive`'s memoized promise with the
+     qwen-subset resolver calls below — if it fails here, THEIR OWN
+     try/catch still sees that same failure and reacts per their own policy
+     (fail-loud for a cloned qwen derive, fail-soft for a designed one);
+     this call only covers the "no derive needed at all, just a qwen
+     RENDER" case, which has no resolver call to hang the hook off. */
+  if (
+    hasCoquiPresence &&
+    (chapterHasQwenGroups || clonedQwenRequests.length > 0 || designedQwenRequests.length > 0)
+  ) {
+    try {
+      await beforeFirstQwenDerive();
+    } catch (err) {
+      console.warn(
+        '[synthesise-chapter] failed to evict Coqui ahead of a Qwen phase — continuing; a ' +
+          'cloned-voice qwen derive that needs this will still fail loud per its own policy:',
+        err,
+      );
+    }
+  }
+
+  if (clonedQwenRequests.length > 0) {
+    /* Task 22 fix round 1 (F4) — restore the abort re-check this call lost:
+       pre-Task-22 it ran immediately after the pre-pass's own early abort
+       check with no intervening await; now it can run after the coqui
+       block's (possibly slow) derives, so re-check here too, matching both
+       neighbouring blocks (the designed-resolver calls) which already do. */
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    }
+    await withVoicePrepareHeartbeat(() =>
+      resolveClonedVoicesForChapter(clonedQwenRequests, cloneResolverDeps!),
+    );
+  }
+  if (designedQwenRequests.length > 0) {
+    /* M-1 (review, carried over) — see the identical check above. */
+    if (signal?.aborted) {
+      throw new DOMException('synthesiseChapter aborted', 'AbortError');
+    }
+    const { softFailedUuids } = await withVoicePrepareHeartbeat(() =>
+      resolveDesignedVoicesForChapter(designedQwenRequests, designedResolverDeps!),
+    );
+    applyDesignedSoftFailures(softFailedUuids);
   }
 
   /* Shared synthetic-narrator stub, used wherever a narrator CastCharacter is
@@ -1288,7 +2004,10 @@ export async function synthesiseChapter(
      source of truth so the title beat and the orphaned-characterId fallback
      below can never diverge on what a "missing narrator" looks like. */
   const resolveNarratorChar = (): CastCharacter =>
-    castById.get(narratorCharacterId) ?? { id: narratorCharacterId, name: 'Narrator' };
+    castById.get(resolvedNarratorCharacterId) ?? {
+      id: resolvedNarratorCharacterId,
+      name: 'Narrator',
+    };
 
   /* Orphaned characterId safety net. A sentence can reference a characterId
      that has no corresponding entry in `cast` at all — e.g. a stray
@@ -2000,6 +2719,53 @@ export async function synthesiseChapter(
       );
     }
     for (const [k, v] of await synthGroupsBatched(coquiGroups, onDone)) out.set(k, v);
+    /* [#1894] — the missing half of fs-60's eviction. This wrapper evicted
+       Qwen FOR the Coqui phase but never the reverse, so XTTS (~3.5 GB)
+       stayed resident for the whole rest of the render: into the next
+       chapter, which on this project's Qwen-default books usually has no
+       Coqui work at all and is exactly the render XTTS then crowds out.
+
+       Placed HERE, at the end of the Coqui phase, because this is the one
+       point where "no further Coqui work is queued" is a FACT rather than a
+       prediction: the Coqui phase is the last thing this dispatch does. That
+       matters — #1894 records a near-miss where gating a different evict on
+       "a Qwen load is imminent" over-triggered on nearly every chapter of
+       nearly every book (Qwen is the default engine) and broke an unrelated
+       fake-timer batching suite. This gate is not that: it is the exact
+       mirror of the `evictQwenForCoquiPhase()` call three lines up, under
+       the identical mixed-engine condition, so it fires only where that one
+       already does. A chapter that never mixes engines short-circuits above
+       and is untouched.
+
+       The engine-partition invariant is preserved, not weakened: the
+       sequence is preEvict → evict qwen → coqui → evict coqui, so the two
+       are never co-resident at any point. Cost is symmetric with the leading
+       evict — a mixed chapter reloads XTTS (and its `_latents_cache`, which
+       Task 11 clears on unload) once per mixed dispatch — and is accepted
+       deliberately: 3.5 GB held across an entire book is the worse trade.
+
+       Fail-SOFT, deliberately and unlike the leading evict: every group is
+       already synthesised by the time this runs, so letting a sidecar
+       recycle window (502/ECONNREFUSED on `/unload`) throw here would
+       destroy a chapter's completed work purely to free VRAM — the exact
+       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. The
+       leading evict's own bare `await` is untouched here; it is a separate
+       finding with its own reconciliation against main. */
+    try {
+      /* #1893 reconciliation (main merge) — bounded + cancellable, matching
+         the leading `qwen-evict-for-coqui` call above. The fail-soft policy
+         here was already right (see the comment above); what main added and
+         this mirror lacked is the ceiling: an unbounded `/unload` queued
+         behind another book's `_synth_lock` could stall a chapter whose
+         groups are ALL already synthesised, purely to free VRAM. */
+      await withCallTimeout('coqui-evict-after-coqui-phase', (sig) => evictCoquiForQwenPhase(sig));
+    } catch (err) {
+      console.warn(
+        '[synthesise-chapter] failed to evict Coqui after the chapter’s Coqui phase — continuing; ' +
+          'XTTS stays resident until the next unload:',
+        err,
+      );
+    }
     return out;
   }
 

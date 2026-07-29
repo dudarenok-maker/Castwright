@@ -10,13 +10,15 @@ export type Character = components['schemas']['Character'] & {
   sourceBookTitle?: string;
 };
 /* `phase` is a UI-only sub-state set from the `chapter_assembling`,
-   `chapter_verifying`, and `chapter_recovering` SSE ticks. It lets the Generate
-   view distinguish "synthesising sentences" from the short disk-write phase
-   (`assembling`) between the last group and chapter_complete, the post-synthesis
-   ASR content-QA pass (`verifying`, srv-31), and a mid-render sidecar
-   recycle/respawn ride-out (`recovering`, Wave 3 C2) — so the bar doesn't appear
-   stuck at 99 % and a healthy respawn doesn't read as a silent stall. Not part
-   of the wire schema.
+   `chapter_verifying`, `chapter_recovering`, and `chapter_preparing_voice` SSE
+   ticks. It lets the Generate view distinguish "synthesising sentences" from
+   the short disk-write phase (`assembling`) between the last group and
+   chapter_complete, the post-synthesis ASR content-QA pass (`verifying`,
+   srv-31), a mid-render sidecar recycle/respawn ride-out (`recovering`, Wave 3
+   C2), and the cloned/designed voice resolver pre-pass re-deriving/self-
+   healing a voice before synth starts (`preparing-voice`, #1813) — so the bar
+   doesn't appear stuck at 99 % and none of these healthy waits reads as a
+   silent stall. Not part of the wire schema.
 
    `lufs` is a UI-only mirror of the chapter's EBU R128 sidecar payload
    (plan 71). Hydrated lazily from the book-state endpoint's per-chapter
@@ -25,7 +27,7 @@ export type Character = components['schemas']['Character'] & {
    / disabled / silent-source). `null` distinguishes "fetched but no data"
    from "not fetched yet". See plan 77 for the report-card consumer. */
 export type Chapter = components['schemas']['Chapter'] & {
-  phase?: 'assembling' | 'verifying' | 'recovering' | null;
+  phase?: 'assembling' | 'verifying' | 'recovering' | 'preparing-voice' | null;
   lufs?: components['schemas']['ChapterLoudness'] | null;
   /* fs-13 — accumulated SET (as a Redux-serialisable array) of manuscript
      sentence ids whose same-speaker group has COMPLETED during the live run.
@@ -36,6 +38,12 @@ export type Chapter = components['schemas']['Chapter'] & {
      UI-only / not persisted. Absent → fall back to the `currentLine`
      approximation (older server, or before the first completion tick). */
   completedSentenceIds?: number[];
+  /* #1813 — the character named by the most recent `chapter_preparing_voice`
+     tick, so the `preparing-voice` phase's caption can resolve a display name
+     via `findChar` the same way the live "Synthesising …" caption does.
+     UI-only / not persisted; only meaningful while `phase === 'preparing-
+     voice'`. */
+  preparingVoiceCharacterId?: string | null;
 };
 
 /* Sentence follows the OpenAPI spec; the optional `confidence` is a UI-only

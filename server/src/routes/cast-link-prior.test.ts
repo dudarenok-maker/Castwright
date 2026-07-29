@@ -484,6 +484,161 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(after?.description).toBe("The source's own description."); // never clobbered
   });
 
+  it('Task 6a: does not plant the target qwen slot onto a coqui-cloned source', async () => {
+    /* Headline regression: the source has a real cloned voice on coqui (no
+       qwen slot of its own — `sourceHasQwen` would read false). Linking it
+       to a qwen-designed target must NOT denormalise the target's qwen
+       slot onto it (that would plant another character's designed voice on
+       a real person's cloned record) and must NOT retarget `ttsEngine` to
+       qwen either — the source has no ttsEngine of its own, so the old
+       `source.ttsEngine ?? target.ttsEngine ?? 'qwen'` fallback chain would
+       have force-moved it. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+      {
+        id: 'hartwell-brennan-vale',
+        name: 'Hartwell Brennan Vale',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Bren'],
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-real-person', libraryUuid: 'lib-123', provenance: 'cloned' },
+        },
+      },
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'hart',
+        name: 'Hart',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_hart',
+        aliases: ['Hartwell'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-hart', provenance: 'designed' } },
+        voiceStyle: 'a quirky, earnest boy genius',
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'hartwell-brennan-vale',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'hart',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'hartwell-brennan-vale',
+    ) as
+      | {
+          ttsEngine?: string;
+          overrideTtsVoices?: {
+            qwen?: { name: string };
+            coqui?: { name: string; libraryUuid?: string; provenance?: string };
+          };
+        }
+      | undefined;
+    /* The target's qwen slot must never land on the persisted source record. */
+    expect(after?.overrideTtsVoices?.qwen).toBeUndefined();
+    /* The source's own cloned coqui slot must survive untouched. */
+    expect(after?.overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-real-person',
+      libraryUuid: 'lib-123',
+      provenance: 'cloned',
+    });
+    /* ttsEngine must not be retargeted to qwen either. */
+    expect(after?.ttsEngine).toBeUndefined();
+  });
+
+  it('Task 6a: a cloned slot with a missing/non-string libraryUuid still counts as cloned and is protected', async () => {
+    /* Fail-safe case: a malformed cloned slot (no usable libraryUuid) must
+       still be read as "cloned" by the guard — characterHasClonedSlot does
+       not validate libraryUuid, deliberately, so a malformed record isn't
+       clobbered. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+      {
+        id: 'hartwell-brennan-vale',
+        name: 'Hartwell Brennan Vale',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Bren'],
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-real-person', provenance: 'cloned' },
+        },
+      },
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'hart',
+        name: 'Hart',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_hart',
+        aliases: ['Hartwell'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-hart', provenance: 'designed' } },
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'hartwell-brennan-vale',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'hart',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'hartwell-brennan-vale',
+    ) as
+      | { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } } }
+      | undefined;
+    expect(after?.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(after?.ttsEngine).toBeUndefined();
+  });
+
+  it('[#1885] does not denormalise a CLONED target voice onto the source (consent-scan bypass)', async () => {
+    /* Distinct from Task 6a (which protects a source that's ALREADY cloned
+       from being overwritten). This is the other half: this route is a
+       MANUAL link — the client supplies targetCharacterId directly, so
+       nothing upstream (unlike the auto-matcher's candidate list, which
+       library-cast-scan.ts already filters to exclude any character
+       carrying a cloned slot) stops the target itself from being a real
+       person's consented clone. Discriminating fixture: the SOURCE has no
+       voice at all (so `sourceHasQwen` is false and denormalisation would
+       otherwise fire); only the TARGET carries the cloned slot. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'hart',
+        name: 'Hart',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_hart',
+        aliases: ['Hartwell'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-hart', libraryUuid: 'lib-hart', provenance: 'cloned' } },
+        voiceStyle: 'a quirky, earnest boy genius',
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'hartwell-brennan-vale',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'hart',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'hartwell-brennan-vale',
+    ) as { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } }; voiceStyle?: string } | undefined;
+    /* The target's cloned qwen slot must never land on the source. */
+    expect(after?.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(after?.ttsEngine).toBeUndefined();
+    expect(after?.voiceStyle).toBeUndefined();
+    /* The target's OWN cloned voice on disk is untouched (this route only
+       ever writes voiceId/aliases/profile onto the target, never voice
+       fields). */
+    const hartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'hart',
+    ) as { overrideTtsVoices?: { qwen?: { provenance?: string } } } | undefined;
+    expect(hartOnDisk?.overrideTtsVoices?.qwen?.provenance).toBe('cloned');
+  });
+
   it('drops target.name from the alias pool (no self-alias)', async () => {
     /* Edge case: source.aliases already contains the target's name.
        After the merge, target.aliases should NOT list its own name. */

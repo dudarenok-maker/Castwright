@@ -4,7 +4,7 @@
    run doesn't leak files into the dev server's audio dir. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -25,15 +25,30 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 });
 
 let audioDir: string;
+let workspaceDir: string;
 let app: Express;
+let writeEntry: typeof import('../workspace/voice-library.js').writeEntry;
+let purgeCloneArtifacts: typeof import('../workspace/purge-clone-artifacts.js').purgeCloneArtifacts;
 
 beforeAll(async () => {
   audioDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-test-'));
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+  /* fs-38 Wave 3c, Task 2 — the consent gate reads voice-library entries via
+     readEntry(), which resolves WORKSPACE_ROOT (workspace/paths.ts) once at
+     module-load time. Redirect it to a throwaway tempdir, same pattern as
+     VOICE_SAMPLE_AUDIO_DIR above, so the consent-gate tests below can seed
+     real entries without touching (or depending on) the dev workspace. */
+  workspaceDir = mkdtempSync(join(tmpdir(), 'audiobook-voice-sample-workspace-'));
+  process.env.WORKSPACE_DIR = workspaceDir;
 
-  /* Defer import so the route module reads VOICE_SAMPLE_AUDIO_DIR at load
-     time (it's captured in a module-level const). */
+  /* Defer import so the route module reads VOICE_SAMPLE_AUDIO_DIR / WORKSPACE_DIR
+     at load time (they're captured in module-level consts). */
   const { voiceSampleRouter } = await import('./voice-sample.js');
+  ({ writeEntry } = await import('../workspace/voice-library.js'));
+  /* Fix wave (B1) — the real (unmocked) purgeCloneArtifacts, imported so the
+     "purge → route" loop test below can prove the ROUTE's own on-disk cache
+     file is reachable by purge's real sweep, not a stand-in. */
+  ({ purgeCloneArtifacts } = await import('../workspace/purge-clone-artifacts.js'));
 
   app = express();
   app.use(express.json());
@@ -42,7 +57,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   if (audioDir) rmSync(audioDir, { recursive: true, force: true });
+  if (workspaceDir) rmSync(workspaceDir, { recursive: true, force: true });
   delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+  delete process.env.WORKSPACE_DIR;
 });
 
 beforeEach(() => {
@@ -156,6 +173,35 @@ describe('voice-sample router', () => {
       expect(res.body.message).toMatch(/design it first/i);
       // The friendly copy must not echo the raw sidecar JSON / path.
       expect(res.body.message).not.toMatch(/\.pt|POST \/qwen/);
+    });
+
+    /* GATE 1 — the sidecar gained a DISTINCT `voice_language_unsupported` 409
+       (a subclass of VoiceNotDesignedError with its own code, main.py's
+       /synthesize handler). Its detail contains neither `voice_not_designed`
+       nor "not been designed yet", so it missed the arm above and fell
+       through to the generic 502 `tts_failed` — the caller was told the
+       gateway broke instead of the one thing it can act on. The rejection
+       string below is the real sidecar body verbatim, wrapped exactly as
+       sidecar.ts's `throwForResponse` wraps it. */
+    it('maps a sidecar voice_language_unsupported 409 to a clean 409, not 502 tts_failed', async () => {
+      synthesize.mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            'Local voice engine returned 409: {"detail":"Voice \'xtts-abc\' cannot render in language \'cs\' — not supported by the loaded XTTS model (supported: [\'en\', \'es\', \'de\']).","code":"voice_language_unsupported"}',
+          ),
+          { transient: false, status: 409, poisoned: false },
+        ),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_lang/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_lang', character: 'L' }, text: 'Hi.' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('voice_language_unsupported');
+      // The remedy `voice_not_designed` implies (design/clone it again) is the
+      // WRONG one here and must not be what the user is told.
+      expect(res.body.message).not.toMatch(/design it first/i);
+      // Friendly copy, never the raw sidecar JSON.
+      expect(res.body.message).not.toMatch(/\{"detail"/);
     });
 
     it('still maps an unrecognised synth failure to 502 tts_failed', async () => {
@@ -490,6 +536,437 @@ describe('voice-sample router', () => {
         { model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' },
       ]);
       expect(res.body.message).toContain('Coqui XTTS');
+    });
+  });
+
+  describe('cloned-voice consent gate (fs-38 Wave 3c, Task 2)', () => {
+    /* The bug this closes: the cast-view sample route cached under
+       `cacheScope = voiceId` (the CHARACTER's id, not the voice's storage
+       key) and served a cache hit via a bare `existsSync` short-circuit with
+       no consent check anywhere in the route. After a revoke, every other
+       artifact was erased, but this route kept serving the cached MP3 —
+       permanently, since nothing ever busts that cache entry. The gate must
+       run BEFORE the existsSync check so a pre-existing cache hit can't
+       bypass it. */
+    const baseConsent = {
+      personName: 'Gran',
+      relationship: 'family-with-permission' as const,
+      permittedUse: 'personal' as const,
+      attestedAt: '2026-01-01T00:00:00.000Z',
+      attestedBy: 'me',
+    };
+
+    it('(a) refuses a revoked cloned character even when a cached file already exists', async () => {
+      const voiceUuid = 'revoked-cast-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const body = {
+        modelKey: 'qwen3-tts-0.6b',
+        voice: {
+          id: 'v_gran',
+          character: 'Gran',
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'cloned' as const },
+          },
+        },
+        text: 'Hello, dear.',
+      };
+
+      /* Consent is currently valid — the audition plays and gets cached, same
+         as any other character. */
+      const before = await request(app).post('/api/voices/v_gran/sample').send(body);
+      expect(before.status).toBe(200);
+      expect(before.body.cached).toBe(false);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+
+      /* Revoke. The cached MP3 from the call above is still sitting on disk —
+         this is the exact scenario the bug allowed through. */
+      await writeEntry({
+        voiceUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const after = await request(app).post('/api/voices/v_gran/sample').send(body);
+      expect(after.status).toBe(403);
+      expect(after.body.error).toMatch(/consent/i);
+      /* Not re-synthesised (still refused) AND not served from the stale
+         cache either — the gate precedes the existsSync short-circuit. */
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('fix wave (finding 1): a cloned character caches under the resolved storage-key scope, not the character id — a designed character is unaffected', async () => {
+      /* This is what makes the purge sweep (purge-clone-artifacts.ts, which
+         already sweeps `qwen-<uuid>`/`xtts-<uuid>`) able to reach the
+         cast-view route's cache at all: before this fix, a cloned
+         character's audition here was cached under `voiceId`
+         (`v_cloned-scope-1`), a scope no purge call could ever derive from
+         `voiceUuid` alone. */
+      const clonedUuid = 'cloned-scope-1';
+      await writeEntry({
+        voiceUuid: clonedUuid,
+        name: 'Scoped Clone',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      const clonedRes = await request(app)
+        .post('/api/voices/v_cloned_scope/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_cloned_scope',
+            character: 'Scoped Clone',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${clonedUuid}`, libraryUuid: clonedUuid, provenance: 'cloned' as const },
+            },
+          },
+          text: 'Cache scope check.',
+        });
+      expect(clonedRes.status).toBe(200);
+      // Scoped by the resolved storage key (qwen-<uuid>), NOT the character id.
+      expect(clonedRes.body.url).toMatch(new RegExp(`^/audio/voices/qwen-${clonedUuid}-`));
+      expect(clonedRes.body.url).not.toContain('v_cloned_scope');
+
+      const designedUuid = 'designed-scope-1';
+      await writeEntry({
+        voiceUuid: designedUuid,
+        name: 'Scoped Designed',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      const designedRes = await request(app)
+        .post('/api/voices/v_designed_scope/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_designed_scope',
+            character: 'Scoped Designed',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${designedUuid}`, libraryUuid: designedUuid, provenance: 'designed' as const },
+            },
+          },
+          text: 'Cache scope check.',
+        });
+      expect(designedRes.status).toBe(200);
+      // Unchanged: still scoped by the character id (voiceId), byte-for-byte.
+      expect(designedRes.body.url).toMatch(/^\/audio\/voices\/v_designed_scope-/);
+    });
+
+    it('(c) the raw-speaker bypass refuses a cloned storage key with revoked consent', async () => {
+      const voiceUuid = 'revoked-raw-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Uncle',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${voiceUuid}`,
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/consent/i);
+      expect(synthesize).not.toHaveBeenCalled();
+    });
+
+    /* GATE 1 fix (C4) — the sibling of (c) that was missing, and the reason
+       this guard survived the branch's other case-fold fixes: (c) only ever
+       sent the canonical lower-case key. `voice-override-linked.test.ts`'s
+       "MAJOR-1 fix-round: rejects a case-varied planted key" and
+       `preserve-cast-voices.test.ts`'s "[#1899] throws case-insensitively"
+       are the two siblings that DID have one.
+
+       The bypass is real, not theoretical: the sidecar sanitises with
+       `re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)` (case-preserving) and then
+       `os.path.isfile`, so on NTFS/APFS `XTTS-<uuid>.pt` opens the real
+       `xtts-<uuid>.pt`. Asserting the 403 alone would be the placebo shape
+       the review warned about, so this also asserts `synthesize` was never
+       reached — no audio of the revoked person's voice was produced at all —
+       and that nothing was cached under the case-varied `raw-coqui-<djb2>`
+       scope, which no purge sweep computes (it only ever hashes the
+       lower-case key). */
+    it('GATE 1 C4: (c) with a CASE-VARIED raw key — `XTTS-<uuid>` must not slip past the consent gate', async () => {
+      const voiceUuid = 'revoked-raw-case-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Uncle',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent, revokedAt: '2026-07-20T00:00:00.000Z' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `XTTS-${voiceUuid}`, // the only difference from (c)
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatch(/consent/i);
+      // The actual bypass consequence: no audio was ever synthesised...
+      expect(synthesize).not.toHaveBeenCalled();
+      // ...and no MP3 was left in a cache scope no purge can reach.
+      expect(res.body.url).toBeUndefined();
+    });
+
+    /* GATE 2 fix (C-B2) — the uuid TAIL, the half the C4 prefix fold left
+       open. `xtts-ABC` against a real uuid of `abc` renders while consent is
+       valid (NTFS/APFS resolve it), but the audition lands in a
+       `raw-coqui-<djb2('xtts-ABC')>` scope `purgeCloneArtifacts` cannot
+       compute and the sidecar's latents stay resident under the raw key that
+       canonical-key `/xtts/evict-voice` misses — so a later revoke answers
+       200 with `failed: []`, claiming an erasure it did not achieve.
+
+       The fixture makes the divergence explicit rather than relying on the
+       host filesystem: the entry DIRECTORY is `<uuid>` in one spelling while
+       its manifest's own `voiceUuid` is another. That is exactly the state
+       `readEntry` observes on NTFS/APFS when a client sends a case-varied
+       tail — it resolves the real entry, whose canonical uuid is spelled
+       differently from the key it was asked for — and it reproduces on a
+       case-SENSITIVE CI runner too, where the case-varied request would
+       simply 404 and prove nothing.
+
+       Asserting the status alone would be the placebo shape: what actually
+       matters is that no audio was produced and nothing was left in a cache
+       scope no purge can reach, so both are asserted. */
+    it('GATE 2 C-B2: a non-canonical uuid TAIL is refused, not rendered under a key revoke cannot erase', async () => {
+      const canonicalUuid = 'tail-case-1';
+      const requestedKey = 'Tail-Case-1'; // what a case-varied client sends
+      const dir = join(workspaceDir, 'voice-library', requestedKey);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'voice.json'),
+        JSON.stringify({
+          voiceUuid: canonicalUuid,
+          name: 'Gran',
+          provenance: 'cloned',
+          tags: [],
+          pinned: false,
+          engines: {},
+          consent: { ...baseConsent }, // consent is VALID — this is not a consent bypass
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${requestedKey}`,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('noncanonical_clone_key');
+      // No audio of this person's voice was produced at all...
+      expect(synthesize).not.toHaveBeenCalled();
+      // ...and nothing landed in a cache scope no purge sweep can compute.
+      expect(res.body.url).toBeUndefined();
+      expect(readdirSync(audioDir)).toHaveLength(0);
+    });
+
+    it('GATE 2 C-B2: the canonical key for the same entry still renders', async () => {
+      /* The discriminating pair for the test above — proves the refusal keys
+         off "not this voice's own key", not off the entry being unusable. */
+      const canonicalUuid = 'tail-case-2';
+      await writeEntry({
+        voiceUuid: canonicalUuid,
+        name: 'Gran',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: { ...baseConsent },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${canonicalUuid}`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('(raw analogue of d) a non-cloned (designed) library voice is unaffected via the raw-speaker bypass', async () => {
+      /* Fix wave (finding 4) — (a)/(c)/(d) above cover the raw branch's
+         REVOKED case (c) and the normal branch's designed case (d), but
+         there was no raw-branch analogue of (d): a designed voice's storage
+         key handed straight to rawSpeaker should sail through the gate
+         exactly like the normal branch does. Same code path (the gate reads
+         `engine`/`voiceName` generically, not branch-specific), so risk is
+         low, but nothing pinned it. */
+      const voiceUuid = 'designed-raw-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Designed Raw',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app).post('/api/voices/v_anyone/sample').send({
+        modelKey: 'coqui-xtts-v2',
+        rawEngine: 'coqui',
+        rawSpeaker: `xtts-${voiceUuid}`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+
+    it('(d) a non-cloned (designed) library voice is unaffected — cache behaviour unchanged', async () => {
+      const voiceUuid = 'designed-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Designed Bard',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const body = {
+        modelKey: 'qwen3-tts-0.6b',
+        voice: {
+          id: 'v_bard',
+          character: 'Bard',
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'designed' as const },
+          },
+        },
+        text: 'A designed voice, unaffected by the clone consent gate.',
+      };
+
+      const res1 = await request(app).post('/api/voices/v_bard/sample').send(body);
+      expect(res1.status).toBe(200);
+      expect(res1.body.cached).toBe(false);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+
+      /* Second identical request — still a normal cache hit, unaffected. */
+      const res2 = await request(app).post('/api/voices/v_bard/sample').send(body);
+      expect(res2.status).toBe(200);
+      expect(res2.body.cached).toBe(true);
+      expect(synthesize).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /* Fix wave (B1) — closes the loop the two disjoint halves left open:
+     voice-sample.test.ts's "fix wave (finding 1)" test above proves the
+     ROUTE computes the right cache-scope URL; purge-clone-artifacts.test.ts
+     proves purgeCloneArtifacts's OWN sweep deletes a file it's HANDED a
+     scope for. Neither drives the real route AND then purges the file it
+     actually wrote, so a revert of either half individually wouldn't be
+     caught by the other. This test does: real POST → real MP3 written to
+     disk by the real route → real purgeCloneArtifacts call → real
+     existsSync proving the file the route wrote is actually gone. */
+  describe('end-to-end: route writes a real cache file, purge actually erases it (fix wave B1)', () => {
+    it('a cloned voice audition cached by the real route is erased by a real purgeCloneArtifacts sweep', async () => {
+      const voiceUuid = 'purge-loop-1';
+      await writeEntry({
+        voiceUuid,
+        name: 'Purge Loop',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        consent: {
+          personName: 'Purge Loop',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      const res = await request(app)
+        .post('/api/voices/v_purge_loop/sample')
+        .send({
+          modelKey: 'qwen3-tts-0.6b',
+          voice: {
+            id: 'v_purge_loop',
+            character: 'Purge Loop',
+            overrideTtsVoices: {
+              qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'cloned' as const },
+            },
+          },
+          text: 'End to end purge loop check.',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cached).toBe(false);
+
+      /* The real file the real route just wrote to the real (tempdir) audio
+         cache — not a mock call-arg assertion. */
+      const fileName = res.body.url.split('/').pop() as string;
+      const filePath = join(audioDir, fileName);
+      expect(existsSync(filePath)).toBe(true);
+
+      /* Sidecar is unreachable in this test env — purgeCloneArtifacts treats
+         that as non-fatal (best-effort evict), so stubbing fetch here just
+         avoids a real, slow, doomed-to-fail network attempt; it isn't load-
+         bearing for the assertion below. */
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+      try {
+        await purgeCloneArtifacts(voiceUuid);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      /* The file the route wrote is now actually gone from disk. This is
+         exactly the assertion that fails if routes/voice-sample.ts's
+         cache-scope fix (caching a cloned voice under `qwen-<uuid>` /
+         `xtts-<uuid>` instead of the character id) is reverted: without it,
+         the file above would be cached under `v_purge_loop-...`, a prefix
+         purgeCloneArtifacts's sweep (scoped to `qwen-<uuid>`/`xtts-<uuid>`)
+         never matches, so it would still exist here. */
+      expect(existsSync(filePath)).toBe(false);
     });
   });
 });

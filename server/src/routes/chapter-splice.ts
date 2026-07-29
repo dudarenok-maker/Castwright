@@ -36,6 +36,7 @@ import { applyGainToPcm } from '../tts/gain-pcm.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
+import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
@@ -244,7 +245,12 @@ chapterSpliceRouter.post(
         if (nonEnglishBook) {
           for (const c of cast.characters) {
             if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
-            c.ttsEngine = 'qwen';
+            /* fs-38 Wave 3c — mirror generation: retarget a cloned character
+               to whichever eligible clone-capable engine actually carries its
+               cloned slot (preferring the current default `engine` when both
+               qualify), instead of blindly forcing 'qwen' where it has no
+               voice at all. */
+            c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
           }
           /* fs-32c — mirror generation: a reused designed Qwen voice whose
              baked manifest language ≠ this book's is cleared so the
@@ -307,7 +313,10 @@ chapterSpliceRouter.post(
               bookLanguage,
               signal: controller.signal,
               chapterTitleNarration: undefined,
-              narratorCharacterId: 'narrator',
+              /* fs-38 Wave 3c, Task 23 — no explicit narratorCharacterId
+                 here: `synthesiseChapter`'s own default now resolves the
+                 book's REAL narrator row ('narrator' OR 'char-narrator',
+                 whichever the cast actually has). */
               maxSegmentRerecords,
               ...(asrOn
                 ? {

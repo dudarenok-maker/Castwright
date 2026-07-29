@@ -152,6 +152,21 @@ export const assignVoice = createAsyncThunk(
   },
 );
 
+/* GATE 1, owner-decided — the "Remove voice" affordance's thunk. Deliberately
+   does NOT refetch the voice library: unassigning changes a character's
+   cast.json slot, not the library entry, so the entry list is unchanged (the
+   voice itself survives in My voices — this clears the assignment only).
+   The caller mirrors the returned `cleared` slots into the cast slice. */
+export const unassignVoice = createAsyncThunk(
+  'voiceLibrary/unassign',
+  async (args: { voiceUuid: string; bookId: string; characterId: string }) => {
+    return api.unassignLibraryVoice(args.voiceUuid, {
+      bookId: args.bookId,
+      characterId: args.characterId,
+    });
+  },
+);
+
 export const promoteCharacterVoice = createAsyncThunk(
   'voiceLibrary/promoteCharacter',
   async (

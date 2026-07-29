@@ -593,3 +593,297 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(segFile.segments[1].qa?.status).toBe('ok');
   });
 });
+
+/* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's
+   fs-2 force-to-Qwen loop test: a cloned character riding the book default on
+   a non-English book must RETARGET to the eligible clone-capable engine
+   carrying the clone, not get blindly forced onto 'qwen'. Uses
+   VERDICT_MANUSCRIPT_ID so the module-level loadAnalysisCache mock returns
+   real sentence data (id 2, "Yes.") for castor's dead-silent segment, which
+   the signal scan flags and the repair loop then re-records. */
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-38 Wave 3c cloned-character retarget)', () => {
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  let synthesiseChapterMock: any;
+
+  const AUTHOR3 = 'Clone Retarget Author';
+  const SERIES3 = 'Standalones';
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  /** A single character ('castor') with a dead-silent segment (flagged by the
+      signal scan and re-recorded by the repair loop) on an 'es' book,
+      carrying `overrideTtsVoicesInit` for the caller to vary per test. */
+  async function scaffoldCloneRetargetBook(
+    bookTitle: string,
+    overrideTtsVoices: Record<string, { name: string; libraryUuid: string; provenance: 'cloned' }>,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR3, SERIES3, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR3, SERIES3, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR3,
+        series: SERIES3,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'es',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [], overrideTtsVoices },
+        ],
+      }),
+    );
+
+    const castorSilent = Buffer.alloc(SR * 2); // 1s of dead silence — flagged by the signal scan
+    const mp3Bytes = await encodePcmToAudio(castorSilent, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 1.0 }],
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('retargets a coqui-cloned character to coqui on an es book, instead of forcing qwen', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Coqui Clone Story', {
+      coqui: { name: 'Cloned Voice', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+    });
+
+    // modelKey 'kokoro-v1' → request default engine 'kokoro' (not clone-capable,
+    // not eligible for 'es' either) — proves the retarget comes from the
+    // character's own cloned slot, not the request default.
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    /* The regression this fix closes: pre-fix this was 'qwen' (forced), or
+       (with the naive "just skip it" fix) left unset entirely — both wrong. */
+    expect(castor?.ttsEngine).toBeDefined();
+    expect(castor?.ttsEngine).not.toBe('qwen');
+    expect(castor?.ttsEngine).toBe('coqui');
+  });
+
+  it('keeps a doubly-cloned character on the request default (qwen) when both engines qualify', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Dual Clone Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+      coqui: { name: 'Coqui Clone', libraryUuid: 'uuid-coqui', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; ttsEngine?: string }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    expect(castor?.ttsEngine).toBe('qwen');
+  });
+
+  /* [#1889] — generation.ts and chapter-splice.ts both re-check a reused
+     DESIGNED qwen voice's baked manifest language against the book's before
+     rendering; this route did not, so a line whose voice was mis-detected
+     once was faithfully re-synthesised in the wrong language on every repair
+     pass. The 'es' book above + a designed qwen slot whose sidecar manifest
+     is absent is exactly the mismatch shape `clearMismatchedDesignedVoices`
+     exists for.
+
+     The assertion is on the CAST HANDED TO `synthesiseChapter`, not on "the
+     request succeeded": the repair completes either way (the mock renders
+     anything), so only the cleared slot distinguishes fixed from reverted. */
+  it('[#1889] clears a designed qwen voice whose baked manifest language does not match the book before re-recording', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook(
+      'Mismatched Designed Story',
+      // Designed, NOT cloned — a cloned slot is deliberately exempt from
+      // this sweep (see verify-designed-voice-language.ts's fail-safe guard).
+      { qwen: { name: 'Spanish Voice', provenance: 'designed' } } as unknown as Record<
+        string,
+        { name: string; libraryUuid: string; provenance: 'cloned' }
+      >,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    // The slot with the wrong baked language is gone — the repair can no
+    // longer re-record this line through it.
+    expect(castor?.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  /* The other half: a CLONED slot must survive the same sweep. A cloned
+     voice's language is the speaker's own, not a baked design language, and
+     its manifest lives under `qwen-<libraryUuid>` — which `qwenStorageKey`
+     never produces — so a language-blind clear would delete the clone marker
+     on every non-English book and hand a real person's line to a catalogue
+     voice (Property 1). Without this case, widening the new call to cover
+     cloned slots would go unnoticed. */
+  it('[#1889] leaves a CLONED qwen slot untouched on the same non-English book', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Cloned Survives Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+
+    const lastArgs = synthesiseChapterMock.mock.calls[synthesiseChapterMock.mock.calls.length - 1][0] as {
+      cast: Array<{ id: string; overrideTtsVoices?: Record<string, { libraryUuid?: string }> }>;
+    };
+    const castor = lastArgs.cast.find((c) => c.id === 'castor');
+    expect(castor?.overrideTtsVoices?.qwen?.libraryUuid).toBe('uuid-qwen');
+  });
+
+  /* [#1889] — the clear itself is a SILENT cast mutation; generation.ts and
+     chapter-splice.ts both send a `warning` frame so the user learns their
+     designed voice was re-detected and dropped, and this route did not. The
+     assertion is on the FRAME THE ROUTE EMITTED — a test that only checked
+     'warning' is a member of the openapi enum would still pass with the emit
+     deleted, which is exactly the placebo shape this branch keeps producing. */
+  it('[#1889] emits a voice_language_mismatch warning frame naming the cleared voice', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook(
+      'Mismatched Designed Warning Story',
+      { qwen: { name: 'Spanish Voice', provenance: 'designed' } } as unknown as Record<
+        string,
+        { name: string; libraryUuid: string; provenance: 'cloned' }
+      >,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    const warning = events.find((e) => e.type === 'warning');
+    expect(warning, `expected a warning frame, got:\n${res.text}`).toBeTruthy();
+    expect(warning?.code).toBe('voice_language_mismatch');
+    // Names the character whose voice was dropped — the actionable half.
+    expect(String(warning?.message)).toContain('Castor');
+  });
+
+  /* The negative half, and the real anti-placebo guard: an UNCONDITIONAL
+     `send({type:'warning'…})` would pass the case above. Here nothing is
+     cleared (the cloned slot is exempt), so the stream must carry no
+     `warning` frame at all. */
+  it('[#1889] emits NO warning frame when the sweep cleared nothing', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldCloneRetargetBook('Cloned No Warning Story', {
+      qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' },
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'qwen3-tts-0.6b' });
+
+    const events = parseSse(res.text);
+    expect(
+      events.find((e) => e.type === 'qa_repair_complete'),
+      `expected qa_repair_complete, got:\n${res.text}`,
+    ).toBeTruthy();
+    expect(events.filter((e) => e.type === 'warning')).toEqual([]);
+  });
+});

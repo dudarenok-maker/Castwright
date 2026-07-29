@@ -10,9 +10,13 @@ import {
   mockDesignLibraryVoice,
   mockDeleteVoiceLibrary,
   mockPromoteLibraryRedesign,
+  mockAssignLibraryVoice,
+  mockRevokeVoiceLibraryEntry,
+  _mockAssignGuardError,
+  _mockAssignWrittenSlots,
   _resetMockVoiceLibrary,
 } from './api';
-import { MOCK_VOICE_LIBRARY_ENTRIES } from '../mocks/voice-library';
+import { MOCK_VOICE_LIBRARY_ENTRIES, type VoiceLibraryEntry } from '../mocks/voice-library';
 
 beforeEach(() => {
   _resetMockVoiceLibrary();
@@ -83,5 +87,169 @@ describe('mock voice library', () => {
     const after = await mockListVoiceLibrary();
     const persisted = after.voices.find((v) => v.voiceUuid === 'lib-pinned');
     expect(persisted?.persona).toBe('A jovial retired quartermaster, tenor, softer edge.');
+  });
+
+  it('#1808 — revoke on an unknown voiceUuid throws a clear error instead of crashing on find()!', async () => {
+    await expect(mockRevokeVoiceLibraryEntry('nope')).rejects.toThrow(/no voice-library entry/i);
+  });
+});
+
+/* fs-38 Wave 3c, Task 29 [ADV-C4][AC-I10][EX-15] — the assign mock used to
+   return `{ updated: 1 }` unconditionally, with none of the real route's
+   three 409s. `_mockAssignGuardError` is unit-tested directly against
+   ad-hoc entries (rather than growing MOCK_VOICE_LIBRARY_ENTRIES, which the
+   e2e voice-library spec's card-count assertions count) for the guard
+   logic itself, and `mockAssignLibraryVoice` is exercised end-to-end
+   against the real `lib-cloned-demo`/`lib-cloned-revoked` fixtures for the
+   success + fixture-shape cases. */
+describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
+  const baseConsent = {
+    personName: 'Mum',
+    relationship: 'family-with-permission' as const,
+    permittedUse: 'personal' as const,
+    attestedAt: '2026-07-20T00:00:00Z',
+    attestedBy: 'me',
+  };
+
+  function makeCloned(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntry {
+    return {
+      voiceUuid: 'lib-clone-test',
+      name: 'Test clone',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      consent: baseConsent,
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
+      createdAt: '2026-07-20T00:00:00Z',
+      updatedAt: '2026-07-20T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  it('409s a revoked entry', () => {
+    const entry = makeCloned({ consent: { ...baseConsent, revokedAt: '2026-07-22T00:00:00Z' } });
+    expect(_mockAssignGuardError(entry, undefined)).toBe(
+      'Consent for this voice has been revoked.',
+    );
+  });
+
+  it('409s a cloned entry that has not finished deriving', () => {
+    const entry = makeCloned({ engines: {} });
+    expect(_mockAssignGuardError(entry, undefined)).toBe(
+      'Cloned voice is not ready to assign yet.',
+    );
+  });
+
+  it('409s a ready, non-revoked cloned entry assigned to a non-clone-capable engine', () => {
+    const entry = makeCloned();
+    expect(_mockAssignGuardError(entry, 'kokoro-v1')).toMatch(/Cloned voices render on Qwen/);
+  });
+
+  it('allows a ready, non-revoked cloned entry assigned to Qwen', () => {
+    const entry = makeCloned();
+    expect(_mockAssignGuardError(entry, 'qwen3-tts-0.6b')).toBeNull();
+  });
+
+  it('allows a designed (non-cloned) entry regardless of modelKey — the guards are cloned-only, matching the real route', () => {
+    const entry = makeCloned({ provenance: 'designed' });
+    expect(_mockAssignGuardError(entry, 'kokoro-v1')).toBeNull();
+  });
+
+  it('checks revoked consent before readiness — guard order matches the real route', () => {
+    const entry = makeCloned({
+      engines: {},
+      consent: { ...baseConsent, revokedAt: '2026-07-22T00:00:00Z' },
+    });
+    expect(_mockAssignGuardError(entry, undefined)).toBe(
+      'Consent for this voice has been revoked.',
+    );
+  });
+
+  it('mockAssignLibraryVoice succeeds for the ready lib-cloned-demo fixture', async () => {
+    const result = await mockAssignLibraryVoice('lib-cloned-demo', {
+      bookId: 'b1',
+      characterId: 'c1',
+      modelKey: 'qwen3-tts-0.6b',
+    });
+    /* `lib-cloned-demo` is CLONED, so both clone-capable slots are written. */
+    expect(result).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
+  });
+
+  /* fs-38 Wave 3c, Task 41 — this test used to pin the OLD "deliberate lag"
+     contract on purpose: `mockAssignLibraryVoice` mirrored the assign route
+     as it stood before Task 24, which still hardcoded the qwen slot, so a
+     coqui-routed assign 409'd here even though `lib-cloned-demo` carries a
+     ready `xtts` slot too. Task 24 landed on this branch and made the real
+     route engine-aware (coqui joined `CLONE_CAPABLE_ENGINES`), so the mock
+     guard (`_mockAssignGuardError`, api.ts) was re-mirrored to match — this
+     now asserts the NEW contract: a cloned voice with a ready xtts slot
+     assigns cleanly on a coqui-routed character, same as it always did on
+     qwen. Kept as a test, not deleted, so the old defect can't quietly come
+     back the next time the route or the mock changes independently. */
+  it('mockAssignLibraryVoice succeeds for lib-cloned-demo on a coqui assign — its xtts slot is ready', async () => {
+    const result = await mockAssignLibraryVoice('lib-cloned-demo', {
+      bookId: 'b1',
+      characterId: 'c1',
+      modelKey: 'coqui-xtts-v2',
+    });
+    expect(result).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
+  });
+
+  it('mockAssignLibraryVoice 409s the real lib-cloned-revoked fixture', async () => {
+    await expect(
+      mockAssignLibraryVoice('lib-cloned-revoked', { bookId: 'b1', characterId: 'c1' }),
+    ).rejects.toThrow('Consent for this voice has been revoked.');
+  });
+
+  /* GATE 1 [F1] — the mock's mirror of the route's `shouldWriteCoquiSlot`.
+     The point of mirroring it at all is that mock mode must be able to
+     produce the DECLINED-coqui response, or no mock-mode surface (including
+     the e2e spec) can exercise the reconciliation the finding is about. */
+  describe('_mockAssignWrittenSlots — which slots the mock reports written', () => {
+    it('reports both slots for a cloned entry (always clone-capable on both)', () => {
+      expect(_mockAssignWrittenSlots(makeCloned())).toEqual(['qwen', 'coqui']);
+    });
+
+    it('reports qwen ONLY for a designed entry with no coqui artifact', () => {
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({ provenance: 'designed', engines: { qwen: { status: 'ready' } } }),
+        ),
+      ).toEqual(['qwen']);
+    });
+
+    it('reports both slots for a designed entry that already carries an xtts artifact', () => {
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({
+            provenance: 'designed',
+            engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+          }),
+        ),
+      ).toEqual(['qwen', 'coqui']);
+    });
+
+    it('reports qwen ONLY for an imported entry, even with an xtts artifact present', () => {
+      /* Discriminating against the proxy: `imported` never qualifies on the
+         real route regardless of what it has derived, so the xtts check must
+         not be reached for it. */
+      expect(
+        _mockAssignWrittenSlots(
+          makeCloned({
+            provenance: 'imported',
+            consent: undefined,
+            engines: { qwen: { status: 'ready' }, xtts: { status: 'ready' } },
+          }),
+        ),
+      ).toEqual(['qwen']);
+    });
+
+    it('every designed fixture in MOCK_VOICE_LIBRARY_ENTRIES is qwen-only, so mock mode can reach the declined-coqui path', () => {
+      const designed = MOCK_VOICE_LIBRARY_ENTRIES.filter((e) => e.provenance === 'designed');
+      expect(designed.length).toBeGreaterThan(0);
+      for (const entry of designed) {
+        expect(_mockAssignWrittenSlots(entry)).toEqual(['qwen']);
+      }
+    });
   });
 });

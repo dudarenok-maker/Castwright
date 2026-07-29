@@ -94,24 +94,101 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning · **51 tests, entirely unexecuted**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **60 tests, entirely unexecuted**
 
 The run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` is complete and has
 never been run — every `Result:` line still reads `☐ P ☐ F ☐ B ☐ N/A`, §7.1's
-tables blank. PR #1837 shipped the template, not results.
+tables blank. PR #1837 shipped the template (3a/3b1/3b2, 51 tests); Wave 3c
+added **Section E** (9 tests, cloned + designed voices on Coqui XTTS v2) —
+also unexecuted.
 
 Starred, highest-risk: **C-01** revoke mid-derive leaves no live `.pt` and
 `revokedAt` survives · **C-08** a transient failure does not brick a voice ·
 **C-10** revoke does total erasure including the original recording · **C-17**
 designed-voice self-heal preserves persona · **C-12** a killed mid-write leaves
-no truncated `.pt`.
+no truncated `.pt` · **E-01** clone → cast on Coqui → generate · **E-02**
+audition-then-revoke refuses Play on the Coqui path · **E-06** the one place
+D-B's synthetic-clip-vs-catalogue quality question can actually be judged, by
+ear · **E-07** a forced designed-derive failure still renders the chapter
+(fail-soft, the opposite policy from cloned's fail-loud).
 
 C-08 and C-12 deliberately kill the sidecar mid-write — nothing else in flight.
 D-01 deliberately runs two concurrent book renders sharing one cloned voice.
+E-03 deliberately races a revoke against an in-flight Coqui derive.
 
-*Also needs:* Whisper weights, ECAPA `/embed`, `voices.library.enabled=true`, the
-Coalfall fixture with ≥2 speaking characters/chapter, and the 9 audio fixtures in §4.
-*Plans:* 267, 268 — both `status: active`, Ship notes empty. *Cost:* multi-hour.
+*Also needs:* Whisper weights, ECAPA `/embed`, the
+Coalfall fixture with ≥2 speaking characters/chapter, the 9 audio fixtures in §4,
+and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
+book fixture that actually routes to Coqui.
+*Plans:* 267, 268, 271 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
+
+**Six checks added by the post-32 follow-up campaign, same box/setup as
+above — batch them into the same session:**
+
+1. **The `preparing-voice` phase (#1813).** Render a chapter with a
+   Repairable cloned voice or a self-healing designed voice (same setup as
+   C-06/C-07/E-01) and confirm the Generate screen shows a "Preparing
+   voice — `{character}`" step, with its own pill, *before* synthesis
+   begins — mirroring the existing `recovering` phase, replacing the
+   multi-second silent pause `docs/testing/fs38-wave3-onbox-acceptance.md`'s
+   KL-f documents. Then render a chapter for a character with no library
+   voice at all and confirm the phase never appears. Not yet folded into
+   that run sheet's own step list or KL-f's now-stale "expected" text —
+   update both when this is next revised.
+2. **A cloned voice actually rendering on XTTS end to end** — the wave's
+   central claim, already exercised by E-01 above but worth restating
+   concretely: play the rendered chapter and confirm the dialogue is
+   recognisably the cloned speaker, not a stock catalogue voice, and that
+   `cast.json` records the character's `overrideTtsVoices.coqui.libraryUuid`
+   matching the clone's uuid with `provenance: 'cloned'`.
+3. **Revoke-then-render.** Revoke consent for a voice already cast on
+   Coqui, then render a chapter that uses it (same shape as C-01/C-02 on
+   the Qwen side, E-02/E-03 on Coqui), and confirm the chapter fails loud —
+   `UnresolvableClonedVoiceError`, zero audio produced for that chapter —
+   rather than silently substituting a stock catalogue voice.
+4. **VRAM partitioning across a mixed chapter — no existing test names
+   this explicitly.** Cast one character in a chapter to a Qwen cloned/
+   designed voice and another to a Coqui cloned/designed voice in the same
+   book, then watch `nvidia-smi` through the resolver pre-pass while that
+   chapter renders. Qwen and Coqui must never both hold GPU memory
+   resident at the same time — the pre-pass partitions cloned-voice derives
+   by engine specifically to preserve this serialization (`fix(server):
+   partition cloned-voice derives by engine to preserve VRAM
+   serialization`). A spike showing both models resident simultaneously is
+   a regression, not a variance.
+5. **The `voice_language_mismatch` advisory reaches the screen on all three
+   streams.** The frame is emitted by `generation.ts`, `chapter-splice.ts`,
+   and (since `f879407c`) `chapter-qa-repair.ts` when a non-English book's
+   reused DESIGNED voice is cleared for a baked-manifest-language mismatch.
+   Only mock-mode coverage exists for the two newer frontend consumers, so
+   confirm on the box: open a **non-English** book that has at least one
+   reused designed voice designed for a *different* language, then (a) run a
+   per-character re-record from the cast profile drawer's "Fix … audio", and
+   (b) hit the repair button on a `suspect` chapter row in the Listen view.
+   Each must raise ONE amber toast reading "…designed voice(s) were cleared
+   because they were designed for a different language…", naming the cleared
+   character — once per run, not once per chapter — and the run must still
+   complete rather than fail. An English-only book must raise no such toast
+   on either path. Server-side emission is already covered by
+   `server/src/routes/chapter-qa-repair.test.ts`; what is owed here is that
+   the real (non-mock) stream reaches the real toast stack.
+6. **Preview plays on the ready engine, not always Qwen.** The My-voices card's
+   Preview button used to always request the Qwen artifact; a voice whose Qwen
+   copy is stale/failed but whose Coqui copy is ready 409'd on every Preview
+   even though it could genuinely play. Confirm on the box: get a cloned or
+   designed voice into a state where `engines.qwen.status` is not `ready` but
+   `engines.xtts.status` is `ready` (e.g. a revoked-then-restored Qwen leg, or
+   a Coqui-only clone with no Qwen derive yet), then press Preview on its
+   My-voices card and confirm real Coqui audio plays instead of a 409 toast. A
+   voice with both engines ready should still preview on Qwen (the primary
+   engine, and the one carrying the session's 1.7B tier pin). Only mock-mode
+   coverage exists (`voice-library-card.test.tsx`); what is owed is the real
+   sidecar round trip.
+
+*Pass/fail criteria for all six:* `docs/features/271-fs38-wave3c-xtts.md`.
+*Hardware:* the same single 8 GB box as the rest of Group A, XTTS weights
+installed (`install-coqui.mjs`/`.ps1`/`.sh`), no additional prerequisites
+beyond what A1 already lists above.
 
 ### A2 · Capacity-aware GPU placement (plan 264) · **two distinct debts**
 

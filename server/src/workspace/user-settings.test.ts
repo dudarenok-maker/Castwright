@@ -623,6 +623,76 @@ describe('getResolvedTtsModelKey — Qwen-when-installed default', () => {
   });
 });
 
+describe('per-engine install-state store (fs-38 Wave 3c Task 19)', () => {
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+  });
+
+  it('a coqui-uninstalled state is observable through the same shape as the qwen one', async () => {
+    const mod = await import('./user-settings.js');
+    /* Starts 'not-installed' for both engines, same as qwen's documented
+       cold-boot default — never optimistically claim either engine usable
+       before the first probe/poll. */
+    expect(mod.getLastKnownCoquiInstallState()).toBe('not-installed');
+    mod.setLastKnownCoquiInstallState('weights-missing');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('weights-missing');
+    mod.setLastKnownCoquiInstallState('ready');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('ready');
+    mod.setLastKnownCoquiInstallState('loaded');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('loaded');
+  });
+
+  it('the generic per-engine lookup and the qwen/coqui-named wrappers read/write the SAME store (no duplicated bespoke function)', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownEngineInstallState('coqui', 'ready');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('ready');
+    mod.setLastKnownCoquiInstallState('weights-missing');
+    expect(mod.getLastKnownEngineInstallState('coqui')).toBe('weights-missing');
+
+    mod.setLastKnownEngineInstallState('qwen', 'loaded');
+    expect(mod.getLastKnownQwenInstallState()).toBe('loaded');
+    mod.setLastKnownQwenInstallState('not-installed');
+    expect(mod.getLastKnownEngineInstallState('qwen')).toBe('not-installed');
+  });
+
+  it('qwen and coqui install-state are independent — setting one never touches the other', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownQwenInstallState('loaded');
+    mod.setLastKnownCoquiInstallState('not-installed');
+    expect(mod.getLastKnownQwenInstallState()).toBe('loaded');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('not-installed');
+
+    mod.setLastKnownCoquiInstallState('ready');
+    expect(mod.getLastKnownQwenInstallState()).toBe('loaded');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('ready');
+  });
+
+  it('the qwen call sites behave identically to before — getResolvedTtsModelKey still only reads the qwen slot of the shared store, unaffected by coqui', async () => {
+    const mod = await import('./user-settings.js');
+    rmSync(mod.USER_SETTINGS_PATH, { force: true });
+    mod._resetUserSettingsCache();
+    await mod.readUserSettings();
+    /* Coqui 'loaded' must NOT flip the default to Qwen — only the qwen slot
+       drives getResolvedTtsModelKey (this is the regression guard: the
+       generalization must not let the two engines' state cross-contaminate
+       the pre-existing Qwen-only resolution rule). */
+    mod.setLastKnownCoquiInstallState('loaded');
+    expect(mod.getResolvedTtsModelKey()).toBe('kokoro-v1');
+    mod.setLastKnownQwenInstallState('ready');
+    expect(mod.getResolvedTtsModelKey()).toBe('qwen3-tts-0.6b');
+  });
+
+  it('_resetUserSettingsCache resets BOTH engines to not-installed', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownQwenInstallState('loaded');
+    mod.setLastKnownCoquiInstallState('ready');
+    mod._resetUserSettingsCache();
+    expect(mod.getLastKnownQwenInstallState()).toBe('not-installed');
+    expect(mod.getLastKnownCoquiInstallState()).toBe('not-installed');
+  });
+});
+
 describe('setupCompletedAt (fs-21 wave 0)', () => {
   beforeEach(async () => {
     const mod = await import('./user-settings.js');

@@ -111,6 +111,20 @@ const characters = [
     voiceStyle: 'a determined, earnest teenage girl',
     overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
   },
+  /* GATE 2 fix-lane-1b — cloned on coqui, no qwen slot at all: the exact
+     shape a bulk qwen design sweep must skip rather than retarget. */
+  {
+    id: 'zara',
+    name: 'Zara',
+    role: 'supporting',
+    color: 'gold',
+    voiceId: 'v_zara',
+    voiceStyle: 'a sly, low-voiced smuggler',
+    ttsEngine: 'coqui',
+    overrideTtsVoices: {
+      coqui: { name: 'xtts-zara-uuid', libraryUuid: 'zara-uuid', provenance: 'cloned' },
+    },
+  },
 ];
 
 function writeBookOnDisk(chars: object[]) {
@@ -302,6 +316,50 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(events.some((e) => e.type === 'character_designed')).toBe(false);
     expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 0, skipped: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /* GATE 2 fix-lane-1b — a bulk qwen design sweep must skip (not retarget) a
+     character already cloned on coqui: applyOverrideToCastFiles pins
+     ttsEngine = 'qwen' unconditionally, which would otherwise silently
+     route the character off its coqui clone while the clone marker stays
+     intact on disk. */
+  it('GATE 2 fix-lane-1b: skips a coqui-cloned character instead of retargeting it, and reports it', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['zara', 'aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'zara')).toBe(false);
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'character_skipped' &&
+          e.characterId === 'zara' &&
+          e.reason === 'already_cloned' &&
+          e.name === 'Zara',
+      ),
+    ).toBe(true);
+    // Only the untouched character was designed — the sidecar call count proves
+    // the sweep never even attempted zara.
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toMatchObject({ done: 1, total: 2, skipped: 1 });
+    expect(idle?.clonedSkips).toEqual([{ characterId: 'zara', name: 'Zara' }]);
+
+    /* The actual defect: `ttsEngine` must be UNCHANGED, not merely that the
+       coqui slot survived (slot survival alone is what the bug already
+       produced, so asserting only that would be a placebo). */
+    const zara = charById('zara');
+    expect(zara?.ttsEngine).toBe('coqui');
+    expect(zara?.overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-zara-uuid',
+      libraryUuid: 'zara-uuid',
+      provenance: 'cloned',
+    });
+    expect(zara?.overrideTtsVoices?.qwen).toBeUndefined();
   });
 
   it('a per-character failure is recorded and the loop continues', async () => {

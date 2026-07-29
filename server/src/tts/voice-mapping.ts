@@ -11,6 +11,7 @@
 
 import type { TtsEngine } from './index.js';
 import type { Emotion } from '../handoff/schemas.js';
+import { isCloneEngine, cloneStorageKey, libraryVoiceForEngine } from './clone-engines.js';
 
 /* srv-43 — the on-disk/sidecar STORAGE key for a bespoke Qwen voice. Prefers
    the immutable voiceUuid (globally unique → no cross-series collision); else
@@ -347,6 +348,33 @@ export function pickVoiceForEngine(
       (voice.overrideTtsVoice?.engine === 'qwen' ? voice.overrideTtsVoice.name : undefined);
     if (!designedName) return '';
     return qwenStorageKey(voice, voice.id);
+  }
+
+  /* fs-38 Wave 3c Task 16 [ADV-H3] — a clone-capable engine's slot carrying
+     a libraryUuid (provenance 'cloned' OR 'designed' — resolution is
+     identical for both; see libraryVoiceForEngine) resolves to its storage
+     key BEFORE the generic name lookup below. Must run before `slotName`
+     and the legacy singular fallback — both would otherwise return the
+     human-readable `name` instead of the xtts-<uuid> storage key, silently
+     routing a real person's clone (or a designed voice-library assignment)
+     through the catalog. Only 'coqui' can actually reach this point today
+     (qwen returns above), but the check is written against
+     `isCloneEngine` rather than `engine === 'coqui'` so the intent stays
+     honest if a future clone-capable engine ever lands in this generic
+     path.
+
+     Contrast with the qwen branch above: that one resolves on libraryUuid
+     presence ALONE, no provenance check (Wave 3b2, review finding I-3) —
+     a deliberate, narrower exception for a designed-but-not-yet-cloned
+     qwen voice whose `name` can legitimately be blank. Coqui carries no
+     such history — this is new code — so it holds the full validated
+     contract from day one: libraryVoiceForEngine requires `provenance` in
+     {cloned, designed}, so a slot with a bare libraryUuid and no
+     provenance at all (legacy drift, [DELTA-M2]) is left unchanged and
+     falls through to the generic name lookup below. */
+  if (isCloneEngine(engine)) {
+    const libVoice = libraryVoiceForEngine(voice, engine);
+    if (libVoice) return cloneStorageKey(engine, libVoice.libraryUuid);
   }
 
   const slotName = voice.overrideTtsVoices?.[engine]?.name;

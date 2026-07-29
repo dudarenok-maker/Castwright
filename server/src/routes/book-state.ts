@@ -58,7 +58,12 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import { DEFAULT_NARRATOR_CREDIT } from '../export/narrator-credit.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
-import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
+import {
+  CastVoiceConsentError,
+  preserveClonedSlotsOnCastWrite,
+  preserveDesignedVoicesOnCastWrite,
+  rejectForeignCloneKeys,
+} from '../workspace/preserve-cast-voices.js';
 import {
   collectRenderedFallbackEngines,
   collectRenderedInstructHashesByChapter,
@@ -124,7 +129,16 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
     castJsonPath(bookDir),
   );
   const existingChars = existing?.characters ?? [];
-  const characters = preserveDesignedVoicesOnCastWrite(existingChars, cast.characters);
+  /* [#1899] — reject a foreign clone storage key before merging; throws a
+     CastVoiceConsentError, which this route's outer catch maps to 409 (a
+     refusal, not a fault). */
+  rejectForeignCloneKeys(existingChars, cast.characters);
+  /* [GATE 2 C-B1] — and refuse (or restore) the ERASE/REPLACE half: a present
+     `overrideTtsVoices` map that drops or overwrites a stored cloned slot.
+     Runs BEFORE preserveDesignedVoicesOnCastWrite, whose slot-blind
+     fill-the-gap pass only ever restores a wholly-absent map. */
+  const restored = preserveClonedSlotsOnCastWrite(existingChars, cast.characters);
+  const characters = preserveDesignedVoicesOnCastWrite(existingChars, restored);
   return { ...cast, characters };
 }
 
@@ -813,6 +827,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
 
     res.status(204).end();
   } catch (e) {
+    /* GATE 2 (owner-directed) — a deliberate consent refusal from the cast
+       guards is a 409, not a 500: a client's retry/telemetry logic must be
+       able to tell "we refused you" from "we broke". 409 matches the two
+       other deliberate refusals this same handler already sends (the
+       empty-sentence-list overwrite and the Author/Series/Title collision)
+       and the consent refusals the dedicated voice routes send. */
+    if (e instanceof CastVoiceConsentError) {
+      console.warn('[book-state] PUT refused', e.message);
+      return res.status(409).json({ error: e.message });
+    }
     console.error('[book-state] PUT failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write book state.' });
   }

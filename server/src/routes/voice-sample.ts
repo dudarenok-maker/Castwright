@@ -19,6 +19,7 @@ import {
   type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
+import { cloneStorageKey, isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { pcmDurationSec } from '../tts/pcm.js';
@@ -31,6 +32,7 @@ import {
   voiceSampleFilePath,
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
+import { clonedVoiceLacksConsent, readEntry } from '../workspace/voice-library.js';
 
 export const voiceSampleRouter = Router();
 
@@ -120,6 +122,117 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
     cacheScope = voiceId;
   }
+
+  /* fs-38 Wave 3c, Task 2 — a cloned voice whose consent has been revoked
+     must never be played again, from either branch, cache hit or not. This
+     runs BEFORE the existsSync short-circuit below: a cache entry written
+     while consent was valid must not outlive a later revoke. Keyed off the
+     RESOLVED (engine, voiceName) rather than the client-supplied `voice`
+     object — the raw-speaker bypass (isRawSample, above) has no character
+     context at all, so a client could otherwise hand a cloned storage key
+     straight to `rawSpeaker` and skip any character-level gate entirely.
+     Mirrors the consent check in routes/voice-library.ts:428 (now shared via
+     clonedVoiceLacksConsent). A designed (non-cloned) voice resolves to the
+     identical `qwen-<uuid>` key shape (see voice-mapping.ts qwenStorageKey)
+     — provenance, not key shape, is what distinguishes them, so this reads
+     the library entry rather than trusting the client-supplied `provenance`
+     field. */
+  if (isCloneEngine(engine)) {
+    /* GATE 1 fix (C4) — the prefix test is CASE-FOLDED, matching the two
+       sibling guards added in this same wave (voice-override-linked.ts's
+       `nameLower.startsWith(prefix)` and preserve-cast-voices.ts's). This was
+       the only clone-key check on the branch that wasn't, and it sits on the
+       one route that actually PLAYS audio: `rawSpeaker: 'XTTS-<uuid>'` failed
+       the case-sensitive `startsWith`, so `readEntry` was never called, the
+       403 never fired, and a revoked person's voice rendered. The sidecar
+       resolves it anyway — main.py's `re.sub(r"[^A-Za-z0-9_.-]", "_", …)`
+       preserves case and `os.path.isfile` is case-insensitive on NTFS/APFS,
+       so `XTTS-<uuid>.pt` opens the real `xtts-<uuid>.pt`. Two aggravating
+       consequences the fold also closes: the sidecar's `_evict_epoch` /
+       `_latents_cache` are dicts keyed on the RAW voice_id, so a render under
+       a case-varied key had its own epoch at 0 and was never interrupted by
+       the evict-epoch stop; and `asciiFileScope` preserves case, so the
+       resulting audition cached under a `raw-coqui-<djb2>` scope no purge
+       sweep ever computes.
+
+       Only the PREFIX is folded — the uuid tail is sliced verbatim, never
+       lower-cased. `randomUUID()` and `nanoid()` both mint mixed-case uuids,
+       so lower-casing the tail would break `readEntry` on a case-sensitive
+       filesystem. This comment used to claim a case-varied UUID was "not a
+       bypass either way" because `readEntry`'s `existsSync` resolves it on
+       NTFS/APFS exactly as the sidecar's `os.path.isfile` does. That is true
+       of the consent gate and false of erasure — resolving is precisely what
+       makes it render while the CACHE SCOPE and the sidecar's latents key
+       still follow the raw, case-varied string. GATE 2 C-B2; the refusal that
+       closes it is below, after the consent check. */
+    const prefix = `${manifestSlotFor(engine)}-`; // manifestSlotFor already returns lower-case
+    if (voiceName.toLowerCase().startsWith(prefix)) {
+      const libraryUuid = voiceName.slice(prefix.length);
+      const entry = await readEntry(libraryUuid);
+      if (clonedVoiceLacksConsent(entry)) {
+        return res.status(403).json({
+          error: 'This cloned voice has no valid consent and cannot be played.',
+        });
+      }
+      /* GATE 2 fix (C-B2) — the uuid TAIL, the half the C4 prefix fold left
+         open. `xtts-ABC` where the real uuid is `abc` renders happily while
+         consent is valid: `readEntry`'s `existsSync` resolves it on NTFS/APFS
+         (see the comment above), the sidecar's canonical-prefix check passes
+         because only the tail varies, and `os.path.isfile` opens the real
+         `xtts-abc.pt`. What it leaves behind is unreachable by revoke — the
+         audition MP3 lands in a `raw-coqui-<djb2('xtts-ABC')>` scope
+         `purgeCloneArtifacts` never computes (it only ever hashes the
+         canonical key), and the sidecar's TTL-less `_latents_cache` /
+         `_evict_epoch` are dicts keyed on the RAW voice id, which
+         canonical-key `/xtts/evict-voice` pops by exact key and misses. The
+         revoke then answers 200 with `failed: []` — claiming a total erasure
+         it did not achieve, which is Property 2's exact failure mode.
+
+         REFUSE, don't normalise — the same choice the sidecar makes for a
+         case-varied prefix (main.py's `VoiceNotDesignedError`), and for the
+         same reason: folding the KEY (rather than the comparison) would make
+         Node write an artifact under one name and look for it under another
+         on a case-sensitive filesystem, so a purge would miss it outright —
+         deepening the very hole this closes. Only the COMPARISON is
+         case-insensitive, and it is implicit: `readEntry` resolved the entry
+         case-insensitively, so `entry.voiceUuid` IS the canonical spelling of
+         whatever the client asked for, and a byte-mismatch against it means
+         the client sent a key that is not this voice's own. Costs nothing
+         real: the only producer of these keys (`cloneStorageKey`) always
+         emits the entry's own uuid verbatim. */
+      if (entry && entry.voiceUuid !== libraryUuid) {
+        return res.status(400).json({
+          code: 'noncanonical_clone_key',
+          message:
+            `"${voiceName}" is not this voice's canonical key — it differs from ` +
+            `"${cloneStorageKey(engine, entry.voiceUuid)}". Refusing rather than rendering ` +
+            'under a key revoke could never erase.',
+        });
+      }
+      /* Fix wave (cache-scope gap) — for a CLONED voice reached via the
+         normal (non-raw) branch, cache under the resolved storage key
+         (`qwen-<uuid>` / `xtts-<uuid>`) instead of the character id,
+         mirroring what routes/voice-library.ts:440 already does for its own
+         /sample route. This makes the scope derivable from `voiceUuid`
+         alone, so the EXISTING storageKey-scoped sweep in
+         purge-clone-artifacts.ts reaches it on revoke — previously a file
+         cached here (character-id scoped) was unreachable by any purge and
+         outlived a revoke on disk (the consent gate above still stopped it
+         being served, but "present but unreachable" fails total erasure).
+         Only cloned slots: a designed/imported voice's cache scope must
+         stay byte-for-byte unchanged. The raw branch is untouched — it
+         already caches under its own engine+speaker scope, unrelated to
+         `voiceId`. Note: a cloned audition cached under the OLD
+         (character-id) scope before this change is now a cache miss and
+         re-renders once — acceptable, and the stale file itself is inert
+         (the gate above already refuses to serve any revoked voice
+         regardless of cache scope). */
+      if (!isRawSample && entry?.provenance === 'cloned') {
+        cacheScope = cloneStorageKey(engine, libraryUuid);
+      }
+    }
+  }
+
   const fileName = voiceSampleFileName({ cacheScope, modelKey: effectiveModelKey, text, voiceName });
   const filePath = voiceSampleFilePath(safeSegment(fileName));
   const publicUrl = voiceSamplePublicUrl(fileName);
@@ -173,6 +286,24 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       });
     }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
+    /* GATE 1 — the sidecar's `voice_language_unsupported` 409 (main.py's
+       /synthesize handler): the voice IS cloned and its artifact loaded, the
+       loaded XTTS model just doesn't list the requested language. Its detail
+       text contains neither `voice_not_designed` nor "not been designed yet",
+       so without this arm it missed the arm below and fell through to the
+       generic 502 `tts_failed` — telling the user their sample failed for an
+       unknown gateway reason instead of the one thing they can act on.
+       Ordered FIRST, mirroring the sidecar's own MIN-4 ordering (the Python
+       exception is a SUBCLASS of VoiceNotDesignedError), so a future widening
+       of the arm below can't swallow this one. Chapter render is NOT affected
+       — it never routes through this route's catch. */
+    if (/voice_language_unsupported/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_language_unsupported',
+        message:
+          'This voice cannot speak the requested language on the loaded voice model — re-cloning it will not help; pick a supported language or a different engine.',
+      });
+    }
     /* #1063 — the sidecar returns 409 `voice_not_designed` when the requested
        voice/variant has no cached embedding (a bad-input condition, not an
        engine fault). Surface it as a clean 4xx with a distinct code + actionable

@@ -386,6 +386,11 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     });
     dispatch(rebaselineActions.startApproving());
     let applied = 0;
+    /* Refused-book titles collected across the whole batch (any book the
+       server declined because it would have laundered a consented cloned
+       voice) — surfaced as one error toast after the loop, mirroring the
+       `res.failed` → toast pattern in src/views/voices.tsx. */
+    const refusedBookTitles = new Set<string>();
     for (const p of included) {
       const character = charById.get(p.characterId);
       if (!character || !p.proposedVoiceId) continue;
@@ -401,6 +406,20 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           engine: 'qwen',
           name: p.proposedVoiceId,
         });
+        for (const f of linked.failed) refusedBookTitles.add(f.bookTitle);
+        /* The endpoint refuses PER BOOK (a book with a consented cloned slot
+           refuses that book's write while siblings still update) — a 207
+           response resolves normally, it does NOT throw. Refusing to apply
+           REQUIRES checking `failed` for THIS character's home book: applying
+           the optimistic update unconditionally is exactly how a refused,
+           cloned-voice-protecting write still launders the slot client-side. */
+        const refusal = linked.failed.find((f) => f.bookId === homeBookId);
+        if (refusal) {
+          dispatch(
+            rebaselineActions.proposalFailed({ characterId: p.characterId, error: refusal.error }),
+          );
+          continue;
+        }
         /* Mirror the engine + persona + override (and the now-unified voiceId)
            into redux so the cast view is correct without a full re-hydrate. */
         const next: Character = {
@@ -432,6 +451,15 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
         dedupeKey: `rebaseline-done:${bookId}`,
       }),
     );
+    if (refusedBookTitles.size > 0) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Kept consented cloned voices unchanged in: ${[...refusedBookTitles].join(', ')}.`,
+          dedupeKey: `rebaseline-refused:${bookId}`,
+        }),
+      );
+    }
     runningRef.current = false;
   }
 

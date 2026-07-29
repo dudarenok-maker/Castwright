@@ -615,3 +615,100 @@ describe('srv-43: voiceUuid propagation', () => {
     expect(chars[0].voiceState).toBe('tuned');
   });
 });
+
+/* GATE 2 D-2 — clearStaleLink was the last unguarded destructive write on the
+   consent surface. A `voiceState: 'reused'` character whose link went stale
+   had its voice fields wiped unconditionally, cloned slot included, silently
+   and at analysis time: a real person's consented voice simply gone from the
+   book after a re-analysis, with the next render reading their lines in a
+   catalogue voice.
+
+   The sibling half of this same file's reuse machinery already refuses the
+   symmetric operation — `resolveReusedVoiceFields` declines to hydrate a
+   character carrying a cloned slot — so this closes the destructive half with
+   the same FAIL-SAFE predicate. */
+describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
+  const stalePrune = (chars: LinkableCharacter[]) =>
+    pruneStaleReuseLinks(BOOK2, chars, {
+      resolveAuthorSeries: async (id) => (id === BOOK2 ? { author: AUTHOR, series: SERIES } : null),
+      positions: async () =>
+        new Map<string, number | null>([
+          [BOOK1, 1],
+          [BOOK2, 2],
+        ]),
+    });
+
+  it('[D-2] a reused character carrying a CLONED slot keeps its voice when the link goes stale', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'gran',
+        name: 'Gran',
+        voiceId: 'gran',
+        voiceUuid: 'CLONE-UUID',
+        voiceState: 'reused',
+        ttsEngine: 'coqui',
+        overrideTtsVoices: {
+          coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+        },
+        voiceStyle: 'a warm, unhurried woman',
+        matchedFrom: { bookId: BOOK1, characterId: 'gran', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+
+    const droppedCount = await stalePrune(chars);
+    expect(droppedCount).toBe(1);
+
+    /* The dead link IS cleared — the row stops advertising a source that no
+       longer qualifies. */
+    expect(chars[0].matchedFrom).toBeFalsy();
+    expect(chars[0].voiceState).toBe('generated');
+    /* …but every field the clone needs to keep rendering survives. */
+    expect(chars[0].overrideTtsVoices?.coqui?.provenance).toBe('cloned');
+    expect(chars[0].overrideTtsVoices?.coqui?.libraryUuid).toBe('lib-1');
+    expect(chars[0].ttsEngine).toBe('coqui');
+    expect(chars[0].voiceUuid).toBe('CLONE-UUID');
+    expect(chars[0].voiceStyle).toBe('a warm, unhurried woman');
+  });
+
+  it('[D-2] protects a MALFORMED cloned slot too (fail-safe: provenance only)', async () => {
+    /* The discriminating case for the predicate choice: with a
+       uuid-validating resolution test here, a cloned slot carrying no usable
+       libraryUuid would read as "not cloned" and be erased — the exact
+       silent-deletion shape the fail-safe pair exists to prevent. */
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'gran',
+        name: 'Gran',
+        voiceState: 'reused',
+        overrideTtsVoices: { coqui: { name: 'xtts-lib-1', provenance: 'cloned' } },
+        matchedFrom: { bookId: BOOK1, characterId: 'gran', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+
+    expect(await stalePrune(chars)).toBe(1);
+    expect(chars[0].overrideTtsVoices?.coqui?.provenance).toBe('cloned');
+  });
+
+  it('[D-2] a reused character with a DESIGNED slot still reverts (the guard is cloned-only)', async () => {
+    /* The control: without this, "the fields survived" could just mean the
+       revert stopped working for everyone. */
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        voiceUuid: 'DESIGNED-UUID',
+        voiceState: 'reused',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-wren', libraryUuid: 'lib-2', provenance: 'designed' },
+        },
+        matchedFrom: { bookId: BOOK1, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 },
+      },
+    ];
+
+    expect(await stalePrune(chars)).toBe(1);
+    expect(chars[0].overrideTtsVoices).toBeUndefined();
+    expect(chars[0].voiceUuid).toBeUndefined();
+    expect(chars[0].ttsEngine).toBeUndefined();
+  });
+});

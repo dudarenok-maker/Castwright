@@ -555,6 +555,9 @@ describe('spawnSidecar', () => {
        (sibling to voices.json), not the sidecar's __file__-relative dir,
        so a restart / cwd change can't orphan a designed voice. */
     expect(options.env.QWEN_VOICES_DIR).toMatch(/voices[\\/]qwen$/);
+    /* Cloned-voice latents (fs-38 Wave 3c) — same per-workspace-tree
+       rationale as QWEN_VOICES_DIR above, sibling directory. */
+    expect(options.env.XTTS_VOICES_DIR).toMatch(/voices[\\/]xtts$/);
     /* CUDA-fragmentation guard (2026-05-30 mid-run VRAM OOM) — defaulted on so
        a long run's variable-length batches don't fragment VRAM into an OOM.
        Plan 161: the default ALSO carries max_split_size_mb + garbage_collection,

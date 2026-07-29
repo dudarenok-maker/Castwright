@@ -1518,18 +1518,24 @@ function ChapterRow({
   /* C2 (Wave 3) — the worker is riding out a mid-render sidecar respawn. Takes
      precedence over the stall styling: this IS a healthy recovery, not a stall. */
   const recovering = chapter.phase === 'recovering';
-  const rowStalled = stalled && chapter.state === 'in_progress' && !recovering;
+  /* #1813 — the cloned/designed voice resolver pre-pass is re-deriving or
+     self-healing a voice before synth starts. Same "healthy wait, not a
+     stall" precedence as recovering. */
+  const preparingVoice = chapter.phase === 'preparing-voice';
+  const rowStalled = stalled && chapter.state === 'in_progress' && !recovering && !preparingVoice;
   const inProgressLabel = rowStalled
     ? 'Stalled'
     : recovering
       ? 'Recovering…'
-      : assembling
-        ? 'Assembling…'
-        : verifying
-          ? 'Verifying speech…'
-          : paused
-            ? 'Paused'
-            : 'Generating';
+      : preparingVoice
+        ? 'Preparing voice…'
+        : assembling
+          ? 'Assembling…'
+          : verifying
+            ? 'Verifying speech…'
+            : paused
+              ? 'Paused'
+              : 'Generating';
   const inProgressPill = rowStalled ? (
     <Pill color="warning">Stalled</Pill>
   ) : (
@@ -1632,6 +1638,14 @@ function ChapterRow({
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
               Recovering — restarting voice engine…
             </span>
+          ) : chapter.state === 'in_progress' && preparingVoice ? (
+            /* #1813 — the cloned/designed voice resolver pre-pass is
+               re-deriving or self-healing a voice before synth starts. Name
+               it explicitly so this healthy, potentially multi-second wait
+               doesn't read as a frozen "Synthesising …" line / stall. */
+            <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
+              Preparing voice — {findChar(chapter.preparingVoiceCharacterId ?? '').name}…
+            </span>
           ) : chapter.state === 'in_progress' && verifying ? (
             /* srv-31 ASR content-QA pass: the synthesis groups are done and
                counters are frozen near 99 %, so show the QA step explicitly
@@ -1713,6 +1727,7 @@ function ChapterRow({
             assembling={assembling}
             verifying={verifying}
             recovering={recovering}
+            preparingVoice={preparingVoice}
           />
         </span>
         <span className="hidden sm:block text-sm tabular-nums text-ink/60 text-right">
@@ -2026,6 +2041,7 @@ function ChapterRow({
             !assembling &&
             !verifying &&
             !recovering &&
+            !preparingVoice &&
             chapter.currentLine != null &&
             chapter.currentLine > 0 && (
               <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
@@ -2176,6 +2192,7 @@ function ChapterProgressBar({
   assembling,
   verifying,
   recovering,
+  preparingVoice,
 }: {
   progress: number;
   state: Chapter['state'];
@@ -2183,6 +2200,7 @@ function ChapterProgressBar({
   assembling: boolean;
   verifying: boolean;
   recovering: boolean;
+  preparingVoice: boolean;
 }) {
   if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/6" />;
   if (state === 'done')
@@ -2197,12 +2215,14 @@ function ChapterProgressBar({
         <div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }} />
       </div>
     );
-  if (assembling || verifying || recovering)
+  if (assembling || verifying || recovering || preparingVoice)
     return (
       /* Disk-write phase (assembling), the srv-31 ASR content-QA pass
-         (verifying), or a mid-render sidecar respawn ride-out (recovering, C2)
-         — neutral ink-tone bar with stripe motion to read as "near done, busy"
-         rather than the magenta synthesis gradient. */
+         (verifying), a mid-render sidecar respawn ride-out (recovering, C2),
+         or the cloned/designed voice resolver pre-pass re-deriving/self-
+         healing a voice (preparingVoice, #1813) — neutral ink-tone bar with
+         stripe motion to read as "near done, busy" rather than the magenta
+         synthesis gradient. */
       <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-ink/40"

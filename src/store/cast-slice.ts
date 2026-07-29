@@ -1,7 +1,11 @@
 /* Cast slice — characters + their voice assignments. */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
+import type { Character, AnalyseResponse, TtsEngine, VoiceMatchResponse } from '../lib/types';
+
+/* A single engine's overrideTtsVoices slot, straight off the generated
+   schema (mirrors voices-slice.ts's OverrideSlot for the Voice-side map). */
+type OverrideVoiceSlot = NonNullable<Character['overrideTtsVoices']>[string];
 
 /* Union two alias lists (case-insensitive dedup, original casing, first-seen
    order). Mirrors the server's union (merge-analysis-cast.ts) so a manually-
@@ -134,6 +138,62 @@ export const castSlice = createSlice({
       const otv = (c.overrideTtsVoices ??= {});
       const qwen = (otv.qwen ??= { name: '' });
       qwen.name = voiceId;
+    },
+    /* fs-38 Wave 3c Task 26 — engine-parameterised sibling of
+       setQwenOverrideName. The "use a My-voices entry" assign flow (profile
+       drawer's useMyVoice) can target ANY clone-capable engine's slot, not
+       just qwen — setQwenOverrideName stays qwen-only because its OTHER
+       caller (the bulk-design SSE stream, cast-design-stream-middleware.ts)
+       only ever designs Qwen voices. Carries libraryUuid/provenance too: the
+       resolver's coqui branch (tts-voice-mapping.ts resolveTtsVoiceForCharacter)
+       only resolves a coqui slot to its clone storage key when BOTH are
+       present, so an optimistic write missing them would display a stock
+       catalog voice until the next cast refetch — the qwen resolver doesn't
+       need them today, but writing them uniformly keeps the mirror correct
+       for whichever engine actually needs them and matches what the server
+       persists. */
+    setOverrideVoiceName: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        engine: TtsEngine;
+        name: string;
+        libraryUuid?: string;
+        provenance?: OverrideVoiceSlot['provenance'];
+      }>,
+    ) => {
+      const { characterId, engine, name, libraryUuid, provenance } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const otv = (c.overrideTtsVoices ??= {});
+      const slot = (otv[engine] ??= { name: '' });
+      slot.name = name;
+      if (libraryUuid !== undefined) slot.libraryUuid = libraryUuid;
+      if (provenance !== undefined) slot.provenance = provenance;
+    },
+    /* GATE 1, owner-decided — mirror of the "Remove voice" unassign
+       (DELETE /api/voice-library/:uuid/assign), which the server has already
+       persisted; this is the local-only reflection, same no-persist rule as
+       setOverrideVoiceName above.
+
+       Scoped by `libraryUuid`, exactly as the route is: the slot is dropped
+       ONLY when it still points at the voice being removed. That predicate is
+       what makes this safe against an over-broad `cleared` list — mock mode
+       cannot narrow its response to the slots that really matched (see
+       mockUnassignLibraryVoice), and a stale response could otherwise erase a
+       slot now holding a DIFFERENT library voice. Removing the whole slot,
+       not just its markers, is deliberate: a slot keeping `name` without
+       `libraryUuid`/`provenance` would strand the character on a raw
+       `xtts-<uuid>` storage key no resolver recognises. */
+    clearOverrideVoiceSlot: (
+      s,
+      a: PayloadAction<{ characterId: string; engine: TtsEngine; libraryUuid: string }>,
+    ) => {
+      const { characterId, engine, libraryUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      const slot = c?.overrideTtsVoices?.[engine];
+      if (!slot || slot.libraryUuid !== libraryUuid) return;
+      delete c!.overrideTtsVoices![engine];
     },
     /* srv-43 — mirror a freshly-minted voiceUuid into redux so a "Play 12s"
        immediately after design resolves the uuid-keyed cache entry without

@@ -35,6 +35,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 export const castLinkPriorRouter = Router();
 
@@ -48,7 +49,12 @@ type PersistedCharacter = CharacterOutput & {
   /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
   voiceUuid?: string;
   ttsEngine?: TtsEngine | null;
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** [ADV-C3][EX-10] — widened to carry `libraryUuid`/`provenance` so a
+      cloned slot's identity is type-visible here too, mirroring the
+      canonical shape in voice-mapping.ts and hydrate-reused-voice.ts. */
+  overrideTtsVoices?: Partial<
+    Record<TtsEngine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  > | null;
 };
 interface CastFile {
   characters: PersistedCharacter[];
@@ -156,10 +162,39 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      its own qwen voice and the target carries one; never clobbers an explicit
      source override. The persona (`voiceStyle`) rides along the same gate
      (srv-18) — copied from the target only when the source lacks its own, so
-     the reused row carries the persona on disk without a backfill. */
+     the reused row carries the persona on disk without a backfill.
+
+     [Task 6a] — a source that already carries a CLONED voice on ANY
+     clone-capable engine (e.g. coqui) must never be denormalised onto the
+     target's qwen slot: `sourceHasQwen` is a name-only test on the qwen slot
+     specifically, so a coqui-cloned character (which genuinely has no qwen
+     slot) read as `!sourceHasQwen` and inherited the target's qwen voice via
+     `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` — planting
+     another character's designed voice on a real person's cloned record, and
+     (via the `ttsEngine` fallback below) retargeting them onto qwen for
+     generation. FAIL-SAFE test (`characterHasClonedSlot`, provenance only,
+     no libraryUuid validation) — this is a destructive/preserving guard, so
+     a malformed cloned slot must still count as cloned and stay protected.
+     Cloned source: fail loud/preserve (never denormalise, never retarget
+     engine). Designed/no-voice source: unchanged fail-soft denormalise below.
+
+     [#1885] — the OTHER half of the same laundering shape: this route is a
+     MANUAL link (the client supplies targetBookId/targetCharacterId
+     directly), so — unlike the auto-matcher's candidate list, which
+     `library-cast-scan.ts` already filters to exclude any character
+     carrying a cloned slot on any engine — nothing upstream of this route
+     guarantees the target isn't itself a real person's consented clone. If
+     the target carries ANY clone-capable engine's cloned slot, denormalising
+     `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` below
+     would copy that clone (its qwen slot, or any other engine's cloned
+     slot the spread pulls in unfiltered) onto the source's book — a
+     cross-book consent bypass, not the Task 6a engine-force shape. Same
+     FAIL-SAFE test as the source-side guard above, applied to the target. */
+  const sourceIsCloned = characterHasClonedSlot(source);
+  const targetIsCloned = characterHasClonedSlot(target);
   const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
   const targetQwen = target.overrideTtsVoices?.qwen?.name;
-  const shouldDenormaliseVoice = !sourceHasQwen && !!targetQwen;
+  const shouldDenormaliseVoice = !sourceIsCloned && !targetIsCloned && !sourceHasQwen && !!targetQwen;
 
   /* Carry the prior character's PROFILE content onto the source at link time.
      A manual continuity link declares "these are the same person", so the

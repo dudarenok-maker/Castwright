@@ -44,7 +44,9 @@ import {
   type AsrClassification,
 } from '../tts/segment-asr-qa.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { isNonEnglish, resolveEligibleEngines } from '../tts/language.js';
+import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
+import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
+import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
@@ -295,7 +297,56 @@ chapterQaRepairRouter.post(
       if (nonEnglishBook) {
         for (const c of cast.characters) {
           if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
-          c.ttsEngine = 'qwen';
+          /* fs-38 Wave 3c — mirror generation/splice: retarget a cloned
+             character to whichever eligible clone-capable engine actually
+             carries its cloned slot (preferring the current default `engine`
+             when both qualify), instead of blindly forcing 'qwen' where it
+             has no voice at all. */
+          c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
+        }
+        /* [#1889] — closes the splice/repair asymmetry this comment used to
+           merely record. generation.ts and chapter-splice.ts both re-check a
+           reused designed Qwen voice's BAKED manifest language against the
+           book's here; QA-repair did not, so a line whose voice was
+           mis-detected once got faithfully re-synthesised in the wrong
+           language on every repair pass — the one path that exists
+           specifically to FIX bad audio was the one path that could not see
+           this class of badness.
+
+           Same call shape as chapter-splice.ts (whole cast, gated on
+           `nonEnglishBook`), deliberately not narrowed to the flagged
+           characters: `clearMismatchedDesignedVoices` mutates the in-memory
+           cast that `synthesiseChapter` then routes EVERY re-record through,
+           and a repair round can re-render a group whose characterId isn't
+           in `flagged` (the acoustic UNION candidates below). A per-character
+           scope would leave those on the mismatched voice. Cost is one
+           manifest read per designed qwen character per repair request —
+           accepted, and identical to what the other two routes already pay.
+
+           The SSE `warning` frame is emitted here too, byte-identical in
+           shape and copy to generation.ts's and chapter-splice.ts's — the
+           clearing is a silent cast mutation otherwise, and the user whose
+           line just got re-recorded would never learn their voice was
+           re-detected and dropped. `clearMismatchedDesignedVoices` also
+           console.warns per cleared voice, but a server log is not a user
+           notification. `warning` is now in this stream's openapi enum
+           (`qa_scan | splice_start | progress | chapter_assembling |
+           warning | qa_repair_complete | chapter_failed`) alongside the
+           `code`/`message` fields it carries. */
+        const clearedVoices = await clearMismatchedDesignedVoices(
+          cast.characters,
+          sidecarLanguageName(bookLanguage),
+          bookLanguage,
+        );
+        if (clearedVoices.length > 0) {
+          const names = clearedVoices.map((c) => c.name).join(', ');
+          send({
+            type: 'warning',
+            code: 'voice_language_mismatch',
+            message:
+              `${clearedVoices.length} designed voice(s) were cleared because they were designed for a ` +
+              `different language than this book — re-design ${names} before generating.`,
+          });
         }
       }
       const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
@@ -434,7 +485,10 @@ chapterQaRepairRouter.post(
               bookLanguage,
               signal: controller.signal,
               chapterTitleNarration: undefined,
-              narratorCharacterId: 'narrator',
+              /* fs-38 Wave 3c, Task 23 — no explicit narratorCharacterId
+                 here: `synthesiseChapter`'s own default now resolves the
+                 book's REAL narrator row ('narrator' OR 'char-narrator',
+                 whichever the cast actually has). */
             });
             const v = evaluateSegmentPcm(r.pcm, r.sampleRate, text);
             const a = asrOn && text ? await verifyAsr(r.pcm, text) : null;

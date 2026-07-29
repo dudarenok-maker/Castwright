@@ -6,7 +6,12 @@
    The slice just holds the latest snapshot for the views to read. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { BaseVoice, Voice, VoiceLibraryResponse } from '../lib/types';
+import type { BaseVoice, TtsEngine, Voice, VoiceLibraryResponse } from '../lib/types';
+
+/* A single engine's overrideTtsVoices slot, straight off the generated
+   schema — includes `libraryUuid`/`provenance`, which `BaseVoice` (the wire
+   shape `setOverride` takes) has no room for. */
+type OverrideSlot = NonNullable<Voice['overrideTtsVoices']>[string];
 
 export interface VoicesState {
   loaded: boolean;
@@ -76,7 +81,24 @@ export const voicesSlice = createSlice({
         return;
       }
       const map = { ...(v.overrideTtsVoices ?? {}) };
-      map[override.engine] = { name: override.name };
+      /* fs-38 Wave 3c Task 4 — spread the existing slot (mirrors the server's
+         applyOverrideToCastFiles, voices.ts:857-874) so setting a new name
+         doesn't drop the slot's other fields — notably libraryUuid/
+         provenance, which identify a consented clone. But the server only
+         PRESERVES those markers when the existing slot's provenance is
+         already 'cloned' (its hasClonedProvenance fail-safe read); for any
+         other existing provenance (designed/imported/none) it deletes both
+         so an explicit pick doesn't keep resolving to the old clone/design.
+         Mirror that conditional delete here, or a catalogue pick over a
+         designed slot leaves the client resolving/sampling the stale
+         library voice while the server renders the user's actual pick. */
+      const existingSlot = map[override.engine];
+      const nextSlot: OverrideSlot = { ...(existingSlot ?? {}), name: override.name };
+      if (existingSlot?.provenance !== 'cloned') {
+        delete nextSlot.libraryUuid;
+        delete nextSlot.provenance;
+      }
+      map[override.engine] = nextSlot;
       v.overrideTtsVoices = map;
       /* Project the active engine's slot back into the legacy field
          so legacy badge/UI code keeps working until it's migrated to
@@ -84,6 +106,29 @@ export const voicesSlice = createSlice({
          is normally for the active synth engine, so this is right
          99% of the time. */
       v.overrideTtsVoice = override;
+    },
+    /* fs-38 Wave 3c Task 26 carry-forward — restores a single engine's slot
+       verbatim after a rejected optimistic write. The profile drawer's 409
+       revert used to route through `setOverride` with just `{engine, name}`;
+       after an optimistic full clear (`setOverride(null)`, which nulls the
+       WHOLE map) that reconstructed the slot from an empty map, dropping
+       `libraryUuid`/`provenance` and de-marking a consented clone. This
+       writes the caller's exact prior slot back, marker included. */
+    restoreOverride: (
+      s,
+      a: PayloadAction<{ voiceId: string; engine: TtsEngine; slot: OverrideSlot }>,
+    ) => {
+      const v = s.voices.find((v) => v.id === a.payload.voiceId);
+      if (!v) return;
+      const map = { ...(v.overrideTtsVoices ?? {}) };
+      map[a.payload.engine] = a.payload.slot;
+      v.overrideTtsVoices = map;
+      /* fs-38 Wave 3c Task 26 fix round 1 [F4] — deliberately does NOT also
+         restore the legacy singular `overrideTtsVoice` field the old
+         setOverride-based revert used to touch. Every current reader treats
+         it as a fallback used only when the plural map's own slot is
+         absent, and this always restores the map slot — so leaving the
+         legacy field alone is behaviourally inert, not a gap. */
     },
     hydrateBaseVoices: (s, a: PayloadAction<BaseVoice[]>) => {
       s.baseVoicesLoaded = true;

@@ -302,7 +302,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
   });
 
   it('assignVoice calls api.assignLibraryVoice with the right args and refetches the list', async () => {
-    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1 });
+    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1, written: ['qwen'] });
     vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [makeEntry({ voiceUuid: 'v1' })] });
     const store = makeStore({
       entries: [makeEntry({ voiceUuid: 'v1' })],
@@ -317,7 +317,7 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
   });
 
   it('assignVoice forwards an explicit modelKey to api.assignLibraryVoice (fix wave 2 — the guard-accuracy field)', async () => {
-    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1 });
+    vi.mocked(api.assignLibraryVoice).mockResolvedValue({ updated: 1, written: ['qwen'] });
     vi.mocked(api.listVoiceLibrary).mockResolvedValue({ voices: [makeEntry({ voiceUuid: 'v1' })] });
     const store = makeStore({
       entries: [makeEntry({ voiceUuid: 'v1' })],

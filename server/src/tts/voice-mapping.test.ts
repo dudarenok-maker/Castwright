@@ -16,6 +16,7 @@ import {
   resolveVoiceAssignment,
   qwenStorageKey,
   KOKORO_PROFILE_VOICES,
+  COQUI_PROFILE_VOICES,
 } from './voice-mapping.js';
 
 describe('voice-mapping catalogs are self-consistent', () => {
@@ -335,6 +336,135 @@ describe('fs-38 Wave 1 — pickVoiceForEngine passes through an explicit voice-l
       },
     });
     expect(picked).toBe('qwen-lib1');
+  });
+});
+
+describe('fs-38 Wave 3c Task 16 [ADV-H3] — pickVoiceForEngine resolves a library voice on coqui', () => {
+  /* Policy note (D-B/D-F): both a cloned AND a designed coqui slot carrying
+     a libraryUuid resolve to xtts-<uuid> — resolution is identical for the
+     two provenances. The failure policy for a missing artifact is enforced
+     downstream, in the pre-pass (Task 20a), never here. */
+  it('returns xtts-<uuid> for a cloned coqui slot', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Cloned Voice', libraryUuid: 'u1', provenance: 'cloned' },
+      },
+    });
+    expect(picked).toBe('xtts-u1');
+  });
+
+  it('returns xtts-<uuid> for a designed coqui slot carrying a libraryUuid too', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Designed Voice', libraryUuid: 'u1', provenance: 'designed' },
+      },
+    });
+    expect(picked).toBe('xtts-u1');
+  });
+
+  it('neither the cloned nor the designed resolution returns a COQUI_PROFILE_VOICES member', () => {
+    /* fix round 1, M-1 — the slot names are deliberately real
+       COQUI_PROFILE_VOICES members (not arbitrary strings like 'Cloned
+       Voice'), so a regression that falls through to the generic slotName
+       lookup returns a GENUINE catalogue member here and this assertion
+       actually fails. With an arbitrary made-up name, a fallthrough would
+       also fail to be "a catalogue member" trivially, so the check would
+       pass either way and prove nothing. */
+    const catalogNames = new Set(Object.values(COQUI_PROFILE_VOICES).flat());
+    const cloned = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Damien Black', libraryUuid: 'u1', provenance: 'cloned' },
+      },
+    });
+    const designed = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Wulf Carlevaro', libraryUuid: 'u1', provenance: 'designed' },
+      },
+    });
+    expect(catalogNames.has(cloned)).toBe(false);
+    expect(catalogNames.has(designed)).toBe(false);
+  });
+
+  it('a slot with a name but no libraryUuid is unchanged (falls through to the generic name lookup)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
+    });
+    expect(picked).toBe('Asya Anara');
+  });
+
+  it('an imported slot is unchanged (falls through to the generic name lookup)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Imported Voice', libraryUuid: 'u1', provenance: 'imported' },
+      },
+    });
+    expect(picked).toBe('Imported Voice');
+  });
+
+  it('[DELTA-M2] a slot with a libraryUuid but no provenance is unchanged (legacy drift)', () => {
+    const picked = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: { coqui: { name: 'Legacy Voice', libraryUuid: 'u1' } },
+    });
+    expect(picked).toBe('Legacy Voice');
+  });
+
+  /* fix round 1, I-1 — pinned here, closed one layer up (Task 20).
+     libraryVoiceForEngine requires a non-empty-string libraryUuid (the
+     coordinator's ruling: a RESOLUTION helper must validate what it
+     returns). So a slot with provenance:'cloned' but a malformed
+     libraryUuid ('' or missing) makes libraryVoiceForEngine return
+     undefined, and pickVoiceForEngine — a PURE, synchronous resolver with
+     no way to know whether an artifact actually exists on disk — falls
+     through to the generic slotName lookup, resolving to the
+     human-readable NAME. That is unchanged, and is not expected to
+     change: this function cannot hard-fail on its own.
+
+     fs-38 Wave 3c, Task 20 closed the hole ONE LAYER UP instead:
+     `synthesiseChapter`'s pre-pass (synthesise-chapter.ts) now extracts
+     each cloned-provenance request's `libraryUuid` via
+     `libraryVoiceForEngine` too — the SAME RESOLUTION predicate this test
+     exercises — so a malformed uuid resolves to `undefined` there as well,
+     and `resolveClonedVoicesForChapter`'s existing `!libraryUuid` guard
+     reports the character 'misconfigured' and hard-fails the WHOLE chapter
+     BEFORE this function is ever reached for such a character in
+     production. See `synthesise-chapter-cloned-resolver.test.ts`'s
+     "Property-1 hole (Task 16 review)" case for the end-to-end hard-fail
+     proof. This test now documents (rather than exercises) a gap that is
+     unreachable in production — mirroring how
+     `synthesise-chapter-cloned-exemption.test.ts` treats the qwen
+     `applyQwenFallback` cloned-exemption branch after the pre-pass fully
+     subsumed it.
+
+     Pins libraryVoiceForEngine's contract — the one pickVoiceForEngine
+     actually uses: an empty `libraryUuid` resolves nothing, so the slot
+     falls through to the human-readable name here. GATE 1 M-1 note: the two
+     RESOLUTION helpers used to DISAGREE on `''` (clonedSlotForEngine
+     accepted it, checking only `typeof libraryUuid === 'string'`). That gap
+     is closed — both now reject it — so this test no longer documents a
+     disagreement, just the shared contract. */
+  it('[I-1 — hard-fail now lives one layer up, in the Task 20 pre-pass] a cloned coqui slot with a malformed libraryUuid falls through and resolves to the human-readable NAME here, but never reaches synth in production', () => {
+    const emptyUuid = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person Clone', libraryUuid: '', provenance: 'cloned' },
+      },
+    });
+    expect(emptyUuid).toBe('Real Person Clone');
+
+    const missingUuid = pickVoiceForEngine('coqui', {
+      id: 'char-brann',
+      overrideTtsVoices: {
+        coqui: { name: 'Real Person Clone', provenance: 'cloned' },
+      },
+    });
+    expect(missingUuid).toBe('Real Person Clone');
   });
 });
 

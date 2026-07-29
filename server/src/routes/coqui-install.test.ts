@@ -2,7 +2,7 @@
    stubbed detect + spawn so the whole detect/install/poll/recheck surface runs
    offline. */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import express from 'express';
 import request from 'supertest';
@@ -13,6 +13,10 @@ import {
 } from './coqui-install.js';
 import { CoquiInstallBootstrap } from '../tts/coqui-install-bootstrap.js';
 import type { CoquiInstallState } from '../tts/coqui-install-detect.js';
+import {
+  _resetUserSettingsCache,
+  getLastKnownCoquiInstallState,
+} from '../workspace/user-settings.js';
 
 function makeApp() {
   const app = express();
@@ -38,25 +42,33 @@ async function poll(app: express.Express, id: string, until: (s: string) => bool
   throw new Error('poll timed out');
 }
 
+beforeEach(() => {
+  _resetUserSettingsCache();
+});
+
 afterEach(() => {
   _resetCoquiInstallBootstrap();
 });
 
 describe('GET /api/coqui/detect', () => {
-  it('returns the install-state + installed flag', async () => {
+  it('returns the install-state + installed flag and seeds the resolver cache', async () => {
     setCoquiInstallBootstrap(
       new CoquiInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready' }),
     );
     const res = await request(makeApp()).get('/api/coqui/detect');
     expect(res.body).toEqual({ state: 'ready', installed: true });
+    /* fs-38 Wave 3c Task 19 — the resolver cache now reads 'ready', through
+       the same per-engine shape getLastKnownQwenInstallState uses. */
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
   });
 
-  it('reports installed:false for weights-missing', async () => {
+  it('reports installed:false for weights-missing, and the resolver cache observes it (coqui-uninstalled is observable through the same shape as qwen)', async () => {
     setCoquiInstallBootstrap(
       new CoquiInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'weights-missing' }),
     );
     const res = await request(makeApp()).get('/api/coqui/detect');
     expect(res.body).toEqual({ state: 'weights-missing', installed: false });
+    expect(getLastKnownCoquiInstallState()).toBe('weights-missing');
   });
 });
 
@@ -78,6 +90,8 @@ describe('POST /api/coqui/install + poll', () => {
 
     const done = await poll(app, start.body.id, (s) => s === 'installed' || s === 'error');
     expect(done.status).toBe('installed');
+    /* Polling an installed job syncs the resolver cache to ready. */
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
   });
 
   it('404s polling an unknown job id', async () => {
@@ -105,5 +119,6 @@ describe('POST /api/coqui/install/:id/recheck', () => {
     cur = 'ready';
     const res = await request(app).post(`/api/coqui/install/${start.body.id}/recheck`);
     expect(res.body.status).toBe('installed');
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
   });
 });

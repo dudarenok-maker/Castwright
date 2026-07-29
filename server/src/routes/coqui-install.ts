@@ -7,15 +7,20 @@
      GET  /api/coqui/install/:id     — poll job progress
      POST /api/coqui/install/:id/recheck — re-probe install-state
 
-   Unlike Qwen there's no last-known-install-state cache to sync: Coqui is the
-   ALTERNATE engine, never auto-selected as the default, so install-state never
-   feeds getResolvedTtsModelKey. */
+   Coqui is the ALTERNATE engine (never auto-selected as the default), so
+   unlike Qwen install-state never feeds getResolvedTtsModelKey. But fs-38
+   Wave 3c Task 19 gave Coqui its own last-known-install-state cache (the
+   cloned-voice resolver's per-engine "is this engine unavailable this run"
+   signal) — synced here on every successful probe/job, same as Qwen's
+   syncResolverCache below, so an in-app install becomes visible immediately
+   rather than waiting for the next /health poll (routes/sidecar-health.ts). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CoquiInstallBootstrap } from '../tts/coqui-install-bootstrap.js';
+import { CoquiInstallBootstrap, type CoquiInstallJob } from '../tts/coqui-install-bootstrap.js';
+import { setLastKnownCoquiInstallState } from '../workspace/user-settings.js';
 
 export const coquiInstallRouter = Router();
 
@@ -33,8 +38,16 @@ export function _resetCoquiInstallBootstrap(): void {
   bootstrap = defaultBootstrap;
 }
 
+/* Sync the resolver's cache from a job/detect snapshot so a freshly-installed
+   Coqui is visible without a poll round-trip. Mirrors qwen-install.ts's
+   syncResolverCache. */
+function syncResolverCache(job: CoquiInstallJob | { status: string }): void {
+  if (job.status === 'installed') setLastKnownCoquiInstallState('ready');
+}
+
 coquiInstallRouter.get('/detect', async (_req: Request, res: Response) => {
   const result = await bootstrap.detect();
+  setLastKnownCoquiInstallState(result.state);
   return res.json(result);
 });
 
@@ -48,6 +61,7 @@ coquiInstallRouter.get('/install/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No Coqui install job '${req.params.id}'` });
   }
+  syncResolverCache(job);
   return res.json(job);
 });
 
@@ -56,5 +70,6 @@ coquiInstallRouter.post('/install/:id/recheck', async (req: Request, res: Respon
   if (!job) {
     return res.status(404).json({ error: `No Coqui install job '${req.params.id}'` });
   }
+  syncResolverCache(job);
   return res.json(job);
 });

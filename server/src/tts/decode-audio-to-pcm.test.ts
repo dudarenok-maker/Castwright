@@ -5,6 +5,8 @@
    via `-ar` regardless of the source rate. Real subprocess — no mock. */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { encodePcmToAudio } from './mp3.js';
 import { decodeAudioToPcm } from './mp3.js';
 import { pcmDurationSec } from './pcm.js';
@@ -50,8 +52,6 @@ describe('decodeAudioToPcm', () => {
   });
 
   it('decodes MediaRecorder-style webm/opus to non-empty s16le PCM', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
     const webm = readFileSync(join(__dirname, '__fixtures__/recorder-sample.webm'));
     const pcm = await decodeAudioToPcm(webm, 24_000);
     expect(pcm.length).toBeGreaterThan(24_000 * 2 * 4); // > ~4s of 24kHz mono s16le

@@ -1245,6 +1245,291 @@ describe('PUT /api/voices/:voiceId/override', () => {
   });
 });
 
+describe('PUT /api/voices/:voiceId/override — refuses to clear a cloned slot (fs-38 Wave 3c Task 4)', () => {
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  function seedClonedSlot(path: string) {
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'brann-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+  }
+
+  afterEach(() => {
+    /* Undo the cloned slot so later describe blocks in this file start
+       clean — this suite writes the slot directly to disk, bypassing the
+       route (which is the whole point: to seed a state the route itself
+       must refuse to clear). */
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('409s a workspace-wide clear when a linked character carries a cloned slot, and writes nothing', async () => {
+    seedClonedSlot(castPath(BOOK_TWO));
+    const res = await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    expect(res.status).toBe(409);
+
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    const slot = (two.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.provenance).toBe('cloned');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+  });
+
+  it('409s a series-scoped clear when the anchor character itself is cloned', async () => {
+    seedClonedSlot(castPath(BOOK_ONE));
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: null, scope: 'series', bookId: bookOneId });
+    expect(res.status).toBe(409);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('still clears normally when no linked character is cloned', async () => {
+    await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    const res = await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    expect(res.status).toBe(204);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  /* GATE 2 I-B1 — the SET branch's half. `applyOverrideToCastFiles` pins
+     `ttsEngine` to the incoming engine on every matching character, so a
+     SET on engine B against a character cloned on engine A left the clone
+     marker intact but INERT: `resolveCharacterEngine` routes every one of
+     that character's lines to B's voice from then on, with no error and no
+     `failed` entry. The clone survives on disk and stops being heard —
+     Property 1's failure mode with the marker still in place. */
+  it('[I-B1] 409s a SET on a different engine when a linked character is cloned on the other one, and writes nothing', async () => {
+    seedClonedSlot(castPath(BOOK_TWO)); // cloned on QWEN
+    const engineBefore = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO).characters[0]
+      .ttsEngine;
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/different\s+engine/);
+
+    /* Nothing was written anywhere in scope — not the coqui slot, and (the
+       assertion that discriminates) not the `ttsEngine` retarget that would
+       have muted the clone while leaving its marker in place. */
+    const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
+    const slots = two.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>;
+    expect(slots?.coqui).toBeUndefined();
+    expect(slots?.qwen?.provenance).toBe('cloned');
+    expect(two.characters[0].ttsEngine).toBe(engineBefore);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    expect(one.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+
+  it('[I-B1] 409s a SERIES-scoped SET on a different engine too', async () => {
+    seedClonedSlot(castPath(BOOK_ONE));
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' }, scope: 'series', bookId: bookOneId });
+    expect(res.status).toBe(409);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slots = one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>;
+    expect(slots?.coqui).toBeUndefined();
+    expect(slots?.qwen?.provenance).toBe('cloned');
+  });
+
+  it('[I-B1] still allows a SET on the SAME engine as the clone (the [DELTA-I5] wart, deliberately untouched)', async () => {
+    /* The discriminating control: the guard keys off "cloned on a DIFFERENT
+       engine", not "cloned at all". A same-engine SET preserves
+       libraryUuid/provenance and keeps rendering the clone, so there is
+       nothing to mute — refusing it would break the documented Task 16
+       behaviour rather than close a hole. */
+    seedClonedSlot(castPath(BOOK_ONE)); // cloned on QWEN
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'brann-redesigned' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.name).toBe('brann-redesigned');
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('[I-B1] still allows a SET when no linked character is cloned at all', async () => {
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+  });
+});
+
+describe('PUT /api/voices/:voiceId/override — clears a stale libraryUuid/provenance on an explicit pick (fs-38 Wave 3c Task 16, DELTA-I5)', () => {
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  /* Direct-to-disk cleanup, not `override: null` via the route — a cloned
+     slot seeded by these tests would make the route's own Task 4 guard
+     (hasClonedSlotAmongMatches) refuse the clear with a 409, leaking state
+     into later tests. Mirrors the cleanup pattern in the "refuses to clear
+     a cloned slot" describe block above. */
+  afterEach(() => {
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('[DELTA-I5] an explicit catalogue pick after a designed library assign clears the stale libraryUuid/provenance', async () => {
+    /* Seed a DESIGNED coqui slot carrying a libraryUuid — the shape a
+       voice-library assignment leaves behind. Written directly to disk
+       (not via this route) because the route itself has no "assign a
+       library voice" affordance yet; this reproduces the shape whatever
+       does write it (fs-38 Wave 1 library-assign path) leaves on disk. */
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      coqui: { name: 'Some Library Voice', libraryUuid: 'lib-uuid-1', provenance: 'designed' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    /* User now explicitly picks a stock catalogue voice for the same
+       engine via the cast picker — this is the route under test. */
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+    expect(slot?.libraryUuid).toBeUndefined();
+    expect(slot?.provenance).toBeUndefined();
+  });
+
+  it('[DELTA-I5 known wart, deliberate carry-forward to Task 24/25] a CLONED slot is preserved even when the user explicitly picks a stock voice', async () => {
+    /* Same shape as the previous test, except provenance is 'cloned' — the
+       consented-clone-marker preserve gate (hasClonedProvenance) must
+       refuse to erase libraryUuid/provenance here, even though the user's
+       explicit pick still updates `name`. This means the character still
+       RENDERS the clone despite the picker showing a stock voice — a
+       known, deliberate wart. The real fix is an explicit "unassign
+       library voice" affordance (Task 24/25), not a silent clear here:
+       Phase 0 of this wave fixed seven live bugs that were all
+       guard-less writes erasing a clone marker upstream of a resolver —
+       this pins that this branch does not reintroduce that class. */
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      coqui: { name: 'brann-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot?.name).toBe('Asya Anara');
+    expect(slot?.libraryUuid).toBe('lib-clone-1');
+    expect(slot?.provenance).toBe('cloned');
+  });
+
+  it('leaves a slot with a name but no libraryUuid untouched (nothing to clear)', async () => {
+    await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
+    const res = await request(app)
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'coqui', name: 'Daisy Studious' } });
+    expect(res.status).toBe(204);
+
+    const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (one.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.coqui;
+    expect(slot).toEqual({ name: 'Daisy Studious' });
+  });
+});
+
+describe('applyOverrideToCastFiles — direct-call coverage for the qwen half of the clearing change (fs-38 Wave 3c Task 16 fix round 1, I-2)', () => {
+  /* The clearing change added in Task 16 lives inside applyOverrideToCastFiles,
+     which has three non-test callers: this route's PUT /override (already
+     covered, coqui-only, through the picker route above) AND the two
+     consent-critical design flows — routes/cast-design.ts (bulk qwen
+     design) and routes/single-design.ts (single-character qwen design) —
+     which both call applyOverrideToCastFiles directly with `engine:
+     'qwen'`. Nothing pinned that a provenance:'cloned' qwen slot survives
+     THOSE calls. This exercises the same call shape directly (bypassing
+     the HTTP route) and asserts on the real persisted cast.json, not on
+     mock call arguments, per the coordinator's instruction. */
+  function castPath(title: string) {
+    return join(workspaceRoot, 'books', AUTHOR, SERIES, title, '.audiobook', 'cast.json');
+  }
+
+  afterEach(() => {
+    for (const title of [BOOK_ONE, BOOK_TWO]) {
+      const path = castPath(title);
+      const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<Record<string, unknown>>;
+      };
+      delete cast.characters[0].overrideTtsVoices;
+      writeFileSync(path, JSON.stringify(cast));
+    }
+  });
+
+  it('[I-2] a direct applyOverrideToCastFiles(qwen) call preserves libraryUuid/provenance on a CLONED qwen slot', async () => {
+    const path = castPath(BOOK_ONE);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].overrideTtsVoices = {
+      qwen: { name: 'brann-qwen-clone', libraryUuid: 'lib-qwen-clone-1', provenance: 'cloned' },
+    };
+    writeFileSync(path, JSON.stringify(cast));
+
+    await applyOverrideToCastFiles('v_brann', { engine: 'qwen', name: 'qwen-catalogue-pick' });
+
+    const after = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
+    const slot = (after.characters[0].overrideTtsVoices as Record<string, Record<string, unknown>>)
+      ?.qwen;
+    expect(slot?.name).toBe('qwen-catalogue-pick');
+    expect(slot?.libraryUuid).toBe('lib-qwen-clone-1');
+    expect(slot?.provenance).toBe('cloned');
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
   afterEach(async () => {
     /* Clear all three casts between cases so the cross-series assertions

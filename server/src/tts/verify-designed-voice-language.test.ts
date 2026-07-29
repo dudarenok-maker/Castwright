@@ -137,4 +137,32 @@ describe('clearMismatchedDesignedVoices', () => {
       { id: 'ivan-missing-return', name: 'ivan-missing-return', designedLanguage: 'unknown' },
     ]);
   });
+
+  /* fs-38 Wave 3c [ADV-C1] — a CLONED voice's language is the speaker's own,
+     not a baked design language, and its manifest lives under
+     qwen-<libraryUuid>, which qwenStorageKey() never produces (it has no
+     voiceUuid to key off). Before the fix this loop had no provenance check,
+     so the manifest read always missed and the clone marker was deleted on
+     every non-English book — silently routing the character to a stock
+     catalog voice downstream (applyQwenFallback + fs-60's Qwen->Coqui
+     branch). A cloned slot must survive untouched, with no manifest on disk
+     and no voiceUuid set on the character (the assign route never sets it). */
+  it('fs-38 Wave 3c: a cloned Qwen voice slot is never language-cleared, even with no manifest on disk', async () => {
+    const cast: CastCharacter[] = [
+      {
+        id: 'hero-cloned',
+        name: 'hero-cloned',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'Real Person', provenance: 'cloned', libraryUuid: 'library-uuid-1' },
+        },
+      },
+    ];
+
+    const cleared = await clearMismatchedDesignedVoices(cast, 'Russian', 'ru');
+
+    expect(cast[0].overrideTtsVoices?.qwen?.name).toBe('Real Person');
+    expect(cast[0].overrideTtsVoices?.qwen?.provenance).toBe('cloned');
+    expect(cleared).toEqual([]);
+  });
 });

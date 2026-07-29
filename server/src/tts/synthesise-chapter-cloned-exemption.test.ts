@@ -227,3 +227,184 @@ describe('review I-3 — applyQwenFallback throws for a cloned slot on EITHER ne
     expect(kokoro.calls).toHaveLength(0); // never silently substituted
   });
 });
+
+/* fs-38 Wave 3c, Task 21 — `applyQwenFallback`'s C1 guard used to be
+   gated on `route.engine === 'qwen'` literally: a coqui-routed cloned
+   character got NO exemption from that guard at all. In production this was
+   masked by the cloned-voice resolver PRE-PASS (Task 20 generalised
+   `engineUnavailableFor` to both engines, so the pre-pass already throws for
+   a coqui-cloned+coqui-unavailable character before any group is reached) —
+   but `applyQwenFallback`'s OWN guard, the documented "backstop for any
+   future caller that reaches applyQwenFallback without going through the
+   pre-pass first", stayed qwen-only. Confirmed empirically pre-fix (see
+   task-21-report.md): with the pre-pass defeated (mocking
+   `characterHasClonedSlot` to `false`, mirroring the review-I-3 technique
+   above), the coqui-cloned character in case 1 below rendered SILENTLY on a
+   marked-unavailable coqui engine, using the malformed slot's raw `name`
+   ("Real Person Clone") as the voice — never raising.
+
+   Both cases here defeat the pre-pass the same way, so they pin
+   `applyQwenFallback`'s OWN guard specifically, independent of the pre-pass. */
+describe('applyQwenFallback — cloned exemption generalises to ANY clone-capable engine (Task 21)', () => {
+  afterEach(() => {
+    vi.doUnmock('./clone-engines.js');
+    vi.resetModules();
+  });
+
+  it('raises for a COQUI-cloned character when coqui is unavailable, even with a malformed (uuid-less) clone slot — never renders, never reroutes', async () => {
+    vi.resetModules();
+    vi.doMock('./clone-engines.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./clone-engines.js')>();
+      return {
+        ...actual,
+        // Defeat the pre-pass gate so this test isolates applyQwenFallback's
+        // OWN guard, not the (already-generalised, Task 20) pre-pass that
+        // would otherwise independently catch this same scenario first.
+        characterHasClonedSlot: () => false,
+      };
+    });
+    const {
+      synthesiseChapter: synthesiseChapterFresh,
+      UnresolvableClonedVoiceError: UnresolvableClonedVoiceErrorFresh,
+    } = await import('./synthesise-chapter.js');
+
+    /* Malformed on purpose — no `libraryUuid` — the discriminating fixture:
+       a well-formed clone slot can't tell apart a fix built on the FAIL-SAFE
+       `hasClonedProvenance` test (protects a malformed clone) from one
+       mistakenly built on the uuid-VALIDATING `clonedSlotForEngine` /
+       `libraryVoiceForEngine` RESOLUTION tests (would read this slot as
+       "not cloned" and let it through). Coqui install-state is never set in
+       this test — it defaults 'not-installed' (unavailable), see
+       workspace/user-settings.ts's `lastKnownEngineInstallState`. */
+    const coquiClonedCast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: { coqui: { name: 'Real Person Clone', provenance: 'cloned' } },
+      },
+    ];
+    const coqui = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+    const kokoro = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: coqui, modelKey: 'coqui-xtts-v2' as const };
+
+    await expect(
+      synthesiseChapterFresh({
+        sentences: [sentence(1)],
+        cast: coquiClonedCast,
+        provider: coqui,
+        modelKey: 'coqui-xtts-v2',
+        engine: 'coqui',
+        resolveForEngine,
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceErrorFresh);
+    expect(coqui.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(0); // never substituted onto another engine either
+  });
+
+  it('fs-60\'s Qwen→Coqui branch still raises for a QWEN-cloned character instead of rerouting to Coqui', async () => {
+    vi.resetModules();
+    vi.doMock('./clone-engines.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./clone-engines.js')>();
+      return { ...actual, characterHasClonedSlot: () => false };
+    });
+    const {
+      synthesiseChapter: synthesiseChapterFresh,
+      UnresolvableClonedVoiceError: UnresolvableClonedVoiceErrorFresh,
+    } = await import('./synthesise-chapter.js');
+
+    const qwenClonedCast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: { qwen: { name: 'Wren clone', libraryUuid: 'lib-clone', provenance: 'cloned' } },
+      },
+    ];
+    const qwen = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+    const coqui = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+    const resolveForEngine = (e: string) =>
+      e === 'coqui'
+        ? { provider: coqui, modelKey: 'coqui-xtts-v2' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+
+    await expect(
+      synthesiseChapterFresh({
+        sentences: [sentence(1)],
+        cast: qwenClonedCast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        qwenUnavailable: true,
+        forbidKokoroFallback: true,
+        coquiEligible: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceErrorFresh);
+    expect(qwen.calls).toHaveLength(0);
+    expect(coqui.calls).toHaveLength(0); // fs-60's Qwen→Coqui branch must not fire for a cloned character
+  });
+
+  /* M15 (review) — this same C1 throw (synthesise-chapter.ts:1348) used to
+     sit behind a combined condition that also depended on `!!resolveForEngine`
+     being truthy; Task 21 split C1 into its own unconditional check, so it now
+     fires even when NO `resolveForEngine` is supplied at all — a caller with
+     no fallback engine wired up at all still gets the fail-loud guarantee
+     rather than silently falling through. Strictly a strengthening, but
+     undocumented by a test until now. Defeats the pre-pass the same way the
+     two cases above do, so this isolates `applyQwenFallback`'s own guard. */
+  it('raises even when resolveForEngine is not supplied at all (no fallback engine wired up)', async () => {
+    vi.resetModules();
+    vi.doMock('./clone-engines.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./clone-engines.js')>();
+      return { ...actual, characterHasClonedSlot: () => false };
+    });
+    const {
+      synthesiseChapter: synthesiseChapterFresh,
+      UnresolvableClonedVoiceError: UnresolvableClonedVoiceErrorFresh,
+    } = await import('./synthesise-chapter.js');
+
+    const qwenClonedCast: CastCharacter[] = [
+      {
+        id: 'wren',
+        name: 'Wren',
+        gender: 'female',
+        overrideTtsVoices: { qwen: { name: 'Wren clone', libraryUuid: 'lib-clone', provenance: 'cloned' } },
+      },
+    ];
+    const qwen = { calls: [] as SynthesizeInput[], async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      this.calls.push(input);
+      return { pcm: Buffer.alloc(4800, 0), sampleRate: 24000, mimeType: 'audio/pcm' };
+    } } as TtsProvider & { calls: SynthesizeInput[] };
+
+    await expect(
+      synthesiseChapterFresh({
+        sentences: [sentence(1)],
+        cast: qwenClonedCast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        // No resolveForEngine at all — the old combined guard would have
+        // skipped the throw entirely here.
+        qwenUnavailable: true,
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceErrorFresh);
+    expect(qwen.calls).toHaveLength(0);
+  });
+});

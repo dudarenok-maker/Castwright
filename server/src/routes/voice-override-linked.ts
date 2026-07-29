@@ -36,18 +36,30 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import {
+  characterHasClonedSlot,
+  isCloneEngine,
+  manifestSlotFor,
+  cloneStorageKey,
+  libraryVoiceForEngine,
+} from '../tts/clone-engines.js';
 
 export const voiceOverrideLinkedRouter = Router();
 
 type Engine = 'coqui' | 'gemini' | 'piper' | 'kokoro' | 'qwen';
 
 /* cast.json carries fields the analyzer schema doesn't declare — widen here so
-   the round-trip read/write preserves them. */
+   the round-trip read/write preserves them. libraryUuid/provenance are the
+   fields fs-38 Wave 3c Task 4 fixes this route to stop dropping — a slot
+   carrying `provenance: 'cloned'` identifies a consented clone, never a
+   catalog/designed voice safe to silently replace. */
 type PersistedCharacter = CharacterOutput & {
   voiceId?: string;
   /** srv-43 — immutable per-voice identity (nanoid) minted at design time. */
   voiceUuid?: string;
-  overrideTtsVoices?: Partial<Record<Engine, { name: string }>>;
+  overrideTtsVoices?: Partial<
+    Record<Engine, { name: string; libraryUuid?: string; provenance?: 'designed' | 'cloned' | 'imported' }>
+  >;
   overrideTtsVoice?: unknown; // legacy singular field — dropped on write
   ttsEngine?: Engine | null;
   notLinkedTo?: Array<{ bookId: string; characterId: string }>;
@@ -167,8 +179,53 @@ voiceOverrideLinkedRouter.post(
 );
 
 /* Set voiceId + the voice override on the given character ids in ONE book.
-   Returns the ids actually written (present in that book's cast). */
-async function applyToBook(
+   Returns the ids actually written (present in that book's cast).
+
+   fs-38 Wave 3c Task 4 — a series rebaseline is a designed-voice operation;
+   silently repointing or clearing a CONSENTED CLONE is never correct (on
+   qwen, dropping a cloned slot's libraryUuid makes the resolver fall back to
+   the character's own voiceUuid — which this same write also unifies to the
+   canonical one — so a completely different person's voice renders, with no
+   error). Refuse the whole book's write, before touching anything, if any
+   targeted character's slot would be removed (clear) or replaced (set) while
+   carrying `provenance: 'cloned'`. A designed/imported slot rebaselines
+   exactly as before.
+
+   fs-38 Wave 3c, Task 20 fix round 1 (MINOR-1) — exported (was module-
+   private) so `synthesise-chapter-cloned-resolver.test.ts`'s Task-4 mutator
+   test can drive the REAL guard here directly (a temp bookDir with its own
+   cast.json is enough — this function has no other dependency on the route's
+   express req/res or the series-discovery scan above it), rather than
+   re-stating `characterHasClonedSlot`/`hasClonedProvenance` next to a
+   fixture built one line earlier — a tautology that stays green even if this
+   function's guard collapsed onto the uuid-validating `clonedSlotForEngine`.
+
+   fs-38 Wave 3c, Task 10a (consent-defect fix) — a SECOND, narrower guard
+   below closes a gap the CRITICAL-2 guard above doesn't cover: `name` is a
+   client string with no format validation (parseOverride only checks
+   non-empty), and for a clone-capable engine a name shaped like THIS
+   engine's OWN manifest-slot storage-key prefix (`manifestSlotFor(engine) +
+   '-'`, e.g. 'xtts-' or 'qwen-') is not just a display label — per
+   voice-mapping.ts's `pickVoiceForEngine`, once a target character's slot
+   has no validated library uuid of its own, that raw name IS the literal
+   storage key the sidecar loads a .pt/latents file from. A character whose
+   slot is absent, or has a bare `libraryUuid` with no `provenance`, or
+   `provenance:'designed'`/`'cloned'` with no usable `libraryUuid` (legacy
+   drift), is unguarded by the CRITICAL-2 check above (which only fires on
+   `provenance:'cloned'` WITH a validated uuid to compare) — so nothing
+   stopped a planted `xtts-<someone-else's-uuid>` from reaching the sidecar
+   and rendering that other person's real consented clone.
+
+   Case fold, deliberately: the prefix test and both allow-arms below compare
+   lower-cased strings. The sidecar builds `f"{safe}.pt"` and does
+   `os.path.isfile` on it, and NTFS/APFS are case-insensitive — so
+   `XTTS-<uuid>` on disk IS `xtts-<uuid>.pt`. A case-SENSITIVE `startsWith`
+   check here would let `{engine:'coqui', name:'XTTS-<victimUuid>'}` sail
+   past undetected (it doesn't start with lower-case 'xtts-') while still
+   resolving to the victim's real artifact at render time — reintroducing
+   the exact consent breach this guard exists to close, just one shift-key
+   away. */
+export async function applyToBook(
   bookDir: string,
   ids: string[],
   canonicalVoiceId: string,
@@ -178,6 +235,108 @@ async function applyToBook(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   if (!cast?.characters?.length) throw new Error('Cast on disk is empty');
   const want = new Set(ids);
+
+  for (const c of cast.characters) {
+    if (!want.has(c.id)) continue;
+    /* fs-38 Wave 3c Task 4 CRITICAL-2 fix: this guard must test provenance
+       ALONE, never the uuid-validating clonedSlotForEngine — a cloned slot
+       with a missing/malformed libraryUuid is still a consented clone. A
+       guard deciding whether to *preserve* a slot must fail safe (preserve
+       when in doubt); only code that needs the uuid to resolve/derive/purge
+       an artifact should validate it.
+
+       GATE 2 I-B1 — the SET path used to narrow that to
+       `hasClonedProvenance(c, override.engine)`: the engine BEING WRITTEN,
+       and only that one. But the write below does not just fill a slot, it
+       pins `next.ttsEngine = override.engine` — so a character cloned on the
+       OTHER clone-capable engine passed the guard and was silently retargeted
+       off its clone. The marker survived on disk and became inert:
+       `resolveCharacterEngine` routes every one of that character's lines to
+       the incoming engine's voice instead, with no error, no per-book `failed`
+       entry, and no warning. Property 1's failure mode wearing a disguise —
+       and flatly contrary to this guard's own message, which promises a
+       series rebaseline "refuses to remove or replace it".
+
+       So both paths now use the whole-character `characterHasClonedSlot`,
+       which is exactly the predicate Task 6a used to close the identical
+       engine-retarget shape in cast-link-prior.ts (there, `sourceIsCloned` /
+       `targetIsCloned` veto the `ttsEngine` assignment as well as the
+       denormalise). Refusing a cloned character's series rebaseline outright
+       is the intended cost: a bulk propagation reaching a book the user isn't
+       looking at is precisely where a silent mute lands unseen, and the
+       refusal names the character and tells the user to reassign it
+       directly. */
+    const blocked = characterHasClonedSlot(c);
+    if (blocked) {
+      throw new Error(
+        `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +
+          `remove or replace it. Reassign the character directly instead.`,
+      );
+    }
+
+    /* Task 10a — reject a planted clone/library storage key (see the
+       function-level comment above). Only fires when `override.name` is
+       actually shaped like THIS engine's reserved manifest-slot prefix
+       (case-folded — see above); an ordinary display name (the common case
+       — a designed voice's human-readable label, or a catalog name) is
+       untouched: proven by the "ordinary display name … is untouched" test
+       below, not just asserted here. Allowed when the name is provably this
+       write's own already-consented identity (both comparisons case-folded
+       for the same reason as the prefix test):
+       (a) `c`'s OWN existing slot already resolves to that exact key via
+       the uuid-validating `libraryVoiceForEngine` — structurally this is a
+       no-op check: render always prefers the slot's OWN `libraryUuid` over
+       `name` once one is set (see voice-mapping.ts), so `name` is inert
+       here either way. This arm exists for defence-in-depth and matters
+       once coqui voice-library propagation lands through this route — until
+       then it is a deferred OVER-block: a client that deliberately restates
+       a target's own already-consented key gets accepted, but nothing today
+       exercises that path, or (b) it matches
+       `cloneStorageKey(engine, canonicalVoiceUuid)` — canonicalVoiceUuid is
+       READ from the SOURCE character's on-disk voiceUuid, not taken from
+       this request's body. That is weaker than "server-controlled": nothing
+       here stops a PRIOR request (e.g. `PUT /api/books/:bookId` with
+       `slice:'cast'`, which persists the client's cast wholesale — voiceUuid
+       is not in that route's `PRESERVED_DESIGN_FIELDS`) from having stamped
+       an attacker-chosen voiceUuid onto the source first. That gap is
+       real, is filed separately, and is NOT this guard's job to close — it
+       already exists independently of this route (that same PUT writes
+       `overrideTtsVoices` directly with no guard at all), so this fix still
+       narrows a real path even though it doesn't close every path to
+       `canonicalVoiceUuid`. What arm (b) DOES correctly authenticate is
+       "this name matches what THIS series-unify call itself is about to
+       stamp everywhere" — which is exactly how a bespoke (non-library) Qwen
+       design's storage key legitimately propagates across a series via this
+       route (rebaseline-modal.tsx's Approve step writes `{engine:'qwen',
+       name: <voiceId returned by designQwenVoice>}` with no libraryUuid at
+       all — the qwen branch of `pickVoiceForEngine` ignores `name` entirely
+       when no libraryUuid is set, so this arm's role is authorisation, not
+       resolution). Anything else is a foreign key — e.g.
+       'xtts-<someone-else's-uuid>' (or a case-varied 'XTTS-<uuid>', folded
+       away by the comparisons above) — that would otherwise render (and
+       consent-breach) another person's real cloned artifact. */
+    if (override !== null && isCloneEngine(override.engine)) {
+      const engine = override.engine;
+      const prefix = `${manifestSlotFor(engine)}-`; // manifestSlotFor already returns lower-case
+      const nameLower = override.name.toLowerCase();
+      if (nameLower.startsWith(prefix)) {
+        const ownLib = libraryVoiceForEngine(c, engine);
+        const matchesOwnLibrary =
+          ownLib !== undefined &&
+          nameLower === cloneStorageKey(engine, ownLib.libraryUuid).toLowerCase();
+        const matchesCanonical =
+          canonicalVoiceUuid !== undefined &&
+          nameLower === cloneStorageKey(engine, canonicalVoiceUuid).toLowerCase();
+        if (!matchesOwnLibrary && !matchesCanonical) {
+          throw new Error(
+            `Character "${c.name ?? c.id}" — refusing to write "${override.name}" as its ${engine} ` +
+              `voice: it doesn't match this character's own consented voice.`,
+          );
+        }
+      }
+    }
+  }
+
   const wrote: string[] = [];
   let dirty = false;
   cast.characters = cast.characters.map((c) => {
@@ -187,7 +346,14 @@ async function applyToBook(
     if (override === null) {
       delete next.overrideTtsVoices;
     } else {
-      next.overrideTtsVoices = { ...(c.overrideTtsVoices ?? {}), [override.engine]: { name: override.name } };
+      /* Spread the existing slot (voices.ts:781's shape) so a re-baseline
+         doesn't drop libraryUuid/provenance for a designed/imported voice —
+         only `name` (and, for qwen, the resolver's storage key derived from
+         it) is what this write is meant to change. */
+      next.overrideTtsVoices = {
+        ...(c.overrideTtsVoices ?? {}),
+        [override.engine]: { ...(c.overrideTtsVoices?.[override.engine] ?? {}), name: override.name },
+      };
       next.ttsEngine = override.engine;
     }
     delete next.overrideTtsVoice; // fold away the legacy singular field

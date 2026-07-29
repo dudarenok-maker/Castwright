@@ -84,7 +84,20 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
       transcriptSource: 'whisper',
       captureMethod: 'record',
     },
-    engines: {},
+    /* fs-38 Wave 3c, Task 29 — a derived, assignable clone: `engines: {}`
+       (the pre-fix shape) is exactly what the real assign route's
+       not-derived-yet guard rejects, so an entry meant to demonstrate a
+       SUCCESSFUL assign has to actually be ready, not just well-formed.
+       The `xtts` slot alongside it makes this entry clone-capable on Coqui
+       too: Task 24 made the real route engine-aware and Task 41 remirrored
+       `_mockAssignGuardError`/`_mockAssignWrittenSlots` to match, so an
+       assign that resolves to coqui now succeeds here — see the branch's
+       own headline e2e case (`e2e/voice-library.spec.ts` Step 7), which
+       assigns this exact fixture onto a coqui-routed character. */
+    engines: {
+      qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' },
+      xtts: { status: 'ready', coquiVersion: '0.27.2' },
+    },
     createdAt: '2026-07-20T00:00:00Z',
     updatedAt: '2026-07-20T00:00:00Z',
   },
@@ -113,7 +126,11 @@ export const MOCK_VOICE_LIBRARY_ENTRIES: VoiceLibraryEntry[] = [
       transcriptSource: 'whisper',
       captureMethod: 'record',
     },
-    engines: {},
+    // fs-38 Wave 3c, Task 29 — ready before revocation (realistic: consent
+    // is revoked on a voice that already derived), same as lib-cloned-demo
+    // above. The assign route's revoked-consent guard fires before its
+    // readiness guard regardless, so this stays a 409 either way.
+    engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } },
     createdAt: '2026-07-15T00:00:00Z',
     updatedAt: '2026-07-22T00:00:00Z',
   },

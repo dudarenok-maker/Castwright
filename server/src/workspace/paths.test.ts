@@ -10,7 +10,18 @@
 
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { slug, makeBookId, parseBookId, bookDirByDisplay, BOOKS_ROOT } from './paths.js';
+import {
+  slug,
+  makeBookId,
+  parseBookId,
+  bookDirByDisplay,
+  BOOKS_ROOT,
+  WORKSPACE_ROOT,
+  xttsVoicesDir,
+  xttsVoiceLatentsPath,
+  xttsVoiceSidecarPath,
+} from './paths.js';
+import { PathContainmentError } from '../util/safe-path.js';
 
 /* The exact legacy slug (pre-219) — the oracle for ASCII parity. */
 function legacySlug(s: string): string {
@@ -76,5 +87,51 @@ describe('bookDirByDisplay containment', () => {
   it('never collapses a level when a field sanitizes to empty', () => {
     const dir = bookDirByDisplay('...', 'Series', 'Title');
     expect(path.relative(BOOKS_ROOT, dir).split(path.sep).length).toBe(3);
+  });
+});
+
+/* fs-38 Wave 3c Task 12 — xtts voice artifact paths, sibling helpers to the
+   qwenVoicesDir/qwenVoicePtPath/qwenVoiceSidecarPath trio. */
+describe('xtts voice paths', () => {
+  it('resolves the voices dir under voices/xtts', () => {
+    expect(path.relative(WORKSPACE_ROOT, xttsVoicesDir())).toBe(path.join('voices', 'xtts'));
+  });
+
+  it('resolves the latents path under voices/xtts', () => {
+    const p = xttsVoiceLatentsPath('xtts-abc123');
+    expect(path.relative(xttsVoicesDir(), p)).toBe('xtts-abc123.pt');
+  });
+
+  it('resolves the sidecar JSON path under voices/xtts', () => {
+    const p = xttsVoiceSidecarPath('xtts-abc123');
+    expect(path.relative(xttsVoicesDir(), p)).toBe('xtts-abc123.json');
+  });
+
+  it('throws PathContainmentError on a traversal voiceId for the latents path', () => {
+    expect(() => xttsVoiceLatentsPath('../../evil')).toThrow(PathContainmentError);
+  });
+
+  it('throws PathContainmentError on a traversal voiceId for the sidecar path', () => {
+    expect(() => xttsVoiceSidecarPath('../../evil')).toThrow(PathContainmentError);
+  });
+
+  /* M5 (review) — the two artifact helpers had no non-ASCII / empty-sanitize
+     case (a parity gap the qwen siblings also lack — see Task 12's ledger
+     note). `sanitizeIdSegment` only rewrites separators/NUL/repeated dots,
+     so a non-ASCII voiceId passes through unchanged; `safeSegment` (which
+     runs first) throws on an empty segment before sanitisation ever runs. */
+  it('preserves a non-ASCII voiceId unchanged in the latents/sidecar paths', () => {
+    const latents = xttsVoiceLatentsPath('xtts-Война');
+    const sidecar = xttsVoiceSidecarPath('xtts-Война');
+    expect(path.relative(xttsVoicesDir(), latents)).toBe('xtts-Война.pt');
+    expect(path.relative(xttsVoicesDir(), sidecar)).toBe('xtts-Война.json');
+  });
+
+  it('throws PathContainmentError on an empty voiceId for the latents path', () => {
+    expect(() => xttsVoiceLatentsPath('')).toThrow(PathContainmentError);
+  });
+
+  it('throws PathContainmentError on an empty voiceId for the sidecar path', () => {
+    expect(() => xttsVoiceSidecarPath('')).toThrow(PathContainmentError);
   });
 });

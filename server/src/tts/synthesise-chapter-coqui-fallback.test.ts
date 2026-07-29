@@ -198,12 +198,20 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
         ? { provider: trackedCoqui, modelKey: 'coqui-xtts-v2' as const }
         : { provider: trackedQwen, modelKey: 'qwen3-tts-0.6b' as const };
 
-    /* fetch is only ever called by evictQwenForCoquiPhase in this test (fully
-       mocked providers, no other network path) — track it in the SAME
-       callOrder sequence so the assertion below can see exactly where the
-       evict happened relative to the qwen/coqui calls. */
-    vi.spyOn(global, 'fetch').mockImplementation(async () => {
-      callOrder.push('evict');
+    /* fetch is only ever called by the two phase-evict helpers in this test
+       (fully mocked providers, no other network path) — track it in the SAME
+       callOrder sequence so the assertion below can see exactly where each
+       evict happened relative to the qwen/coqui calls.
+
+       [#1894] — tagged with the target ENGINE (it used to push a bare
+       'evict'). The chapter now evicts on BOTH sides of the Coqui phase, and
+       an untagged label would let two evicts of the SAME engine satisfy the
+       sequence below, which would be a real defect. */
+    vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
+        engine?: string;
+      };
+      callOrder.push(`evict:${body.engine}`);
       return new Response(null, { status: 200 });
     });
 
@@ -233,13 +241,24 @@ describe('synthesiseChapter — Qwen→Coqui fallback (fs-60)', () => {
     });
 
     expect(rerecordStartIndex).toBeGreaterThan(-1);
-    /* Within the re-record round specifically: qwen renders, THEN an evict,
-       THEN coqui renders — never interleaved, never skipping the evict. This
-       is the exact sequence that only exists once the re-record loop is
-       routed through synthGroupsSerialized instead of synthGroupsBatched
-       directly; on the unfixed code this would read ['qwen', 'coqui'] with no
-       'evict' entry at all. */
-    expect(callOrder.slice(rerecordStartIndex)).toEqual(['qwen', 'evict', 'coqui']);
+    /* Within the re-record round specifically: qwen renders, THEN Qwen is
+       evicted, THEN coqui renders — never interleaved, never skipping the
+       evict. This is the exact sequence that only exists once the re-record
+       loop is routed through synthGroupsSerialized instead of
+       synthGroupsBatched directly; on the unfixed code this would read
+       ['qwen', 'coqui'] with no evict entry at all.
+
+       [#1894] added the trailing `evict:coqui` — the mirror that frees XTTS
+       (~3.5 GB) once the round's Coqui work is done instead of holding it for
+       the rest of the render. Its position at the END is the load-bearing
+       part: an evict:coqui anywhere before 'coqui' would unload the model
+       that group needs. */
+    expect(callOrder.slice(rerecordStartIndex)).toEqual([
+      'qwen',
+      'evict:qwen',
+      'coqui',
+      'evict:coqui',
+    ]);
   });
 
   it('renders every group when a chapter mixes qwen + coqui + a third engine (kokoro) — none dropped', async () => {

@@ -3,9 +3,10 @@ import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, TtsModelKey, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
-import { modelKeyForEngineChoice } from '../lib/tts-models';
+import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
+import { castActions } from '../store/cast-slice';
 
 type Tab = 'all' | 'current' | 'library';
 
@@ -108,6 +109,11 @@ export function VoiceLibraryPanel({
     [myVoicesEntries],
   );
   const [assigningLibraryUuid, setAssigningLibraryUuid] = useState<string | null>(null);
+  /* #1896 — mirrors profile-drawer.tsx's `libraryActionError`: the panel's
+     own "My voices" assign dispatch was fire-and-forget, so a server
+     rejection (revoked / not-ready / wrong-engine 409) had nowhere to
+     surface. Same local-error idiom, one component over. */
+  const [myVoicesAssignError, setMyVoicesAssignError] = useState<string | null>(null);
   /* Whether any voice belongs to the open book's series (a sibling book — the
      `source === 'library'` half — that shares its author + series). The server
      tags these `inCurrentSeries`. A standalone (or a one-book series) has none,
@@ -263,13 +269,65 @@ export function VoiceLibraryPanel({
                   const modelKey = ttsModelKey
                     ? modelKeyForEngineChoice(engineChoice, ttsModelKey, qwenTier)
                     : undefined;
-                  dispatch(
-                    assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
-                  );
+                  setMyVoicesAssignError(null);
                   setAssigningLibraryUuid(null);
+                  void dispatch(
+                    assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
+                  )
+                    .unwrap()
+                    .then(({ written }) => {
+                      /* Gate 2 C-2 — mirror the profile drawer's `useMyVoice`
+                         reconcile-from-the-response discipline: a 200 only
+                         means the slots in `written` actually landed (`qwen`
+                         is unconditional; `coqui` only when the entry is
+                         clone-capable there too), never the engine we asked
+                         for. Without this, a partial success (designed entry,
+                         no retained clip, assigned to a coqui-routed
+                         character) closed the popover with no notice and no
+                         reconciliation — the user believed the coqui assign
+                         landed when the character was still on a stock
+                         catalogue voice. */
+                      for (const engine of written) {
+                        dispatch(
+                          castActions.setOverrideVoiceName({
+                            characterId,
+                            engine,
+                            name: `${engine === 'coqui' ? 'xtts' : 'qwen'}-${entry.voiceUuid}`,
+                            libraryUuid: entry.voiceUuid,
+                            provenance: entry.provenance,
+                          }),
+                        );
+                      }
+                      /* Only reachable for coqui in practice — qwen is
+                         unconditional, and coqui is the only OTHER
+                         clone-capable engine `written` ever names. */
+                      if (
+                        modelKey &&
+                        engineForModelKey(modelKey) === 'coqui' &&
+                        !written.includes('coqui')
+                      ) {
+                        setMyVoicesAssignError(
+                          `“${entry.name}” can’t be used on Coqui XTTS v2 — it has no recording to derive from. ` +
+                            `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
+                        );
+                      }
+                    })
+                    .catch((e) => {
+                      setMyVoicesAssignError(
+                        (e as Error).message || 'Could not assign this voice.',
+                      );
+                    });
                 }}
               />
             ))}
+            {myVoicesAssignError && (
+              <p
+                data-testid="voice-library-my-voices-error"
+                className="text-[11px] text-red-600/90 font-medium px-1"
+              >
+                ⚠ {myVoicesAssignError}
+              </p>
+            )}
           </div>
         )}
         {shown.length === 0 && q ? (

@@ -16,6 +16,7 @@ import {
   type ResolveDesignedVoiceDeps,
 } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
+import { currentQwenBaseModel } from './model-paths.js';
 
 describe('UnresolvableClonedVoiceError', () => {
   it('fromList carries the structured broken voices and a readable message', () => {
@@ -48,6 +49,38 @@ describe('UnresolvableClonedVoiceError', () => {
       { name: 'Wren', reason: 'wrong-engine' },
     ]);
     expect(e.message).toContain('Re-enable Qwen');
+    expect(e.message).toContain('switch the book to Qwen');
+  });
+
+  /* GATE 1 I-2 — the wrong-engine remedy is engine-aware, reusing Task 18's
+     `engine` field + label ordering rather than a parallel mechanism. */
+  it('[I-2] fromList names the engine the clone LIVES on in the wrong-engine remedy', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+    ]);
+    expect(e.message).toContain('switch the book to Coqui');
+    expect(e.message).not.toContain('switch the book to Qwen');
+  });
+
+  it('[I-2] fromList orders a two-engine wrong-engine label by CLONE_ENGINE_LIST, not report order', () => {
+    const coquiFirst = UnresolvableClonedVoiceError.fromList([
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+      { name: 'Marlow', reason: 'wrong-engine', engine: 'qwen' },
+    ]);
+    const qwenFirst = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'wrong-engine', engine: 'qwen' },
+      { name: 'Wren', reason: 'wrong-engine', engine: 'coqui' },
+    ]);
+    expect(coquiFirst.message).toContain('switch the book to Qwen or Coqui');
+    expect(qwenFirst.message).toContain('switch the book to Qwen or Coqui');
+  });
+
+  it('[I-2] the two engine-naming remedies stay independent: coqui-unavailable + qwen-wrong-engine', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'engine-unavailable', engine: 'coqui' },
+      { name: 'Wren', reason: 'wrong-engine', engine: 'qwen' },
+    ]);
+    expect(e.message).toContain('Re-enable Coqui or restore the missing voice(s)');
     expect(e.message).toContain('switch the book to Qwen');
   });
 
@@ -90,10 +123,11 @@ function baseEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntr
 function classifyInput(overrides: Partial<ClassifyInput> = {}): ClassifyInput {
   return {
     entry: baseEntry(),
+    engine: 'qwen',
     wrongEngine: false,
     engineUnavailable: false,
     ptExists: true,
-    currentBaseModel: 'qwen3-0.6b',
+    currentArtifactVersion: 'qwen3-0.6b',
     ...overrides,
   };
 }
@@ -199,7 +233,7 @@ describe('classifyClonedVoice', () => {
             captureMethod: 'upload',
           },
         }),
-        currentBaseModel: 'qwen3-0.6b',
+        currentArtifactVersion: 'qwen3-0.6b',
       }),
     );
     expect(result).toEqual({ state: 'repairable' });
@@ -232,6 +266,123 @@ describe('classifyClonedVoice', () => {
     );
     expect(result).toEqual({ state: 'healthy' });
   });
+
+  /* --- fs-38 Wave 3c, Task 18 — the coqui column: the SAME classifier
+     table above, on the `xtts` manifest slot / `coquiVersion` comparand
+     instead of `qwen`/`baseModel`. */
+  describe('the coqui column', () => {
+    it('coqui engine unavailable -> broken/engine-unavailable', () => {
+      const result = classifyClonedVoice(
+        classifyInput({ engine: 'coqui', engineUnavailable: true }),
+      );
+      expect(result).toEqual({ state: 'broken', reason: 'engine-unavailable' });
+    });
+
+    it('coqui persisted failed status -> broken/derive-failed', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({ engines: { xtts: { status: 'failed' } } }),
+        }),
+      );
+      expect(result).toEqual({ state: 'broken', reason: 'derive-failed' });
+    });
+
+    it('coqui .pt missing + master present -> repairable', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({
+            master: {
+              clipFile: 'master.wav',
+              sampleRate: 24000,
+              durationSeconds: 5,
+              transcript: 'hi',
+              transcriptSource: 'user',
+              captureMethod: 'upload',
+            },
+          }),
+          ptExists: false,
+        }),
+      );
+      expect(result).toEqual({ state: 'repairable' });
+    });
+
+    it('coqui .pt missing + no master -> broken/missing-master', () => {
+      const result = classifyClonedVoice(
+        classifyInput({ engine: 'coqui', ptExists: false }),
+      );
+      expect(result).toEqual({ state: 'broken', reason: 'missing-master' });
+    });
+
+    it('coqui coquiVersion mismatch + master present -> repairable', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({
+            engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } },
+            master: {
+              clipFile: 'master.wav',
+              sampleRate: 24000,
+              durationSeconds: 5,
+              transcript: 'hi',
+              transcriptSource: 'user',
+              captureMethod: 'upload',
+            },
+          }),
+          currentArtifactVersion: 'v2.0.5',
+        }),
+      );
+      expect(result).toEqual({ state: 'repairable' });
+    });
+
+    it('coqui everything current -> healthy', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.5' } } }),
+          currentArtifactVersion: 'v2.0.5',
+        }),
+      );
+      expect(result).toEqual({ state: 'healthy' });
+    });
+
+    /* fs-38 Wave 3c, Task 18 — the ambiguity this task's brief called out
+       explicitly: BOTH sides of the version comparison can be empty
+       ('' is `derive-engine-artifact.ts`'s older-sidecar fallback for
+       STORED; `currentArtifactVersion('coqui')` also reads `''` during the
+       boot window before Task 19's live oracle — `getLastKnownCoquiVersion()`
+       — has answered its first reachable /health poll). An empty/unknown
+       value on EITHER side must read as "not stale", never "always stale" —
+       the latter would force a real GPU re-derive of every already-healthy
+       coqui-cloned voice on every single chapter render during that window
+       (see clone-engines.ts's isArtifactVersionStale doc comment for the
+       full reasoning). Pinned at the classifier's own boundary, not just the
+       underlying predicate in isolation — `classifyClonedVoice` takes a
+       plain `currentArtifactVersion` string, so these cases are agnostic to
+       whether it came from the boot window or any other empty source. */
+    it('an EMPTY stored coquiVersion (older-sidecar fallback) never reads stale, even against a real known current version', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({ engines: { xtts: { status: 'ready', coquiVersion: '' } } }),
+          currentArtifactVersion: 'v2.0.5',
+        }),
+      );
+      expect(result).toEqual({ state: 'healthy' });
+    });
+
+    it('an EMPTY currentArtifactVersion (e.g. the boot window, before the oracle has answered) never reads a real stored coquiVersion as stale', () => {
+      const result = classifyClonedVoice(
+        classifyInput({
+          engine: 'coqui',
+          entry: baseEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } }),
+          currentArtifactVersion: '',
+        }),
+      );
+      expect(result).toEqual({ state: 'healthy' });
+    });
+  });
 });
 
 /* --- T5: orchestrator ------------------------------------------------------ */
@@ -239,14 +390,52 @@ describe('classifyClonedVoice', () => {
 function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDeps & {
   readEntry: ReturnType<typeof vi.fn>;
   writeEntry: ReturnType<typeof vi.fn>;
+  updateEntry: ReturnType<typeof vi.fn>;
   ptExists: ReturnType<typeof vi.fn>;
   deriveEngineArtifact: ReturnType<typeof vi.fn>;
   readMasterPcm: ReturnType<typeof vi.fn>;
   purgeCloneArtifacts: ReturnType<typeof vi.fn>;
 } {
+  // fs-38 Wave 3c, Task 14 — `readEntry`/`writeEntry` are pulled out as
+  // locals (rather than inlined in the returned object) so the DEFAULT
+  // `updateEntry` below can call through to whichever readEntry/writeEntry
+  // mock a given test configured (including the sequenced
+  // `mockResolvedValueOnce` chains the review-C-1 tests use), mirroring
+  // exactly what the pre-Task-14 inline read+write did. This keeps every
+  // pre-existing test's call-count/ordering assertions on `readEntry`/
+  // `writeEntry` valid unchanged — a test only needs its own `updateEntry`
+  // override when it's testing the LOCK itself (see the dedicated
+  // concurrency describe block below), not the ordinary success/failure
+  // paths.
+  const readEntry = overrides.readEntry ?? vi.fn(async () => null);
+  const writeEntry = overrides.writeEntry ?? vi.fn(async () => {});
+  const defaultUpdateEntry = vi.fn(
+    async (
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ) => {
+      const fresh = await readEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await writeEntry(next);
+      // Fix wave (review I-4) — production's `updateEntry` does a SECOND,
+      // canonical re-read after the write (workspace/voice-library.ts),
+      // not a bare return of `next`. The old double stopped at `writeEntry`
+      // and never exercised that re-read, which is exactly where I-1's
+      // null-conflation bug lived — a double that never reaches
+      // production's real shape can't catch a regression there. Falls
+      // back to `next` (I-1's fix, mirrored here too) when the re-read
+      // comes back null/undefined, e.g. a test that only configured 2
+      // `mockResolvedValueOnce` reads.
+      return (await readEntry(uuid)) ?? next;
+    },
+  );
   return {
-    readEntry: vi.fn(async () => null),
-    writeEntry: vi.fn(async () => {}),
+    readEntry,
+    writeEntry,
+    updateEntry: defaultUpdateEntry,
     ptExists: vi.fn(async () => true),
     deriveEngineArtifact: vi.fn(async () => ({
       previewPcm: Buffer.alloc(0),
@@ -254,7 +443,7 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
       baseModel: 'qwen3-0.6b',
     })),
     readMasterPcm: vi.fn(async () => ({ pcm: Buffer.alloc(0), sampleRate: 24000, refText: 'hi' })),
-    currentBaseModel: () => 'qwen3-0.6b',
+    currentArtifactVersion: () => 'qwen3-0.6b',
     // Review C-1 — defaults to a no-op success; only the revoke/gone-mid-
     // derive tests need to observe this being called.
     purgeCloneArtifacts: vi.fn(async () => ({ failed: [] })),
@@ -262,6 +451,7 @@ function makeDeps(overrides: Partial<ResolveChapterDeps> = {}): ResolveChapterDe
   } as ResolveChapterDeps & {
     readEntry: ReturnType<typeof vi.fn>;
     writeEntry: ReturnType<typeof vi.fn>;
+    updateEntry: ReturnType<typeof vi.fn>;
     ptExists: ReturnType<typeof vi.fn>;
     deriveEngineArtifact: ReturnType<typeof vi.fn>;
     readMasterPcm: ReturnType<typeof vi.fn>;
@@ -295,7 +485,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -307,7 +497,7 @@ describe('resolveClonedVoicesForChapter', () => {
     // coincidental throw from something else).
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
       throw new Error('expected rejection');
@@ -334,13 +524,13 @@ describe('resolveClonedVoicesForChapter', () => {
     const deps = makeDeps({
       readEntry: vi.fn(async () => entry),
       ptExists: vi.fn(async () => true),
-      currentBaseModel: () => 'qwen3-new',
+      currentArtifactVersion: () => 'qwen3-new',
       signal: controller.signal,
     });
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).resolves.toBeUndefined();
@@ -380,7 +570,7 @@ describe('resolveClonedVoicesForChapter', () => {
     const deps = makeDeps({
       readEntry: vi.fn(async () => entry),
       ptExists: vi.fn(async () => true),
-      currentBaseModel: () => 'qwen3-new',
+      currentArtifactVersion: () => 'qwen3-new',
       readMasterPcm: vi.fn(async () => ({
         pcm: Buffer.alloc(0),
         sampleRate: 24000,
@@ -389,7 +579,7 @@ describe('resolveClonedVoicesForChapter', () => {
     });
 
     await resolveClonedVoicesForChapter(
-      [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+      [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
       deps,
     );
 
@@ -418,7 +608,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       await expect(
         resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         ),
       ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -439,7 +629,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
     await expect(
       resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       ),
     ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
@@ -460,7 +650,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -496,8 +686,8 @@ describe('resolveClonedVoicesForChapter', () => {
     try {
       await resolveClonedVoicesForChapter(
         [
-          { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
-          { characterName: 'Reeve', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
+          { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+          { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
         ],
         deps,
       );
@@ -516,7 +706,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: undefined, wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: undefined, engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -533,7 +723,7 @@ describe('resolveClonedVoicesForChapter', () => {
     let thrown: UnresolvableClonedVoiceError | undefined;
     try {
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
     } catch (e) {
@@ -541,6 +731,69 @@ describe('resolveClonedVoicesForChapter', () => {
     }
     expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'misconfigured' }]);
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
+  /* --- #1813: onVoicePrepare fires for a Repairable re-derive, never for a
+     healthy voice --- */
+
+  describe('onVoicePrepare (#1813)', () => {
+    it('fires with { characterId, characterName } for a Repairable voice, before the derive', async () => {
+      const entry = baseEntry({ master: MASTER });
+      const onVoicePrepare = vi.fn();
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false), // .pt missing -> repairable (master present)
+        onVoicePrepare,
+      });
+
+      await resolveClonedVoicesForChapter(
+        [
+          {
+            characterName: 'Marlow',
+            characterId: 'marlow',
+            libraryUuid: 'u1',
+            engine: 'qwen' as const,
+            wrongEngine: false,
+            engineUnavailable: false,
+          },
+        ],
+        deps,
+      );
+
+      expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+      expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'marlow', characterName: 'Marlow' });
+      // Fired BEFORE the derive, not after.
+      expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+        deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('does NOT fire for a healthy voice (no derive needed)', async () => {
+      const entry = baseEntry(); // no master needed — ptExists true + current version.
+      const onVoicePrepare = vi.fn();
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        onVoicePrepare,
+      });
+
+      await resolveClonedVoicesForChapter(
+        [
+          {
+            characterName: 'Marlow',
+            characterId: 'marlow',
+            libraryUuid: 'u1',
+            engine: 'qwen' as const,
+            wrongEngine: false,
+            engineUnavailable: false,
+          },
+        ],
+        deps,
+      );
+
+      expect(onVoicePrepare).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
   });
 
   /* --- review C-1: revoke landing mid-derive is a lost-update, not a re-vivify --- */
@@ -573,13 +826,13 @@ describe('resolveClonedVoicesForChapter', () => {
       const deps = makeDeps({
         readEntry,
         ptExists: vi.fn(async () => true),
-        currentBaseModel: () => 'qwen3-new',
+        currentArtifactVersion: () => 'qwen3-new',
       });
 
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -608,7 +861,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -637,10 +890,10 @@ describe('resolveClonedVoicesForChapter', () => {
         .fn()
         .mockResolvedValueOnce(preDeriveEntry)
         .mockResolvedValueOnce(postDeriveEntry);
-      const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => true), currentBaseModel: () => 'qwen3-new' });
+      const deps = makeDeps({ readEntry, ptExists: vi.fn(async () => true), currentArtifactVersion: () => 'qwen3-new' });
 
       await resolveClonedVoicesForChapter(
-        [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
         deps,
       );
 
@@ -678,7 +931,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let thrown: UnresolvableClonedVoiceError | undefined;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
       } catch (e) {
@@ -688,6 +941,116 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'revoked' }]);
       expect(deps.writeEntry).not.toHaveBeenCalled();
       expect(deps.purgeCloneArtifacts).toHaveBeenCalledWith('u1', {});
+    });
+  });
+
+  /* --- fix wave, review I-1/I-4: the makeDeps default `updateEntry` used to
+     stop at `writeEntry` and never exercise production's canonical
+     post-write re-read — the exact spot where I-1's null-conflation bug
+     lived. This test drives that double's real (fixed) two-read shape and
+     configures its SECOND (post-write) read to come back undefined —
+     reproducing "the write succeeded but the canonical re-read failed"
+     inside the resolver's own permanent-derive-failure path, not just at
+     the voice-library primitive in isolation. */
+  describe('fix wave, review I-1/I-4 — a successful write must still be reported even when the canonical re-read fails', () => {
+    it('permanent (4xx) derive failure: still reported as derive-failed even when the post-write canonical re-read comes back undefined', async () => {
+      const preDeriveEntry = baseEntry({ master: MASTER });
+      const freshEntry = baseEntry({ master: MASTER }); // NOT revoked — the write proceeds.
+      const readEntry = vi
+        .fn()
+        .mockResolvedValueOnce(preDeriveEntry) // classify's read
+        .mockResolvedValueOnce(freshEntry); // updateEntry's fresh pre-write read
+      // Deliberately NO third mockResolvedValueOnce — the double's
+      // canonical post-write re-read falls through to `undefined`,
+      // reproducing I-1's "write succeeded, re-read failed" ambiguity.
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      // The write DID happen — proving this isn't the "mutate declined"
+      // branch (that's the pre-existing "revoked" test above).
+      expect(deps.writeEntry).toHaveBeenCalledTimes(1);
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.qwen?.status).toBe('failed');
+
+      // I-1: a write that succeeded but whose canonical re-read comes back
+      // null/undefined must still be reported — not silently dropped.
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+    });
+
+    /* GATE 1 M-6 — the harder sibling: `updateEntry` ITSELF throws (disk
+       full, lock timeout, corrupt manifest) inside the permanent-4xx catch.
+       That throw used to escape `resolveClonedVoicesForChapter` entirely,
+       discarding every `broken` entry accumulated so far — the caller got
+       one opaque raw error instead of the structured
+       `UnresolvableClonedVoiceError`, silently degrading the "report every
+       unresolvable voice in one throw" contract. Two characters, so the
+       DISCARD is what the assertion sees: a single-character fixture would
+       pass either way.
+
+       Still fail-loud in both shapes (no substitution), so this is about
+       the quality of the report, not safety. */
+    it('[M-6] a throw from updateEntry itself must not discard the broken list accumulated for OTHER characters', async () => {
+      const readEntry = vi.fn(async (uuid: string) =>
+        uuid === 'u1'
+          ? baseEntry({
+              voiceUuid: 'u1',
+              consent: {
+                personName: 'x',
+                relationship: 'self',
+                permittedUse: 'personal',
+                attestedAt: '2026-01-01T00:00:00Z',
+                attestedBy: 'x',
+                revokedAt: '2026-02-01T00:00:00Z',
+              },
+            })
+          : baseEntry({ voiceUuid: 'u2', name: 'Reeve', master: MASTER }),
+      );
+      const deps = makeDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+        updateEntry: vi.fn(async () => {
+          throw new Error('EBUSY: voice.json is locked');
+        }),
+      });
+
+      let thrown: unknown;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+          ],
+          deps,
+        );
+      } catch (e) {
+        thrown = e;
+      }
+
+      // Pre-fix this was the raw `EBUSY` Error and Marlow's revoked report
+      // was gone entirely.
+      expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect((thrown as UnresolvableClonedVoiceError).broken).toEqual([
+        { name: 'Marlow', reason: 'revoked' },
+        { name: 'Reeve', reason: 'derive-failed' },
+      ]);
     });
   });
 
@@ -707,8 +1070,8 @@ describe('resolveClonedVoicesForChapter', () => {
       await expect(
         resolveClonedVoicesForChapter(
           [
-            { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
-            { characterName: 'Second', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', characterId: 'second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
           ],
           deps,
         ),
@@ -748,7 +1111,7 @@ describe('resolveClonedVoicesForChapter', () => {
       let rejection: unknown;
       try {
         await resolveClonedVoicesForChapter(
-          [{ characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false }],
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false }],
           deps,
         );
         throw new Error('expected rejection');
@@ -772,8 +1135,8 @@ describe('resolveClonedVoicesForChapter', () => {
       try {
         await resolveClonedVoicesForChapter(
           [
-            { characterName: 'Marlow', libraryUuid: 'u1', wrongEngine: false, engineUnavailable: false },
-            { characterName: 'Second', libraryUuid: 'u2', wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
+            { characterName: 'Second', characterId: 'second', libraryUuid: 'u2', engine: 'qwen' as const, wrongEngine: false, engineUnavailable: false },
           ],
           deps,
         );
@@ -785,6 +1148,287 @@ describe('resolveClonedVoicesForChapter', () => {
       expect((rejection as { name?: string })?.name).toBe('AbortError');
       expect(readEntry).not.toHaveBeenCalled();
       expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+  });
+
+  /* --- fs-38 Wave 3c, Task 18 — the coqui path: same orchestrator, engine
+     threaded through to the storage key, the derive call, and the written
+     manifest slot (`engines.xtts` instead of `engines.qwen`). */
+  describe('the coqui path', () => {
+    /* Placebo-proof (per this task's brief): a raise-only assertion would
+       pass against an implementation that raises AFTER wastefully deriving
+       — assert BOTH halves. Mirrors the qwen "the invariant, direct" test
+       above, on the coqui engine/xtts slot instead. */
+    it('the invariant, direct: a revoked coqui-cloned voice rejects and NEVER calls deriveEngineArtifact', async () => {
+      const revokedEntry = baseEntry({
+        consent: {
+          personName: 'x',
+          relationship: 'self',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'x',
+          revokedAt: '2026-02-01T00:00:00Z',
+        },
+        master: MASTER,
+        engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } },
+      });
+      const deps = makeDeps({ readEntry: vi.fn(async () => revokedEntry) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      // Half 1: raises, with the right reason.
+      expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'revoked' }]);
+      // Half 2: no derive was invoked — the raise-only assertion above would
+      // also pass against a broken implementation that derives BEFORE
+      // noticing the revoke; this is what actually catches that defect.
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+    });
+
+    it('coqui repairable: derives on the xtts slot, stamps ready with the derive-reported coquiVersion/modelId, and preserves a sibling qwen engine untouched', async () => {
+      // Sibling preservation, direction 2 (coqui writes must not disturb an
+      // existing qwen slot) — the mirror image of the pre-existing
+      // "repairable: derives once..." qwen test, which only pinned qwen
+      // writes preserving xtts.
+      const entry = baseEntry({
+        master: MASTER,
+        engines: {
+          xtts: { status: 'stale', coquiVersion: 'v2.0.3' },
+          qwen: { status: 'ready', baseModel: 'qwen3-0.6b' },
+        },
+      });
+      const controller = new AbortController();
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        currentArtifactVersion: () => '', // no live coqui oracle — see Task 18's decision.
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+        })),
+        signal: controller.signal,
+      });
+
+      await expect(
+        resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
+        'u1',
+        'coqui',
+        {
+          masterPcm: expect.any(Buffer),
+          sampleRate: 24000,
+          refText: 'hi',
+          auditionText: REPAIR_AUDITION_TEXT,
+        },
+        { signal: controller.signal },
+      );
+      expect(deps.writeEntry).toHaveBeenCalledTimes(1);
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts).toEqual({
+        status: 'ready',
+        coquiVersion: 'v2.0.5',
+        modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+      });
+      // The sibling qwen slot survives untouched — the direction the
+      // pre-existing qwen test above does NOT cover.
+      expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-0.6b' });
+    });
+
+    /* fix wave (Task 18 review, MINOR-5) — `deriveEngineArtifact` defaults
+       `modelId` to `''` when the sidecar's response omits `X-Model-Id` (an
+       older-sidecar derive). The ready-stamp spreads over the EXISTING slot,
+       so an unconditional `modelId: result.modelId` would erase a
+       previously-recorded real modelId with `''`. */
+    it('coqui repairable with an older-sidecar derive response (empty modelId) preserves the PREVIOUSLY recorded modelId, never overwrites it with empty', async () => {
+      const entry = baseEntry({
+        master: MASTER,
+        engines: { xtts: { status: 'stale', coquiVersion: 'v2.0.3', modelId: 'tts_models/multilingual/multi-dataset/xtts_v2' } },
+      });
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        currentArtifactVersion: () => '',
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: '', // older-sidecar fallback — see derive-engine-artifact.ts
+        })),
+      });
+
+      await resolveClonedVoicesForChapter(
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+        deps,
+      );
+
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts).toEqual({
+        status: 'ready',
+        coquiVersion: 'v2.0.5',
+        modelId: 'tts_models/multilingual/multi-dataset/xtts_v2', // preserved, not wiped to ''
+      });
+    });
+
+    it('coqui: a stat()/derive call is keyed on the xtts- storage key, not qwen-', async () => {
+      const entry = baseEntry({ master: MASTER, engines: { xtts: { status: 'stale' } } });
+      const ptExists = vi.fn(async () => false);
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists,
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: 'xtts_v2',
+        })),
+      });
+
+      await resolveClonedVoicesForChapter(
+        [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+        deps,
+      );
+
+      expect(ptExists).toHaveBeenCalledWith('xtts-u1');
+    });
+
+    it('coqui permanent (4xx) derive failure persists failed on the xtts slot, not qwen', async () => {
+      const entry = baseEntry({ master: MASTER, engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
+      const deps = makeDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('rejected clip'), { status: 422 });
+        }),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+      expect(deps.writeEntry).toHaveBeenCalledTimes(1);
+      const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts?.status).toBe('failed');
+      // The sibling qwen slot is untouched by the coqui failure stamp.
+      expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-0.6b' });
+    });
+  });
+
+  /* fs-38 Wave 3c, Task 18 — UnresolvableClonedVoiceError's remedy text is
+     now engine-aware: a coqui-unavailable voice must not tell the user to
+     "Re-enable Qwen", which misdiagnoses a perfectly healthy Qwen. */
+  describe('UnresolvableClonedVoiceError.fromList is engine-aware for engine-unavailable', () => {
+    it('a coqui-unavailable voice is told to re-enable Coqui, not Qwen', async () => {
+      const entry = baseEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const deps = makeDeps({ readEntry: vi.fn(async () => entry) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: true }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.message).toContain('Re-enable Coqui');
+      expect(thrown?.message).not.toContain('Re-enable Qwen');
+    });
+
+    it('a mix of qwen- and coqui-unavailable voices names both engines', async () => {
+      const qwenEntry = baseEntry({ voiceUuid: 'u1', engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
+      const coquiEntry = baseEntry({ voiceUuid: 'u2', engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const deps = makeDeps({
+        readEntry: vi.fn(async (uuid: string) => (uuid === 'u1' ? qwenEntry : coquiEntry)),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true },
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u2', engine: 'coqui', wrongEngine: false, engineUnavailable: true },
+          ],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.message).toContain('Re-enable Qwen or Coqui');
+    });
+
+    /* M-6 (review, fs-38 Wave 3c) — the remedy label used to join a Set in
+       INSERTION order, so a coqui-first broken list produced "Re-enable
+       Coqui or Qwen" while the qwen-first case above produced "Re-enable
+       Qwen or Coqui" — the same underlying failure, different copy, purely
+       a function of report order. This test reports coqui BEFORE qwen and
+       still expects the canonical "Qwen or Coqui" order. */
+    it('a coqui-then-qwen report order still names them in canonical (qwen, coqui) order', async () => {
+      const coquiEntry = baseEntry({ voiceUuid: 'u1', engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const qwenEntry = baseEntry({ voiceUuid: 'u2', engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
+      const deps = makeDeps({
+        readEntry: vi.fn(async (uuid: string) => (uuid === 'u1' ? coquiEntry : qwenEntry)),
+      });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [
+            { characterName: 'Reeve', characterId: 'reeve', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: true },
+            { characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u2', engine: 'qwen', wrongEngine: false, engineUnavailable: true },
+          ],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.message).toContain('Re-enable Qwen or Coqui');
+      expect(thrown?.message).not.toContain('Re-enable Coqui or Qwen');
+    });
+
+    it('a qwen-unavailable voice still says "Re-enable Qwen" (byte-identical to pre-Task-18 text)', async () => {
+      const entry = baseEntry({ engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } } });
+      const deps = makeDeps({ readEntry: vi.fn(async () => entry) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'qwen', wrongEngine: false, engineUnavailable: true }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.message).toContain(
+        'Re-enable Qwen or restore the missing voice(s)',
+      );
     });
   });
 });
@@ -800,7 +1444,31 @@ function makeDesignedDeps(
   writeSidecarManifest: ReturnType<typeof vi.fn>;
   readEntry: ReturnType<typeof vi.fn>;
   writeEntry: ReturnType<typeof vi.fn>;
+  updateEntry: ReturnType<typeof vi.fn>;
+  currentArtifactVersion: ReturnType<typeof vi.fn>;
 } {
+  // fs-38 Wave 3c, Task 14 — same call-through default as makeDeps above, so
+  // pre-existing tests asserting on `readEntry`/`writeEntry` directly keep
+  // passing unchanged.
+  const readEntry = overrides.readEntry ?? vi.fn(async () => null);
+  const writeEntry = overrides.writeEntry ?? vi.fn(async () => {});
+  const defaultUpdateEntry = vi.fn(
+    async (
+      uuid: string,
+      mutate: (
+        entry: VoiceLibraryEntry | null,
+      ) => Promise<VoiceLibraryEntry | null | undefined> | VoiceLibraryEntry | null | undefined,
+    ) => {
+      const fresh = await readEntry(uuid);
+      const next = await mutate(fresh);
+      if (!next) return null;
+      await writeEntry(next);
+      // Fix wave (review I-4) — same production-shape fix as makeDeps'
+      // default above: a real canonical re-read, falling back to `next`
+      // (I-1) when it comes back null/undefined.
+      return (await readEntry(uuid)) ?? next;
+    },
+  );
   return {
     ptExists: vi.fn(async () => true),
     readDesignedMasterPcm: vi.fn(async () => null),
@@ -810,8 +1478,14 @@ function makeDesignedDeps(
       baseModel: 'qwen3-0.6b',
     })),
     writeSidecarManifest: vi.fn(async () => {}),
-    readEntry: vi.fn(async () => null),
-    writeEntry: vi.fn(async () => {}),
+    readEntry,
+    writeEntry,
+    updateEntry: defaultUpdateEntry,
+    // fs-38 Wave 3c, Task 20a — coqui-arm-only dep; default reads as
+    // "unknown current version" (never stale, see isArtifactVersionStale),
+    // mirroring makeDeps' own qwen-only default's neutrality for tests that
+    // don't care about staleness.
+    currentArtifactVersion: vi.fn(() => ''),
     ...overrides,
   } as ResolveDesignedVoiceDeps & {
     ptExists: ReturnType<typeof vi.fn>;
@@ -820,6 +1494,8 @@ function makeDesignedDeps(
     writeSidecarManifest: ReturnType<typeof vi.fn>;
     readEntry: ReturnType<typeof vi.fn>;
     writeEntry: ReturnType<typeof vi.fn>;
+    updateEntry: ReturnType<typeof vi.fn>;
+    currentArtifactVersion: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -841,13 +1517,13 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.ptExists).toHaveBeenCalledWith('qwen-lib-designed');
-    expect(deps.readDesignedMasterPcm).toHaveBeenCalledWith('lib-designed');
+    expect(deps.readDesignedMasterPcm).toHaveBeenCalledWith('lib-designed', 'qwen');
     expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
     expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
       'lib-designed',
@@ -866,7 +1542,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -882,10 +1558,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
   });
@@ -900,7 +1576,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps({ ptExists: vi.fn(async () => true) });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -924,10 +1600,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     // M-3 (review) — the failure is logged, not silently swallowed.
     expect(warnSpy).toHaveBeenCalledWith(
@@ -941,7 +1617,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     const deps = makeDesignedDeps();
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: undefined }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: undefined, engine: 'qwen' as const }],
       deps,
     );
 
@@ -986,7 +1662,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1021,10 +1697,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
@@ -1043,10 +1719,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
@@ -1063,10 +1739,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.readDesignedMasterPcm).not.toHaveBeenCalled();
     warnSpy.mockRestore();
@@ -1106,7 +1782,7 @@ describe('resolveDesignedVoicesForChapter', () => {
     });
 
     await resolveDesignedVoicesForChapter(
-      [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
       deps,
     );
 
@@ -1114,6 +1790,54 @@ describe('resolveDesignedVoicesForChapter', () => {
     const written = writeEntry.mock.calls[0][0];
     expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-new' });
     expect(written.engines.xtts).toEqual({ status: 'ready' }); // sibling engine survives
+  });
+
+  /* Task 15 (DELTA-I4) — `deriveEngineArtifact`'s `baseModel` is now optional
+     on its result (a coqui derive never sets it), so `result.baseModel` is
+     `string | undefined` at this call site even though it always derives via
+     the literal 'qwen'. Left unguarded, a falsy `result.baseModel` would
+     write `baseModel: undefined` onto `engines.qwen`, which
+     `withComputedStaleness` (routes/voice-library.ts) reads as "never
+     stale" — a silent regression to this self-heal. Pins the guard: an
+     undefined `baseModel` on the derive result falls back to
+     `currentQwenBaseModel()`, never `undefined`. */
+  it('I-2/Task-15: a derive result with no baseModel stamps engines.qwen with currentQwenBaseModel(), never undefined', async () => {
+    const entry = {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed' as const,
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'stale' as const } },
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const writeEntry = vi.fn(async (_entry: typeof entry) => {});
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(10),
+        sampleRate: 24000,
+        refText: 'x',
+        manifest: { refText: 'x' },
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        baseModel: undefined,
+      })),
+      readEntry: vi.fn(async () => entry),
+      writeEntry,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      deps,
+    );
+
+    expect(writeEntry).toHaveBeenCalledTimes(1);
+    const written = writeEntry.mock.calls[0][0];
+    expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: currentQwenBaseModel() });
   });
 
   /* Review C-1 — a designed voice carries no consent dimension, so there's
@@ -1159,7 +1883,7 @@ describe('resolveDesignedVoicesForChapter', () => {
       writeEntry,
     });
 
-    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', libraryUuid: 'lib-designed' }], deps);
+    await resolveDesignedVoicesForChapter([{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }], deps);
 
     expect(writeEntry).toHaveBeenCalledTimes(1);
     const written = writeEntry.mock.calls[0][0];
@@ -1184,10 +1908,10 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     await expect(
       resolveDesignedVoicesForChapter(
-        [{ characterName: 'Orin', libraryUuid: 'lib-designed' }],
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
         deps,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ softFailedUuids: [] });
 
     expect(deps.writeEntry).not.toHaveBeenCalled();
   });
@@ -1214,8 +1938,8 @@ describe('resolveDesignedVoicesForChapter', () => {
     await expect(
       resolveDesignedVoicesForChapter(
         [
-          { characterName: 'Orin', libraryUuid: 'lib-designed' },
-          { characterName: 'Second', libraryUuid: 'lib-second' },
+          { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
+          { characterName: 'Second', characterId: 'second', libraryUuid: 'lib-second', engine: 'qwen' as const },
         ],
         deps,
       ),
@@ -1223,5 +1947,575 @@ describe('resolveDesignedVoicesForChapter', () => {
 
     // The loop stopped at the first request — the second was never reached.
     expect(readDesignedMasterPcm).toHaveBeenCalledTimes(1);
+  });
+
+  /* --- fs-38 Wave 3c, Task 20a — the coqui arm: fail-SOFT (D-B/D-F), not the
+     qwen arm's fail-alone-and-leave-it. Same loop, different policy — see
+     DesignedVoiceRequest.engine's doc comment. */
+  describe('the coqui arm (fs-38 Wave 3c, Task 20a)', () => {
+    function designedEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntry {
+      return {
+        voiceUuid: 'lib-designed',
+        name: 'Orin',
+        provenance: 'designed',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        ...overrides,
+      };
+    }
+
+    it('missing .pt + retained clip present -> derives once on the xtts slot, stamps engines.xtts ready with coquiVersion/modelId — NEVER baseModel (DELTA-I4) — and softFailedUuids stays empty', async () => {
+      const entry = designedEntry();
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+        writeEntry,
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '', // DELTA-M1 — a coqui derive never needs refText.
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+          modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+        })),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(deps.ptExists).toHaveBeenCalledWith('xtts-lib-designed');
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
+        'lib-designed',
+        'coqui',
+        expect.objectContaining({ masterPcm: expect.any(Buffer), sampleRate: 24000 }),
+        { signal: undefined },
+      );
+      expect(writeEntry).toHaveBeenCalledTimes(1);
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts).toEqual({
+        status: 'ready',
+        coquiVersion: 'v2.0.5',
+        modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+      });
+      expect(written.engines.xtts).not.toHaveProperty('baseModel');
+      // Placebo-proof half 2 — the qwen-only sidecar-manifest restore never
+      // runs for a coqui derive (main.py's coqui clone_voice writes a
+      // SEPARATE xtts-<uuid>.json, never touching qwen-<uuid>.json).
+      expect(deps.writeSidecarManifest).not.toHaveBeenCalled();
+    });
+
+    /* GATE 1 M-2 — the stamp used to be `coquiVersion: result.coquiVersion ?? ''`.
+       `deriveEngineArtifact` returns `''` (not undefined) when the sidecar
+       omits `X-Coqui-Version`, and `??` only guards null/undefined — so an
+       older sidecar's derive wrote `''` straight over a previously-recorded
+       real version, and `isArtifactVersionStale` reads an empty STORED
+       version as "never stale". That permanently disabled [DELTA-I3]'s
+       staleness check for the voice. The fixture is the discriminating one:
+       an EXISTING real coquiVersion plus an EMPTY derive response. */
+    it('[M-2] an older sidecar (no X-Coqui-Version) must not overwrite a previously-recorded real coquiVersion with an empty one', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        writeEntry,
+        ptExists: vi.fn(async () => false), // missing artifact -> a real derive runs.
+        currentArtifactVersion: vi.fn(() => ''), // boot window: the oracle hasn't answered either.
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: '', // the older-sidecar shape derive-engine-artifact.ts produces.
+          modelId: '',
+        })),
+      });
+
+      await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts?.status).toBe('ready');
+      // The real version survived — [DELTA-I3]'s staleness check still works.
+      expect(written.engines.xtts?.coquiVersion).toBe('v2.0.3');
+    });
+
+    it('[M-2] a derive that reports no version still adopts the current-version oracle when one is known', async () => {
+      const entry = designedEntry();
+      const writeEntry = vi.fn(async (_entry: VoiceLibraryEntry) => {});
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        writeEntry,
+        ptExists: vi.fn(async () => false),
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(1000),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: '',
+        })),
+      });
+
+      await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      const written = writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
+      expect(written.engines.xtts?.coquiVersion).toBe('v2.0.5');
+    });
+
+    it('the load-bearing case — a derive failure is swallowed (never throws) and reports the uuid via softFailedUuids so the call site can remove the slot', async () => {
+      const entry = designedEntry();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(10),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => {
+          throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+        }),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      // Half 1: never throws, never constructs UnresolvableClonedVoiceError
+      // (the fail-loud shape) — it just RESOLVES with the failed uuid.
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      // Half 2: no entry write happened — a failed derive must not stamp
+      // engines.xtts ready.
+      expect(deps.writeEntry).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Orin'), expect.any(Error));
+      warnSpy.mockRestore();
+    });
+
+    it('no retained clip -> no derive attempted, reports the uuid via softFailedUuids', async () => {
+      const entry = designedEntry();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async () => null),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    /* [DELTA-verified] — the discriminating fixture: a WELL-FORMED
+       cast-slot-shaped request (provenance implied 'designed' by the
+       caller) whose backing voice-library ENTRY actually reads 'cloned'.
+       A well-formed "everything agrees" fixture can't tell "this function
+       trusts the request" apart from "this function verifies against the
+       entry" — only a fixture where the two DISAGREE can. This is the one
+       lesson this branch's reviewers keep re-learning (Task 20's own
+       malformed-uuid tests, same rationale). */
+    it('a request whose backing entry is actually provenance "cloned" (drift) is skipped entirely — never derived, never soft-failed — protecting a cloned voice from this self-heal', async () => {
+      const cloneEntry = designedEntry({ provenance: 'cloned' });
+      const ptExists = vi.fn(async () => false);
+      const readDesignedMasterPcm = vi.fn();
+      const deriveEngineArtifact = vi.fn();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => cloneEntry),
+        ptExists,
+        readDesignedMasterPcm,
+        deriveEngineArtifact,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Wren', characterId: 'wren', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      /* The invariant this fixture exists for, unchanged by GATE 1 I-3: a
+         cloned-provenance entry is NEVER soft-removed (that would substitute
+         a catalogue voice for a real person — Property 1) and NEVER derived
+         by this fail-soft machinery. What I-3 changed is only WHEN the
+         cheap `ptExists` stat runs: it now precedes the provenance branch so
+         the two non-designed branches can apply the F1 "keep a present
+         artifact" rule. A stat is not a mutation — the cloned voice's state
+         is still untouched. */
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(readDesignedMasterPcm).not.toHaveBeenCalled();
+      expect(deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    /* GATE 1 I-3 — this used to assert `softFailedUuids: []` for a deleted
+       library entry, pinning the defect: the slot survived into the render,
+       `pickVoiceForEngine('coqui', …)` resolved `xtts-<uuid>`, and the
+       sidecar's no-fallback latents branch hard-failed the chapter. That is
+       a NEW hard failure on the fail-SOFT arm, which D-F forbids (pre-3c the
+       same character resolved a catalogue voice and the chapter rendered).
+       Reachable in production: `/voice-library/:uuid/assign` does not
+       require `castConfirmed`, `clearLibraryVoiceReferences` only walks
+       CONFIRMED casts. */
+    it('[I-3] a missing entry (deleted from the library) with NO artifact on disk soft-fails, so the slot is dropped for this chapter', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => null),
+        ptExists: vi.fn(async () => false),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      expect(deps.ptExists).toHaveBeenCalledWith('xtts-lib-designed');
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    /* The F1 rule applied to the same branch: a present artifact still
+       renders correctly, so a missing library entry must not downgrade it. */
+    it('[I-3] a missing entry whose artifact IS on disk keeps its slot (F1), never soft-failed', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => null),
+        ptExists: vi.fn(async () => true),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    it('[I-3] an `imported`-provenance entry with no artifact soft-fails, like a missing one', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => designedEntry({ provenance: 'imported' })),
+        ptExists: vi.fn(async () => false),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+    });
+
+    /* [DELTA-I3] — the direct contrast with the qwen arm's pinned
+       presence-only test above ("a stale-baseModel designed entry ...
+       explicitly out of scope"): on the coqui arm, staleness ALONE (no
+       missing .pt) is enough to trigger a re-derive. */
+    it('DELTA-I3: coquiVersion staleness triggers a re-derive even though the .pt is PRESENT — the direct contrast with the qwen arm\'s presence-only pin above', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true), // present!
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'), // but stale against "current".
+        readDesignedMasterPcm: vi.fn(async () => ({
+          pcm: Buffer.alloc(10),
+          sampleRate: 24000,
+          refText: '',
+          manifest: {},
+        })),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(0),
+          sampleRate: 24000,
+          coquiVersion: 'v2.0.5',
+        })),
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ softFailedUuids: [] });
+    });
+
+    /* Task 20a fix round 1 (F1, the blocker) — a STALE-but-PRESENT artifact
+       renders correctly TODAY (that's what "stale" means, as opposed to
+       "missing"). A failed re-derive attempt must never downgrade it to a
+       catalogue voice — fail-soft exists to AVOID a downgrade, not cause
+       one. Concrete trigger the reviewer named: a designed voice minted
+       before Task 11's clip-retention (no `qwen-<uuid>__master.wav`) plus a
+       real coqui-tts version bump (Task 19 made `currentArtifactVersion`
+       live) — that voice now has NOTHING to re-derive from, so pre-fix it
+       silently lost its slot on every render. */
+    describe('F1 — a stale-but-present artifact must survive a failed refresh attempt', () => {
+      it('stale + derive throws -> the slot survives (softFailedUuids stays empty), keeping the existing artifact', async () => {
+        const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => true), // present!
+          currentArtifactVersion: vi.fn(() => 'v2.0.5'), // stale.
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(10),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => {
+            throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+          }),
+        });
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        // The load-bearing assertion: NOT reported as a soft failure, so the
+        // call site never removes the slot — the character keeps rendering
+        // as xtts-lib-designed off the existing (stale) latents.
+        expect(result).toEqual({ softFailedUuids: [] });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('keeping the existing'),
+          expect.any(Error),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('stale + no retained clip to refresh from -> the slot ALSO survives (a missing clip only removes a MISSING artifact, never a stale one)', async () => {
+        const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.3' } } });
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => true),
+          currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+          readDesignedMasterPcm: vi.fn(async () => null), // no clip at all — e.g. minted before Task 11.
+        });
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(result).toEqual({ softFailedUuids: [] });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('keeping the existing'));
+        warnSpy.mockRestore();
+      });
+
+      /* The direct contrast — MISSING (not stale) + a failed derive still
+         removes the slot, exactly as the pre-F1 "load-bearing case" test
+         above already pins. Re-asserted here, side by side with the two
+         stale cases, so a future reader sees both halves of F1's contract
+         in one place. */
+      it('missing (never derived) + derive throws -> the slot IS removed, unlike the stale case above', async () => {
+        const entry = designedEntry(); // no engines.xtts at all — never derived.
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => false), // missing, not stale.
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(10),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => {
+            throw Object.assign(new Error('sidecar rejected the clip'), { status: 422 });
+          }),
+        });
+
+        const result = await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      });
+    });
+
+    it('present AND current -> healthy, no derive, no entry read of the retained clip', async () => {
+      const entry = designedEntry({ engines: { xtts: { status: 'ready', coquiVersion: 'v2.0.5' } } });
+      const readDesignedMasterPcm = vi.fn();
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => entry),
+        ptExists: vi.fn(async () => true),
+        currentArtifactVersion: vi.fn(() => 'v2.0.5'),
+        readDesignedMasterPcm,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: [] });
+      expect(readDesignedMasterPcm).not.toHaveBeenCalled();
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
+
+    it('an unexpected throw from readEntry itself is swallowed and reported as a soft failure (never a new hard failure)', async () => {
+      const deps = makeDesignedDeps({
+        readEntry: vi.fn(async () => {
+          throw new Error('disk blew up');
+        }),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+        deps,
+      );
+
+      expect(result).toEqual({ softFailedUuids: ['lib-designed'] });
+      warnSpy.mockRestore();
+    });
+
+    it('a mixed request list — one qwen, one coqui — keeps each arm\'s policy independent: a coqui failure never touches the qwen write, and vice versa', async () => {
+      const qwenReadDesignedMasterPcm = vi.fn(async () => null); // qwen: no retained clip -> silent no-op.
+      const coquiEntry = designedEntry({ voiceUuid: 'lib-coqui' });
+      const readEntry = vi.fn(async (uuid: string) => (uuid === 'lib-coqui' ? coquiEntry : null));
+      const deps = makeDesignedDeps({
+        readEntry,
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: qwenReadDesignedMasterPcm,
+      });
+
+      const result = await resolveDesignedVoicesForChapter(
+        [
+          { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' },
+          { characterName: 'Wren', characterId: 'wren', libraryUuid: 'lib-coqui', engine: 'coqui' },
+        ],
+        deps,
+      );
+
+      // The qwen request's "no retained clip" fell through silently (no
+      // softFail — that's the byte-for-byte qwen behaviour); the coqui
+      // request's own missing clip DID report — proving the two requests'
+      // policies never bleed into each other.
+      expect(result).toEqual({ softFailedUuids: ['lib-coqui'] });
+    });
+  });
+});
+
+/* --- #1813: onVoicePrepare fires for a designed-voice self-heal, on EITHER
+   arm, and never for an already-healthy (.pt present) voice. Both arms share
+   this loop but never their failure policy (see the module-level note above
+   `resolveClonedVoicesForChapter` in clone-voice-resolver.ts) — these tests
+   drive each arm independently to prove onVoicePrepare doesn't blur that
+   boundary either. */
+describe('resolveDesignedVoicesForChapter — onVoicePrepare (#1813)', () => {
+  function designedEntry(overrides: Partial<VoiceLibraryEntry> = {}): VoiceLibraryEntry {
+    return {
+      voiceUuid: 'lib-designed',
+      name: 'Orin',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  it('the QWEN arm fires with { characterId, characterName } when the .pt is missing (self-heal), before the derive', async () => {
+    const onVoicePrepare = vi.fn();
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: 'A calibration line.',
+        manifest: { voiceId: 'qwen-lib-designed', refText: 'A calibration line.' },
+      })),
+      onVoicePrepare,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+      deps,
+    );
+
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'orin', characterName: 'Orin' });
+    expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('the COQUI arm fires with { characterId, characterName } when the .pt is missing (self-heal), before the derive', async () => {
+    const onVoicePrepare = vi.fn();
+    const entry = designedEntry();
+    const deps = makeDesignedDeps({
+      readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+      ptExists: vi.fn(async () => false),
+      readDesignedMasterPcm: vi.fn(async () => ({
+        pcm: Buffer.alloc(1000),
+        sampleRate: 24000,
+        refText: '', // DELTA-M1 — a coqui derive never needs refText.
+        manifest: {},
+      })),
+      deriveEngineArtifact: vi.fn(async () => ({
+        previewPcm: Buffer.alloc(0),
+        sampleRate: 24000,
+        coquiVersion: 'v2.0.5',
+      })),
+      onVoicePrepare,
+    });
+
+    const result = await resolveDesignedVoicesForChapter(
+      [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' as const }],
+      deps,
+    );
+
+    expect(result).toEqual({ softFailedUuids: [] });
+    expect(onVoicePrepare).toHaveBeenCalledTimes(1);
+    expect(onVoicePrepare).toHaveBeenCalledWith({ characterId: 'orin', characterName: 'Orin' });
+    expect(onVoicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.deriveEngineArtifact.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does NOT fire on either arm when the .pt already exists (healthy, no self-heal)', async () => {
+    const onVoicePrepare = vi.fn();
+    const entry = designedEntry();
+    const deps = makeDesignedDeps({
+      readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+      ptExists: vi.fn(async () => true),
+      onVoicePrepare,
+    });
+
+    await resolveDesignedVoicesForChapter(
+      [
+        { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const },
+        { characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' as const },
+      ],
+      deps,
+    );
+
+    expect(onVoicePrepare).not.toHaveBeenCalled();
+    expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
   });
 });

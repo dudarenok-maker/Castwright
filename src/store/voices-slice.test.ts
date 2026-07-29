@@ -193,6 +193,125 @@ describe('voicesSlice — setOverride', () => {
     );
     expect(next.voices).toEqual(start.voices);
   });
+
+  it('preserves libraryUuid/provenance on the touched slot when the existing slot is CLONED (fs-38 Wave 3c Task 4)', () => {
+    /* Mirrors the server-side spread at voices.ts:857-874 — setting a new
+       name for an engine must not drop the slot's other fields when the
+       existing slot is a consented clone, or the marker gets erased out
+       from under the resolver. */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [
+          voice('v_brann', {
+            overrideTtsVoices: {
+              qwen: { name: 'brann-old', libraryUuid: 'lib-1', provenance: 'cloned' },
+            },
+          }),
+        ],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.setOverride({
+        voiceId: 'v_brann',
+        override: { engine: 'qwen', name: 'brann-new' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      qwen: { name: 'brann-new', libraryUuid: 'lib-1', provenance: 'cloned' },
+    });
+  });
+
+  it('drops libraryUuid/provenance on the touched slot when the existing slot is DESIGNED, not cloned (fs-38 Wave 3c Gate 2 C-1 fix)', () => {
+    /* The server's applyOverrideToCastFiles only preserves libraryUuid/
+       provenance when the existing slot's provenance is already 'cloned'
+       (hasClonedProvenance) — a designed (or otherwise non-cloned) slot has
+       both deleted so an explicit catalogue pick doesn't keep resolving to
+       the stale library voice. A client mirror that always preserved these
+       fields would resolve/sample the OLD library voice (xtts-lib-1)
+       immediately after the pick while the server renders the user's new
+       choice. */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [
+          voice('v_brann', {
+            overrideTtsVoices: {
+              qwen: { name: 'brann-old', libraryUuid: 'lib-1', provenance: 'designed' },
+            },
+          }),
+        ],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.setOverride({
+        voiceId: 'v_brann',
+        override: { engine: 'qwen', name: 'brann-new' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({ qwen: { name: 'brann-new' } });
+  });
+});
+
+describe('voicesSlice — restoreOverride', () => {
+  it('writes the given slot verbatim, including libraryUuid/provenance (fs-38 Wave 3c Task 26 carry-forward)', () => {
+    /* Simulates the profile drawer's 409 revert after an optimistic full
+       clear (setOverride(null)): the prior slot must come back exactly as
+       it was, not reconstructed from just its name. */
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [voice('v_brann', { overrideTtsVoices: null })],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'v_brann',
+        engine: 'coqui',
+        slot: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    });
+  });
+
+  it('preserves an untouched engine slot when restoring a different engine', () => {
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({
+        voices: [voice('v_brann', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } })],
+      }),
+    );
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'v_brann',
+        engine: 'coqui',
+        slot: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+      }),
+    );
+    expect(next.voices[0].overrideTtsVoices).toEqual({
+      kokoro: { name: 'am_onyx' },
+      coqui: { name: 'Asya Anara', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+    });
+  });
+
+  it('is a no-op for an unknown voiceId', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v1')] }));
+    const next = voicesSlice.reducer(
+      start,
+      voicesActions.restoreOverride({
+        voiceId: 'missing',
+        engine: 'coqui',
+        slot: { name: 'X' },
+      }),
+    );
+    expect(next.voices).toEqual(start.voices);
+  });
 });
 
 describe('voicesSlice — hydrateBaseVoices', () => {

@@ -101,7 +101,7 @@ export function createCastDesignMiddleware(): Middleware {
             lastTickAt: Date.now(),
           }),
         ),
-      onIdle: ({ done, total, skipped, failures }) => {
+      onIdle: ({ done, total, skipped, clonedSkips, failures }) => {
         const fellBack = (store.getState() as CastDesignRootState).castDesign.active?.fallbacks?.length ?? 0;
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
         if (total > 0) {
@@ -110,6 +110,14 @@ export function createCastDesignMiddleware(): Middleware {
           if (fellBack > 0) parts.push(`${fellBack} via fallback (lower fidelity)`);
           if (failed > 0) parts.push(`${failed} failed`);
           if (skipped > 0) parts.push(`${skipped} skipped`);
+          /* GATE 2 C-6 — name who the clone-protection guard skipped, not
+             just fold them into the bare `skipped` count: "Design full cast"
+             quietly designing fewer characters than asked is exactly the
+             silence the server-side guard's report-instead-of-retarget
+             behaviour exists to surface. */
+          if (clonedSkips.length > 0) {
+            parts.push(`already cloned: ${clonedSkips.map((c) => c.name).join(', ')}`);
+          }
           dispatch(
             notificationsActions.pushToast({
               kind: failed > 0 ? 'error' : 'info',

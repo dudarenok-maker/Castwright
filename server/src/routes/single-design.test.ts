@@ -79,6 +79,20 @@ function writeBookOnDisk(dir: string, id: string) {
           color: 'rose',
           voiceStyle: 'a warm, confident voice',
         },
+        /* GATE 2 fix-lane-1b — cloned on coqui, no qwen slot at all: the
+           exact shape a "first design" qwen call must refuse rather than
+           retarget. */
+        {
+          id: 'c2',
+          name: 'Kael',
+          role: 'supporting',
+          color: 'teal',
+          voiceStyle: 'a low, careful voice',
+          ttsEngine: 'coqui',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-c2-uuid', libraryUuid: 'c2-uuid', provenance: 'cloned' },
+          },
+        },
       ],
     }),
   );
@@ -188,6 +202,43 @@ describe('single-design job — preview (re-design)', () => {
     const ready = events.find((e) => e.type === 'preview_ready');
     expect(typeof ready?.voiceUuid).toBe('string');
     expect(ready?.voiceUuid).not.toBe('');
+  });
+});
+
+describe('single-design job — clone protection (GATE 2 fix-lane-1b)', () => {
+  /* A "first design" (preview=false) persists via applyOverrideToCastFiles,
+     which pins ttsEngine = 'qwen' unconditionally. For a character already
+     cloned on coqui, that pin would silently retarget them off their clone
+     while the clone marker stays intact — the defect this guard closes.
+     Refused up front (409), before the SSE stream even starts, so the
+     client gets an honest reason instead of a hollow "designed" event for a
+     design that was never persisted. */
+  it('refuses (409) to design a coqui-cloned character instead of retargeting it off its clone', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c2/design-voice/stream`)
+      .send({ persona: 'a low, careful voice', sampleVoiceId: 'char-c2', modelKey: 'qwen3-tts-0.6b' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+    expect(res.body.error).toMatch(/cloned voice/i);
+    /* The actual defect: applyOverrideToCastFiles (the call that pins
+       ttsEngine = 'qwen') must never be reached — not merely that SOME
+       4xx came back, which a differently-worded refusal could satisfy too. */
+    expect(applyOverrideStub).not.toHaveBeenCalled();
+  });
+
+  /* The preview ("redesign") branch never calls applyOverrideToCastFiles —
+     nothing is persisted, so there is no retarget risk and it must NOT be
+     refused just because the character happens to be cloned elsewhere. */
+  it('does NOT refuse a preview/redesign request for the same cloned character', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c2/design-voice/stream`)
+      .send({ persona: 'warmer', sampleVoiceId: 'char-c2', modelKey: 'qwen3-tts-0.6b', preview: true });
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    expect(events.some((e) => e.type === 'preview_ready')).toBe(true);
+    expect(applyOverrideStub).not.toHaveBeenCalled();
   });
 });
 

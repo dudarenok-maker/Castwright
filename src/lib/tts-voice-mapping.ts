@@ -337,6 +337,26 @@ export function resolveTtsVoiceForCharacter(
       description: designed ? 'Designed voice' : 'No voice designed yet',
     };
   }
+  /* fs-38 Wave 3c Task 25 [ADV-H1] — mirror the server's pickVoiceForEngine
+     isCloneEngine branch (tts/voice-mapping.ts, Task 16): a coqui slot
+     carrying a cloned/designed library voice resolves to its storage key
+     (xtts-<uuid>) BEFORE the generic catalog lookup below. Without this the
+     cast row shows, and Play samples, a stock catalog speaker for a
+     cloned-on-coqui character while the chapter itself renders the clone.
+     Only 'coqui' is clone-capable outside qwen (handled above) in the
+     current TtsEngine union — an 'imported' slot, or one with a name but no
+     libraryUuid, falls through to the catalog lookup unchanged, same as the
+     server. */
+  if (engine === 'coqui') {
+    const slot = c.overrideTtsVoices?.coqui;
+    if (slot?.libraryUuid && (slot.provenance === 'cloned' || slot.provenance === 'designed')) {
+      return {
+        provider: 'coqui',
+        name: `xtts-${slot.libraryUuid}`,
+        description: 'Local voice',
+      };
+    }
+  }
   const profile = resolveProfileForCharacter(c);
   const id = c.voiceId ?? c.id;
   const options = catalogForEngine(engine)[profile];

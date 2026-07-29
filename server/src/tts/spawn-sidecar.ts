@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 
 import type { UserSettings } from '../workspace/user-settings.js';
-import { WORKSPACE_ROOT } from '../workspace/paths.js';
+import { qwenVoicesDir, xttsVoicesDir } from '../workspace/paths.js';
 import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
@@ -448,7 +448,10 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
        tree (sibling to voices.json), not the sidecar's __file__-relative
        dir. A sidecar restart / cwd change / workspace move can't orphan a
        designed voice (a latent ENOENT on torch.load at synth time). */
-    QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
+    QWEN_VOICES_DIR: qwenVoicesDir(),
+    /* Cloned-voice latents (fs-38 Wave 3c) — same per-workspace-tree
+       rationale as QWEN_VOICES_DIR above, sibling directory. */
+    XTTS_VOICES_DIR: xttsVoicesDir(),
     /* Fight CUDA allocator fragmentation. PyTorch's default caching allocator
        uses fixed cudaMalloc blocks; over a long run the variable-length Qwen
        batches fragment VRAM until a wide (e.g. 32-item) batch can't find a

@@ -37,7 +37,7 @@ import threading
 import time
 import wave
 from collections import deque
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from typing import Any, Callable, NamedTuple, Optional
 
 import numpy as np
@@ -239,6 +239,45 @@ def _atomic_wav_save(pcm: bytes, sample_rate: int, wav_path: str) -> None:
             wf.setframerate(sample_rate)
             wf.writeframes(pcm)
         os.replace(tmp, wav_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_json_write(text: str, json_path: str) -> None:
+    """Write `text` to json_path atomically: temp sibling -> flush -> fsync ->
+    `os.replace`. Same three-step shape as `_atomic_torch_save` /
+    `_atomic_wav_save` above (same directory, so `os.replace` is a
+    same-filesystem rename — atomic on POSIX *and* Windows, which matters
+    because this project's primary dev box is Windows), with two deliberate
+    differences:
+
+    1. The temp name is DETERMINISTIC (`<target>.tmp`), not a `mkstemp`
+       random suffix. A crash between create and replace strands the temp
+       file, and the Node-side purge (`purgeCloneArtifacts`) erases a fixed
+       path list with no directory sweep — a randomly-named leftover is
+       therefore unreachable by it forever, which is precisely the Property 2
+       retention hole GATE 1 raised against the two mkstemp helpers above.
+       A name derived from the target stays reachable by a fixed-path purge.
+       (Those two helpers keep their mkstemp naming here; changing it is the
+       purge lane's call, not this one's.) The `.json.tmp` name is also safe
+       on Windows — it is neither dot-leading nor extension-less, the shape
+       real torch's PyTorchFileWriter rejects.
+    2. It `fsync`s before the replace, so a power loss can't leave the
+       renamed file with unflushed (zero-filled) contents.
+
+    A same-named leftover from a previous crashed write is simply truncated
+    and rewritten, so this never accumulates more than one temp per target."""
+    tmp = f"{json_path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, json_path)
     except BaseException:
         try:
             os.remove(tmp)
@@ -1192,6 +1231,23 @@ class CoquiEngine(Engine):
     # tells the caller their catalog is stale.
     FALLBACK_SPEAKER = "Claribel Dervla"
 
+    # Storage-key prefix for a cloned voice on this engine (fs-38 Wave 3c).
+    # Mirrors the manifest slot key ('xtts') — see clone-engines.ts
+    # cloneStorageKey('coqui', uuid) -> 'xtts-<uuid>'.
+    XTTS_KEY_PREFIX = "xtts-"
+
+    # Fixed calibration line POST /xtts/clone-voice (Task 11) speaks when the
+    # caller omits X-Audition-Text (or it fails to decode). `clone_voice`'s
+    # `audition_text` parameter has no engine-side fallback of its own —
+    # unlike QwenEngine.clone_voice's `audition_text or ref_text or
+    # CALIBRATION_TEXT`, XTTS has no ref_text to fall back to — so the route
+    # resolves this default and the engine always receives a concrete
+    # string. Same pangram as QwenEngine.CALIBRATION_TEXT for consistency.
+    DEFAULT_AUDITION_TEXT = (
+        "The quick brown fox jumps over the lazy dog, "
+        "and she wondered what tomorrow would bring."
+    )
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._torch: Any = None
@@ -1203,12 +1259,46 @@ class CoquiEngine(Engine):
         # call would race past the `_tts is None` check and load XTTS twice.
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
-        # Serialises the synth forward against unload() (#1894). A threading
-        # .Lock, NOT the asyncio `_load_lock` above: both /synthesize and
-        # /unload reach this class through `asyncio.to_thread`, i.e. on worker
-        # threads, so an asyncio primitive would not serialise them. Mirrors
-        # QwenEngine's `_synth_lock`. NON-REENTRANT — a holder must call
-        # `_drop_model_locked()`, never `unload()`.
+        # Single-flights the ~3 GB COLD LOAD, and nothing else — the split
+        # QwenEngine already runs (`_cold_load_lock` vs its forward lock).
+        # `_load_lock` above is an asyncio.Lock scoped to the /load ROUTE, so it
+        # only serialises concurrent /load clicks against each other; it does
+        # nothing for a /synthesize call, which reaches `_ensure_loaded` via
+        # `asyncio.to_thread` on a worker thread that never touches `_load_lock`.
+        # Wave 3c adds a second concurrent entry point into the same `self._tts`
+        # (clone-voice synthesis), so without a thread-level lock a /load and a
+        # /synthesize (or two /synthesize calls) can both observe `self._tts is
+        # None` and both cold-load the model. `_ensure_loaded` double-checks
+        # `self._tts is not None` AFTER acquiring this lock, so a caller that
+        # loses the race simply observes the fully-loaded model instead of
+        # redoing the load.
+        #
+        # Wave 3c Task 8 originally used `_synth_lock` below for this too. It
+        # cannot be the same lock any more: #1918 moved the load OUT of
+        # `_synth_lock` so a Stop pressed mid-load can win instead of blocking
+        # behind the ~90 s pull. LOCK ORDER is `_cold_load_lock` ->
+        # `_synth_lock` (the publish inside `_ensure_loaded`), never the
+        # reverse — see `_ensure_loaded` for why `lock_held=True` skips this
+        # lock rather than invert that order.
+        self._cold_load_lock = threading.Lock()
+        # Serialises the GPU FORWARD, and the forward against `unload()`
+        # (#1894): both /synthesize and /unload reach this class through
+        # `asyncio.to_thread`, i.e. on worker threads, so the asyncio
+        # `_load_lock` above would not serialise them either. The underlying
+        # XTTS model object is not thread-safe for concurrent `tts()` calls any
+        # more than Qwen's Base model is. `_ensure_loaded` also takes it, but
+        # only briefly, to publish a freshly loaded model atomically.
+        #
+        # NON-REENTRANT (`threading.Lock`) — TWO rules, both load-bearing:
+        #   - `_ensure_loaded` must never be called from inside a `with
+        #     self._synth_lock:` block in the same thread WITHOUT
+        #     `lock_held=True`; its publish takes this lock itself, so that
+        #     deadlocks. This is why `synthesize`'s re-ensure sits immediately
+        #     BEFORE its acquire rather than inside it, unlike
+        #     QwenEngine/WhisperEngine whose `_ensure_loaded` is lock-free —
+        #     see `synthesize` for what that costs and why it is safe.
+        #   - a holder that needs to drop the model calls `_drop_model_locked()`
+        #     (then `_reclaim_after_drop()` once released), never `unload()`.
         self._synth_lock = threading.Lock()
         # Bumped by every teardown (`_drop_model_locked`, which both unload()
         # and maybe_free_idle go through). `_ensure_loaded` snapshots it before
@@ -1246,6 +1336,47 @@ class CoquiEngine(Engine):
         # engine), not per-engine — see the module-level `_process_poisoned` /
         # `_mark_cuda_poisoned`. Any engine's context-fatal CUDA error fast-fails
         # all engines + schedules one supervised self-exit.
+        # Cloned-voice latents (fs-38 Wave 3c). Node points XTTS_VOICES_DIR at
+        # <workspace>/voices/xtts; the local default keeps a bare sidecar run
+        # working. Sibling convention to QWEN_VOICES_DIR.
+        self._voices_dir = os.environ.get("XTTS_VOICES_DIR") or os.path.join(
+            os.path.dirname(__file__), "voices", "xtts"
+        )
+        # Task 10 — in-memory cache for a cloned voice's derived latents, keyed
+        # by voice_id, so a hot cloned voice doesn't re-`torch.load` its .pt on
+        # every sentence. `_evict_epoch` is the cache-epoch contract Task 9
+        # deliberately left unbuilt (its own docstring: "Task 10 owns
+        # `_latents_cache`'s epoch contract"): a plain dict of voice_id -> int,
+        # bumped by `_bump_evict_epoch` (Task 11 wires an HTTP route to it,
+        # mirroring `/qwen/evict-voice`). `_load_voice_latents` captures the
+        # epoch BEFORE reading the .pt and re-checks it under `_latents_lock`
+        # immediately before installing into the cache — see that method's
+        # docstring for why (AC-C7/ADV-M1: purgeCloneArtifacts is files-first/
+        # evict-last, so a slow `torch.load` already past the isfile check
+        # could otherwise repopulate the cache AFTER a concurrent evict).
+        # Deliberately a SEPARATE lock from `_synth_lock`: the load itself
+        # (disk read, sometimes seconds) must not block a concurrent unrelated
+        # /synthesize's GPU forward, mirroring QwenEngine._load_voice_prompt's
+        # own choice to release its cache lock across `torch.load`.
+        self._latents_cache: dict[str, tuple[Any, Any]] = {}
+        self._latents_lock = threading.Lock()
+        self._evict_epoch: dict[str, int] = {}
+
+    def _voice_paths(self, voice_id: str) -> tuple[str, str]:
+        # Same scheme as QwenEngine._voice_paths (verbatim behaviour, copied
+        # rather than shared, since the two engines' voices dirs differ):
+        # filename-safe id, identity for an already-ASCII voice_id, and a
+        # short stable sha1 suffix of the ORIGINAL id when sanitisation is
+        # lossy — so two distinct non-ASCII ids that `re.sub` would otherwise
+        # both flatten to the same underscores stay injective.
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)
+        if safe != voice_id:
+            digest = hashlib.sha1(voice_id.encode("utf-8")).hexdigest()[:8]
+            safe = f"{safe}-{digest}"
+        return (
+            os.path.join(self._voices_dir, f"{safe}.pt"),
+            os.path.join(self._voices_dir, f"{safe}.json"),
+        )
 
     def _resolve_runtime_options(
         self, torch_module: Any, device_override: Optional[str] = None
@@ -1306,142 +1437,171 @@ class CoquiEngine(Engine):
         """Load the Coqui XTTS model if it isn't already resident, then publish
         it atomically (#1918) — a no-op if `_tts` is already set.
 
-        `lock_held=True` means the caller already holds `_synth_lock` (the
-        re-ensure inside `synthesize`), so the publish assigns directly instead
-        of acquiring — `_synth_lock` is non-reentrant and acquiring it here
-        would self-deadlock."""
+        The cold pull is single-flighted under `_cold_load_lock`; only the
+        publish takes `_synth_lock`, and only briefly.
+
+        `lock_held=True` means the caller already holds `_synth_lock`, so the
+        publish assigns directly instead of acquiring — `_synth_lock` is
+        non-reentrant and acquiring it here would self-deadlock. It also skips
+        `_cold_load_lock`, which would otherwise invert the lock order."""
         if self._tts is not None:
             return
-        epoch = self._load_epoch
-        # Importing lazily so the process can start (and /health respond)
-        # before the heavy ML deps load. Most useful while iterating on
-        # the protocol — the Node side can verify reachability instantly.
-        # Surface the *actual* import error so the Node-side log/UI carries
-        # a useful diagnostic (torch missing vs TTS missing vs a third-party
-        # incompatibility) instead of a one-size-fits-all message.
-        try:
-            from TTS.api import TTS  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(
-                f"Failed to import coqui-tts ({e}). "
-                "Most common cause: PyTorch isn't installed in this venv — "
-                "coqui-tts excludes it from its deps so you can pick CPU vs CUDA. "
-                "Run `.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
-                "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
-            ) from e
-        try:
-            import torch  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(
-                f"PyTorch missing from this venv ({e}). Install with: "
-                "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
-                "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
-            ) from e
-
-        _apply_torch_perf_flags(torch)
-
-        model_id = {
-            "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
-        }.get(model, model)
-
-        opts = self._resolve_runtime_options(torch, device_override=device)
-        device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
-        _validate_cuda_index(device, torch)
-        # Single startup log line — `npm run tts:sidecar` users can grep
-        # logs/tts.log for this to confirm GPU mode is actually on. If you
-        # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
-        # CPU PyTorch wheel installed (see README.md "GPU install" section).
-        log.info(
-            "Loading Coqui model=%s on device=%s half=%s deepspeed=%s …",
-            model_id, device, want_half, want_deepspeed,
-        )
-
-        tts = TTS(model_id)
-
-        # DeepSpeed inference engine. Wires in BEFORE `.to(device)` because
-        # init_gpt_for_inference rebuilds the GPT module against the deepspeed
-        # runtime — moving to GPU afterwards transfers the rebuilt module.
-        # Best-effort: if deepspeed isn't installed or the hook drifts in a
-        # future coqui-tts release, log and continue without it rather than
-        # failing the whole sidecar boot.
-        if want_deepspeed:
+        # Single-flight the cold pull under a lock of its OWN (Wave 3c Task 8),
+        # NOT `_synth_lock`. Task 8 originally used `_synth_lock` for both the
+        # load and the forward; #1918 then moved the load OUT of `_synth_lock`
+        # so a Stop pressed mid-load wins the race instead of blocking behind
+        # the ~90 s pull (`test_an_unload_during_a_cold_load_wins`). Those two
+        # goals only conflict while it is ONE lock, so the load keeps a
+        # dedicated one — the same split QwenEngine already runs
+        # (`_cold_load_lock` around `_ensure_base_loaded`'s pull, a separate
+        # lock around its forward). Double-checked inside: a caller that lost
+        # the race blocks here, then finds `_tts` already published and returns
+        # without redoing the ~3 GB load
+        # (`test_coqui_load_racing_synth_never_double_loads_or_half_loads`).
+        #
+        # `lock_held=True` deliberately SKIPS this lock. That caller already
+        # holds `_synth_lock`, and every other path takes `_cold_load_lock`
+        # FIRST and `_synth_lock` second (at the publish below) — acquiring it
+        # here would invert that order and close a real deadlock cycle. Giving
+        # up the single-flight on that one path is the lesser cost, and no
+        # production path takes it: `synthesize` and `clone_voice` both
+        # re-ensure OUTSIDE the lock (see `synthesize`'s comment), so the cold
+        # pull is still single-flighted everywhere it actually happens.
+        with nullcontext() if lock_held else self._cold_load_lock:
+            if self._tts is not None:
+                return
+            epoch = self._load_epoch
+            # Importing lazily so the process can start (and /health respond)
+            # before the heavy ML deps load. Most useful while iterating on
+            # the protocol — the Node side can verify reachability instantly.
+            # Surface the *actual* import error so the Node-side log/UI carries
+            # a useful diagnostic (torch missing vs TTS missing vs a third-party
+            # incompatibility) instead of a one-size-fits-all message.
             try:
-                tts.synthesizer.tts_model.gpt.init_gpt_for_inference(
-                    kv_cache=True, use_deepspeed=True,
-                )
-                log.info("DeepSpeed inference enabled.")
-            except Exception as e:
-                log.warning(
-                    "DeepSpeed enable failed (%s) — continuing without it. "
-                    "If you want this speedup, install deepspeed in the sidecar venv.",
-                    e,
-                )
+                from TTS.api import TTS  # type: ignore
+            except ImportError as e:
+                raise RuntimeError(
+                    f"Failed to import coqui-tts ({e}). "
+                    "Most common cause: PyTorch isn't installed in this venv — "
+                    "coqui-tts excludes it from its deps so you can pick CPU vs CUDA. "
+                    "Run `.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
+                    "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
+                ) from e
+            try:
+                import torch  # type: ignore
+            except ImportError as e:
+                raise RuntimeError(
+                    f"PyTorch missing from this venv ({e}). Install with: "
+                    "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
+                    "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
+                ) from e
 
-        tts.to(device)
+            _apply_torch_perf_flags(torch)
 
-        # fp16 mode. NOTE: we do NOT call `tts_model.half()` here — that
-        # casts every weight including LayerNorm to fp16, but XTTS's inputs
-        # (text tokens, audio conditioning latents) arrive as fp32 and the
-        # LayerNorm forward then dies with `expected Float but found Half`.
-        # Instead we record the intent and use `torch.autocast` around the
-        # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
-        # and only casts the ops where fp16 is safe (matmuls, attention),
-        # which is where the speedup lives anyway.
-        use_half = bool(want_half and _parse_device(device)[0] == "cuda")
-        if use_half:
-            log.info("fp16 autocast enabled for /synthesize.")
+            model_id = {
+                "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
+            }.get(model, model)
 
-        # Snapshot the speaker manifest so /synthesize can validate inbound
-        # `voice` against what the model actually knows. Read from the LOCAL
-        # `tts`, not `self._tts` — this runs BEFORE the publish (#1918), so
-        # `self._tts` may still be `None` (or hold a different model entirely,
-        # on the losing side of a load race). Extracted to its own frame
-        # (#1918 review) so `speaker_manager` doesn't stay reachable from
-        # THIS frame's locals across the `del tts` a few lines down in the
-        # discard path — `del tts` alone doesn't drop every reference to the
-        # freshly loaded model if a sibling local still points into it.
-        speakers = self._read_speaker_manifest(tts)
-
-        # Publish as ONE atomic step (#1918): `_ensure_loaded` runs outside
-        # `_synth_lock` for most of this ~90s cold load (see the "Load OUTSIDE
-        # the lock" rationale in `synthesize`, a few methods below), so a Stop
-        # pressed anywhere during the load must be able to win the race rather
-        # than have its resets overwritten by this thread finishing after it.
-        # `lock_held` controls whether we still need to acquire `_synth_lock`
-        # ourselves — the re-ensure inside `synthesize` already holds it, and
-        # the lock is non-reentrant.
-        if lock_held:
-            published = self._publish_loaded_locked(
-                epoch, tts, torch, device, use_half, speakers
+            opts = self._resolve_runtime_options(torch, device_override=device)
+            device, want_half, want_deepspeed = opts["device"], opts["half"], opts["deepspeed"]
+            _validate_cuda_index(device, torch)
+            # Single startup log line — `npm run tts:sidecar` users can grep
+            # logs/tts.log for this to confirm GPU mode is actually on. If you
+            # set COQUI_DEVICE=cuda but this prints device=cpu, the venv has the
+            # CPU PyTorch wheel installed (see README.md "GPU install" section).
+            log.info(
+                "Loading Coqui model=%s on device=%s half=%s deepspeed=%s …",
+                model_id, device, want_half, want_deepspeed,
             )
-        else:
-            with self._synth_lock:
+
+            tts = TTS(model_id)
+
+            # DeepSpeed inference engine. Wires in BEFORE `.to(device)` because
+            # init_gpt_for_inference rebuilds the GPT module against the deepspeed
+            # runtime — moving to GPU afterwards transfers the rebuilt module.
+            # Best-effort: if deepspeed isn't installed or the hook drifts in a
+            # future coqui-tts release, log and continue without it rather than
+            # failing the whole sidecar boot.
+            if want_deepspeed:
+                try:
+                    tts.synthesizer.tts_model.gpt.init_gpt_for_inference(
+                        kv_cache=True, use_deepspeed=True,
+                    )
+                    log.info("DeepSpeed inference enabled.")
+                except Exception as e:
+                    log.warning(
+                        "DeepSpeed enable failed (%s) — continuing without it. "
+                        "If you want this speedup, install deepspeed in the sidecar venv.",
+                        e,
+                    )
+
+            tts.to(device)
+
+            # fp16 mode. NOTE: we do NOT call `tts_model.half()` here — that
+            # casts every weight including LayerNorm to fp16, but XTTS's inputs
+            # (text tokens, audio conditioning latents) arrive as fp32 and the
+            # LayerNorm forward then dies with `expected Float but found Half`.
+            # Instead we record the intent and use `torch.autocast` around the
+            # `tts()` call in `synthesize()` — autocast keeps LayerNorm in fp32
+            # and only casts the ops where fp16 is safe (matmuls, attention),
+            # which is where the speedup lives anyway.
+            use_half = bool(want_half and _parse_device(device)[0] == "cuda")
+            if use_half:
+                log.info("fp16 autocast enabled for /synthesize.")
+
+            # Snapshot the speaker manifest so /synthesize can validate inbound
+            # `voice` against what the model actually knows. Read from the LOCAL
+            # `tts`, not `self._tts` — this runs BEFORE the publish (#1918), so
+            # `self._tts` may still be `None` (or hold a different model entirely,
+            # on the losing side of a load race). Extracted to its own frame
+            # (#1918 review) so `speaker_manager` doesn't stay reachable from
+            # THIS frame's locals across the `del tts` a few lines down in the
+            # discard path — `del tts` alone doesn't drop every reference to the
+            # freshly loaded model if a sibling local still points into it.
+            # A drifting speaker-manager API falls back to permissive validation
+            # with a warning rather than crashing the load — see that method.
+            speakers = self._read_speaker_manifest(tts)
+
+            # Publish as ONE atomic step (#1918): `_ensure_loaded` runs outside
+            # `_synth_lock` for the whole of this ~90s cold load (see the "Load
+            # OUTSIDE the lock" rationale in `synthesize`, a few methods below),
+            # so a Stop pressed anywhere during the load must be able to win the
+            # race rather than have its resets overwritten by this thread
+            # finishing after it. `lock_held` controls whether we still need to
+            # acquire `_synth_lock` ourselves — the caller may already hold it,
+            # and the lock is non-reentrant.
+            if lock_held:
                 published = self._publish_loaded_locked(
                     epoch, tts, torch, device, use_half, speakers
                 )
-        if not published:
-            # A teardown (Stop, or an admission evict) landed during the load,
-            # or another thread published first. Discard rather than overwrite —
-            # publishing here would leave a live model with `_device` pinned to
-            # the admitted card, bypassing placement on the next lazy load
-            # (#1730 gap 3).
-            log.info("Coqui load discarded — unloaded or superseded while loading.")
-            # `del` BEFORE the reclaim, or it does nothing: this frame still
-            # holds a reference to the ~3 GB model, so gc.collect() cannot
-            # collect it.
-            del tts
-            if not lock_held:
-                self._reclaim_after_drop(torch, reason="discarded (unloaded or superseded while loading)")
-            # When `lock_held` is True the caller holds `_synth_lock`, and
-            # `_reclaim_after_drop` documents that it MUST run with that lock
-            # released. Skipping it is safe rather than merely convenient: the
-            # epoch only ever moves under `_synth_lock`, and `_tts` is only
-            # ever published under it, so neither failure condition can arise
-            # while the caller holds it — this branch is unreachable on that
-            # path. The guard is here so a future caller cannot make it
-            # reachable silently.
-            return
-        log.info("Coqui ready — %d speakers in manifest.", len(speakers))
+            else:
+                with self._synth_lock:
+                    published = self._publish_loaded_locked(
+                        epoch, tts, torch, device, use_half, speakers
+                    )
+            if not published:
+                # A teardown (Stop, or an admission evict) landed during the load,
+                # or another thread published first. Discard rather than overwrite —
+                # publishing here would leave a live model with `_device` pinned to
+                # the admitted card, bypassing placement on the next lazy load
+                # (#1730 gap 3).
+                log.info("Coqui load discarded — unloaded or superseded while loading.")
+                # `del` BEFORE the reclaim, or it does nothing: this frame still
+                # holds a reference to the ~3 GB model, so gc.collect() cannot
+                # collect it.
+                del tts
+                if not lock_held:
+                    self._reclaim_after_drop(torch, reason="discarded (unloaded or superseded while loading)")
+                # When `lock_held` is True the caller holds `_synth_lock`, and
+                # `_reclaim_after_drop` documents that it MUST run with that lock
+                # released. Skipping it is safe rather than merely convenient: the
+                # epoch only ever moves under `_synth_lock`, and `_tts` is only
+                # ever published under it, so neither failure condition can arise
+                # while the caller holds it — this branch is unreachable on that
+                # path. The guard is here so a future caller cannot make it
+                # reachable silently.
+                return
+            log.info("Coqui ready — %d speakers in manifest.", len(speakers))
 
     def _publish_loaded_locked(
         self, epoch: int, tts: Any, torch_module: Any, device: str,
@@ -1458,9 +1618,10 @@ class CoquiEngine(Engine):
         The `_tts is not None` half of the guard covers a second loser: two
         threads can both pass `_ensure_loaded`'s `_tts is None` fast-out (a
         `/load` and `synthesize`'s pre-lock ensure are serialised by different
-        primitives — an asyncio `_load_lock` and nothing respectively), both
-        load, and both arrive here with the same unchanged epoch. Without it the
-        second publish overwrites the first and orphans ~3 GB.
+        primitives — an asyncio `_load_lock` and `_cold_load_lock` respectively,
+        and `lock_held=True` skips the latter), both load, and both arrive here
+        with the same unchanged epoch. Without it the second publish overwrites
+        the first and orphans ~3 GB.
         """
         if epoch != self._load_epoch or self._tts is not None:
             return False
@@ -1484,12 +1645,46 @@ class CoquiEngine(Engine):
         still bumps `_load_epoch`, which cancels any cold load currently
         in flight.
 
-        Acquires `_synth_lock` so it cannot null `_tts` out from under an
-        in-flight forward (#1894): the route offloads both this and
-        /synthesize to the worker pool, so they genuinely overlap. MUST NOT
-        be called while already holding `_synth_lock` — it is non-reentrant.
-        Internal holders call `_drop_model_locked()` + `_reclaim_after_drop()`.
-        """
+        Acquires `_synth_lock` before nulling — mirrors `QwenEngine.unload()`
+        and for the same reason (Task 8a, folded from Task 8's review;
+        arrived at independently on `main` as #1894, where the route offloads
+        both this and /synthesize to the worker pool so they genuinely
+        overlap): `synthesize()`'s forward re-dereferences the model AFTER
+        the (possibly multi-second) `tts()` / `_infer_from_latents()` call
+        returns (e.g. to read `synthesizer.output_sample_rate`), all still
+        inside its own `with self._synth_lock:` block. Without this lock, a
+        racing `/unload` could null `self._tts` mid-forward — killing the
+        request with an `AttributeError` AFTER the expensive GPU work already
+        ran — and would leave the in-flight thread holding the old model past
+        the null, so the `gc.collect()` + `empty_cache()` in
+        `_reclaim_after_drop` can't reclaim its VRAM; the next idempotent
+        `/load` (seeing `self._tts is None`) would then allocate a SECOND
+        copy. Taking `_synth_lock` here makes `unload` wait for any in-flight
+        forward to finish and drop its own reference first.
+
+        MUST NOT be called while already holding `_synth_lock` (it is a
+        non-reentrant threading.Lock) — only the /unload route calls this,
+        and it holds no lock. An internal holder that needs the same teardown
+        calls `_drop_model_locked()` and then `_reclaim_after_drop()` once it
+        has released the lock; `maybe_free_idle` is the one such caller.
+
+        Deliberately does NOT clear `_latents_cache` — contrast
+        `QwenEngine.unload()`, which DOES clear its analogous
+        `_prompt_cache`. The two caches are not analogous: Qwen's cached
+        clone prompts are GPU tensors that would otherwise survive the
+        `empty_cache()` in `_reclaim_after_drop` (see that method's own
+        docstring), while
+        every `_latents_cache` entry is loaded via `_load_voice_latents`
+        with `map_location='cpu'` — it never holds VRAM, so clearing it here
+        would free no GPU memory, only force the next cloned-voice request
+        to re-`torch.load` its `.pt` for no benefit. `unload` is a
+        VRAM-reclaim operation, not an erasure one: Property 2 ("erasure is
+        total") is owned by `POST /xtts/evict-voice` (`_bump_evict_epoch`),
+        which DOES pop this cache and is deliberately NOT gated on
+        `self._tts` being loaded (see that route's docstring) — a voice
+        revoked via evict-voice cannot render through a stale entry
+        surviving an `unload`, because revoke and unload are independent
+        paths and only evict-voice sits on the revoke path."""
         with self._synth_lock:
             # Bump UNCONDITIONALLY (#1918) — a Stop pressed during a cold load
             # must cancel that load even though there is nothing to drop yet
@@ -1574,6 +1769,121 @@ class CoquiEngine(Engine):
                 log.warning("torch.cuda.empty_cache() failed (%s) — model is dropped, VRAM will free on GC.", e)
         log.info("Coqui model %s.", reason)
 
+    def _bump_evict_epoch(self, voice_id: str) -> bool:
+        """Invalidate any cached (or in-flight) latents load for `voice_id`
+        (fs-38 Wave 3c, Task 10's cache-epoch contract). Task 11 wires an
+        HTTP route to this, mirroring `/qwen/evict-voice` — called on a
+        clone revoke/purge so a stale in-process cache entry can't keep
+        serving an erased voice (Property 2: erasure is total, including
+        this cache). Also invalidates a `torch.load` that is CURRENTLY in
+        flight for this voice: `_load_voice_latents` captures the epoch
+        before reading the .pt and re-checks it under `_latents_lock`
+        immediately before installing — bumping it here mid-load means that
+        load discards its result instead of caching it. Idempotent/cheap —
+        safe to call for a voice_id with no cached entry.
+
+        Returns True iff a resident cache entry was actually dropped by THIS
+        call (GATE 1 MIN-3). The return value is computed inside the same
+        `_latents_lock` critical section as the pop so it cannot disagree with
+        it: `/xtts/evict-voice` used to read membership in one acquisition and
+        pop in a second, so a `_load_voice_latents` installing this voice in
+        the gap made the route answer `evicted: false` for a call that did in
+        fact evict an entry. `/qwen/evict-voice` has always done the pop and
+        the flag in one critical section; this now matches. Callers that only
+        want the invalidation (e.g. `clone_voice`'s re-clone path) may ignore
+        it. Lock discipline (GATE 2 A-2 — corrected; this used to claim the
+        opposite): this takes `_latents_lock` alone when called from the
+        `/xtts/evict-voice` route, but `clone_voice`'s re-clone path calls it
+        from INSIDE `with self._synth_lock:` — nested, not standalone. Either
+        way the sidecar's established `_synth_lock` -> `_latents_lock`
+        ordering holds; `_latents_lock` is never held while acquiring
+        `_synth_lock`, so there is no inversion and no deadlock."""
+        with self._latents_lock:
+            self._evict_epoch[voice_id] = self._evict_epoch.get(voice_id, 0) + 1
+            return self._latents_cache.pop(voice_id, None) is not None
+
+    def _load_voice_latents(self, voice_id: str) -> tuple[Any, Any, int]:
+        """Return (gpt_cond_latent, speaker_embedding, epoch) for a cloned
+        XTTS voice — an in-memory cache hit, or a `torch.load` of the
+        persisted `.pt` on a miss. Raises `VoiceNotDesignedError` if this
+        voice was never cloned (no `.pt` on disk).
+
+        `epoch` is `_evict_epoch[voice_id]` captured ATOMICALLY with the
+        cache read/install (same `_latents_lock` critical section) — Task
+        11a's caller re-checks it immediately before the GPU forward
+        (`synthesize`'s cloned-voice branch, right before
+        `_infer_from_latents`), and that re-check would itself race an
+        evict landing in the gap if it had to re-derive "the epoch this
+        load is valid as of" after the fact instead of receiving it here.
+
+        Epoch-safe (`[AC-C7][ADV-M1]`): `purgeCloneArtifacts` is
+        files-first / evict-last (delete the `.pt`, THEN best-effort POST
+        the sidecar evict). A naive read-cache -> isfile -> torch.load
+        (seconds) -> write-cache sequence lets a load that already passed
+        the isfile check land AFTER a concurrent evict lands — a revoked
+        voice would stay renderable from RAM until process restart, which
+        is exactly the never-silent-substitution property (Property 1) this
+        whole wave exists to protect. Capturing `_evict_epoch[voice_id]`
+        BEFORE the isfile check, then re-comparing it under `_latents_lock`
+        immediately before installing into `_latents_cache`, closes that
+        window: if `_bump_evict_epoch` landed anywhere in between, the
+        freshly-loaded tensors are discarded (never cached) and this call
+        raises instead of returning them.
+
+        NOT held under `_synth_lock` — this can block on disk I/O for
+        seconds and must not stall a concurrent unrelated /synthesize's GPU
+        forward. Mirrors QwenEngine._load_voice_prompt's own choice to
+        release its cache lock across `torch.load`."""
+        with self._latents_lock:
+            cached = self._latents_cache.get(voice_id)
+            if cached is not None:
+                return cached[0], cached[1], self._evict_epoch.get(voice_id, 0)
+
+        epoch_before = self._evict_epoch.get(voice_id, 0)
+        pt_path, _json_path = self._voice_paths(voice_id)
+        if not os.path.isfile(pt_path):
+            raise VoiceNotDesignedError(
+                f"Voice '{voice_id}' has not been cloned yet (no cached latents). "
+                "Clone it first via POST /xtts/clone-voice."
+            )
+
+        import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
+
+        # map_location='cpu' is required, not an optimisation: latents are
+        # persisted as CUDA tensors on whichever device DERIVED them
+        # (get_conditioning_latents runs on `self.device` at clone time,
+        # xtts.py:361-370), and capacity-aware placement can derive on
+        # cuda:1 while this process later synthesises on cuda:0 — a bare
+        # `torch.load` would try to materialise cuda:1 tensors on a process
+        # that may not even have that card. `inference()` moves both
+        # tensors to `self.device` anyway (xtts.py:505-506), so loading onto
+        # cpu first costs nothing extra `[AC-I1]`.
+        #
+        # weights_only=True is CHOSEN, not inherited (GATE 1 MIN-1): what
+        # `clone_voice` persists here is `{"gpt_cond_latent": tensor,
+        # "speaker_embedding": tensor}` (see `_atomic_torch_save`'s call site)
+        # — plain tensors in a plain dict, which the safe unpickler loads
+        # verbatim. Contrast `QwenEngine`'s `weights_only=False` uses, which
+        # carry an explicit reason (the cached prompt is a qwen_tts
+        # `VoiceClonePromptItem`, a custom class the safe loader rejects). No
+        # such reason exists here, and `pt_path` is derived from a
+        # CALLER-SUPPLIED `voice` field, so leaving the arbitrary-code-
+        # execution unpickler enabled would make any file that lands at
+        # `voices/xtts/<sanitised>.pt` executable at load time.
+        saved = torch.load(pt_path, map_location="cpu", weights_only=True)
+        latents = (saved["gpt_cond_latent"], saved["speaker_embedding"])
+
+        with self._latents_lock:
+            if self._evict_epoch.get(voice_id, 0) != epoch_before:
+                # A purge landed while this torch.load was in flight — refuse
+                # to install a load that's already stale. Property 1: never
+                # silently render a revoked voice from RAM.
+                raise VoiceNotDesignedError(
+                    f"Voice '{voice_id}' was revoked while its latents were loading."
+                )
+            self._latents_cache[voice_id] = latents
+        return latents[0], latents[1], epoch_before
+
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the resident XTTS model when it has been idle longer than
         `ttl_seconds`. Returns True if it freed. Driven by `_idle_evict_steps` on
@@ -1615,15 +1925,22 @@ class CoquiEngine(Engine):
         return True
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
-        # Load OUTSIDE the lock: a cold XTTS pull takes ~90s and holding
-        # `_synth_lock` across it would block /unload (the Stop button) for
-        # that whole window.
+        # Load OUTSIDE the lock: a cold XTTS pull is ~90 s and must not hold
+        # off /unload (the Stop button) for its duration. `_ensure_loaded`
+        # single-flights it under `_cold_load_lock` (Wave 3c Task 8) and takes
+        # `_synth_lock` only to publish (#1918), so calling it here rather than
+        # inside the `with self._synth_lock:` blocks below keeps those blocks a
+        # fresh, non-reentrant acquisition.
         self._ensure_loaded(model)
-        # Claim BEFORE the acquire. The counter alone is NOT enough and neither
-        # is the timestamp — `QwenEngine.design_voice` spells out the same
-        # TOCTOU for Qwen: an evict can read a stale `_last_used` and free the
-        # model in the gap between the ensure above and the acquire below. The
-        # pair (`_in_flight` claimed here + the re-ensure under the lock) closes it.
+        # Claim BEFORE the acquire (#1894). The counter alone is NOT enough and
+        # neither is the timestamp — `QwenEngine.design_voice` spells out the
+        # same TOCTOU for Qwen: an evict can read a stale `_last_used` and free
+        # the model in the gap between the ensure above and the forward's
+        # acquire. The pair (`_in_flight` claimed here + the re-ensure below)
+        # closes it. `InFlightCounter.claim()` decrements in its own `finally`,
+        # so a failing forward can't leave the guard stuck — and it is the SAME
+        # object `maybe_free_idle` reads (`.busy`), which is the only thing that
+        # makes a claim mean anything. `clone_voice` claims the same counter.
         with self._in_flight.claim():
             self._last_used = time.monotonic()
             # Re-stamp on the way out in an INNER finally, BEFORE the claim's
@@ -1633,82 +1950,580 @@ class CoquiEngine(Engine):
             # while `_last_used` is still the pre-forward value, which reads
             # as "idle" and gets evicted.
             try:
-                with self._synth_lock:
-                    # Re-ensure under the lock: a concurrent /unload or
-                    # admission evict holds `_synth_lock` to null the model,
-                    # so one ensured before the lock can be gone in the gap.
-                    # No-op on the warm path (`_ensure_loaded` early-returns
-                    # when `_tts` is set). `lock_held=True` — this call already
-                    # holds `_synth_lock`, which is non-reentrant, so
-                    # `_ensure_loaded`'s publish must assign directly rather
-                    # than acquire it again (#1918).
-                    self._ensure_loaded(model, lock_held=True)
-                    return self._synthesize_locked(model, voice, text, language)
+                # Re-ensure AFTER the claim: an admission-path `maybe_free_idle`
+                # can free the model in the gap between the ensure above and the
+                # claim, so a call that entered warm can find `_tts` already
+                # None. No-op on the warm path (`_ensure_loaded` early-returns
+                # when `_tts` is set).
+                #
+                # On `main` this call sits INSIDE `with self._synth_lock:` with
+                # `lock_held=True`. On THIS branch it cannot, for a structural
+                # reason: `_synthesize_claimed` below does not run under one
+                # enclosing acquisition — its cloned-voice branch must do
+                # seconds of latents disk I/O OFF the lock and take
+                # `_synth_lock` only around the GPU forward — so there is no
+                # single block to put a re-ensure inside. Pushing it into
+                # either branch's own block instead would DEADLOCK:
+                # `threading.Lock` is non-reentrant and `_ensure_loaded`'s
+                # publish acquires `_synth_lock` itself. Sibling engines whose
+                # `_ensure_loaded` is lock-free (QwenEngine, WhisperEngine)
+                # keep main's placement. Do NOT "fix" that inconsistency by
+                # moving this line under the lock.
+                #
+                # What that costs: a window between this line and each branch's
+                # `with self._synth_lock:` below. `maybe_free_idle` cannot use
+                # it — it declines while `_in_flight.busy`, both in its
+                # lock-free fast-out and again under the lock — so only an
+                # explicit `/unload` (the user pressing Stop) can win it, and
+                # both forwards below re-read `self._tts` under the lock and
+                # fail LOUD rather than asserting if they lost that race.
+                self._ensure_loaded(model)
+                return self._synthesize_claimed(model, voice, text, language)
             finally:
                 self._last_used = time.monotonic()
 
-    def _synthesize_locked(
+    def _synthesize_claimed(
         self, model: str, voice: str, text: str, language: Optional[str] = None
     ) -> SynthResult:
-        """The forward itself. CALLER MUST HOLD `_synth_lock`.
+        """The forward itself. CALLER MUST have claimed `_in_flight` and
+        re-ensured the model — see `synthesize`.
 
-        Binds `self._tts` to a local up front so the forward never re-reads an
-        attribute a concurrent unload could null. The assert is a cheap
-        invariant, NOT the race guard — the guard is the caller's
-        `_in_flight` claim plus its re-ensure under the lock.
+        Does NOT hold `_synth_lock` on entry, unlike `main`'s
+        `_synthesize_locked` which this replaces: the cloned-voice branch below
+        has to run `_load_voice_latents` (disk I/O, seconds) OFF the lock — its
+        own docstring's stated requirement — and take `_synth_lock` only around
+        the GPU forward. So each branch acquires the lock for itself rather
+        than the whole body running under one acquisition.
+
+        Each branch then binds `self._tts` to a local up front (#1894) so the
+        forward never re-reads an attribute a concurrent unload could null.
+        That local capture is a cheap invariant, NOT the race guard — the guard
+        is the caller's `_in_flight` claim plus its re-ensure. Because the
+        re-ensure sits OUTSIDE the lock here (see `synthesize`), an explicit
+        `/unload` landing in the gap is reachable, so each capture is checked
+        with a loud `RuntimeError` rather than main's bare `assert`, which `-O`
+        strips.
         """
-        tts = self._tts
-        assert tts is not None
         effective_language = language or self._language
 
-        # Pre-flight validation. If the caller's `voice` isn't in this model's
-        # manifest, substitute the fallback rather than letting XTTS fail with
-        # a cryptic embedding index error mid-chapter. The actual_voice
-        # carries forward into the synth so the swap is invisible at the
-        # protocol level except for the X-Voice-Substituted-From header set
-        # by the route handler.
-        actual_voice = voice
-        substituted_from: Optional[str] = None
-        if self._speakers and voice not in self._speakers:
-            substituted_from = voice
-            actual_voice = (
-                self.FALLBACK_SPEAKER
-                if self.FALLBACK_SPEAKER in self._speakers
-                else self._speakers[0]
-            )
-            log.warning(
-                "Speaker '%s' not in XTTS v2 manifest — substituting '%s'. "
-                "Update the Node-side voice catalog (server/src/tts/voice-mapping.ts) "
-                "to remove this name. Valid sample: %s",
-                voice, actual_voice, ", ".join(self._speakers[:8]),
-            )
-
-        # XTTS returns a list[float] at the model's sample rate. We convert
-        # to int16 LE bytes here so the network payload is half the size of
-        # float32 (and Node side already speaks 16-bit PCM).
+        # Cloned-voice branch — MUST precede the `self._speakers` membership
+        # check below: `xtts-<uuid>` is never in the loaded model's manifest,
+        # so without this branch a cloned-voice request would fall through
+        # and silently substitute FALLBACK_SPEAKER (Property 1 violation).
+        # Gated on the storage-key prefix (`XTTS_KEY_PREFIX`) — every
+        # `xtts-<uuid>` request reaching this engine came from
+        # `cloneStorageKey('coqui', uuid)` (clone-engines.ts), for EITHER a
+        # provenance==='cloned' OR a provenance==='designed' slot: fs-38
+        # Wave 3c Task 20a gave Coqui a "designed" voice concept too
+        # (`libraryVoiceForEngine` mints this same `xtts-<uuid>` shape for
+        # both provenances — Task 16 review), so the prefix alone no longer
+        # tells you which. This branch has NO catalogue fallback either way —
+        # `_load_voice_latents` raises `VoiceNotDesignedError` (below) if the
+        # `.pt` is missing, unconditionally. On the CHAPTER-RENDER path, the
+        # Node side's pre-render pre-pass (`resolveDesignedVoicesForChapter`'s
+        # coqui arm, clone-voice-resolver.ts) removes a designed voice's coqui
+        # slot ahead of synth so a raise here doesn't kill a chapter that
+        # could have rendered on a catalogue voice (D-F's fail-SOFT arm).
         #
-        # fp16 path: wrap inference in `torch.autocast`. Unlike a global
-        # `model.half()`, autocast leaves LayerNorm + input tensors in fp32
-        # (where mixed-precision would otherwise hit `expected Float but found
-        # Half`) and casts only the matmul/attention ops that benefit from
-        # tensor cores. This is the supported PyTorch pattern for fp16
-        # inference on a model that wasn't trained mixed-precision.
-        if self._use_half and self._torch is not None:
-            with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
+        # GATE 1 I-3 — that pre-pass is NOT a guarantee this branch never
+        # fires on a chapter render, and this comment used to claim it was
+        # ("only ever reaches this engine with cached latents actually
+        # available"). It is the same overclaim already corrected on the Node
+        # side's twin guard (`server/src/tts/sidecar.ts`, the
+        # `x-voice-substituted-from` branch); keep the two readings the same.
+        # The pre-pass drops the slot only when there is NO artifact on disk
+        # AND the voice-library entry does not read `cloned`
+        # (clone-voice-resolver.ts's `if (!ptExists && entry?.provenance !==
+        # 'cloned')`). Two deliberate exceptions follow from that:
+        #   - a STALE-but-present `.pt` is kept rather than downgraded (it
+        #     still renders correctly today), so the slot survives;
+        #   - an entry reading `cloned` with no artifact at all keeps its slot
+        #     ON PURPOSE — soft-removing a real person's voice would be a
+        #     Property-1 substitution, so D-F's fail-LOUD arm applies and the
+        #     raise below IS the intended outcome, not a leak.
+        # So a chapter-render `xtts-<uuid>` can still arrive here with no
+        # cached latents; that is by design, and this branch is what makes it
+        # loud. The pre-pass also does NOT run ahead of every caller —
+        # `routes/voice-sample.ts` and the voice-
+        # library `/sample` route reach this engine directly with a
+        # `pickVoiceForEngine`-resolved `xtts-<uuid>`, so THIS branch (the
+        # `.pt`-presence check below) is still the only thing standing
+        # between those callers and a stranded designed voice. A
+        # non-`xtts-`-prefixed request (a baked catalog speaker name, or any
+        # other id) skips this branch entirely and falls through to the
+        # existing fail-soft substitution logic, unchanged.
+        #
+        # The prefix test is CASE-FOLDED (GATE 1 sweep — third instance of
+        # this class: Task 10a fixed the first in voice-override-linked.ts,
+        # the C4 fix the second). `_voice_paths` builds `f"{safe}.pt"` and
+        # `_load_voice_latents` does `os.path.isfile` on it, and NTFS/APFS
+        # resolve paths case-insensitively — so on this project's primary dev
+        # box `XTTS-<uuid>` IS `xtts-<uuid>.pt` on disk. A case-SENSITIVE gate
+        # sent `XTTS-<uuid>` straight past this branch into the catalogue
+        # substitution path below, and the Node-side fail-loud guard
+        # (`tts/sidecar.ts`'s `substitutedFrom.startsWith('xtts-')`) missed it
+        # for the identical reason — both layers blind to the same input,
+        # which is precisely what defence-in-depth must not do.
+        #
+        # A case-varied PREFIX is then rejected outright rather than
+        # normalised, and the raw `voice` stays the key for every downstream
+        # lookup. Both halves of that are deliberate:
+        #   - Normalising (`_load_voice_latents(voice.lower())`) would lower
+        #     the UUID too, and a mixed-case uuid is legitimate — Node derives
+        #     the path from its OWN `cloneStorageKey`, so on a case-SENSITIVE
+        #     filesystem the sidecar would look for a file Node never wrote,
+        #     and `purgeCloneArtifacts` would delete a path the cache no
+        #     longer matches. Writing and reading must agree byte-for-byte
+        #     with Node's key.
+        #   - Folding only the TEST and then caching under the raw string
+        #     would key `_latents_cache`/`_evict_epoch` by `XTTS-<uuid>`,
+        #     so a render warmed that way would survive a revoke of
+        #     `xtts-<uuid>` — trading a substitution hole for a Property 2
+        #     one.
+        # Failing loud costs nothing real: the only shipped producer
+        # (`derive-engine-artifact.ts` / `cloneStorageKey`) always emits the
+        # canonical lower-case prefix, and `/xtts/clone-voice` requires it on
+        # the write side for the same reason.
+        if voice.lower().startswith(self.XTTS_KEY_PREFIX):
+            if not voice.startswith(self.XTTS_KEY_PREFIX):
+                raise VoiceNotDesignedError(
+                    f"Voice '{voice}' is not a canonical cloned-voice key — the "
+                    f"'{self.XTTS_KEY_PREFIX}' prefix is case-sensitive. Refusing rather than "
+                    "falling through to catalogue substitution."
+                )
+            # GATE 1 MIN-2 — this runs AFTER `_ensure_loaded` released
+            # `_synth_lock` and BEFORE the `with self._synth_lock:` below, so a
+            # racing `POST /unload` (Stop button, or the Analysing screen
+            # auto-evicting Coqui for the analyzer LLM) can null `self._tts`
+            # exactly here. Reading `self._tts` TWICE — once for the assert,
+            # once for the deref — meant the second read could see None: an
+            # `AssertionError`, or under `python -O` (asserts stripped) an
+            # `AttributeError: 'NoneType' object has no attribute
+            # 'synthesizer'`, either way a generic 500 mid-render.
+            #
+            # Fixed with a single local capture rather than by taking
+            # `_synth_lock`: holding the lock here would serialise this read
+            # behind any in-flight multi-second forward and so delay the
+            # `_load_voice_latents` disk read below, which that method's own
+            # docstring deliberately keeps OFF the lock. The capture is
+            # atomic under the GIL, and keeping our own reference means the
+            # model object cannot be torn out from under the deref.
+            #
+            # `del tts` is load-bearing, not tidiness: a local reference held
+            # across the (seconds-long) latents load + forward would keep the
+            # OLD model alive past `unload()`'s `self._tts = None`, so its
+            # `gc.collect()` + `empty_cache()` could not reclaim that VRAM and
+            # the next idempotent `/load` would allocate a SECOND copy — the
+            # exact leak `unload()`'s docstring describes. Only the extracted
+            # list of language codes outlives this block.
+            tts = self._tts
+            if tts is None:
+                raise RuntimeError(
+                    "Coqui model was unloaded before this render started — reload it and retry."
+                )
+            supported_languages = list(tts.synthesizer.tts_model.config.get("languages", []))
+            del tts
+            # Config-faithful language gate `[AC-C3]` — mirrors `Xtts.synthesize`'s
+            # own guard (xtts.py:422-423) EXACTLY, quirk included: that upstream
+            # assert is `"zh-cn" if language == "zh" else language in
+            # self.config.languages`, which — because "zh-cn" is a non-empty
+            # string and therefore always truthy — always accepts language="zh"
+            # regardless of whether the loaded model's config actually lists it.
+            # The low-level `inference()` `_infer_from_latents` calls skips this
+            # check entirely (its own docstring), so without it here an
+            # unsupported language would reach deep into the GPT forward before
+            # failing, instead of failing loud with an actionable error now.
+            language_ok = (
+                True if effective_language == "zh" else effective_language in supported_languages
+            )
+            if not language_ok:
+                # GATE 1 MIN-4 — a DISTINCT error type, not a bare
+                # `VoiceNotDesignedError`: /synthesize maps the latter to
+                # "Voice '<v>' has not been designed yet", whose implied remedy
+                # (clone it again) is wrong and cannot help — the voice IS
+                # cloned, the loaded model just can't speak this language.
+                # Subclasses `VoiceNotDesignedError` so every OTHER handler
+                # keeps treating it exactly as before (fail loud, no
+                # catalogue fallback — Property 1); only /synthesize, which
+                # catches this narrower type first, reports the real reason.
+                raise VoiceLanguageUnsupportedError(
+                    f"Voice '{voice}' cannot render in language '{effective_language}' — "
+                    f"not supported by the loaded XTTS model (supported: {supported_languages})."
+                )
+            gpt_cond_latent, speaker_embedding, latents_epoch = self._load_voice_latents(voice)
+            # `_infer_from_latents` must be called under `_synth_lock` (its own
+            # docstring) — the shared helper Task 9 built so a cloned voice
+            # renders identically whether reached via clone_voice's audition or
+            # this cached-latents synth branch.
+            with self._synth_lock:
+                # A loud guard, not `assert self._tts is not None` (GATE 1
+                # MIN-2): `_load_voice_latents` above releases `_latents_lock`
+                # across its own (possibly slow) disk I/O before this lock is
+                # even acquired, so an explicit `/unload` (Stop button /
+                # analyzer auto-evict) landing in that gap is reachable — it
+                # checks only `_synth_lock`, not any in-flight claim. A bare
+                # assert is stripped under `python -O`, and even live it
+                # reads as a programmer error rather than a reachable runtime
+                # race.
+                if self._tts is None:
+                    raise RuntimeError(
+                        "Coqui model was unloaded before this render started — reload it and retry."
+                    )
+                # Task 11a — re-check the epoch here, immediately before the
+                # GPU forward: `_load_voice_latents` can return well before
+                # this lock is acquired (it releases `_latents_lock` across
+                # its own I/O), so an evict landing in that gap was
+                # otherwise never observed again — the forward would run
+                # anyway and `/xtts/evict-voice` reporting success would NOT
+                # mean rendering stopped (Property 2). This closes the
+                # window down to the (unavoidable, undetectable) gap between
+                # this check and the `_infer_from_latents` call immediately
+                # below it — it does NOT abort a forward already inside
+                # `tts_model.inference()` by the time an evict lands; an
+                # evict landing after this check passes still lets that
+                # in-flight GPU call finish and its audio be returned.
+                with self._latents_lock:
+                    if self._evict_epoch.get(voice, 0) != latents_epoch:
+                        raise VoiceNotDesignedError(
+                            f"Voice '{voice}' was revoked while a render was in "
+                            "flight — aborted before the GPU forward."
+                        )
+                audio, sample_rate = self._infer_from_latents(
+                    gpt_cond_latent, speaker_embedding, text, effective_language
+                )
+            pcm = _float_audio_to_int16_le(audio)
+            # Never substituted — a cloned voice renders as itself or fails
+            # loud above (Property 1). `substituted_from` stays None.
+            return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=None)
+
+        # Serialise the forward — see `_synth_lock` in __init__ (the XTTS
+        # model isn't thread-safe for concurrent `tts()` calls, mirroring
+        # QwenEngine's Base model). NOT nested with `_ensure_loaded` above:
+        # that call already acquired and released `_synth_lock` internally
+        # before returning, so by this point the load is guaranteed complete
+        # and re-acquiring here is a fresh, non-reentrant acquisition.
+        with self._synth_lock:
+            # Bind `self._tts` to a local up front (#1894) so the forward — and
+            # the `output_sample_rate` read after it — never re-reads an
+            # attribute a concurrent unload could null. This is a LOUD guard,
+            # not `assert tts is not None` as on `main`: there the caller
+            # re-ensures INSIDE this lock so the model is guaranteed present,
+            # whereas here `synthesize`'s re-ensure sits just outside it (see
+            # its comment — `_ensure_loaded` self-locks and is non-reentrant),
+            # so an explicit `/unload` landing in that gap is reachable. Under
+            # `python -O` a bare assert is stripped and the next line would
+            # raise `AttributeError: 'NoneType' object has no attribute 'tts'`
+            # — the same GATE 1 MIN-2 defect already fixed on the cloned-voice
+            # branch above.
+            tts = self._tts
+            if tts is None:
+                raise RuntimeError(
+                    "Coqui model was unloaded before this render started — reload it and retry."
+                )
+            # Pre-flight validation. If the caller's `voice` isn't in this
+            # model's manifest, substitute the fallback rather than letting
+            # XTTS fail with a cryptic embedding index error mid-chapter. The
+            # actual_voice carries forward into the synth so the swap is
+            # invisible at the protocol level except for the
+            # X-Voice-Substituted-From header set by the route handler.
+            actual_voice = voice
+            substituted_from: Optional[str] = None
+            if self._speakers and voice not in self._speakers:
+                substituted_from = voice
+                actual_voice = (
+                    self.FALLBACK_SPEAKER
+                    if self.FALLBACK_SPEAKER in self._speakers
+                    else self._speakers[0]
+                )
+                log.warning(
+                    "Speaker '%s' not in XTTS v2 manifest — substituting '%s'. "
+                    "Update the Node-side voice catalog (server/src/tts/voice-mapping.ts) "
+                    "to remove this name. Valid sample: %s",
+                    voice, actual_voice, ", ".join(self._speakers[:8]),
+                )
+
+            # XTTS returns a list[float] at the model's sample rate. We convert
+            # to int16 LE bytes here so the network payload is half the size of
+            # float32 (and Node side already speaks 16-bit PCM).
+            #
+            # fp16 path: wrap inference in `torch.autocast`. Unlike a global
+            # `model.half()`, autocast leaves LayerNorm + input tensors in fp32
+            # (where mixed-precision would otherwise hit `expected Float but found
+            # Half`) and casts only the matmul/attention ops that benefit from
+            # tensor cores. This is the supported PyTorch pattern for fp16
+            # inference on a model that wasn't trained mixed-precision.
+            if self._use_half and self._torch is not None:
+                with self._torch.autocast(device_type="cuda", dtype=self._torch.float16):
+                    audio = tts.tts(
+                        text=text,
+                        speaker=actual_voice,
+                        language=effective_language,
+                    )
+            else:
                 audio = tts.tts(
                     text=text,
                     speaker=actual_voice,
                     language=effective_language,
                 )
-        else:
-            audio = tts.tts(
-                text=text,
-                speaker=actual_voice,
-                language=effective_language,
-            )
-        sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
+            sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(pcm=pcm, sample_rate=sample_rate, substituted_from=substituted_from)
+
+    def _infer_from_latents(
+        self, gpt_cond_latent: Any, speaker_embedding: Any, text: str, language: str,
+    ) -> tuple[Any, int]:
+        """Config-faithful low-level XTTS inference from already-derived
+        conditioning latents. Mirrors `Xtts.synthesize`'s own build of
+        `inference_settings` — temperature/length_penalty/repetition_penalty/
+        top_k/top_p pulled from the loaded model's config (`xtts.py:432-437`)
+        — and its `enable_text_splitting=True` (`xtts.py:438` via `tts()`'s
+        default, `api.py:300`). The bare low-level `Xtts.inference()` instead
+        hardcodes temperature=0.75/repetition_penalty=10.0/top_p=0.85 and
+        defaults `enable_text_splitting=False` (`xtts.py:448-462`), then
+        asserts `text_tokens.shape[-1] < gpt_max_text_tokens` (`xtts.py:516`)
+        — so a sentence that renders fine on a stock catalogue voice can
+        hard-crash a cloned one. Deliberately does NOT replicate
+        `Xtts.synthesize`'s `language in self.config.languages` guard (with
+        its zh/zh-cn special case, `xtts.py:423`) — that validation is
+        Task 10's stated scope for the cached-latents synth branch.
+
+        CALLER MUST HOLD `_synth_lock` — this touches `self._tts` and does
+        not serialise itself, mirroring how `synthesize()`'s own forward
+        body lives inside its `with self._synth_lock:` block rather than
+        behind a second acquisition (the lock is NON-REENTRANT). Shared by
+        `clone_voice`'s audition preview and (from Task 10) the
+        cached-latents `/synthesize` branch, so both render a cloned voice
+        identically instead of one path hitting XTTS's low-fidelity
+        low-level-API defaults.
+
+        Returns (audio, sample_rate).
+        """
+        # A loud guard, not `assert self._tts is not None` (GATE 1 MIN-2):
+        # both callers document holding `_synth_lock` across their own
+        # pre-check, but an explicit `/unload` checks only `_synth_lock` —
+        # never any in-flight claim — so the same reachable-race shape
+        # already fixed on the other bare asserts in this file applies here
+        # too, and a bare assert would be stripped under `python -O`.
+        tts = self._tts
+        if tts is None:
+            raise RuntimeError(
+                "Coqui model was unloaded before this render started — reload it and retry."
+            )
+        tts_model = tts.synthesizer.tts_model
+        config = tts_model.config
+        inference_settings = {
+            key: config.get(key, default)
+            for key, default in (
+                ("temperature", 0.75),
+                ("length_penalty", 1.0),
+                ("repetition_penalty", 10.0),
+                ("top_k", 50),
+                ("top_p", 0.85),
+            )
+        }
+        result = tts_model.inference(
+            text=text,
+            language=language,
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+            enable_text_splitting=True,
+            **inference_settings,
+        )
+        sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
+        return result["wav"], sample_rate
+
+    def clone_voice(
+        self,
+        voice_id: str,
+        ref_audio: Any,
+        ref_sr: int,
+        audition_text: str,
+        language: Optional[str] = None,
+        model: str = "xtts_v2",
+        device: Optional[str] = None,
+    ) -> SynthResult:
+        """Derive engine-config-faithful XTTS conditioning latents from a
+        CALLER-supplied reference clip and persist them for later
+        cloned-voice synthesis (Task 10 reads what this writes). Mirrors
+        QwenEngine.clone_voice's shape (distil -> persist -> audition), but
+        XTTS has no transcript input — `get_conditioning_latents` is purely
+        acoustic — and the low-level `tts_model` API is entered directly
+        rather than through the catalogue `tts.tts()` wrapper `synthesize()`
+        uses.
+
+        D-C (design decision, do not reverse): latents are hand-rolled via
+        `get_conditioning_latents` + `_atomic_torch_save`, NOT Coqui's
+        built-in `CloningMixin` (`Xtts.clone_voice`/`_clone_voice`) — the
+        built-in slugifies its own filename and writes it with a plain,
+        non-atomic `torch.save`, so purge could not reliably reach it and a
+        crash mid-write would leave a corrupt artifact.
+
+        Does NOT seed any in-memory cache — Task 10 owns `_latents_cache`'s
+        epoch contract. The derived tensors here live only as local
+        variables and are dropped (GC-eligible) the moment this call
+        returns; the only durable trace is the `.pt`/`.json` pair on disk,
+        which Property 2's purge path already reaches via `_voice_paths`.
+        """
+        import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
+        import TTS as _tts_pkg  # noqa: PLC0415
+
+        self._ensure_loaded(model, device=device)
+        # Claim BEFORE the acquire -- mirrors `synthesize()`'s TOCTOU guard
+        # (GATE 2 A-1): the counter alone is not enough and neither is the
+        # timestamp on its own. Without this, a warm-idle admission evict
+        # (`_idle_evict_steps` -> `maybe_free_idle`) or an explicit `/unload` landing
+        # in the gap between the ensure above and the `with self._synth_lock:`
+        # below drops the model out from under this derive -- `maybe_free_idle`
+        # declines while `_in_flight.busy` (both its lock-free fast-out and its
+        # re-validation under the lock), and a fresh `_last_used` stops it
+        # reading a stale idle timestamp.
+        #
+        # Claims the SAME `InFlightCounter` (#1917) `synthesize` and
+        # `maybe_free_idle` use, not a private counter: a claim the evictor
+        # does not read is not a claim. `claim()` decrements in its own
+        # `finally`, so a failed derive can't leave the guard stuck, and the
+        # `_last_used` re-stamp below sits in an INNER finally so it lands
+        # BEFORE that decrement -- a decrement-then-restamp order leaves a
+        # window where `.busy` reads False while `_last_used` is still the
+        # pre-derive value, which the admission path's `ttl=0.0` call reads as
+        # idle and evicts.
+        with self._in_flight.claim():
+            self._last_used = time.monotonic()
+            try:
+                # Re-ensure AFTER the claim -- see `synthesize()`'s identical
+                # comment: an idle evict can still free the model in the narrow
+                # gap between the ensure above and the claim just taken. No-op on
+                # the warm path (`_ensure_loaded` early-returns when `self._tts`
+                # is set).
+                self._ensure_loaded(model, device=device)
+                effective_language = (language or self._language).strip() or self._language
+
+                # Serialise the derive AND the audition forward under the SAME lock
+                # `synthesize()` uses (`_synth_lock` in __init__) — both touch the
+                # shared `self._tts` model, and Task 8's over-serialization verdict
+                # is intentional/spec-mandated (see `_synth_lock`'s docstring): a
+                # concurrent /synthesize must never interleave with a derive-in-
+                # flight against the same model object. Mirrors QwenEngine.clone_voice,
+                # which holds `_synth_lock` across its own distil+persist+audition.
+                with self._synth_lock:
+                    # A loud guard, not `assert self._tts is not None` (GATE 2
+                    # A-1): the claim above closes the admission-evict window, but
+                    # an explicit `/unload` (Stop button / analyzer auto-evict)
+                    # doesn't check `_in_flight` at all -- only `_synth_lock`
+                    # -- so it can still win the gap between the re-ensure above and
+                    # this acquisition. A bare assert here is the same GATE 1
+                    # MIN-2 shape already fixed on `synthesize()`'s two branches:
+                    # compiled out under `-O`, and even live it reads as a
+                    # programmer error rather than a reachable runtime race.
+                    tts = self._tts
+                    if tts is None:
+                        raise RuntimeError(
+                            "Coqui model was unloaded before this clone finished -- reload it and retry."
+                        )
+                    tts_model = tts.synthesizer.tts_model
+                    config = tts_model.config
+
+                    # Trap 1: config-faithful get_conditioning_latents kwargs. A bare
+                    # call defaults to gpt_cond_len=6 — LOWER fidelity than the
+                    # engine's own tts()/synthesize() path. Mirror `Xtts.synthesize`'s
+                    # own kwarg build (`xtts.py:425-431`) exactly: pull each key from
+                    # the loaded model's config, falling back to
+                    # get_conditioning_latents' OWN signature default only when the
+                    # config lacks it.
+                    import inspect  # noqa: PLC0415
+
+                    sig = inspect.signature(tts_model.get_conditioning_latents)
+
+                    def _cfg(config_key: str, param_name: str) -> Any:
+                        return config.get(config_key, sig.parameters[param_name].default)
+
+                    derive_kwargs = {
+                        "gpt_cond_len": _cfg("gpt_cond_len", "gpt_cond_len"),
+                        "gpt_cond_chunk_len": _cfg("gpt_cond_chunk_len", "gpt_cond_chunk_len"),
+                        "max_ref_length": _cfg("max_ref_len", "max_ref_length"),
+                        "sound_norm_refs": _cfg("sound_norm_refs", "sound_norm_refs"),
+                    }
+
+                    os.makedirs(self._voices_dir, exist_ok=True)
+                    pt_path, json_path = self._voice_paths(voice_id)
+
+                    # Trap 2: get_conditioning_latents takes an audio PATH, not an
+                    # array (`xtts.py:331`) — write the normalised PCM to a temp WAV
+                    # beside the artifact, derive, then ALWAYS delete it (including
+                    # on a derive exception — it's scratch, never a durable
+                    # artifact, so `os.remove` runs in a `finally`).
+                    tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
+                    _atomic_wav_save(_float_audio_to_int16_le(ref_audio), int(ref_sr), tmp_wav_path)
+                    try:
+                        gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
+                            audio_path=tmp_wav_path, **derive_kwargs
+                        )
+                    finally:
+                        try:
+                            os.remove(tmp_wav_path)
+                        except OSError:
+                            pass
+
+                    _atomic_torch_save(
+                        torch,
+                        {"gpt_cond_latent": gpt_cond_latent, "speaker_embedding": speaker_embedding},
+                        pt_path,
+                    )
+
+                    # A re-clone of the SAME voice_id (repair/re-derive from fresh
+                    # reference audio — the same pattern already shipped for Qwen via
+                    # `resolveClonedVoicesForChapter`'s re-derive branch,
+                    # clone-voice-resolver.ts:301-334) must invalidate any latents
+                    # for this voice already resident in `_latents_cache` from an
+                    # earlier synth. Without this, `_load_voice_latents` would keep
+                    # serving the OLD tensors on a cache hit — indefinitely, with
+                    # `substituted_from` staying None — which is exactly Property 1's
+                    # silent-substitution shape, just via a stale cache instead of a
+                    # stale file. `_bump_evict_epoch` is idempotent/cheap when
+                    # nothing is cached yet (the common first-clone case).
+                    self._bump_evict_epoch(voice_id)
+
+                    # model_id resolution mirrors `_ensure_loaded`'s own mapping.
+                    model_id = {
+                        "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
+                    }.get(model, model)
+                    coqui_version = getattr(_tts_pkg, "__version__", "unknown")
+
+                    import json as _json  # noqa: PLC0415
+
+                    # GATE 1 MIN-5 — atomic, matching the `.pt` beside it. D-C above
+                    # rejected Coqui's `CloningMixin` partly because "a crash mid-write
+                    # would leave a corrupt artifact", then wrote this sibling manifest
+                    # with exactly the plain `open(..., "w")` it rejected: a kill
+                    # between truncate and write left a TRUNCATED manifest where a
+                    # valid one had been. Serialise to a string first so `_json.dump`
+                    # can never half-write the target — only a fully-formed document
+                    # is ever `os.replace`d into place.
+                    _atomic_json_write(
+                        _json.dumps(
+                            {
+                                "voiceId": voice_id,
+                                "clone": True,
+                                "coquiVersion": coqui_version,
+                                "modelId": model_id,
+                            },
+                            ensure_ascii=False, indent=2,
+                        ),
+                        json_path,
+                    )
+
+                    # Audition preview — via the shared low-level inference helper
+                    # Task 10's cached-latents synth branch will also call, so both
+                    # paths render a cloned voice identically instead of hitting
+                    # XTTS's raw low-fidelity low-level `inference()` defaults.
+                    audio, sample_rate = self._infer_from_latents(
+                        gpt_cond_latent, speaker_embedding, audition_text, effective_language
+                    )
+
+                log.info("Cloned + cached Coqui voice '%s' from caller clip.", voice_id)
+                return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=sample_rate)
+            finally:
+                self._last_used = time.monotonic()
 
 
 class KokoroEngine(Engine):
@@ -3124,6 +3939,17 @@ def _resample24k(wav: Any, sr: int) -> "np.ndarray":
 
 class VoiceNotDesignedError(RuntimeError):
     """Base voice has no cached .pt — design it before minting a variant."""
+
+
+class VoiceLanguageUnsupportedError(VoiceNotDesignedError):
+    """The voice EXISTS and its artifact loaded fine — the loaded model just
+    doesn't list the requested language (GATE 1 MIN-4). Deliberately a
+    SUBCLASS of `VoiceNotDesignedError`: both are fail-loud, no-fallback
+    conditions (Property 1), so every existing `except VoiceNotDesignedError`
+    keeps its current behaviour unchanged. The split exists only so
+    /synthesize can report the actual reason instead of "has not been
+    designed yet", whose implied remedy (re-clone the voice) is wrong here —
+    re-cloning cannot add a language to the model's config."""
 
 
 class Base17UnavailableError(Exception):
@@ -6665,6 +7491,101 @@ def _coqui_package_installed() -> bool:
         return False
 
 
+def _coqui_installed_version() -> Optional[str]:
+    """The currently-installed coqui-tts version, WITHOUT importing TTS (same
+    non-importing cost class as `_coqui_package_installed` above — this is
+    called on every /health poll, and importing TTS pulls torch + a slow
+    startup). Uses `importlib.metadata`, which reads the installed
+    distribution's metadata directly off disk.
+
+    fs-38 Wave 3c Task 19 — this is the Node-side clone-voice resolver's
+    "current coqui version" oracle (`currentArtifactVersion('coqui')` in
+    synthesise-chapter.ts), compared against each voice's stored
+    `coquiVersion` to decide staleness. It MUST return the same string
+    `CoquiEngine.clone_voice` stamps into a cloned voice's manifest as
+    `coquiVersion` — `getattr(_tts_pkg, "__version__", "unknown")` off
+    `import TTS as _tts_pkg` (search `coqui_version = getattr` in this file).
+    `importlib.metadata.version("coqui-tts")` (the pip distribution name;
+    the import name is `TTS`) reads the package's OWN installed-metadata
+    version rather than its `__version__` module attribute — for a normal
+    pip install these agree (coqui-tts sets `__version__` from its own
+    package metadata at build time), but they are not the SAME READ and can
+    diverge for an editable/dev install or a hand-patched `__version__`.
+
+    GATE 2 A-3 — a divergence is not a one-off: every healthy coqui-cloned
+    voice classifies stale on EVERY chapter while it persists, each
+    re-derive is a real GPU round trip, and the re-derive re-stamps the
+    SAME `__version__` into the manifest, so the stored side never
+    converges back to this one. Deliberately left as two separate reads
+    rather than unified onto one source: `clone_voice` stamping
+    `importlib.metadata.version("coqui-tts")` instead of `__version__`
+    would change what a hand-patched `__version__` does to a cloned
+    voice's manifest, a behaviour
+    `test_manifest_write_is_atomic_a_failed_write_leaves_the_previous_one_intact`
+    (test_xtts_clone_voice.py) exercises on purpose. Normal pip installs
+    never see the loop (hence Minor); an editable/dev install is the
+    realistic trigger.
+
+    None (not "unknown") on any failure — the Node side's staleness
+    predicate treats an empty/missing current version as "not stale", the
+    same fail-safe posture as an unset stored version."""
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("coqui-tts")
+    except Exception:
+        return None
+
+
+_XTTS_MODEL_DIR_NAME = "tts_models--multilingual--multi-dataset--xtts_v2"
+
+
+def _coqui_tts_data_dir() -> str:
+    """Resolve the `TTS` lib's user-data dir exactly as trainer.io's
+    `get_user_data_dir("tts")` does, WITHOUT importing TTS/trainer (same
+    non-importing cost class as `_qwen_weights_present` — this runs on every
+    /health poll). Mirrors `coqui-install-detect.ts`'s `ttsDataDir()` on the
+    Node side, field-for-field (TTS_HOME -> XDG_DATA_HOME -> platform
+    default), so the wire probe and the Node-side local-disk probe can never
+    disagree on where XTTS v2 weights land."""
+    tts_home = os.environ.get("TTS_HOME")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if tts_home:
+        base = tts_home
+    elif xdg:
+        base = xdg
+    elif sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+    elif sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "tts")
+
+
+def _coqui_weights_present() -> bool:
+    """True if the XTTS v2 model blob (`model.pth`) is present under the
+    resolved TTS user-data dir. Mirrors `coqui-install-detect.ts`'s
+    `coquiWeightsPresent()` — same directory resolution, same "requires the
+    real blob, not just metadata" caution.
+
+    fs-38 Wave 3c, Task 20 fix round 1 (IMPORTANT-1) — this is the wire
+    counterpart of `qwen_weights_present`: before this field existed,
+    `sidecar-health.ts`'s `deriveCoquiInstallState` fell back to a LOCAL
+    stat() of THIS box's disk whenever `coqui_package_installed` came back
+    true, which silently disagreed with a remote/Pinokio sidecar (weights
+    live on the sidecar's box, not this one) and permanently classified
+    every coqui-cloned voice as `weights-missing` -> `engineUnavailable` ->
+    a hard chapter failure that never self-corrected (Coqui isn't loaded
+    until first synth, and the pre-pass runs before that). Reporting this on
+    the wire — the same fix `qwen_weights_present` already applied — closes
+    that gap the same way qwen closed it."""
+    model_dir = os.path.join(_coqui_tts_data_dir(), _XTTS_MODEL_DIR_NAME)
+    return os.path.isfile(os.path.join(model_dir, "model.pth"))
+
+
 def _kokoro_package_installed() -> bool:
     """True if the `kokoro_onnx` package is importable without importing it."""
     try:
@@ -7065,6 +7986,8 @@ def health() -> dict[str, Any]:
         "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
+        "coqui_weights_present": _coqui_weights_present(),
+        "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
         "whisper_package_installed": _whisper_package_installed(),
         # ASR (srv-31) load state — its own pair, same pattern as the synth
@@ -7861,6 +8784,227 @@ async def qwen_evict_voice(req: Request) -> Response:
     return JSONResponse({"ok": True, "evicted": evicted})
 
 
+@app.post("/xtts/clone-voice")
+async def xtts_clone_voice(req: Request) -> Response:
+    """Distil a caller-supplied reference clip (raw s16le mono PCM body) into
+    persisted XTTS conditioning latents (`CoquiEngine.clone_voice`, Task 9)
+    and return an audition preview (PCM, same wire shape as /synthesize).
+    Headers: X-Sample-Rate (required), X-Voice-Id (required, the
+    `xtts-<uuid>` storage key — CoquiEngine.XTTS_KEY_PREFIX),
+    X-Audition-Text (base64, optional — falls back to
+    CoquiEngine.DEFAULT_AUDITION_TEXT when absent or undecodable),
+    X-Language (optional). No X-Ref-Text: unlike Qwen's clone prompt,
+    XTTS's `get_conditioning_latents` is purely acoustic and takes no
+    transcript. Fails loud (no fallback) on derive/audition error — a
+    cloned voice is provenance==='cloned', which is a fail-loud contract
+    (Property 1)."""
+    import base64 as _b64
+    import numpy as np  # type: ignore
+
+    if _process_poisoned:
+        return JSONResponse(
+            {"detail": "Voice engine is in a poisoned CUDA state and must be restarted.", "poisoned": True},
+            status_code=503,
+        )
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    pcm = await req.body()
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty PCM body")
+    try:
+        sample_rate = int(req.headers.get("X-Sample-Rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate <= 0:
+        raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
+    voice_id = (req.headers.get("X-Voice-Id") or "").strip()
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="X-Voice-Id header is required.")
+    # GATE 1 MIN-6 — enforce at the boundary that WRITES the artifact the
+    # invariant `synthesize()` later relies on. That method enters its
+    # cloned-voice branch ONLY for `voice.startswith(XTTS_KEY_PREFIX)`; a
+    # clone accepted under a non-prefixed id would persist a perfectly good
+    # `.pt`, return a 200 + audition, and then at render time fall through to
+    # the catalogue substitution path — a successful clone whose renders are
+    # silently swapped for a stock speaker (Property 1's exact shape). The
+    # only shipped producer of this header (derive-engine-artifact.ts) always
+    # sends `cloneStorageKey(engine, voiceUuid)`, so this is defence in depth
+    # — but the invariant was asserted only in a comment and never checked.
+    if not voice_id.startswith(CoquiEngine.XTTS_KEY_PREFIX):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"X-Voice-Id must be a cloned-voice storage key starting with "
+                f"'{CoquiEngine.XTTS_KEY_PREFIX}' — /synthesize routes cloned voices on that "
+                "prefix, so a clone stored under any other id would render as a "
+                "substituted catalogue speaker."
+            ),
+        )
+
+    coqui = ENGINES.get("coqui")
+    if not isinstance(coqui, CoquiEngine):
+        return JSONResponse({"detail": "coqui engine missing"}, status_code=500)
+
+    # X-Audition-Text decode. Local `_b64` import (see the verified trap on
+    # /qwen/clone-voice above) — a bare module-scope `_b64` doesn't exist, so
+    # this must be imported in THIS function too. Falls back to
+    # DEFAULT_AUDITION_TEXT on a missing/empty/undecodable header — unlike
+    # QwenEngine.clone_voice, CoquiEngine.clone_voice's `audition_text` param
+    # has no engine-side fallback of its own (no ref_text to fall back to),
+    # so the route must always hand it a concrete non-empty string.
+    audition_text = coqui.DEFAULT_AUDITION_TEXT
+    _aud = req.headers.get("X-Audition-Text")
+    if _aud:
+        try:
+            decoded = _b64.b64decode(_aud).decode("utf-8").strip()
+        except Exception:
+            decoded = ""
+        if decoded:
+            audition_text = decoded
+    language = req.headers.get("X-Language") or None
+
+    ref_audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+    global _inflight_synth
+    _inflight_synth += 1
+    try:
+        if _capacity_admission_enabled():
+            cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
+            with _placement.reservation(
+                "coqui", None, {},
+                cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
+                pinned=_engine_env_pin("coqui"),
+            ) as adm:
+                if "noCapacity" in adm:
+                    return _no_capacity(adm)
+                result = await asyncio.to_thread(
+                    coqui.clone_voice, voice_id, ref_audio, sample_rate, audition_text,
+                    language=language, device=adm["device"],
+                )
+        else:
+            result = await asyncio.to_thread(
+                coqui.clone_voice, voice_id, ref_audio, sample_rate, audition_text,
+                language=language,
+            )
+    except Exception as e:
+        err_str = f"{e}"
+        if _CUDA_POISON_RE.search(err_str):
+            log.warning("/xtts/clone-voice CUDA poison (voiceId=%s): %s", voice_id, e)
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse(
+                {"detail": ("GPU is out of memory — likely another job is using it. "
+                            "Free up GPU memory and try again."),
+                 "poisoned": True, "code": "gpu_poisoned"},
+                status_code=503,
+            )
+        log.exception("/xtts/clone-voice failed (voiceId=%s)", voice_id)
+        return JSONResponse({"detail": "Internal error."}, status_code=500)
+    finally:
+        _inflight_synth -= 1
+
+    # X-Coqui-Version / X-Model-Id come from the manifest `clone_voice` just
+    # persisted (Task 9's json_path — `coquiVersion`/`modelId`), rather than
+    # re-derived here, so the response can never disagree with what's on
+    # disk. `modelId` is the FULL resolved model string (e.g.
+    # "tts_models/multilingual/multi-dataset/xtts_v2"), not the short
+    # "xtts_v2" alias — this route is the first consumer of that field and
+    # deliberately echoes it verbatim rather than inventing a second form.
+    #
+    # fs-38 Wave 3c Task 19 fix round 1 (IMPORTANT-2) — coqui_version's
+    # not-yet-known default MUST be "" (empty), never "unknown". Node's
+    # derive-engine-artifact.ts stores this header verbatim as a voice's
+    # `coquiVersion`, and `isArtifactVersionStale` only treats an EMPTY
+    # stored/current version as "not stale" — "unknown" is truthy, so under
+    # Task 19's live oracle a manifest-read failure here would have
+    # permanently misclassified that voice as stale (every classify triggers
+    # a spurious GPU re-derive, which can itself fail to re-read the
+    # manifest and re-stamp "unknown" — an infinite loop). Under Task 18's
+    # permanent '' current-version this was inert (isArtifactVersionStale
+    # never fires when current is empty, however stored reads); Task 19's
+    # real oracle made it live. `model_id`'s "unknown" default is untouched
+    # — modelId is never a staleness comparand, only coquiVersion is.
+    coqui_version = ""
+    model_id = "unknown"
+    _pt_path, json_path = coqui._voice_paths(voice_id)
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        coqui_version = manifest.get("coquiVersion", coqui_version)
+        model_id = manifest.get("modelId", model_id)
+    except Exception:
+        log.warning("Could not read cloned-voice manifest '%s' for response headers.", json_path)
+
+    return Response(
+        content=result.pcm,
+        media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
+        headers={
+            "X-Sample-Rate": str(result.sample_rate),
+            "X-Coqui-Version": coqui_version,
+            "X-Model-Id": model_id,
+        },
+    )
+
+
+@app.post("/xtts/evict-voice")
+async def xtts_evict_voice(req: Request) -> Response:
+    """Drop a cloned XTTS voice's in-memory conditioning-latents cache entry
+    and bump its evict epoch (`CoquiEngine._bump_evict_epoch`, Task 10's
+    cache-epoch contract). Mirrors /qwen/evict-voice's shape and idempotence,
+    but the payload is Property 2 ("erasure is total"): called by the
+    server's clone-revoke/purge flow (Task 13's `purgeCloneArtifacts`) AFTER
+    it deletes the on-disk `.pt`/`.json` AND the `.derive-src.tmp.wav`
+    reference-audio leftover a hard/external process kill can strand beside
+    them (Task 13's job, not this route's — this route only ever touches the
+    in-memory cache), so neither a stale resident cache entry NOR an
+    in-flight `torch.load` racing the purge can keep a revoked voice
+    renderable — `_load_voice_latents` re-checks the epoch immediately
+    before installing into the cache. Deliberately NOT gated on the engine's
+    load state (`coqui._tts`): a voice can have warm latents cached from an
+    earlier synth even after the model itself was later unloaded (e.g. the
+    UI's Stop button), and revoke must still reach it. Idempotent: a miss is
+    a no-op `evicted: false`.
+
+    WHAT THIS RESPONSE DOES NOT GUARANTEE (Task 11a): this route deliberately
+    never takes `_synth_lock` — it must return immediately and can never
+    block or deadlock behind a multi-second forward — so `{"ok": true}` means
+    "the cache entry and epoch are updated", NOT "any in-flight render for
+    this voice has stopped". `synthesize()` re-checks the epoch immediately
+    before its GPU forward and aborts on a mismatch, which closes the window
+    to (at most) a single forward already past that check — a render that
+    had already entered `tts_model.inference()` before this call landed
+    still completes and its audio is still returned to that caller."""
+    try:
+        body = await _read_json_body(req)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    voice_id = body.get("voiceId")
+    if not isinstance(voice_id, str) or not voice_id.strip():
+        raise HTTPException(status_code=400, detail="`voiceId` is required.")
+    coqui = ENGINES.get("coqui")
+    evicted = False
+    if isinstance(coqui, CoquiEngine):
+        # GATE 1 MIN-3 — ONE critical section for the membership read and the
+        # pop (`_bump_evict_epoch` returns whether it dropped an entry), so
+        # the reported flag can never disagree with what was actually
+        # evicted. The previous shape read membership under its own
+        # `_latents_lock` acquisition and popped under a second one, which let
+        # a `_load_voice_latents` install this voice in the gap and be
+        # silently dropped while the response still said `evicted: false`.
+        #
+        # NOT case-folded, deliberately: `synthesize` keys `_latents_cache`/
+        # `_evict_epoch` by the RAW voice id (see its cloned branch — it
+        # refuses a case-varied prefix outright rather than normalising, so
+        # the only keys that can ever be cached are byte-identical to Node's
+        # own `cloneStorageKey`). Folding here would look up a key that can
+        # never exist and silently evict nothing.
+        evicted = coqui._bump_evict_epoch(voice_id.strip())
+    return JSONResponse({"ok": True, "evicted": evicted})
+
+
 @app.post("/synthesize")
 async def synthesize(req: Request) -> Response:
     try:
@@ -7966,6 +9110,24 @@ async def synthesize(req: Request) -> Response:
                 result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
         else:
             result = await asyncio.to_thread(engine.synthesize, model, voice, text, language)
+    except VoiceLanguageUnsupportedError as exc:
+        # GATE 1 MIN-4 — MUST precede the `VoiceNotDesignedError` arm below
+        # (this is a subclass of it, so the broader arm would otherwise
+        # swallow it). The voice is cloned and its artifact loaded; the loaded
+        # XTTS model simply doesn't list this language. Reporting that as
+        # `voice_not_designed` told the user to clone the voice again — a
+        # remedy that cannot work. `str(exc)` is safe to echo: the message is
+        # built entirely from the requested voice/language and the model's own
+        # config language list (see `CoquiEngine.synthesize`), never from a
+        # traceback or a third-party exception string.
+        log.warning(
+            "/synthesize: language unsupported — engine=%s voice=%s: %s",
+            engine_id, voice, exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "voice_language_unsupported"},
+            status_code=409,
+        )
     except VoiceNotDesignedError as exc:
         # #1063 — the requested voice/variant has no cached embedding on disk.
         # That's a bad-input condition (design the voice/variant first), not an

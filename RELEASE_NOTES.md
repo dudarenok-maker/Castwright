@@ -53,6 +53,16 @@
 - **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
   line for re-recording could quietly re-record the line before it, or fail with a confusing error
   about segment indices. Both are fixed.
+- **Fix a flagged chapter without regenerating the whole thing.** When Castwright marks a
+  finished chapter "Suspect" — a line that came out silent, clipped, or the wrong length — the
+  chapter row now has a button that re-records just those lines and stitches them back in. It
+  keeps your previous take, so you can always go back. Castwright has been able to do this
+  under the hood for a while; there was simply no way to ask for it.
+- **Re-recording a character now tells you when one of their voices had to be dropped.** If a
+  voice you'd designed turns out to have been built for a different language than the book
+  you're fixing, Castwright sets it aside rather than reading the line in the wrong language —
+  and it now says so on screen. It was already doing the setting-aside quietly; you just never
+  heard about it, so a line could come back in a voice you didn't choose with no explanation.
 - **The groundwork for cloning a real voice is quietly taking shape.** Recording, quality
   checks, and consent — the plumbing behind _"even in your own voice"_ — are now in place
   under the hood. Nothing to try yet; the first voice you can actually clone and cast is
@@ -73,6 +83,48 @@
   a voice now really does erase it: your original recording, and everything Castwright built
   from it, is gone for good — not just the visible entry. Castwright tells you exactly what
   you're about to lose and asks you to confirm before it happens.
+- **Cloned and designed voices now work on the second speech engine too, not just the first.**
+  Until now a cloned voice only worked reliably on one of Castwright's two speech engines —
+  cast it on a book that used the other one and you'd either hit a wall or, worse, quietly get
+  a stand-in voice instead. Both are covered now — for a cloned voice, the same promise holds
+  either way: it renders as the real voice, or it tells you it can't — never a silent swap.
+- **Your consent record for a cloned voice is now enforced everywhere it applies.** Revoking a
+  clone was already final — Castwright stopped rendering it and erased what it could be rebuilt
+  from. That same check now reaches a couple of paths inside your own install that hadn't been
+  covered yet: linking one character's voice to another's, and a plain cast save. A voice you've
+  revoked, or never gave consent for in the first place, can't be quietly carried across either
+  one.
+- **A chapter that needs to rebuild a voice now shows you it's happening.** Before narration
+  starts, Castwright sometimes has to quietly re-derive a cloned voice or self-heal a designed
+  one — that could look like nothing was happening for several seconds. The Generate screen now
+  shows a "Preparing voice" step and names the character, so a quiet pause reads as progress,
+  not a stall.
+- **Assigning a voice that won't work now tells you why.** In My voices, trying to assign a
+  library voice Castwright can't actually use on that character — the wrong engine, say — used to
+  fail with no visible response. It now shows the reason right in the panel.
+- **Promoting a voice into your library can no longer lose the one it's replacing.** Promoting a
+  redesigned voice removed the live version first and only afterwards checked whether the
+  redesign meant to replace it actually existed — so promoting a second time, before a first
+  promote had produced anything new, could delete your live voice for nothing. It now checks
+  first.
+- **A cloned voice can no longer be silently overwritten by a redesign.** Editing a cloned voice's
+  persona used to be able to replace it in place with a completely different, synthesised voice —
+  while everything on screen kept calling it by the original name and nothing warned you. Redesigning
+  or promoting a cloned voice is now refused outright, so the voice you cloned stays the one you get.
+- **Take a library voice back off a character.** Until now there was no way to undo an assignment —
+  you could put a My-voices entry on a character, but never remove just that link, short of picking
+  a different voice over it. There's a Remove-voice control right in the profile drawer now, and if
+  Castwright can't actually put a voice on the engine you're using — a designed voice with no saved
+  sample, say — it tells you which part of the assignment stuck instead of quietly showing one that
+  isn't really there.
+- **Deleting a library voice now only claims success when it actually erased everything.** If a
+  stray file couldn't be removed, Castwright used to say the voice was gone anyway. It's honest
+  about it now, and keeps the entry around so you — and Castwright's own consent checks — can still
+  see it and try again.
+- **Previewing a voice in My voices now uses whichever copy is actually ready.** The Play button on
+  a voice's card always tried its Qwen copy first, even when that copy wasn't ready and the other
+  engine's was — so it could fail on a voice that genuinely had something to play. It now plays
+  whichever copy is ready.
 - Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
@@ -86,7 +138,8 @@
   it away didn't work, the whole chapter stopped there — even though the recording itself was
   fine. Now it notes the problem in the log and carries on with the chapter. It also no longer
   waits forever when the speech engine is busy with another book, and it stops promptly when you
-  pause.
+  pause. It also now puts the second engine away again once it's done with it for that chapter,
+  instead of leaving it taking up room through chapters that never needed it.
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
   outside code Castwright is built on — including the component that opens your EPUB files, where a
   malformed book could previously have made Castwright try to swallow far more memory than it should.
@@ -103,6 +156,32 @@
 - Chapter loudness figures on the Listen view are now measured from the finished audio. The
   loudness-range and true-peak numbers were previously reported by the normaliser rather than
   measured, so they could be well off — the integrated loudness reading was always right.
+- **A cast save can no longer quietly damage a cloned voice.** Saving your whole cast used to
+  accept a save that simply left out a cloned character's engine assignment — and silently drop
+  it. A save that leaves one out now restores it instead; one that tries to swap it for something
+  else is refused, and refused as a plain refusal, not a crash.
+- **Designing your whole cast at once no longer knocks a cloned character off their clone.** A
+  bulk "Design full cast" used to be able to retarget an already-cloned character onto a fresh,
+  uncloned voice without telling you. It now skips them and names who, right in the summary —
+  and designing a single already-cloned character on its own is refused with a reason instead of
+  quietly doing the wrong thing.
+- **Assigning a voice from My voices now tells you when only part of it landed.** A voice that
+  could only be written to one of your book's two engines used to close the panel with no notice
+  at all, leaving the assignment half-done with nothing on screen to say so.
+- **Previewing a voice now always matches what the book will actually render**, even right after
+  you've picked a different voice over a clone.
+- **A background repair or splice can no longer mark the wrong book as done.** Finishing one
+  while you'd already switched books could stamp another book's same-numbered chapter as freshly
+  rendered. And a repair that hits an unexpected error no longer leaves its spinner running
+  forever — it now fails cleanly, the same way a normal finish does.
+- **The audio-repair button is now a proper tap target on tablets**, instead of shrinking below
+  the size your thumb needs.
+- Revoking a cloned voice is airtight even under an unusual spelling of its own key — Castwright
+  now refuses to play a voice under anything but its own canonical name, closing a corner where a
+  copy could keep working after a revoke reported everything erased.
+- A voice-clone build that collided with Castwright freeing up graphics-card memory used to fail
+  with an unhelpful error. It now either recovers on its own or tells you plainly that the model
+  was unloaded and to try again.
 
 # Castwright 1.14.0
 

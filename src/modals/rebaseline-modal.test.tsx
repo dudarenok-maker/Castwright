@@ -34,11 +34,20 @@ const generateVoiceStyle = vi.fn(async (_bookId: string, characterId: string) =>
   voiceStyle: `persona for ${characterId}`,
 }));
 const generateAllVoiceStyles = vi.fn(async () => ({ voiceStyles: {}, failures: {} }));
-const setVoiceOverrideLinked = vi.fn(async (_bookId: string, characterId: string) => ({
-  canonicalVoiceId: `v_${characterId}`,
-  updated: [],
-  failed: [],
-}));
+const setVoiceOverrideLinked = vi.fn(
+  async (
+    _bookId: string,
+    characterId: string,
+  ): Promise<{
+    canonicalVoiceId: string;
+    updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
+    failed: Array<{ bookId: string; bookTitle: string; error: string }>;
+  }> => ({
+    canonicalVoiceId: `v_${characterId}`,
+    updated: [],
+    failed: [],
+  }),
+);
 const getBookState = vi.fn(async (_bookId: string) => null as unknown);
 /* The whole-series aggregation fetch. Default: no series-mates (single-book
    workspace), so the modal works from the anchor cast alone — the pre-
@@ -705,6 +714,86 @@ describe('RebaselineModal — per-character failure', () => {
       [string, string, { name: string }]
     >;
     expect(calls[0][2].name).toBe('qwen-maerin');
+  });
+});
+
+describe('RebaselineModal — approve honours a server refusal (fs-38 wave3c task4 CRITICAL-1)', () => {
+  it('does not launder a cloned slot into redux when the linked write is refused (207)', async () => {
+    /* Clara currently carries a CONSENTED CLONE on qwen but her active engine
+       in this book is coqui — the "approved Qwen voice exists but wrong
+       engine" reuse branch (runPropose) proposes reusing that exact cloned
+       voiceId with NO re-design. The server refuses the linked write per-book
+       (207, `failed` non-empty, no throw — `res.ok` is true for 207) because
+       writing it would replace a cloned slot. Pre-fix, runApprove ignored
+       `failed` and applied the optimistic update anyway, stripping
+       libraryUuid/provenance and flipping ttsEngine to qwen — laundering a
+       real person's voice into an anonymous stock one, in redux (which the
+       persistence middleware then debounce-writes to cast.json). */
+    const cloned = {
+      ...char('clara', 'Clara', 90),
+      ttsEngine: 'coqui',
+      overrideTtsVoices: {
+        qwen: { name: 'clone-voice-original', libraryUuid: 'lib-uuid-1', provenance: 'cloned' },
+      },
+    } as Character;
+    const cast = [char('narrator', 'Narrator', 500), cloned];
+    const voices = [voice('voice-clara', 'clara')];
+    setVoiceOverrideLinked.mockImplementation(async (bookId: string, characterId: string) => {
+      if (characterId === 'clara') {
+        return {
+          canonicalVoiceId: 'clara',
+          updated: [],
+          failed: [
+            {
+              bookId,
+              bookTitle: 'Book One',
+              error:
+                'Character "Clara" has a consented cloned voice — series rebaseline refuses to remove or replace it. Reassign the character directly instead.',
+            },
+          ],
+        };
+      }
+      return { canonicalVoiceId: `v_${characterId}`, updated: [], failed: [] };
+    });
+    const store = makeStore(cast, voices);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    // Ensure Clara is selected regardless of the principal-cast threshold math.
+    if (!store.getState().rebaseline.selectedCharacterIds.includes('clara')) {
+      fireEvent.click(screen.getByLabelText('Rebaseline Clara'));
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    // Reuse branch: no fresh design for the already-approved cloned voice.
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('ready'));
+    expect(store.getState().rebaseline.proposals.clara.proposedVoiceId).toBe('clone-voice-original');
+    expect(designQwenVoice).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledWith('book-1', 'clara', {
+      engine: 'qwen',
+      name: 'clone-voice-original',
+    }));
+
+    // THE FIX: the refusal must be honoured — the row reads failed, not applied.
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('failed'));
+
+    // THE BUG THIS GUARDS: the cloned slot must reach redux UNCHANGED — no
+    // laundered {name} replacement, no engine flip.
+    const clara = store.getState().cast.characters.find((c) => c.id === 'clara')!;
+    expect(clara.overrideTtsVoices?.qwen).toEqual({
+      name: 'clone-voice-original',
+      libraryUuid: 'lib-uuid-1',
+      provenance: 'cloned',
+    });
+    expect(clara.ttsEngine).toBe('coqui');
   });
 });
 

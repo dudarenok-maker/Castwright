@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import { existsSync } from 'node:fs';
-import { mkdir, copyFile, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { nanoid } from 'nanoid';
@@ -21,13 +21,24 @@ import {
   listEntries,
   readEntry,
   writeEntry,
+  updateEntry,
   ConsentRequiredError,
+  clonedVoiceLacksConsent,
   type VoiceConsentRecord,
   type VoiceLibraryEntry,
   type VoiceLibraryEngineStatus,
   type VoiceMaster,
 } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from '../tts/model-paths.js';
+import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
+import {
+  CLONE_CAPABLE_ENGINES,
+  CLONE_ENGINE_LIST,
+  cloneStorageKey,
+  isArtifactVersionStale,
+  isCloneEngine,
+  type CloneEngine,
+} from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
@@ -37,6 +48,7 @@ import {
   selectTtsProvider,
   engineForModelKey,
   isTtsModelKey,
+  type TtsEngine,
   type TtsModelKey,
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
@@ -140,12 +152,18 @@ async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T
   }
 }
 
-/* Finding 3 (#1842 review) — /design, /:voiceUuid/redesign, and
-   /:voiceUuid/sample each validated an incoming `modelKey` with a
-   character-identical block. Collapsed to one helper: `null` means "reject
-   with the 400 below", any other return is the resolved, valid modelKey
-   (the 0.6B base when the caller omitted the field). Callers still own the
-   400 response status/body — this only decides validity. */
+/* Finding 3 (#1842 review) — /design and /:voiceUuid/redesign each validated
+   an incoming `modelKey` with a character-identical block (both design onto
+   a `qwen-<uuid>` storageKey only, so a non-Qwen modelKey can never be
+   honoured there). Collapsed to one helper: `null` means "reject with the
+   400 below", any other return is the resolved, valid modelKey (the 0.6B
+   base when the caller omitted the field). Callers still own the 400
+   response status/body — this only decides validity.
+
+   fs-38 Wave 3c, Task 27 — /:voiceUuid/sample used to share this helper too,
+   back when it also only ever auditioned `qwen-<uuid>`. It now resolves its
+   own engine-aware modelKey inline (any clone-capable engine, not Qwen-only)
+   — see that route's own comment. */
 function resolveQwenModelKey(raw: unknown): TtsModelKey | null {
   if (raw === undefined) return 'qwen3-tts-0.6b';
   if (!isTtsModelKey(raw) || engineForModelKey(raw) !== 'qwen') return null;
@@ -225,16 +243,52 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
   }
 });
 
+/* GATE 1 fix (C1) — persona redesign is a DESIGNED-voice operation and must
+   never touch a cloned one. Both `/redesign` and `/redesign/promote` write to
+   the `qwen-<uuid>` storage key: promote does `rm(qwen-<uuid>.pt)` +
+   `rename(qwen-<uuid>-preview.pt → qwen-<uuid>.pt)`, replacing a cloned
+   voice's artifact in place with a persona-instruct design that has nothing
+   to do with the person's clip. Nothing downstream re-checks — PATCH refuses
+   to change `provenance`, promote's own `updateEntry` only touches `persona`,
+   and every cast slot `/assign` wrote still carries
+   `{ libraryUuid, provenance: 'cloned' }`. `libraryVoiceForEngine` resolves
+   that slot, the artifact exists, and the chapter renders a stranger's
+   synthesised voice under the cloned speaker's name, with no error and no
+   badge change. That is Property 1's exact failure mode, reachable from the
+   Edit button on a cloned card.
+
+   Fails CLOSED with a 403 rather than inventing a re-consent flow or
+   clearing the entry's cloned provenance + every slot referencing it. Both
+   of those are live options and the choice between them is the repo owner's
+   — this is the safe default until then, and it is trivially reversible.
+   `PATCH /:voiceUuid` already enforces the same rule for the `persona` field
+   itself (see its 400 below); these are the two routes that ACT on persona
+   and were missing it. */
+function clonedRedesignRefusal(
+  entry: { provenance?: string } | null,
+): { error: string } | undefined {
+  if (entry?.provenance !== 'cloned') return undefined;
+  return {
+    error:
+      'This voice was cloned from a recording, so it cannot be re-designed from a persona — ' +
+      'doing so would replace the cloned voice with a synthesised one. Revoke this voice first ' +
+      'if you want to design a new one.',
+  };
+}
+
 /* POST /api/voice-library/:voiceUuid/redesign
 
    Stage a redesign of an existing library voice under `<storageKey>-preview`
    (preview:true) so the live `.pt` is untouched while the user A/B-compares.
-   → 200 { previewUrl } — the A/B modal plays this against the live sample. */
+   → 200 { previewUrl } — the A/B modal plays this against the live sample.
+   → 403 when the entry is CLONED (see `clonedRedesignRefusal`). */
 voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    const refusal = clonedRedesignRefusal(entry);
+    if (refusal) return res.status(403).json(refusal);
 
     const body = (req.body ?? {}) as { persona?: unknown; modelKey?: unknown };
     const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
@@ -277,24 +331,36 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
    THEN best-effort evict the sidecar's in-memory prompt cache — the same
    file-op-first ordering as qwen-voice.ts's promote-voice. Purges the cached
    auditions and bumps persona/updatedAt on the manifest. A missing preview
-   `.pt` (nothing staged / double-promote) → 409. */
+   `.pt` (nothing staged / double-promote) → 409 — checked via `stat` BEFORE
+   the live `.pt` is removed (#1804), so a double-promote can't delete a live
+   artifact when the replacement was never staged.
+
+   GATE 1 fix (C1) — → 403 when the entry is CLONED. Guarded independently of
+   `/redesign` above, not merely as a consequence of it: this is the handler
+   that actually overwrites the live `.pt`, so it must refuse on its own even
+   if a preview were staged some other way (a pre-fix preview still sitting on
+   disk, a direct API call, a future stager). Placed BEFORE the preview `stat`
+   so a cloned entry can never reach the `rm`+`rename`. */
 voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    const refusal = clonedRedesignRefusal(entry);
+    if (refusal) return res.status(403).json(refusal);
 
     const storageKey = `qwen-${voiceUuid}`;
     const previewKey = `${storageKey}-preview`;
 
     try {
-      await rm(qwenVoicePtPath(storageKey), { force: true });
-      await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
+      await stat(qwenVoicePtPath(previewKey));
     } catch (e) {
       return res
         .status(409)
         .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
     }
+    await rm(qwenVoicePtPath(storageKey), { force: true });
+    await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
     await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
 
@@ -327,12 +393,23 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     }
 
     const body = (req.body ?? {}) as { persona?: unknown };
-    const updated: VoiceLibraryEntry = {
-      ...entry,
-      ...(typeof body.persona === 'string' ? { persona: body.persona } : {}),
-    };
-    await writeEntry(updated); // stamps a fresh updatedAt
-    return res.status(200).json(await readEntry(voiceUuid));
+    /* fs-38 Wave 3c, Task 14 — read+mutate+write through the shared,
+       per-uuid-locked `updateEntry` rather than the `entry` read at the top
+       of this handler: that read happened BEFORE the file-op/sidecar-evict
+       work above, a long-enough window for a concurrent xtts derive
+       (clone-voice-resolver.ts) to have written `engines.xtts` in the
+       meantime — writing `entry`'s stale `engines` here would silently
+       erase it. `updateEntry` re-reads fresh under the lock immediately
+       before writing. */
+    const updated = await updateEntry(voiceUuid, (fresh) =>
+      fresh
+        ? { ...fresh, ...(typeof body.persona === 'string' ? { persona: body.persona } : {}) }
+        : null,
+    );
+    if (!updated) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+    return res.status(200).json(updated);
   } catch (e) {
     console.error('[voice-library] redesign/promote failed', e);
     return res.status(500).json({ error: (e as Error).message || 'Promote failed.' });
@@ -376,11 +453,33 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    manifest recorded the Qwen base model it was derived from no longer
    matches the CURRENT base model once that model is upgraded. Returning
    'stale' here — without touching the on-disk manifest — lets the list
-   route reflect an upgrade immediately, with no migration/backfill step. */
+   route reflect an upgrade immediately, with no migration/backfill step.
+
+   fs-38 Wave 3c, Task 18 — recomputes the `xtts` slot too, via the SAME
+   `isArtifactVersionStale` comparand `clone-voice-resolver.ts`'s per-chapter
+   classifier uses, so this list-time view can't silently disagree with what
+   a chapter render would decide.
+
+   fs-38 Wave 3c, Task 19 — Coqui now has a live "installed coqui-tts
+   version" oracle: `getLastKnownCoquiVersion()`, fed by the sidecar's
+   /health poll (routes/sidecar-health.ts), mirroring qwen's
+   `currentQwenBaseModel()`. Before the first reachable poll (the boot
+   window) it reads '', which `isArtifactVersionStale` treats as "unknown,
+   never stale" (see its doc comment in clone-engines.ts) — the same
+   fail-safe qwen's own '' (never-fetched) case already relies on, so a
+   cold-started server can't flip every cloned coqui voice to 'stale' before
+   the sidecar has answered even once. */
 function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
+  let result = entry;
   const qwen = entry.engines.qwen;
-  if (!qwen?.baseModel || qwen.baseModel === currentQwenBaseModel()) return entry;
-  return { ...entry, engines: { ...entry.engines, qwen: { ...qwen, status: 'stale' } } };
+  if (qwen && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
+    result = { ...result, engines: { ...result.engines, qwen: { ...qwen, status: 'stale' } } };
+  }
+  const xtts = entry.engines.xtts;
+  if (xtts && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
+    result = { ...result, engines: { ...result.engines, xtts: { ...xtts, status: 'stale' } } };
+  }
+  return result;
 }
 
 function sortEntries(entries: VoiceLibraryEntry[]): VoiceLibraryEntry[] {
@@ -440,15 +539,29 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '`persona` must be a string.' });
     }
 
-    const updated: VoiceLibraryEntry = {
-      ...existing,
-      ...(body.name !== undefined ? { name: body.name as string } : {}),
-      ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
-      ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
-      ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
-    };
-    await writeEntry(updated);
-    const written = await readEntry(voiceUuid);
+    /* fs-38 Wave 3c, Task 14 — mutate/write through the shared, per-uuid-
+       locked `updateEntry`, spreading over a FRESH `fresh` (read under the
+       lock), not the `existing` read above. `existing` is only used for the
+       validation checks above (all timing-insensitive: 404 on missing, and
+       `provenance` is immutable so its value can't have changed between the
+       two reads) — but writing `existing`'s `engines` back would silently
+       clobber a concurrent engine-slot write (e.g. an in-flight xtts
+       derive) that landed in the window between this handler's first read
+       and its write. */
+    const written = await updateEntry(voiceUuid, (fresh) =>
+      fresh
+        ? {
+            ...fresh,
+            ...(body.name !== undefined ? { name: body.name as string } : {}),
+            ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
+            ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
+            ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
+          }
+        : null,
+    );
+    if (!written) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
     res.json(written);
   } catch (e) {
     console.error('[voice-library] patch failed', e);
@@ -476,32 +589,68 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
 
    `contentToken = djb2(entry.persona)` busts the cache on a persona edit
    even when the request text/voiceName are otherwise unchanged (Wave 3
-   swaps in a master-clip hash for cloned voices instead). */
+   swaps in a master-clip hash for cloned voices instead).
+
+   fs-38 Wave 3c, Task 27 — `modelKey` now selects the ENGINE to audition,
+   not just the Qwen tier: `voiceName`/`cacheScope` follow `engineForModelKey`
+   via the shared `cloneStorageKey` (tts/clone-engines.js — never hand-built,
+   Task 15 was rejected for reimplementing this helper). Before this task the
+   route hardcoded `qwen-<uuid>`, so a card's Coqui chip Played the QWEN
+   artifact — 409ing whenever qwen was stale/missing even though xtts was
+   ready — and Task 13's `xtts-<uuid>` purge had no cache entries under that
+   scope to ever reach. Restricted to the two clone-capable engines
+   (`isCloneEngine`) because a library entry's `engines` map only ever
+   carries a `qwen` and/or `xtts` slot; omitted → the 0.6B Qwen base, which
+   is what a caller that sends no `modelKey` at all still gets.
+
+   GATE 1 — this used to add "keeping the current frontend caller (which
+   still only ever sends a Qwen tier) working unchanged". That was true when
+   written and stopped being true in 918cbff5: `VoiceLibraryCard.playSample`
+   (src/components/voices/voice-library-card.tsx) now picks its preview
+   engine off the entry's own slot statuses — qwen when `engines.qwen` reads
+   `ready`, else coqui when `engines.xtts` does — so this route's Coqui arm
+   IS reached from the UI, not just from an API client. Do not treat the
+   coqui path here as untrodden. */
 voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response) => {
+  /* Hoisted above the try so the catch below can name which engine the
+     un-derived-artifact 409 (below) is about — assigned only once the
+     modelKey has resolved to a clone-capable engine. */
+  let engine: TtsEngine | undefined;
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
-    if (entry.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+    if (clonedVoiceLacksConsent(entry)) {
       return res.status(403).json({ error: 'This cloned voice has no valid consent and cannot be played.' });
     }
 
     const body = (req.body ?? {}) as { text?: unknown; modelKey?: unknown };
-    const voiceName = `qwen-${voiceUuid}`;
-    /* #1842 — the card previews at the tier the caller's session will render at,
-       so the same voice doesn't sound different on the card and on the cast row.
-       Qwen-only: this endpoint synthesises `qwen-<uuid>`, which no other engine
-       can voice. Omitted → the 0.6B base (resolveQwenModelKey — Finding 3),
-       keeping older callers working. */
-    const modelKey = resolveQwenModelKey(body.modelKey);
-    if (!modelKey) {
-      return res.status(400).json({ code: 'invalid_model', message: 'modelKey must be a Qwen model key.' });
+    /* #1842 — the card previews at the tier/engine the caller's session will
+       render at, so the same voice doesn't sound different on the card and
+       on the cast row. Omitted → the 0.6B Qwen base. */
+    if (body.modelKey !== undefined && !isTtsModelKey(body.modelKey)) {
+      return res.status(400).json({ code: 'invalid_model', message: 'modelKey is not a recognised TTS model key.' });
     }
+    const modelKey: TtsModelKey = body.modelKey === undefined ? 'qwen3-tts-0.6b' : body.modelKey;
+    const resolvedEngine = engineForModelKey(modelKey);
+    if (!isCloneEngine(resolvedEngine)) {
+      return res
+        .status(400)
+        .json({ code: 'invalid_model', message: 'modelKey must route to a clone-capable engine (Qwen or Coqui).' });
+    }
+    engine = resolvedEngine;
+
     const text =
       typeof body.text === 'string' && body.text.trim().length > 0
         ? body.text.trim()
         : buildSampleText({ id: voiceUuid, character: entry.name, overrideTtsVoices: {} });
-    const cacheScope = `qwen-${voiceUuid}`;
+    /* `cacheScope` IS `voiceName` — both the engine's storage key for this
+       library voice, DERIVED (never hand-built) via `cloneStorageKey`.
+       Deriving it from (engine, voiceUuid) alone is what lets Task 13's
+       storageKey-scoped sample purge reach the cached audition on
+       revoke/delete regardless of which engine it was played on. */
+    const voiceName = cloneStorageKey(engine, voiceUuid);
+    const cacheScope = voiceName;
     /* Finding 1 (#1842 review) — runVoiceDesign (design-voice-core.ts) derives
        this SAME token from opts.persona for a live design, so a /design
        (or /redesign's promoted) audition and this route's first Play land on
@@ -525,6 +674,41 @@ voiceLibraryRouter.post('/:voiceUuid/sample', async (req: Request, res: Response
     await writeFile(filePath, mp3);
     return res.json({ url: publicUrl, cached: false });
   } catch (e) {
+    /* #1801 doc comment on httpStatusForSidecarError flagged this as the
+       deliberate follow-up: the sidecar's `voice_not_designed` 409 (raised
+       for EVERY engine — server/tts-sidecar/main.py's generic /synthesize
+       handler, not a Qwen-specific path) used to reach the caller as an
+       opaque 502 (4xx never passes through that helper) with the sidecar's
+       raw JSON body as the message. A lazily-derived engine (most commonly
+       an xtts slot nobody has rendered a chapter on yet) hits this exactly
+       the way a stale/never-designed qwen slot always could — translate it
+       to a clean, engine-aware 409 instead, mirroring the sibling
+       POST /api/voices/:voiceId/sample (routes/voice-sample.ts). */
+    const msg = (e as Error).message ?? '';
+    /* GATE 1 — same gap as the sibling voice-sample.ts arm: the sidecar's
+       `voice_language_unsupported` 409 says the voice IS cloned and loaded
+       but the loaded XTTS model can't speak the requested language. Its
+       detail matches neither token in the arm below, so it fell through to
+       `httpStatusForSidecarError` — which deliberately never forwards a 4xx —
+       and surfaced as an opaque 502 carrying the sidecar's raw JSON. Ordered
+       FIRST, mirroring the sidecar's own MIN-4 ordering (the Python exception
+       subclasses VoiceNotDesignedError). Not gated on `engine` unlike the arm
+       below: this condition is raised only by the Coqui/XTTS branch, so there
+       is no engine name to disambiguate. Chapter render is NOT affected — it
+       never routes through this route's catch. */
+    if (/voice_language_unsupported/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_language_unsupported',
+        message:
+          'This voice cannot speak the requested language on the loaded Coqui model — re-preparing it will not help.',
+      });
+    }
+    if (engine && /voice_not_designed|not been designed yet/i.test(msg)) {
+      return res.status(409).json({
+        code: 'voice_not_designed',
+        message: `This voice hasn't been prepared on ${engine === 'coqui' ? 'Coqui' : 'Qwen'} yet.`,
+      });
+    }
     console.error('[voice-library] sample failed', e);
     return res
       .status(httpStatusForSidecarError(e))
@@ -672,7 +856,7 @@ voiceLibraryRouter.post(
       const captureMethod = (req.body?.captureMethod === 'record' ? 'record' : 'upload') as 'record' | 'upload';
       const candidateId = randomUUID();
       const result = await ingestCloneSample(file.buffer, { captureMethod, candidateId });
-      return res.status(202).json({ ...result, qualityWarnings: result.qualityWarnings });
+      return res.status(202).json(result);
     } catch (e) {
       const status = (e as { status?: number }).status ?? 502;
       return res.status(status).json({ error: (e as Error).message || 'Clone-sample ingest failed.' });
@@ -926,17 +1110,46 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
   }
 });
 
+/* fs-38 Wave 3c, Task 24 [DELTA-C1] — does this DESIGNED voice have a
+   retained reference clip on disk? NOT `entry.master` (`VoiceLibraryEntry`'s
+   own `master` field, workspace/voice-library.ts) — that field is populated
+   only for a CLONED voice's ingested clip; a designed entry never populates
+   it (see synthesise-chapter.ts's `readDesignedMasterPcmDefault` comment).
+   A designed voice's retained clip instead lives on disk at
+   `qwenVoiceWavPath('qwen-<uuid>__master')` — always the `qwen-` prefix
+   regardless of which engine will eventually consume it (DELTA-M1), written
+   once by the sidecar's `design_voice` call. Point-in-time only: a later
+   re-design or purge can invalidate this the moment after it's checked,
+   which is exactly why Task 20a's render-time pre-pass removes an unbacked
+   slot rather than trusting this gate as a lasting guarantee. */
+async function hasRetainedDesignedClip(voiceUuid: string): Promise<boolean> {
+  try {
+    await stat(qwenVoiceWavPath(`qwen-${voiceUuid}__master`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* POST /api/voice-library/:voiceUuid/assign
 
    Assigns a library voice to ONE character in ONE book — a bespoke,
    character-targeted cast write (NOT `applyOverrideToCastFiles` from
    routes/voices.ts, which is keyed by voiceId across every matching book
    and whose `override` param can't carry `libraryUuid`/`provenance`).
-   Reads the book's cast.json, merges the new `qwen` slot into that one
-   character's `overrideTtsVoices` (sibling engine slots + the rest of the
-   qwen slot survive), and writes back atomically. `character.voiceUuid`
-   is never touched — that field is the srv-43 identity key, not something
-   an assign should alias. */
+   Reads the book's cast.json, merges the new `qwen` slot — and, fs-38 Wave
+   3c, ALSO the `coqui` slot when the voice is clone-capable there too (see
+   the both-slots gate below) — into that one character's
+   `overrideTtsVoices` (sibling engine slots + the rest of each merged slot
+   survive), and writes back atomically. `character.voiceUuid` is never
+   touched — that field is the srv-43 identity key, not something an assign
+   should alias. Task 24 also makes this handler do async I/O it didn't do
+   before (`hasRetainedDesignedClip`'s `stat`), gated to the designed-clip
+   branch only — and (fix round 1, review) that `await` is computed BEFORE
+   the cast.json read-modify-write window (`readJson` -> `nextCharacters` ->
+   `writeJsonAtomic`), which must stay free of any `await` so it stays
+   atomic against a concurrent write to the same cast.json. See the
+   `shouldWriteCoquiSlot` comment below for why. */
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -954,6 +1167,44 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
       return res.status(409).json({ error: 'Cloned voice is not ready to assign yet.' });
     }
+
+    /* fs-38 Wave 3c, Task 24 (fix round 1, review) — write BOTH the qwen and
+       coqui slots when the library voice is actually clone-capable on both
+       engines, so this route closes the reachability gap: it was the only
+       writer of `libraryUuid` at all, and until this both-slots write
+       lands, no character can carry a resolvable coqui-cloned slot end to
+       end. A CLONED entry always qualifies (§2.3 — an ingested clip derives
+       on either engine). A DESIGNED entry qualifies only when it still has
+       its retained reference clip on disk (`hasRetainedDesignedClip`,
+       above) — without that clip a coqui derive has nothing to derive
+       FROM, so writing a coqui slot here would strand the character on a
+       slot the resolver can never back. `entry.master` is NOT the right
+       test — see `hasRetainedDesignedClip`'s own comment. An IMPORTED entry
+       never qualifies. This check is point-in-time only (see that helper's
+       comment) — Task 20a's render-time pre-pass is what actually enforces
+       the invariant over time, not this gate.
+
+       DELIBERATELY computed here, before `findBookByBookId`/`readJson`
+       below, not next to the `nextCharacters` build where it's consumed.
+       It depends only on `entry` and `voiceUuid` — both already in hand —
+       so nothing requires it to sit inside the cast.json read-modify-write
+       window. Before this task that window (`readJson` cast ->
+       `nextCharacters` -> `writeJsonAtomic`) contained zero `await`s
+       (`getResolvedTtsModelKey`/`engineForModelKey`/`resolveCharacterEngine`
+       are all synchronous), so the RMW was effectively atomic — no
+       yield-to-event-loop between reading `characters` and writing them
+       back. `hasRetainedDesignedClip`'s `stat` is real filesystem I/O; if
+       it sat inside that window instead, a concurrent write to the SAME
+       cast.json (a debounced cast-editor save, `voice-override-linked`'s
+       `applyToBook`, or a second `/assign`) could land in the gap and then
+       get silently clobbered when this handler resumes and writes back the
+       `characters` array it captured before yielding — the "cast.json
+       clobbered" defect class this project has hit before. Keep this
+       `await` OUTSIDE the window; do not move it back down next to
+       `nextCharacters`. */
+    const shouldWriteCoquiSlot =
+      entry.provenance === 'cloned' ||
+      (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
 
     const body = (req.body ?? {}) as AssignBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
@@ -978,12 +1229,17 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
 
     const character = characters[charIndex];
 
-    /* Task 6b — a cloned voice renders on Qwen ONLY. Assigning one to a
-       character that doesn't route to Qwen this run would produce exactly
-       the same 3b2 resolver-pre-pass hard-fail this task exists to give an
-       accurate reason for ('wrong-engine') — but discovered only at RENDER
-       time, chapters deep. Catch it here instead, at assign time, so the
-       user gets an actionable 409 immediately.
+    /* Task 6b, widened by fs-38 Wave 3c Task 24 — a cloned voice renders on
+       a clone-capable engine ONLY (Qwen or Coqui XTTS v2 —
+       `CLONE_CAPABLE_ENGINES`, tts/clone-engines.js). Assigning one to a
+       character that routes to neither would produce exactly the same 3b2
+       resolver-pre-pass hard-fail this task exists to give an accurate
+       reason for ('wrong-engine') — but discovered only at RENDER time,
+       chapters deep. Catch it here instead, at assign time, so the user
+       gets an actionable 409 immediately. Scoped to `provenance === 'cloned'`
+       only — a DESIGNED voice has always been free to route anywhere
+       (spec §2.3); widening this guard to designed voices would be a new
+       hard failure for them.
 
        Fix wave 2 (review) — the guard's FIRST cut computed the book's
        effective default purely from the PERSISTED `getResolvedTtsModelKey()`
@@ -999,28 +1255,28 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        has no meaningful engine context (and omits the field) do we fall
        back to the persisted default. A character's own `ttsEngine` override
        (if any) still wins via `resolveCharacterEngine`, so a character
-       explicitly cast on Qwen is unaffected by the book/session default
-       sitting elsewhere. */
+       explicitly cast on Qwen or Coqui is unaffected by the book/session
+       default sitting elsewhere. */
     if (entry.provenance === 'cloned') {
       const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
       const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
       const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
-      if (routedEngine !== 'qwen') {
+      if (!CLONE_CAPABLE_ENGINES.has(routedEngine)) {
         /* I-2 — name the ACTUAL cause. When the character carries its own
-           `ttsEngine` override, THAT is why it's not routing to Qwen — the
-           book/session default is irrelevant, and telling the user to
-           "switch the book's engine" would send them to fix the wrong
-           thing (the same misdiagnosis class Part A eliminated for the
-           render-time error). */
+           `ttsEngine` override, THAT is why it's not routing to a
+           clone-capable engine — the book/session default is irrelevant,
+           and telling the user to "switch the book's engine" would send
+           them to fix the wrong thing (the same misdiagnosis class Part A
+           eliminated for the render-time error). */
         const characterCaused = Boolean(character.ttsEngine);
         const cause = characterCaused
           ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
           : `this book is set to ${routedEngine}`;
         const fix = characterCaused
-          ? `Switch the character's engine to Qwen (or reassign the character)`
-          : `Switch the book's engine to Qwen`;
+          ? `Switch the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)`
+          : `Switch the book's engine to Qwen or Coqui XTTS v2`;
         return res.status(409).json({
-          error: `Cloned voices render on Qwen, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
+          error: `Cloned voices render on Qwen or Coqui XTTS v2, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
         });
       }
     }
@@ -1034,7 +1290,8 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
        synth time on the sidecar's own VoiceNotDesignedError, breaking the
        fail-fast promise. Drop `variants` here — they're semantically tied to
-       the previous base and don't carry over. */
+       the previous base and don't carry over (both slots, when both are
+       written). */
     const nextCharacters = [...characters];
     nextCharacters[charIndex] = {
       ...character,
@@ -1042,20 +1299,135 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         ...character.overrideTtsVoices,
         qwen: {
           ...character.overrideTtsVoices?.qwen,
-          name: `qwen-${voiceUuid}`,
+          name: cloneStorageKey('qwen', voiceUuid),
           libraryUuid: voiceUuid,
           provenance: entry.provenance,
           variants: undefined,
         },
+        ...(shouldWriteCoquiSlot
+          ? {
+              coqui: {
+                ...character.overrideTtsVoices?.coqui,
+                name: cloneStorageKey('coqui', voiceUuid),
+                libraryUuid: voiceUuid,
+                provenance: entry.provenance,
+                variants: undefined,
+              },
+            }
+          : {}),
       },
     };
 
     await writeJsonAtomic(castJsonPath(located.bookDir), { ...cast, characters: nextCharacters });
 
-    res.status(200).json({ updated: 1 });
+    /* GATE 1 [F1] — report WHICH engine slots were actually persisted. The
+       response used to be a bare `{ updated: 1 }`, which told the caller
+       nothing about `shouldWriteCoquiSlot`: the profile drawer's picker
+       mirrored a coqui assignment into redux on any 200, so a designed entry
+       with no retained reference clip (coqui slot declined above) displayed
+       as a "My voice" coqui assignment that cast.json never carried, with no
+       refetch to reconcile it. Derived from the SAME `shouldWriteCoquiSlot`
+       flag the write above spreads on, not recomputed — the two cannot
+       disagree. Order mirrors the write: qwen is unconditional, coqui is
+       conditional. */
+    const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
+    res.status(200).json({ updated: 1, written });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
+  }
+});
+
+/* DELETE /api/voice-library/:voiceUuid/assign?bookId=…&characterId=…
+
+   GATE 1, owner-decided — the exact inverse of the assign route above, and
+   the missing half of `[DELTA-I5]`: until now there was NO way to take a
+   library voice back OFF a character.
+
+   Both of the routes that could plausibly have done it deliberately refuse:
+   `PUT /api/voices/:voiceId/override` with `override: null` 409s outright
+   when any matching character carries a cloned slot (Task 4), and its SET
+   branch preserves `libraryUuid`/`provenance` through the
+   `hasClonedProvenance` fail-safe guard — so picking a stock catalogue
+   voice over a cloned slot leaves the character still RENDERING the clone.
+   Both refusals are correct in their own right (Phase 0 of this wave fixed
+   seven bugs that were all clone markers erased by an unrelated upstream
+   write); what they left missing was a DELIBERATE, character-targeted
+   unassign. That is this route.
+
+   Deliberate properties:
+
+   - **Clears whole slots, not just the markers.** Half-clearing (dropping
+     `libraryUuid`/`provenance` and keeping `name`) would strand the
+     character on a raw `xtts-<uuid>`/`qwen-<uuid>` storage key the resolver
+     no longer recognises as a library voice — the exact "slot the resolver
+     can never back" shape Task 24's coqui gate exists to avoid. Removing
+     the slot returns the character to "no voice assigned", where the
+     engine's ordinary catalogue/attribute inference takes over. Any
+     `variants` on the slot go with it, which is correct: `/assign` already
+     drops them (review I-4), so a slot bearing THIS uuid has none that
+     mean anything.
+   - **Scoped by `libraryUuid`, never by engine.** Only slots that actually
+     point at THIS voice are touched, so a character carrying a different
+     library voice on its other engine keeps it.
+   - **No consent / readiness / provenance gate, and no `readEntry` at
+     all.** Unassigning destroys nothing — it is the escape hatch, so it
+     must not be refusable. It must in particular still work when the entry
+     is revoked or already deleted, which is exactly when a character is
+     most likely to be stuck holding a dangling assignment.
+   - **No `await` between the cast.json read and its write-back**, same
+     atomicity discipline the assign route's `shouldWriteCoquiSlot` comment
+     spells out.
+
+   `cleared: []` with a 200 is the honest answer for a character that
+   wasn't carrying this voice — the requested end state already holds. */
+voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
+    const characterId =
+      typeof req.query.characterId === 'string' ? req.query.characterId : undefined;
+    if (!bookId || !characterId) {
+      return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) {
+      return res.status(404).json({ error: `No book "${bookId}".` });
+    }
+
+    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+    const characters = cast?.characters ?? [];
+    const charIndex = characters.findIndex((c) => c.id === characterId);
+    if (charIndex === -1) {
+      return res
+        .status(404)
+        .json({ error: `No character "${characterId}" in book "${bookId}".` });
+    }
+
+    const character = characters[charIndex];
+    const nextSlots = { ...character.overrideTtsVoices };
+    const cleared: CloneEngine[] = [];
+    for (const engine of CLONE_ENGINE_LIST) {
+      if (nextSlots[engine]?.libraryUuid === voiceUuid) {
+        delete nextSlots[engine];
+        cleared.push(engine);
+      }
+    }
+
+    if (cleared.length > 0) {
+      const nextCharacters = [...characters];
+      nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
+      await writeJsonAtomic(castJsonPath(located.bookDir), {
+        ...cast,
+        characters: nextCharacters,
+      });
+    }
+
+    res.status(200).json({ cleared });
+  } catch (e) {
+    console.error('[voice-library] unassign failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice library unassign failed.' });
   }
 });
 
@@ -1086,15 +1458,41 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
    `revokedAt` is set regardless. But a partial erasure must not read as a
    silent, total success: when any path survives, this adds
    `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` to the response
-   rather than claiming clean erasure it didn't achieve. */
+   rather than claiming clean erasure it didn't achieve.
+
+   Task 14a — that same `failed` array (and therefore this same
+   `artifactPurgeIncomplete` gate) now ALSO covers a failed/timed-out
+   sidecar cache evict, not just file unlinks. Before this, a bare
+   `catch {}` inside `purgeCloneArtifacts` swallowed both a non-2xx evict
+   response AND a timeout/rejection, so revoke could answer 200 with no
+   `artifactPurgeIncomplete` while XTTS's TTL-less latents cache
+   (`CoquiEngine._latents_cache`) still held the voice — this route needed
+   no code change of its own to pick that up, since it already forwards
+   `purgeResult.failed` verbatim. */
 voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
     const entry = await readEntry(voiceUuid);
     if (!entry) return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     if (!entry.consent) return res.status(409).json({ error: 'Entry has no consent record to revoke.' });
-    const updated = { ...entry, consent: { ...entry.consent, revokedAt: new Date().toISOString() } };
-    await writeEntry(updated); // passes the guard — revokedAt is orthogonal (Task 7)
+    /* fs-38 Wave 3c, Task 14 — stamp `revokedAt` through the shared,
+       per-uuid-locked `updateEntry` (fresh read + mutate + write, held
+       under one lock) instead of writing back the `entry` read above,
+       which by now may be stale relative to a concurrent engine-slot
+       write (e.g. an in-flight xtts derive elsewhere) that would
+       otherwise be silently clobbered. The 404/409 checks above stay
+       against the pre-lock `entry` — both are timing-insensitive here
+       (missing-entirely and no-consent-record are not states a concurrent
+       writer would create out from under a genuinely present, consented
+       entry) — only the write itself needs the fresh snapshot. */
+    const updated = await updateEntry(voiceUuid, (fresh) =>
+      fresh?.consent
+        ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
+        : null,
+    );
+    if (!updated) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
     // Erase resynthesis-capable artifacts AND the original recording itself.
     const purgeResult = await purgeCloneArtifacts(voiceUuid, { deleteMasterClip: true });
     const final = (await readEntry(voiceUuid)) ?? updated;
@@ -1122,9 +1520,16 @@ voiceLibraryRouter.post('/:voiceUuid/revoke', async (req: Request, res: Response
    for "every consent-scoped clone artifact" — including the `__1.7b.pt`
    variant this route's prior ad-hoc erasure missed. `deleteEntryDir: true`
    also removes the manifest dir (voice.json + master.wav), unlike the
-   revoke route above. */
-async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
-  await purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
+   revoke route above — but only when the purge came back CLEAN; see the C3
+   comment in purge-clone-artifacts.ts.
+
+   GATE 1 fix (C3) — the `failed` array is no longer discarded here. It was
+   the same report the revoke route already forwards as
+   `artifactPurgeIncomplete`, thrown away on the delete path so the route
+   could answer an unconditional `{ deleted: true }`. Returning it is what
+   lets the handler stop claiming more erasure than happened. */
+async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: string[] }> {
+  return purgeCloneArtifacts(voiceUuid, { deleteEntryDir: true });
 }
 
 /* DELETE /api/voice-library/:voiceUuid
@@ -1134,7 +1539,20 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<void> {
    matches this voice is reported via 409 unless the caller passes
    `?confirm=1`; on confirm (or when unused) the matching override slots are
    cleared first — leaving those characters voiceless on that engine, which
-   the fe-46 gate surfaces — THEN every derived artifact is erased. */
+   the fe-46 gate surfaces — THEN every derived artifact is erased.
+
+   GATE 1 fix (C3) — a purge that could not erase everything answers
+   `{ deleted: false, artifactPurgeIncomplete: true, artifactPurgeFailedPaths }`
+   instead of the old unconditional `{ deleted: true }`, and the entry
+   SURVIVES (purge-clone-artifacts.ts keeps the manifest whenever `failed` is
+   non-empty — see the C3 comment there for why removing it would leave the
+   surviving artifact ungated). `deleted: false` is therefore literal, not
+   cosmetic: the card is still in the library and the user can retry the
+   delete or revoke instead. Still 200 — the reference-clearing and the
+   artifact sweep both genuinely ran; this is a partial outcome, not an
+   error. `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` are the same
+   two fields the revoke route above already carries (Task 14a), deliberately
+   reused rather than a second, delete-only signal. */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -1152,7 +1570,19 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
     if (usage.length > 0) {
       await clearLibraryVoiceReferences(voiceUuid);
     }
-    await eraseLibraryVoiceArtifacts(voiceUuid);
+    const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
+    if (purgeResult.failed.length > 0) {
+      console.warn(
+        `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+          `un-erased — the entry is RETAINED so the consent gates still cover them:`,
+        purgeResult.failed,
+      );
+      return res.status(200).json({
+        deleted: false,
+        artifactPurgeIncomplete: true,
+        artifactPurgeFailedPaths: purgeResult.failed,
+      });
+    }
 
     res.status(200).json({ deleted: true });
   } catch (e) {

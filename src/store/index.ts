@@ -55,6 +55,7 @@ import { queueSlice } from './queue-slice';
 import { rebaselineSlice } from './rebaseline-slice';
 import { upgradeSlice } from './upgrade-slice';
 import { spliceSlice } from './splice-slice';
+import { qaRepairSlice } from './qa-repair-slice';
 import { configSlice } from './config-slice';
 import { tourSlice } from './tour-slice';
 import { continueListeningSlice } from './continue-listening-slice';
@@ -68,6 +69,7 @@ import { castDesignMiddleware } from './cast-design-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
+import { qaRepairRunnerMiddleware } from './qa-repair-runner-middleware';
 import { exportPollMiddleware } from './exports-middleware';
 import { exportPillMiddleware } from './export-pill-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
@@ -202,6 +204,7 @@ export const store = configureStore({
     rebaseline: rebaselineSlice.reducer,
     upgrade: upgradeSlice.reducer,
     splice: spliceSlice.reducer,
+    qaRepair: qaRepairSlice.reducer,
     config: configSlice.reducer,
     tour: tourSlice.reducer,
     continueListening: continueListeningSlice.reducer,
@@ -227,6 +230,7 @@ export const store = configureStore({
       broadcastMiddleware,
       queueDispatcherMiddleware(getStreamRunner),
       spliceRunnerMiddleware(),
+      qaRepairRunnerMiddleware(),
       exportPollMiddleware,
       exportPillMiddleware,
     ),

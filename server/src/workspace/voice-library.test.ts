@@ -98,3 +98,213 @@ describe('voice-library manifest store', () => {
     expect(await vl.readEntry(entry.voiceUuid)).toBeNull();
   });
 });
+
+/* fs-38 Wave 3c, Task 14 — `updateEntry`/the per-uuid lock it's built on
+   (`withEntryLock`, not exported — exercised only through `updateEntry`
+   here) close the voice-library's read-modify-write race: two concurrent
+   callers each reading a stale snapshot, mutating their own copy, and
+   writing back must not let the second writer's stale snapshot clobber the
+   first writer's change. A mutex around only the final `writeEntry` call
+   does NOT close this — it just serializes two already-stale snapshots, and
+   the second one still wins. These tests exercise the REAL, non-mocked
+   module (same real fs the production routes/resolver use via this same
+   `updateEntry` export) so a regression here is a regression every caller
+   inherits. */
+describe('updateEntry — per-uuid read-modify-write lock', () => {
+  it('a missing entry: mutate is invoked with null, and returning null/undefined skips the write', async () => {
+    let seen: unknown;
+    const result = await vl.updateEntry('does-not-exist', (entry) => {
+      seen = entry;
+      return null;
+    });
+    expect(seen).toBeNull();
+    expect(result).toBeNull();
+    expect(await vl.readEntry('does-not-exist')).toBeNull();
+  });
+
+  it('a present entry: mutate receives the fresh entry, the write persists, and the canonical (re-read) record is returned', async () => {
+    const entry = makeEntry({ voiceUuid: 'update-1', name: 'Original' });
+    await vl.writeEntry(entry);
+
+    const result = await vl.updateEntry('update-1', (fresh) => {
+      expect(fresh?.name).toBe('Original');
+      return { ...fresh!, name: 'Renamed' };
+    });
+
+    expect(result?.name).toBe('Renamed');
+    const onDisk = await vl.readEntry('update-1');
+    expect(onDisk?.name).toBe('Renamed');
+    // The returned record is the CANONICAL post-write one (re-read), not
+    // just the object `mutate` handed back — same convention every route
+    // handler relies on (writeEntry-then-readEntry).
+    expect(result?.updatedAt).toBe(onDisk?.updatedAt);
+  });
+
+  /* THE core proof for Task 14: two interleaved read-modify-write cycles
+     touching DIFFERENT engine slots on the SAME entry. Without a lock that
+     spans the whole read+mutate+write span (not just the write), this is
+     exactly the wave-3c regression described in clone-voice-resolver.ts's
+     Task 14 doc comment — A reads {qwen:stale}, derives xtts, writes
+     {qwen:stale, xtts:ready}; B, holding its OWN stale pre-A snapshot,
+     writes {qwen:ready} — erasing A's xtts slot.
+
+     Determinism: no setTimeout/sleep. Caller A's `mutate` awaits a
+     manually-released gate — since `updateEntry` chains the NEXT queued
+     caller (B) onto the promise A's own critical section resolves to, B's
+     `mutate` (and even B's own `readEntry`) cannot start running until A's
+     `mutate` returns and A's write completes — this is guaranteed by the
+     promise chain itself, not by timing. B is launched (queued) before A's
+     gate is released, so this only passes if the queueing is real. */
+  it('serializes two interleaved read-modify-write cycles across DIFFERENT engine slots — both writes survive', async () => {
+    const entry = makeEntry({
+      voiceUuid: 'race-1',
+      engines: { qwen: { status: 'ready', baseModel: 'old' } },
+    });
+    await vl.writeEntry(entry);
+
+    let releaseA: () => void = () => {};
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const order: string[] = [];
+
+    // Caller A — simulates the cloned resolver's post-derive xtts write.
+    // Pauses mid-critical-section until we release it below.
+    const pA = vl.updateEntry('race-1', async (fresh) => {
+      order.push('A-read');
+      await gateA;
+      order.push('A-write');
+      return { ...fresh!, engines: { ...fresh!.engines, xtts: { status: 'ready' } } };
+    });
+
+    // Caller B — simulates a concurrent PATCH-style write to the SIBLING
+    // engine slot, launched (queued) before A's gate is ever released.
+    const pB = vl.updateEntry('race-1', (fresh) => {
+      order.push('B-read-and-write');
+      return { ...fresh!, engines: { ...fresh!.engines, qwen: { status: 'stale', baseModel: 'old' } } };
+    });
+
+    releaseA();
+    const [resultA, resultB] = await Promise.all([pA, pB]);
+
+    // B's body must not have run before A's write completed — proof the
+    // lock actually queued it, not just that both happened to finish.
+    expect(order).toEqual(['A-read', 'A-write', 'B-read-and-write']);
+
+    expect(resultA?.engines.xtts).toEqual({ status: 'ready' });
+    expect(resultB?.engines.qwen).toEqual({ status: 'stale', baseModel: 'old' });
+
+    // Assert on the REAL persisted state, not on mock call arguments — the
+    // whole point is that BOTH slots survive on disk.
+    const final = await vl.readEntry('race-1');
+    expect(final?.engines.xtts).toEqual({ status: 'ready' });
+    expect(final?.engines.qwen).toEqual({ status: 'stale', baseModel: 'old' });
+  });
+
+  /* Fix wave (review I-1) — `updateEntry` used to return the bare
+     post-write `readEntry()` result, so "mutate declined to write" and
+     "the write succeeded but the canonical re-read failed" were both
+     surfaced to callers as `null`, indistinguishable. Two production
+     callers branched on plain truthiness and paid for the ambiguity: the
+     revoke route skipped its consent-erasure purge after a successful
+     revokedAt stamp, and the cloned-voice resolver silently dropped a
+     permanent derive-failure report. This reproduces the "re-read fails"
+     half for REAL, with no mocking: `mutate` hands back an entry with an
+     empty `provenance`, which `writeEntry` happily persists (its own
+     consent guard only cares about `provenance === 'cloned'`), but
+     `readEntry`'s OWN documented structural check
+     (`Boolean(voiceUuid && name && provenance)`) treats that exact
+     on-disk state as invalid and returns null — the same class of gap as
+     "a concurrent unlocked DELETE lands between the write and the
+     re-read", reached here through this module's own real validation
+     rule instead of a race. */
+  it('review I-1: returns the just-written entry, not null, when the canonical post-write re-read fails structurally', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'reread-fail-1', name: 'Original' }));
+
+    const result = await vl.updateEntry('reread-fail-1', (fresh) => ({
+      ...fresh!,
+      provenance: '' as unknown as import('./voice-library.js').VoiceProvenance,
+    }));
+
+    // Proof the write really happened AND that a bare re-read of this
+    // exact on-disk state genuinely fails structurally (this is not a
+    // mocked/simulated null — it's readEntry's own real validation rule).
+    expect(await vl.readEntry('reread-fail-1')).toBeNull();
+
+    // Yet updateEntry must not report this the same way as "mutate
+    // declined" — the caller needs to know a write actually happened.
+    expect(result).not.toBeNull();
+    expect(result?.voiceUuid).toBe('reread-fail-1');
+  });
+
+  /* Fix wave (review I-3) — a `mutate` that calls `updateEntry` again for
+     the SAME uuid it's already running under chains onto a queue slot
+     that can only settle once that very `mutate` returns — which can
+     never happen while it's awaiting the nested call. Pre-fix this wedged
+     the uuid's lock for the rest of the process's lifetime with no error
+     and no timeout (the revoke route would just hang). The guard must
+     fail loud instead. */
+  it('review I-3: a mutate that re-enters updateEntry for the SAME uuid throws a clear re-entrancy error instead of wedging the lock forever', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'reentrant-1', name: 'Original' }));
+
+    await expect(
+      vl.updateEntry('reentrant-1', async (fresh) => {
+        // Nested call for the SAME uuid, from inside this very mutate.
+        await vl.updateEntry('reentrant-1', (inner) => ({ ...inner!, name: 'inner' }));
+        return { ...fresh!, name: 'outer' };
+      }),
+    ).rejects.toThrow(/re-entrant/i);
+
+    // Neither the outer nor the inner write landed — the entry is
+    // untouched.
+    expect((await vl.readEntry('reentrant-1'))?.name).toBe('Original');
+
+    // The lock must not be left wedged for this uuid — an ordinary
+    // subsequent caller still gets to run.
+    const after = await vl.updateEntry('reentrant-1', (fresh) => ({ ...fresh!, name: 'after' }));
+    expect(after?.name).toBe('after');
+  }, 10_000);
+
+  /* Fix wave (review I-3) — a mutate calling updateEntry for a DIFFERENT
+     uuid is ordinary, expected usage (not the hazard above) and must not
+     trip the guard. */
+  it('review I-3: a mutate calling updateEntry for a DIFFERENT uuid is not re-entrancy and runs normally', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'outer-1' }));
+    await vl.writeEntry(makeEntry({ voiceUuid: 'inner-1' }));
+
+    const result = await vl.updateEntry('outer-1', async (fresh) => {
+      const innerResult = await vl.updateEntry('inner-1', (inner) => ({ ...inner!, name: 'inner-done' }));
+      expect(innerResult?.name).toBe('inner-done');
+      return { ...fresh!, name: 'outer-done' };
+    });
+
+    expect(result?.name).toBe('outer-done');
+    expect((await vl.readEntry('inner-1'))?.name).toBe('inner-done');
+  });
+
+  it('different voiceUuids never block each other', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'indep-1' }));
+    await vl.writeEntry(makeEntry({ voiceUuid: 'indep-2' }));
+
+    let releaseFirst: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondFinished = false;
+
+    const p1 = vl.updateEntry('indep-1', async (fresh) => {
+      await gate;
+      return { ...fresh!, name: 'first' };
+    });
+    const p2 = vl.updateEntry('indep-2', async (fresh) => {
+      secondFinished = true;
+      return { ...fresh!, name: 'second' };
+    });
+
+    await p2; // must resolve WITHOUT waiting on indep-1's still-open gate.
+    expect(secondFinished).toBe(true);
+
+    releaseFirst();
+    await p1;
+  });
+});

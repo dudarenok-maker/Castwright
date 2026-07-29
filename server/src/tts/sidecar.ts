@@ -35,6 +35,7 @@ import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js
 import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry.js';
 import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { coquiLanguageCode } from './voice-mapping.js';
+import { manifestSlotFor } from './clone-engines.js';
 
 /* Re-exported from ../gpu/capacity-retry.ts (the no-capacity poll-wait counter
    moved there in Task 5, #1720) so server/src/routes/gpu-queue.ts's import
@@ -193,6 +194,56 @@ export class SidecarTtsProvider implements TtsProvider {
             `Update server/src/tts/voice-mapping.ts to remove this name. ` +
             `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
         );
+
+        /* fs-38 Wave 3c Task 17 [EX-8] — defence-in-depth, NOT a live guard
+           against the current sidecar: server/tts-sidecar/main.py's
+           CoquiEngine.synthesize already routes every `xtts-`-prefixed voice
+           into a latents-only branch (gated on XTTS_KEY_PREFIX) that raises
+           rather than falling through to substitution, so this branch is
+           unreachable today. It exists so a future regression — an older
+           sidecar, a reverted branch, a new engine path — can't silently
+           reintroduce substituting a stock speaker for a cloned voice.
+           Gate on the `xtts-` prefix ONLY, mirroring the sidecar's own
+           key-shape gate — it fires for both `cloned` and `designed`
+           provenance, because since Task 16 `xtts-<uuid>` is minted for
+           BOTH (server/src/tts/clone-engines.ts `libraryVoiceForEngine`),
+           and the sidecar's gate doesn't distinguish them either. D-F's
+           fail-soft guarantee for designed voices is NOT enforced here — it
+           lives in the Task 20/20a pre-pass, which reverts a designed
+           character to a catalogue voice before synth ever runs whenever it
+           cannot back the slot with an artifact. Two deliberate exceptions
+           to that, so this comment doesn't overclaim (GATE 1 I-3): the
+           pre-pass keeps a stale-but-PRESENT artifact rather than
+           downgrading it, and it keeps the slot when the voice-library entry
+           reads `cloned` (soft-removing a real person's slot would be a
+           Property-1 substitution, so D-F's fail-LOUD arm applies instead).
+           Do NOT extend this to the `qwen-` prefix: that prefix is also
+           qwen's storage key for designed voices, and gating there would
+           turn substitution of a designed qwen voice into a new hard
+           failure, which D-F forbids.
+
+           GATE 1 — the prefix test is CASE-FOLDED, the third instance of a
+           defect class already fixed at `routes/voice-override-linked.ts`
+           (Task 10a) and `routes/voice-sample.ts` (C4) and never swept.
+           `manifestSlotFor` returns lower-case, but `substitutedFrom` is
+           whatever the sidecar echoes back, and the sidecar sanitises voice
+           ids with a case-PRESERVING `re.sub` before a case-INSENSITIVE
+           `os.path.isfile` — so on NTFS/APFS `XTTS-<uuid>.pt` opens the real
+           `xtts-<uuid>.pt`. Un-folded, a case-varied key missed the
+           latents branch (stock speaker substituted) AND missed this guard
+           meant to catch exactly that. No live entry point today (C4 closed
+           the reachable one), so this is defence-in-depth like the rest of
+           the branch — but the fold costs nothing and the blind spot was
+           real. Only the PREFIX is folded; nothing here slices the uuid
+           tail, so mixed-case uuids are unaffected. */
+        if (substitutedFrom.toLowerCase().startsWith(`${manifestSlotFor('coqui')}-`)) {
+          throw new Error(
+            `Sidecar substituted a cloned Coqui voice: requested "${substitutedFrom}" was not ` +
+              `found in the XTTS v2 manifest and a stock speaker was rendered instead. This ` +
+              `should be unreachable — the sidecar's own XTTS_KEY_PREFIX gate should have ` +
+              `failed loud before returning a response.`,
+          );
+        }
       }
 
       return {

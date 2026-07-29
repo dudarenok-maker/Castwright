@@ -79,6 +79,7 @@ let setUserSettingsCacheForTest: typeof import('../workspace/user-settings.js').
 let paths: typeof import('../workspace/paths.js');
 let qwenVoice: typeof import('./qwen-voice.js');
 let sampleCache: typeof import('../tts/voice-sample-cache.js');
+let coquiVersionState: typeof import('../tts/coqui-version-state.js');
 
 function writeBookOnDisk(
   workspace: string,
@@ -143,6 +144,7 @@ beforeEach(async () => {
     pathsMod,
     qwenVoiceMod,
     sampleCacheMod,
+    coquiVersionStateMod,
   ] = await Promise.all([
     import('./voice-library.js'),
     import('../workspace/voice-library.js'),
@@ -151,6 +153,7 @@ beforeEach(async () => {
     import('../workspace/paths.js'),
     import('./qwen-voice.js'),
     import('../tts/voice-sample-cache.js'),
+    import('../tts/coqui-version-state.js'),
   ]);
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
@@ -158,6 +161,7 @@ beforeEach(async () => {
   paths = pathsMod;
   qwenVoice = qwenVoiceMod;
   sampleCache = sampleCacheMod;
+  coquiVersionState = coquiVersionStateMod;
 
   app = express();
   app.use(express.json());
@@ -257,6 +261,107 @@ describe('GET /api/voice-library', () => {
     const onDisk = await vl.readEntry('stale-1');
     expect(onDisk?.engines.qwen?.status).toBe('ready');
   });
+
+  /* fs-38 Wave 3c, Task 18 — withComputedStaleness now recomputes the xtts
+     slot too (via the same isArtifactVersionStale comparand the resolver
+     pre-pass uses). Task 19 gave coqui a live "current installed coqui-tts
+     version" oracle (getLastKnownCoquiVersion(), fed by the sidecar's
+     /health poll) — but BEFORE the first reachable poll (this test's own
+     starting state: a fresh module import via beforeEach's resetModules,
+     never seeded) it still reads '', which isArtifactVersionStale treats as
+     "unknown, never stale". This test pins that DELIBERATE, documented
+     boot-window behaviour (not a bug): a coqui-cloned voice with a real
+     recorded coquiVersion never spontaneously reads 'stale' before the
+     oracle has a real value, and — the sibling-preservation half —
+     recomputing xtts must never disturb an independently-stale qwen slot on
+     the SAME entry, or vice versa. See the NEXT test for the oracle
+     actually firing once seeded. */
+  it('recomputes the xtts slot alongside qwen: a real recorded coquiVersion never reads stale before the oracle has been seeded (boot window), and each engine slot is computed independently of the other', async () => {
+    const current = modelPaths.currentQwenBaseModel();
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'mixed-1',
+        engines: {
+          qwen: { status: 'ready', baseModel: 'some/other-model' }, // stale
+          xtts: { status: 'ready', coquiVersion: 'v2.0.3' }, // NOT stale — no oracle
+        },
+      }),
+    );
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'mixed-2',
+        engines: {
+          qwen: { status: 'ready', baseModel: current }, // fresh
+          xtts: { status: 'ready', coquiVersion: '' }, // older-sidecar fallback — never stale
+        },
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (
+        res.body.voices as Array<{
+          voiceUuid: string;
+          engines: { qwen?: { status: string }; xtts?: { status: string } };
+        }>
+      ).map((v) => [v.voiceUuid, v]),
+    );
+
+    // qwen's own staleness is unaffected by adding the xtts recomputation.
+    expect(byId.get('mixed-1')?.engines.qwen?.status).toBe('stale');
+    expect(byId.get('mixed-2')?.engines.qwen?.status).toBe('ready');
+    // xtts never reads 'stale' here — the oracle (getLastKnownCoquiVersion())
+    // is a fresh, never-seeded module instance in this test (boot window),
+    // so it reads '' regardless of whether the stored coquiVersion is real
+    // or empty — and each entry's own computation doesn't leak the other's
+    // qwen staleness onto xtts. See the NEXT test for the oracle actually
+    // firing once seeded with a real value.
+    expect(byId.get('mixed-1')?.engines.xtts?.status).toBe('ready');
+    expect(byId.get('mixed-2')?.engines.xtts?.status).toBe('ready');
+
+    // On-disk manifest is untouched for both slots.
+    const onDisk = await vl.readEntry('mixed-1');
+    expect(onDisk?.engines.qwen?.status).toBe('ready');
+    expect(onDisk?.engines.xtts?.status).toBe('ready');
+  });
+
+  /* fs-38 Wave 3c, Task 19 — the coverage gap Task 18 explicitly could not
+     close: a test that FAILS if the xtts staleness-recompute block is
+     deleted. Task 18's own version could not, because production's coqui
+     current-version was hardcoded '' — every case read 'ready' whether or
+     not the block ran. Now that getLastKnownCoquiVersion() is a real,
+     seedable oracle, a genuine mismatch must flip xtts to 'stale', and a
+     genuine match must NOT — proving the block is load-bearing, not
+     inert. */
+  it('flips xtts to stale once the coqui-version oracle is seeded with a MISMATCHING version, and stays ready on a match', async () => {
+    coquiVersionState.setLastKnownCoquiVersion('0.28.0');
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'live-oracle-mismatch',
+        engines: { xtts: { status: 'ready', coquiVersion: '0.27.5' } }, // stale — mismatch
+      }),
+    );
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'live-oracle-match',
+        engines: { xtts: { status: 'ready', coquiVersion: '0.28.0' } }, // fresh — matches
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (
+        res.body.voices as Array<{ voiceUuid: string; engines: { xtts?: { status: string } } }>
+      ).map((v) => [v.voiceUuid, v]),
+    );
+
+    expect(byId.get('live-oracle-mismatch')?.engines.xtts?.status).toBe('stale');
+    expect(byId.get('live-oracle-match')?.engines.xtts?.status).toBe('ready');
+
+    // On-disk manifest is untouched — staleness is computed at list time only.
+    const onDisk = await vl.readEntry('live-oracle-mismatch');
+    expect(onDisk?.engines.xtts?.status).toBe('ready');
+  });
 });
 
 describe('PATCH /api/voice-library/:voiceUuid', () => {
@@ -332,6 +437,23 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
 });
 
 describe('DELETE /api/voice-library/:voiceUuid', () => {
+  /* GATE 1 fix (C3) — the purge's `failed` array now DECIDES whether the
+     manifest dir comes off and whether the route answers `deleted: true`, so
+     the sidecar-evict outcome is load-bearing in this describe where it
+     previously was not. Left unstubbed, these tests would depend on whatever
+     happens to be listening on the dev box's sidecar port. Pin it to the
+     honest default for a test environment — nothing listening, which Node's
+     fetch surfaces as ECONNREFUSED and `isSidecarNotRunning` (Task 14a
+     MEDIUM-1) correctly treats as "no cache to lose", i.e. a clean purge.
+     Individual tests below re-stub it where the evict outcome IS the
+     subject. */
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   /** Seeds every artifact a real designed library voice would have on disk:
       the manifest dir (Task 3), the global qwen `.pt` + sidecar `.json`
       (mirrors `qwen-voice.ts`'s design-route output), and a cached sample
@@ -413,14 +535,23 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
      `__1.7b.pt` copy, so an unstubbed test here could pass against
      un-fixed Node-side code as long as a sidecar happened to be reachable.
      Rejecting the sidecar call proves the file is gone via the Node-side
-     `rm`, not the sidecar. */
+     `rm`, not the sidecar.
+
+     GATE 1 fix (C3) — the rejection is now an ECONNREFUSED one rather than a
+     generic `Error('sidecar unreachable')`. That is what "unreachable" (this
+     test's own stated scenario) actually looks like from Node's fetch, and
+     it is the only rejection shape that still counts as a CLEAN purge — a
+     generic error now means "cache state unknown", which deliberately
+     retains the entry dir. The test's real subject (the `__1.7b.pt` unlink
+     happening Node-side with no sidecar involved) is unchanged: fetch still
+     rejects on every evict. */
   it('erases the qwen-<uuid>__1.7b.pt clone variant on delete (Node-side, sidecar unreachable)', async () => {
     const artifacts = await seedFullVoiceArtifacts('unused-17b');
     const qwenName = `qwen-unused-17b`;
     const pt17bPath = qwenVoice.qwenVoicePtPath(`${qwenName}__1.7b`);
     writeFileSync(pt17bPath, 'fake-1.7b-pt-bytes');
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sidecar unreachable'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
     try {
       const res = await request(app).delete('/api/voice-library/unused-17b');
 
@@ -473,6 +604,71 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     };
     expect(cast.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
     expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({ name: 'preset-voice' });
+  });
+
+  /* GATE 1 fix (C3). The bypass under test is NOT "does the response mention
+     the failure" — it is that a DELETE whose purge left an artifact behind
+     used to remove `voice.json`, the manifest BOTH consent gates read
+     (`clonedVoiceLacksConsent` returns false for a null entry), leaving the
+     survivor LESS gated after the delete than before it and with nothing left
+     to revoke. So the test asserts the survivor is still gateable: it drives
+     a real revoke through the retained entry afterwards and proves the
+     /sample gate then 403s.
+
+     The unlink is failed WITHOUT mocking `rm`: the `.pt` path is replaced by
+     a directory, which `rm(path, { force: true })` (no `recursive`) rejects
+     on — the same throw-from-rm path a Windows EBUSY takes into
+     `unlinkTracked`'s catch, with no stub that could drift from real fs
+     behaviour. */
+  it('GATE 1 C3: a purge that leaves an artifact keeps the entry, reports deleted:false, and stays gateable', async () => {
+    const voiceUuid = 'cloned-partial-1';
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid,
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready' } },
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      }),
+    );
+    const qwenName = `qwen-${voiceUuid}`;
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    const ptPath = qwenVoice.qwenVoicePtPath(qwenName);
+    // A directory where the `.pt` should be — `rm` without `recursive` can't
+    // remove it, so this artifact genuinely survives the purge.
+    mkdirSync(ptPath, { recursive: true });
+    writeFileSync(join(ptPath, 'holds-it-open'), 'x');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).delete(`/api/voice-library/${voiceUuid}`);
+    warnSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(false); // never claims more than happened
+    expect(res.body.artifactPurgeIncomplete).toBe(true);
+    expect(res.body.artifactPurgeFailedPaths).toContain(ptPath);
+    expect(existsSync(ptPath)).toBe(true); // the artifact really did survive
+
+    // The manifest — the ONLY thing the consent gates can read — is retained.
+    const retained = await vl.readEntry(voiceUuid);
+    expect(retained).not.toBeNull();
+    expect(retained?.provenance).toBe('cloned');
+
+    // ...and it is still revocable, so the survivor can still be gated.
+    const revoke = await request(app).post(`/api/voice-library/${voiceUuid}/revoke`);
+    expect(revoke.status).toBe(200);
+    expect((await vl.readEntry(voiceUuid))?.consent?.revokedAt).toBeTruthy();
+
+    // The gate now actually fires on the voice whose artifact is still there.
+    const sample = await request(app)
+      .post(`/api/voice-library/${voiceUuid}/sample`)
+      .send({ text: 'Hello.' });
+    expect(sample.status).toBe(403);
   });
 });
 
@@ -534,6 +730,25 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
       createdAt: 'x', updatedAt: 'x',
     });
     const res = await request(app).post('/api/voice-library/s1/sample').send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /:uuid/sample 403s a cloned voice with no consent record at all (#1808 — a fully-absent consent block can only exist as legacy/corrupted on-disk state now that writeEntry() guards it, so seed the manifest directly)', async () => {
+    mkdirSync(vl.entryDir('s-noconsent'), { recursive: true });
+    writeFileSync(
+      join(vl.entryDir('s-noconsent'), 'voice.json'),
+      JSON.stringify({
+        voiceUuid: 's-noconsent',
+        name: 'Legacy',
+        provenance: 'cloned',
+        tags: [],
+        pinned: false,
+        engines: {},
+        createdAt: 'x',
+        updatedAt: 'x',
+      }),
+    );
+    const res = await request(app).post('/api/voice-library/s-noconsent/sample').send({});
     expect(res.status).toBe(403);
   });
 
@@ -604,7 +819,7 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
     expect(res.body.url).toContain('qwen3-tts-0.6b');
   });
 
-  it('rejects a modelKey that does not route to Qwen', async () => {
+  it('rejects a modelKey that does not route to a clone-capable engine', async () => {
     await vl.writeEntry(makeEntry());
 
     const res = await request(app)
@@ -612,6 +827,108 @@ describe('POST /api/voice-library/:voiceUuid/sample (Task 10)', () => {
       .send({ modelKey: 'kokoro-v1' });
 
     expect(res.status).toBe(400);
+  });
+
+  /* fs-38 Wave 3c, Task 27 — before this task the route hardcoded
+     `voiceName='qwen-<uuid>'`/`cacheScope='qwen-<uuid>'` regardless of the
+     requested modelKey, so a `coqui-xtts-v2` request still auditioned the
+     QWEN artifact. `engine` (the resolved TtsEngine) is asserted via the
+     synth call's `voiceName` AND the returned url's cache scope — both
+     must equal `cloneStorageKey('coqui', uuid)` == `xtts-<uuid>`, derived,
+     not just shaped like it. */
+  it('auditions the requested engine — a coqui-xtts-v2 request synthesises the xtts-<uuid> artifact', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-coqui', name: 'Nova' }));
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-coqui/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/^\/audio\/voices\/xtts-sample-coqui-coqui-xtts-v2-[a-z0-9]+\.mp3$/);
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    const synthArgs = synthesize.mock.calls[0][0] as { voiceName: string; modelKey: string };
+    expect(synthArgs.voiceName).toBe('xtts-sample-coqui');
+    expect(synthArgs.modelKey).toBe('coqui-xtts-v2');
+  });
+
+  /* Proves the qwen and coqui auditions of the SAME library voice land on
+     DISTINCT cache scopes (and so never collide/share a file), which is
+     also what makes Task 13's per-engine storageKey purge able to reach
+     each independently. */
+  it('a qwen and a coqui audition of the same voice cache under distinct storageKey scopes', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-both', name: 'Nova' }));
+
+    const qwenRes = await request(app)
+      .post('/api/voice-library/sample-both/sample')
+      .send({ modelKey: 'qwen3-tts-0.6b' });
+    const coquiRes = await request(app)
+      .post('/api/voice-library/sample-both/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(qwenRes.status).toBe(200);
+    expect(coquiRes.status).toBe(200);
+    expect(qwenRes.body.url).not.toBe(coquiRes.body.url);
+    expect(qwenRes.body.url).toContain('qwen-sample-both');
+    expect(coquiRes.body.url).toContain('xtts-sample-both');
+    expect(synthesize).toHaveBeenCalledTimes(2);
+  });
+
+  /* fs-38 Wave 3c, Task 27 — an engine whose artifact has never been
+     derived (the sidecar's generic /synthesize handler 409s
+     `voice_not_designed` for EVERY engine, per server/tts-sidecar/main.py)
+     used to reach the caller as an opaque 502 (httpStatusForSidecarError
+     only passes through 5xx) carrying the sidecar's raw JSON body as the
+     message. It must now surface as a clean 409 naming the ENGINE that
+     isn't ready — not a generic/qwen-flavoured message reused verbatim
+     for coqui. */
+  it('an un-derived engine returns a clear "not prepared yet" 409, not an opaque 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-undeer', name: 'Nova' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Local voice engine returned 409: {"detail":"Voice \'xtts-sample-undeer\' has not been designed yet.","code":"voice_not_designed"}',
+        ),
+        { transient: false, status: 409, poisoned: false },
+      ),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-undeer/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('voice_not_designed');
+    expect(res.body.message).toMatch(/coqui/i);
+    expect(res.body.message).not.toMatch(/\{"detail"/); // not the raw sidecar body
+  });
+
+  /* GATE 1 — the sidecar gained a DISTINCT `voice_language_unsupported` 409
+     (a subclass of VoiceNotDesignedError carrying its own code, main.py's
+     /synthesize handler). Its detail matches neither token in the arm above,
+     so this route fell through to `httpStatusForSidecarError`, which
+     deliberately never forwards a 4xx — the caller got an opaque 502 with the
+     sidecar's raw JSON as the message. The rejection below is the real
+     sidecar body verbatim, wrapped as sidecar.ts wraps it. */
+  it('a language the loaded model cannot speak returns a 409 voice_language_unsupported, not an opaque 502', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'sample-badlang', name: 'Nova' }));
+    synthesize.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'Local voice engine returned 409: {"detail":"Voice \'xtts-sample-badlang\' cannot render in language \'cs\' — not supported by the loaded XTTS model (supported: [\'en\', \'es\', \'de\']).","code":"voice_language_unsupported"}',
+        ),
+        { transient: false, status: 409, poisoned: false },
+      ),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/sample-badlang/sample')
+      .send({ modelKey: 'coqui-xtts-v2' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('voice_language_unsupported');
+    // Must not tell the user to prepare/re-derive the voice — that cannot help.
+    expect(res.body.message).not.toMatch(/hasn't been prepared/i);
+    expect(res.body.message).not.toMatch(/\{"detail"/); // not the raw sidecar body
   });
 });
 
@@ -774,7 +1091,9 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
       .send({ bookId: 'book-four', characterId: 'char-marlow' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ updated: 1 });
+    /* GATE 1 [F1] - `assign-3` is CLONED, so both clone-capable slots are
+       written and the response names both. */
+    expect(res.body).toEqual({ updated: 1, written: ['qwen', 'coqui'] });
 
     const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
       characters: Array<{
@@ -849,6 +1168,346 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     });
     expect(cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
+
+  /* fs-38 Wave 3c, Task 24 [D-B] — a DESIGNED entry that still has its
+     retained reference clip on disk (`qwen-<uuid>__master.wav`, written by
+     the sidecar's design_voice) is clone-capable on coqui too, so the
+     both-slots write applies to it exactly like a `cloned` entry. A
+     still-broken implementation that tests `entry.master` instead of
+     stat-ing the disk file [DELTA-C1] would find `entry.master` undefined
+     (no designed entry ever sets it) and fail this test the same way as the
+     no-clip case below — the two tests only diverge once the disk check is
+     actually wired in. */
+  it('D-B: a designed entry WITH a retained reference clip on disk also writes the coqui slot (both slots, engine-correct names)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-clip-1', provenance: 'designed' }));
+    writeFileSync(paths.qwenVoiceWavPath('qwen-designed-clip-1__master'), 'REF-CLIP');
+
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-designed-clip', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-clip-1/assign')
+      .send({ bookId: 'book-designed-clip', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-designed-clip-1',
+      libraryUuid: 'designed-clip-1',
+      provenance: 'designed',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-designed-clip-1',
+      libraryUuid: 'designed-clip-1',
+      provenance: 'designed',
+    });
+    /* GATE 1 [F1] — the response must NAME both slots it just wrote. Asserted
+       against the same disk state the block above reads, so the two can't
+       drift: a `written` derived independently of `shouldWriteCoquiSlot`
+       would show up here as a report that contradicts cast.json. */
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
+  });
+
+  /* fs-38 Wave 3c, Task 24 [D-E/D-F] — legacy behaviour, byte-for-byte: a
+     designed entry with NO retained clip on disk writes ONLY the qwen slot,
+     exactly as it did before this task. A regression that always writes
+     both slots for a designed entry (ignoring the clip check entirely)
+     would fail this test by producing a `coqui` slot here. */
+  it('D-E/D-F: a designed entry with NO retained reference clip writes ONLY the qwen slot (legacy behaviour, unchanged)', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-noclip-1', provenance: 'designed' }));
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-designed-noclip', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-noclip-1/assign')
+      .send({ bookId: 'book-designed-noclip', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-designed-noclip-1',
+      libraryUuid: 'designed-noclip-1',
+      provenance: 'designed',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+    /* GATE 1 [F1] — THE case the finding is about: the caller asked to assign
+       on a coqui-routed character, the route declined the coqui slot, and the
+       response has to say so or the UI shows an assignment that isn't there. */
+    expect(res.body.written).toEqual(['qwen']);
+  });
+
+  /* fs-38 Wave 3c, Task 24 — an `imported` entry never qualifies for the
+     both-slots write (neither `cloned` nor `designed`); legacy behaviour,
+     byte-for-byte. A regression that widens the gate to any provenance
+     would fail this test by producing a `coqui` slot here. */
+  it('an imported entry writes ONLY the qwen slot (legacy behaviour, unchanged)', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'imported-1', provenance: 'imported' }));
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-imported', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/imported-1/assign')
+      .send({ bookId: 'book-imported', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-imported-1',
+      libraryUuid: 'imported-1',
+      provenance: 'imported',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
+    expect(res.body.written).toEqual(['qwen']);
+  });
+});
+
+/* fs-38 Wave 3c GATE 1, owner-decided [DELTA-I5] — the unassign affordance.
+
+   Before this route there was NO way to take a library voice off a
+   character: `PUT /api/voices/:voiceId/override` 409s a clear when a cloned
+   slot is present (Task 4) and preserves cloned provenance on a SET, so an
+   explicit stock-voice pick over a clone left the character still RENDERING
+   the clone. Both refusals are correct on their own; what was missing was a
+   deliberate, character-targeted removal. */
+describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELTA-I5)', () => {
+  function castPathFor(bookDir: string) {
+    return join(bookDir, '.audiobook', 'cast.json');
+  }
+  function slotsOf(bookDir: string) {
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    return cast.characters[0].overrideTtsVoices ?? {};
+  }
+
+  it('400s without bookId/characterId', async () => {
+    const res = await request(app).delete('/api/voice-library/lib-1/assign');
+    expect(res.status).toBe(400);
+  });
+
+  it('404s for an unknown bookId', async () => {
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'nope', characterId: 'char-marlow' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown characterId', async () => {
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-unassign-404', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-404', characterId: 'char-nobody' });
+    expect(res.status).toBe(404);
+  });
+
+  /* The headline case. A CLONED coqui slot is exactly what every other
+     write path in this wave is built to preserve — this route is the one
+     deliberate exception, and it must actually remove the slot rather than
+     half-clearing it (dropping the markers but keeping `name` would strand
+     the character on a raw `xtts-<uuid>` key no resolver recognises). */
+  it('removes a cloned library slot outright, markers and name together', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-1',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          ttsEngine: 'coqui',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-1', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    expect(slotsOf(bookDir).coqui).toBeUndefined();
+  });
+
+  /* Scoped by libraryUuid, not by engine. A route that cleared every
+     clone-capable slot would take the OTHER library voice with it — the
+     "erased a marker for an unrelated voice" shape Phase 0 of this wave
+     spent seven fixes on. */
+  it('clears only the slots pointing at THIS voice, leaving another library voice and a plain override alone', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-2',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+            qwen: { name: 'qwen-lib-other', libraryUuid: 'lib-other', provenance: 'designed' },
+            kokoro: { name: 'af_heart' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-2', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    const slots = slotsOf(bookDir);
+    expect(slots.coqui).toBeUndefined();
+    expect(slots.qwen).toEqual({
+      name: 'qwen-lib-other',
+      libraryUuid: 'lib-other',
+      provenance: 'designed',
+    });
+    expect(slots.kokoro).toEqual({ name: 'af_heart' });
+  });
+
+  it('clears BOTH engine slots when the character carries this voice on each', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-3',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+            coqui: { name: 'xtts-lib-1', libraryUuid: 'lib-1', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-3', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['qwen', 'coqui'] });
+    expect(slotsOf(bookDir)).toEqual({});
+  });
+
+  /* The escape hatch must not be refusable. A revoked entry — or one already
+     deleted, so `readEntry` finds nothing at all — is exactly when a
+     character is stuck holding an assignment it cannot render. Both the
+     `/assign` route above and `/sample` gate on consent; this one must not.
+     Note NO library entry is written here at all. */
+  it('works for a library entry that no longer exists (revoked or deleted) — never gated on the entry', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-4',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-gone', libraryUuid: 'lib-gone', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-gone/assign')
+      .query({ bookId: 'book-unassign-4', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: ['coqui'] });
+    expect(slotsOf(bookDir).coqui).toBeUndefined();
+  });
+
+  /* A no-op is a 200 with an empty list — the requested end state already
+     holds — and must not rewrite the character. Asserted on the untouched
+     slot, not just the status code. */
+  it('reports cleared: [] and leaves the character untouched when it was not carrying this voice', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-5',
+      [
+        {
+          id: 'char-marlow',
+          name: 'Marlow',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-lib-other', libraryUuid: 'lib-other', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const res = await request(app)
+      .delete('/api/voice-library/lib-1/assign')
+      .query({ bookId: 'book-unassign-5', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: [] });
+    expect(slotsOf(bookDir).coqui).toEqual({
+      name: 'xtts-lib-other',
+      libraryUuid: 'lib-other',
+      provenance: 'cloned',
+    });
+  });
+
+  /* Round-trips against the real assign, so the pair can't drift: whatever
+     `/assign` writes, the unassign must be able to take back off. */
+  it('round-trips a real /assign — every slot the assign reported written is cleared', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'roundtrip-1', provenance: 'designed' }));
+    writeFileSync(paths.qwenVoiceWavPath('qwen-roundtrip-1__master'), 'REF-CLIP');
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-6',
+      [{ id: 'char-marlow', name: 'Marlow' }],
+    );
+
+    const assignRes = await request(app)
+      .post('/api/voice-library/roundtrip-1/assign')
+      .send({ bookId: 'book-unassign-6', characterId: 'char-marlow' });
+    expect(assignRes.status).toBe(200);
+    expect(assignRes.body.written).toEqual(['qwen', 'coqui']);
+
+    const unassignRes = await request(app)
+      .delete('/api/voice-library/roundtrip-1/assign')
+      .query({ bookId: 'book-unassign-6', characterId: 'char-marlow' });
+
+    expect(unassignRes.status).toBe(200);
+    expect(unassignRes.body.cleared).toEqual(assignRes.body.written);
+    expect(slotsOf(bookDir)).toEqual({});
+  });
 });
 
 describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {
@@ -913,6 +1572,11 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
       .send({ bookId: 'book-five', characterId: 'char-marlow' });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/qwen/i);
+    /* fs-38 Wave 3c, Task 24 — the guard now accepts Coqui too, so the 409
+       must name BOTH clone-capable engines, not just Qwen — a caller who
+       only sees "render on Qwen" would be misdirected into switching the
+       book to Qwen when switching to Coqui is an equally valid fix. */
+    expect(res.body.error).toMatch(/coqui/i);
   });
 
   it('allows assigning a ready cloned voice to a character that DOES route to Qwen (200, regression)', async () => {
@@ -940,6 +1604,73 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
     const res = await request(app).post('/api/voice-library/designed-1/assign')
       .send({ bookId: 'book-seven', characterId: 'char-marlow' });
     expect(res.status).toBe(200);
+  });
+
+  /* fs-38 Wave 3c, Task 24 — the reachability gap this task closes: this is
+     the FIRST route that can ever write a coqui `libraryUuid`, so a
+     coqui-routed character assigning a ready cloned voice must 200 (the
+     guard now accepts Coqui, not just Qwen) AND get BOTH slots, each with
+     its own engine-correct storage-key prefix (`qwen-<uuid>` /
+     `xtts-<uuid>`, via the shared `cloneStorageKey` helper — never
+     re-derived locally). Also proves the emotion-`variants` clear (review
+     I-4) now applies to BOTH slots, not just qwen — the fixture seeds a
+     stale `variants` map on each. A still-unwidened guard would 409 this
+     case; a slot-write that only ever touches `qwen` would leave
+     `overrideTtsVoices.coqui` at its OLD (stale-variants) value instead of
+     the new cloned identity. */
+  it('fs-38 Wave 3c: allows assigning a ready cloned voice to a Coqui-routed character (200) — writes BOTH engine-correct slots and clears variants on both', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-coqui-route',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-coqui-route', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        ttsEngine: 'coqui',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-old-designed',
+            provenance: 'designed',
+            variants: { angry: { name: 'qwen-old-designed__angry' } },
+          },
+          coqui: {
+            name: 'xtts-old-designed',
+            provenance: 'designed',
+            variants: { angry: { name: 'xtts-old-designed__angry' } },
+          },
+        },
+      },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-coqui-route/assign')
+      .send({ bookId: 'book-coqui-route', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    const cast = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8')) as {
+      characters: Array<{ overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-clone-coqui-route',
+      libraryUuid: 'clone-coqui-route',
+      provenance: 'cloned',
+    });
+    expect(cast.characters[0].overrideTtsVoices?.coqui).toEqual({
+      name: 'xtts-clone-coqui-route',
+      libraryUuid: 'clone-coqui-route',
+      provenance: 'cloned',
+    });
   });
 });
 
@@ -1372,11 +2103,120 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(res.status).toBe(409);
   });
 
+  it('promote 409s WITHOUT deleting the live .pt on a double-promote (#1804 data-loss guard)', async () => {
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeEntry({ voiceUuid: 'doublepromo-1', provenance: 'designed' }));
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-doublepromo-1');
+    writeFileSync(liveP, 'LIVE');
+    // No preview `.pt` staged — mirrors a double-promote (second click after
+    // the first already consumed the preview).
+
+    const res = await request(app)
+      .post('/api/voice-library/doublepromo-1/redesign/promote')
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(existsSync(liveP)).toBe(true); // live artifact must survive
+    expect(readFileSync(liveP, 'utf8')).toBe('LIVE');
+  });
+
   it('404s design-lifecycle routes for an unknown uuid', async () => {
     const r1 = await request(app).post('/api/voice-library/nope/redesign/promote').send({});
     expect(r1.status).toBe(404);
     const r2 = await request(app).post('/api/voice-library/nope/redesign/discard').send({});
     expect(r2.status).toBe(404);
+  });
+
+  /* GATE 1 fix (C1). Asserting "a 403 comes back" would be a placebo — the
+     property that matters is that the cloned voice's LIVE `.pt` is still the
+     cloned one afterwards, i.e. no stranger's voice can render under the
+     clone's name. So both tests stage a real preview `.pt` on disk and assert
+     the live artifact's BYTES are unchanged. `promote` is exercised with a
+     preview already staged, which is the state that actually performs the
+     destructive `rm`+`rename`. */
+  function makeClonedEntry(voiceUuid: string) {
+    return makeEntry({
+      voiceUuid,
+      provenance: 'cloned',
+      engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      consent: {
+        personName: 'Dad',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'me',
+      },
+    });
+  }
+
+  it('GATE 1 C1: refuses to STAGE a redesign of a cloned voice (403), leaving the clone intact', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeClonedEntry('cloned-redesign-1'));
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-cloned-redesign-1');
+    writeFileSync(liveP, 'CLONED-LATENTS');
+
+    const res = await request(app)
+      .post('/api/voice-library/cloned-redesign-1/redesign')
+      .send({ persona: 'a wry, steady woman' });
+
+    expect(res.status).toBe(403);
+    // No design was even attempted — the sidecar was never asked to synthesise.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The person's own artifact is untouched.
+    expect(readFileSync(liveP, 'utf8')).toBe('CLONED-LATENTS');
+    // Provenance is not quietly rewritten either.
+    expect((await vl.readEntry('cloned-redesign-1'))?.provenance).toBe('cloned');
+  });
+
+  it('GATE 1 C1: refuses to PROMOTE a staged redesign onto a cloned voice (403), so the clone is never overwritten', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(makeClonedEntry('cloned-promo-1'));
+
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-cloned-promo-1');
+    const previewP = qwenVoice.qwenVoicePtPath('qwen-cloned-promo-1-preview');
+    writeFileSync(liveP, 'CLONED-LATENTS');
+    // A preview IS staged — the state in which promote does its rm+rename.
+    // Guarded independently of /redesign so a preview staged before this fix
+    // (or by any other route) still cannot land on a cloned voice.
+    writeFileSync(previewP, 'STRANGER-DESIGN');
+
+    const res = await request(app)
+      .post('/api/voice-library/cloned-promo-1/redesign/promote')
+      .send({ persona: 'a wry, steady woman' });
+
+    expect(res.status).toBe(403);
+    expect(readFileSync(liveP, 'utf8')).toBe('CLONED-LATENTS'); // NOT overwritten
+    expect(existsSync(previewP)).toBe(true); // and nothing was consumed
+    expect((await vl.readEntry('cloned-promo-1'))?.provenance).toBe('cloned');
+  });
+
+  it('GATE 1 C1: a DESIGNED voice can still be redesigned and promoted (the fix is provenance-scoped)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'designed-redesign-1',
+        provenance: 'designed',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+
+    const staged = await request(app)
+      .post('/api/voice-library/designed-redesign-1/redesign')
+      .send({ persona: 'a calm, measured narrator' });
+    expect(staged.status).toBe(200);
+
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-designed-redesign-1');
+    writeFileSync(liveP, 'OLD-DESIGN');
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-designed-redesign-1-preview'), 'NEW-DESIGN');
+
+    const promoted = await request(app)
+      .post('/api/voice-library/designed-redesign-1/redesign/promote')
+      .send({ persona: 'a calm, measured narrator' });
+    expect(promoted.status).toBe(200);
+    expect(readFileSync(liveP, 'utf8')).toBe('NEW-DESIGN');
   });
 });
 
@@ -1994,7 +2834,17 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
      (voice.json) stays readable so the revoked entry is still
      visible/inspectable in the library. Proven via real erasure effects (not
      a spy) — see the file-header note above the hoisted mocks for why a
-     self-mocked spy on purgeCloneArtifacts was rejected. */
+     self-mocked spy on purgeCloneArtifacts was rejected.
+
+     Task 14a — this test used to mock the sidecar as unreachable and assert
+     ONLY a clean 200, i.e. it pinned the OLD swallowing contract: a failed
+     sidecar evict (3 calls here — qwen base, qwen -preview, xtts — all
+     rejecting) never surfaced anywhere in the response. That is exactly the
+     Property-2 residual Task 14a closes, so this test now asserts the NEW
+     contract instead: `artifactPurgeIncomplete` is true and
+     `artifactPurgeFailedPaths` names all three failed sidecar evicts. The
+     revoke still succeeds (200, revokedAt set, files gone) — only the
+     "silent total success" claim is what's fixed. */
   it('purges clone artifacts (no deleteEntryDir) and leaves voice.json readable', async () => {
     const voiceUuid = 'r-purge-1';
     await vl.writeEntry(
@@ -2041,6 +2891,21 @@ describe('POST /api/voice-library/:voiceUuid/revoke (Task 8)', () => {
       // ...but the manifest dir survives (no deleteEntryDir).
       const onDisk = await vl.readEntry(voiceUuid);
       expect(onDisk?.consent?.revokedAt).toBeTruthy();
+
+      // Task 14a — the sidecar is unreachable (a non-ECONNREFUSED rejection
+      // — "sidecar unreachable" carries no proof the sidecar is actually
+      // DOWN, so it's the genuine-failure case, not the ECONNREFUSED
+      // fail-open carve-out) for every evict call in this test, so the
+      // revoke response must say so rather than claiming clean erasure it
+      // didn't achieve. Fix round 1, LOW-2 — all three markers pinned
+      // exactly (was `stringContaining` on the xtts one, which would still
+      // pass with a wrong or empty key).
+      expect(res.body.artifactPurgeIncomplete).toBe(true);
+      expect(res.body.artifactPurgeFailedPaths).toEqual([
+        `sidecar:qwen:${qwenName}`,
+        `sidecar:qwen:${qwenName}-preview`,
+        `sidecar:xtts:xtts-${voiceUuid}`,
+      ]);
     } finally {
       fetchSpy.mockRestore();
     }
