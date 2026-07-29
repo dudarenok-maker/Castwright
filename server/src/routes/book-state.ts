@@ -392,8 +392,12 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        chapter id. Read once on book-open so the LUFS report card in the
        Listen view doesn't have to N-fan-out one chapter-audio meta fetch
        per chapter row. Missing/malformed sidecar → null entry; the
-       frontend uses absence to render a neutral "no data" badge and
-       gates drift comparisons on `twoPass === true`. Tolerant of
+       frontend uses absence to render a neutral "no data" badge. Plan 274:
+       drift comparisons are gated on `measurementSource` provenance
+       (`'ebur128'` = real measurement; `'loudnorm'` = re-measurement
+       failed, render neutral), falling back to the legacy
+       `twoPass === true` rule only when `measurementSource` is absent
+       (a sidecar written before this field existed). Tolerant of
        directory absence (no audio generated yet) — `chapterLufs` stays
        empty in that case. */
     const chapterLufs: Record<number, LoudnormSidecarJson | null> = {};

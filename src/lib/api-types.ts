@@ -4211,6 +4211,21 @@ export interface components {
              */
             normalizationType?: "linear" | "dynamic";
             /**
+             * @description Provenance of `i`/`lra`/`tp` (plan 274). `ebur128` — a real
+             *     post-write measurement of the finished file. `loudnorm` — the
+             *     real measurement failed and the fields fall back to loudnorm's
+             *     self-reported figures (which, depending on shape, may be the
+             *     requested ceiling rather than a measurement, or pre-filter input
+             *     loudness rather than the normalised output). OPTIONAL: absent
+             *     means a sidecar written before this field existed — treated as
+             *     trustworthy-by-assumption (grandfathered) rather than blanked,
+             *     since the distinguishing information was never recorded for
+             *     those chapters. `scripts/relufs-existing.mjs` re-measures a
+             *     chapter and upgrades a grandfathered row to `ebur128`.
+             * @enum {string}
+             */
+            measurementSource?: "ebur128" | "loudnorm";
+            /**
              * Format: date-time
              * @description ISO-8601 timestamp the measurement was taken (encode time).
              */

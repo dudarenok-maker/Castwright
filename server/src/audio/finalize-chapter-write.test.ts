@@ -8,10 +8,11 @@
    Real ffmpeg encode against a tempdir workspace — no mocks at the audio
    boundary, matching the rest of the audio suite. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { measureLoudnessFile } from './measure-loudness.js';
 import { resolveLoudnormOptions } from '../tts/loudnorm.js';
 
@@ -20,6 +21,18 @@ const SERIES = 'Standalones';
 const TITLE = 'Finalize Story';
 const SLUG = 'chapter-one';
 const SR = 24_000;
+
+/* plan 274 T8 — the committed golden-fixture PCM (real synthesised speech,
+   captured by the golden-audio harness), NOT a synthetic tone. §1.8's
+   five-ceiling measurement was run against this exact fixture, and it is
+   the only signal in this repo known to reproduce the requested/measured
+   true-peak gap: a pure sine tone's low crest factor lands loudnorm's
+   output nowhere near the ceiling regardless of amplitude (verified before
+   writing this test), while this fixture's speech-like dynamics measure
+   requested -1.5 / real -1.2, matching §1.8's row exactly. */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const goldenChapterPcm = readFileSync(join(HERE, '..', 'tts', '__fixtures__', 'golden-chapter.pcm'));
+const goldenChapterDurationSec = goldenChapterPcm.length / 2 / SR;
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -205,5 +218,172 @@ describe('finalizeChapterAudioWrite loudness sidecar (ops-36 finding 10)', () =>
     expect(sidecar.tp).not.toBe(requestedCeiling);
     // loudnorm's own state still comes from loudnorm.
     expect(sidecar.normalizationType).toBeDefined();
+  });
+});
+
+describe('finalizeChapterAudioWrite measurementSource provenance (plan 274 T4)', () => {
+  afterEach(() => {
+    vi.doUnmock('./measure-loudness.js');
+    vi.resetModules();
+  });
+
+  it('stamps "ebur128" when the real re-measurement succeeds', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    expect(sidecar.measurementSource).toBe('ebur128');
+  });
+
+  it('stamps "loudnorm" when the real re-measurement fails (fallback to loudnorm self-reports)', async () => {
+    vi.resetModules();
+    vi.doMock('./measure-loudness.js', () => ({
+      measureLoudnessFile: async () => null,
+    }));
+
+    const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
+    await finalizeMocked(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    expect(sidecar.measurementSource).toBe('loudnorm');
+    // Sanity: this is the real re-measurement failing, not a forced Shape B —
+    // loudnorm's own second-pass parse still succeeded normally.
+    expect(sidecar.normalizationType).toBeDefined();
+  });
+});
+
+describe('finalizeChapterAudioWrite QA vs sidecar (plan 274 T3 — the two surfaces can never disagree)', () => {
+  it('QA truePeakDb matches the sidecar tp exactly, and neither is the requested ceiling', async () => {
+    const { audioQa } = await finalizeChapterAudioWrite(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+
+    // One number, two surfaces.
+    expect(audioQa.truePeakDb).toBe(sidecar.tp);
+    // ...and it is a real measurement, not the ceiling loudnorm was asked for.
+    expect(audioQa.truePeakDb).not.toBe(resolveLoudnormOptions().tp);
+  });
+});
+
+describe('finalizeChapterAudioWrite QA clip check — the centrepiece (plan 274 T8)', () => {
+  afterEach(() => {
+    delete process.env.QA_CLIP_TP_DB;
+  });
+
+  it('stays quiet at defaults, then fires once the threshold moves into the requested/measured gap', async () => {
+    /* Clean arm: default ceiling (resolveLoudnormOptions().tp), default
+       QA_CLIP_TP_DB (-0.1). Both arms run at DEFAULT loudnorm config — more
+       faithful to production audio than moving the ceiling (plan §1.8: there
+       is no ceiling where `requested < -0.1 <= measured`, so the fix has to
+       move the THRESHOLD into the gap, not the ceiling). */
+    const goldenInput = {
+      ...baseInput(),
+      pcm: goldenChapterPcm,
+      durationSec: goldenChapterDurationSec,
+    };
+    const { audioQa: cleanQa } = await finalizeChapterAudioWrite(goldenInput);
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    const measured: number = sidecar.tp;
+    const { tp: requested } = resolveLoudnormOptions();
+
+    expect(cleanQa.status).toBe('ok');
+    expect(cleanQa.reasons.some((r) => /clip/i.test(r))).toBe(false);
+    // Non-vacuousness: the clean arm reads the REAL measured peak, not the
+    // requested ceiling loudnorm was asked for (plan 274 T2).
+    expect(cleanQa.truePeakDb).toBeCloseTo(measured, 5);
+    expect(cleanQa.truePeakDb).not.toBe(requested);
+
+    /* Self-calibrating guard (plan §1.8 / risk register: "medium" — ffmpeg-
+       version drift could silently close this window). If the measured
+       peak has drifted down to within 0.1 dB of the requested ceiling on
+       THIS ffmpeg build, there is no threshold left that can discriminate
+       clipping from clean without also tripping the clean arm above — fail
+       LOUDLY, don't silently skip and let a green run masquerade as proof. */
+    if (measured <= requested + 0.1) {
+      throw new Error(
+        `plan 274 T8: the true-peak overshoot window has collapsed on this ` +
+          `ffmpeg build (requested=${requested}, measured=${measured}). This ` +
+          `test can no longer discriminate the clip check — investigate ` +
+          `before trusting a green result here.`,
+      );
+    }
+
+    /* Clipping arm: the SAME audio, the SAME ceiling — only QA_CLIP_TP_DB
+       moves, into the gap between the requested ceiling and the real
+       measured peak. This is the only variable that changes between arms. */
+    process.env.QA_CLIP_TP_DB = String(measured - 0.05);
+    const { audioQa: clipQa } = await finalizeChapterAudioWrite(goldenInput);
+    expect(clipQa.status).toBe('suspect');
+    expect(clipQa.reasons.some((r) => /clip/i.test(r))).toBe(true);
+  });
+
+  /* Covers T1's probe risk: `tmpAudio` has no real extension
+     (`<slug>.<ext>.tmp-<pid>-<ts>`), so ffmpeg must probe by content for
+     every format the encoder supports, not just the ones easy to sniff. */
+  it.each(['mp3', 'aac-m4a', 'opus'] as const)(
+    'measures a real true peak for %s at the extensionless temp path',
+    async (format) => {
+      const { audioQa } = await finalizeChapterAudioWrite({
+        ...baseInput(),
+        pcm: goldenChapterPcm,
+        durationSec: goldenChapterDurationSec,
+        audioFormat: format,
+      });
+      expect(audioQa.truePeakDb).not.toBeNull();
+    },
+  );
+});
+
+describe('finalizeChapterAudioWrite QA — three-shape fail-soft (plan 274 T2)', () => {
+  afterEach(() => {
+    vi.doUnmock('./measure-loudness.js');
+    vi.doUnmock('../tts/loudnorm.js');
+    vi.resetModules();
+  });
+
+  it('does not judge QA on Shape B\'s pre-filter loudness (spurious near-silent guard)', async () => {
+    // Force the real ebur128 re-measurement to fail (`realLoudness === null`)
+    // AND force loudnormStats into Shape B: the second-pass JSON parse
+    // throws, so `mp3.ts` falls back to the provisional pre-filter stats
+    // (input_i/input_lra/input_tp) while still stamping `twoPass: true` and
+    // leaving `normalizationType` undefined — the discriminator for Shape B
+    // (plan §1.9).
+    vi.resetModules();
+    vi.doMock('./measure-loudness.js', () => ({
+      measureLoudnessFile: async () => null,
+    }));
+    vi.doMock('../tts/loudnorm.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../tts/loudnorm.js')>();
+      return {
+        ...actual,
+        parseLoudnormSecondPassJson: () => {
+          throw new Error('forced Shape B: second-pass JSON unparseable');
+        },
+      };
+    });
+
+    const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
+
+    // Quiet-but-not-silent continuous tone: PRE-filter input loudness sits
+    // well below the -40 LUFS near-silent floor, but loudnorm still
+    // normalises the actual encoded output to ~-16 LUFS. Shape B's fallback
+    // keeps the PRE-filter figure (input_i) in loudnormStats — if QA judged
+    // on that unconditionally, it would spuriously trip `nearSilentLufs`
+    // even though the real rendered output is fine (plan §1.9/§1.10).
+    const pcm = tone(1.0, 100);
+    const { audioQa } = await finalizeMocked({ ...baseInput(), pcm });
+
+    expect(audioQa.measuredLufs).toBeNull();
+    expect(audioQa.reasons.some((r) => /near-silent/i.test(r))).toBe(false);
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    // Confirms the fixture actually landed in Shape B — otherwise this test
+    // would be vacuous.
+    expect(sidecar.twoPass).toBe(true);
+    expect(sidecar.normalizationType).toBeUndefined();
   });
 });

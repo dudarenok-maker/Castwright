@@ -64,12 +64,13 @@ export interface LoudnormFirstPassStats {
  *  reads this back; field names are stable contract.
  *
  *  `i` / `lra` / `tp` are measured from the FINISHED file by a real `ebur128`
- *  pass (`server/src/audio/measure-loudness.ts`), run after the audio is
- *  encoded and renamed into place — not loudnorm's self-reported `output_*`
- *  figures (ops-36 finding 10: `output_tp` in particular is the ceiling
- *  loudnorm was ASKED to hit, not what the audio measured, and can sit below
- *  the true sample peak). On measurement failure — the audio is already on
- *  disk by then — they fall back to loudnorm's self-reports, which are NOT
+ *  pass (`server/src/audio/measure-loudness.ts`), run once the audio is fully
+ *  encoded — at the temp path, before the atomic rename (plan 274 T1
+ *  hoisted this from its original post-rename call site) — not loudnorm's
+ *  self-reported `output_*` figures (ops-36 finding 10: `output_tp` in
+ *  particular is the ceiling loudnorm was ASKED to hit, not what the audio
+ *  measured, and can sit below the true sample peak). On measurement
+ *  failure they fall back to loudnorm's self-reports, which are NOT
  *  measurements. */
 export interface LoudnormSidecarJson {
   /** Integrated loudness (LUFS) of the finished chapter, as measured by
@@ -98,6 +99,19 @@ export interface LoudnormSidecarJson {
    *  presence from `twoPass`. Sidecars written by
    *  `scripts/relufs-existing.mjs` also omit it (ebur128 has no mode). */
   normalizationType?: 'linear' | 'dynamic';
+  /** Provenance of `i`/`lra`/`tp` (plan 274). `'ebur128'` — a real post-write
+   *  measurement of the finished file. `'loudnorm'` — the real measurement
+   *  failed and the fields fall back to loudnorm's self-reported figures
+   *  (which, depending on shape, may be the requested ceiling rather than a
+   *  measurement, or pre-filter input loudness rather than the normalised
+   *  output — see `finalize-chapter-write.ts`).
+   *
+   *  OPTIONAL: absent means a sidecar written before this field existed —
+   *  treated as trustworthy-by-assumption (grandfathered) rather than
+   *  blanked, since the distinguishing information was never recorded for
+   *  those chapters. `scripts/relufs-existing.mjs` re-measures a chapter and
+   *  upgrades a grandfathered row to `'ebur128'`. */
+  measurementSource?: 'ebur128' | 'loudnorm';
   /** ISO-8601 timestamp the measurement was taken. */
   measuredAt: string;
 }
