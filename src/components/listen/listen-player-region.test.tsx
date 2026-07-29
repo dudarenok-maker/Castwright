@@ -132,6 +132,28 @@ describe('ListenPlayerRegion — per-chapter LUFS badge (plan 77)', () => {
     /* Minus-sign is U+2212 in our formatter (numeric typography). */
     expect(badge.textContent).toContain('−16.7');
   });
+
+  it('does NOT render a badge for a loudnorm-fallback record, even though twoPass is true (plan 274 T6, §1.10)', () => {
+    /* `measurementSource: 'loudnorm'` means the real ebur128 re-measurement
+       failed and the record is holding one of loudnorm's self-reported
+       shapes — never a real measurement, regardless of `twoPass`. Rendering
+       a coloured badge off it is exactly the lie plan 274 exists to stop. */
+    renderRegion([makeChapter(1, { lufs: lufs(0.1, { measurementSource: 'loudnorm' }) })]);
+    expect(screen.getByTestId('chapter-row-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('chapter-row-1-lufs-badge')).toBeNull();
+  });
+
+  it('renders a badge for an ebur128-attested record', () => {
+    renderRegion([makeChapter(1, { lufs: lufs(0.1, { measurementSource: 'ebur128' }) })]);
+    const badge = screen.getByTestId('chapter-row-1-lufs-badge');
+    expect(badge.getAttribute('data-bucket')).toBe('on-target');
+  });
+
+  it('grandfathers a legacy two-pass record (no measurementSource) — renders as before', () => {
+    renderRegion([makeChapter(1, { lufs: lufs(0.1, { measurementSource: undefined }) })]);
+    const badge = screen.getByTestId('chapter-row-1-lufs-badge');
+    expect(badge.getAttribute('data-bucket')).toBe('on-target');
+  });
 });
 
 describe('ListenPlayerRegion — LoudnessReport card', () => {

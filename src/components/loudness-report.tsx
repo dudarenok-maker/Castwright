@@ -6,10 +6,14 @@
    - A sparkline histogram of per-chapter measured integrated loudness
    - An expandable per-chapter table: title | i | drift | badge |
      measured-at relative time
-   - Critical gate: chapters with `twoPass === false` are treated as
-     NEUTRAL (no ground-truth measurement) — single-pass values are
-     the nominal target, not real post-filter measurements. Drift
-     comparison is GATED on `twoPass === true`.
+   - Critical gate (plan 274): chapters are gated on measurement
+     PROVENANCE, not `twoPass` — a `measurementSource: 'loudnorm'` record
+     means the real ebur128 re-measurement failed, so the figures are
+     loudnorm's self-reports (never a real measurement, whatever `twoPass`
+     says) and must render NEUTRAL. A record with no `measurementSource`
+     at all (written before this field existed) is grandfathered by
+     delegating to the old `twoPass === true` rule, so no already-rendered
+     chapter's badge moves. See `classifyDrift` below.
 
    Mount point: rendered inside `ListenPlayerRegion` below the chapter
    list so it sits next to the rows it summarises. The card stays
@@ -37,12 +41,38 @@ interface LoudnessReportProps {
 export type LoudnessDriftBucket = 'on-target' | 'slight' | 'off-target' | 'no-data';
 
 export function classifyDrift(
-  lufs: { i: number; target: number; twoPass: boolean } | null | undefined,
+  lufs:
+    | {
+        i: number;
+        target: number;
+        twoPass: boolean;
+        measurementSource?: 'ebur128' | 'loudnorm';
+      }
+    | null
+    | undefined,
 ): LoudnessDriftBucket {
-  /* The CRITICAL gate: single-pass values are NOT post-filter measurements.
-     They're the nominal target restated. Rendering them as ground-truth
-     would lie to the user. Degrade to neutral. */
-  if (!lufs || lufs.twoPass !== true) return 'no-data';
+  if (!lufs) return 'no-data';
+  /* plan 274 T6 — gate on measurement PROVENANCE, not on `twoPass`.
+     `twoPass` never told us whether `i`/`tp` were a real measurement; it
+     only told us which loudnorm pass ran (ops-36 finding 10, §1.9).
+       - 'ebur128': a real post-write measurement. Trustworthy.
+       - 'loudnorm': the real measurement failed and the record is holding
+         one of loudnorm's self-reported shapes (the requested ceiling, or
+         pre-filter input loudness) — never a real measurement of the
+         finished chapter. This is the ONLY new neutral case (§1.10's lie).
+       - absent (undefined): a sidecar written before this field existed.
+         Decision 1 = A' — grandfather it by delegating to the OLD
+         twoPass-only rule, unchanged, so no existing chapter's badge moves.
+         Do NOT collapse this to an unconditional render — that would also
+         start rendering legacy single-pass (`twoPass: false`) rows, which
+         the pre-plan-274 gate was right to hide. */
+  if (lufs.measurementSource === 'ebur128') {
+    // fall through to the drift computation below
+  } else if (lufs.measurementSource === 'loudnorm') {
+    return 'no-data';
+  } else if (lufs.twoPass !== true) {
+    return 'no-data';
+  }
   if (!Number.isFinite(lufs.i) || !Number.isFinite(lufs.target)) return 'no-data';
   const drift = Math.abs(lufs.i - lufs.target);
   if (drift <= 2) return 'on-target';
@@ -156,10 +186,12 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
       listenable.map((c) => {
         const lufs = c.lufs ?? null;
         const bucket = classifyDrift(lufs);
-        const drift =
-          lufs && lufs.twoPass === true && Number.isFinite(lufs.i) && Number.isFinite(lufs.target)
-            ? Math.abs(lufs.i - lufs.target)
-            : 0;
+        /* plan 274 T6 — gate on `bucket` (which already reads provenance),
+           not on `twoPass` directly: a `measurementSource: 'loudnorm'`
+           record has `twoPass: true` but `bucket` is 'no-data', and
+           classifyDrift already validated i/target are finite whenever
+           bucket isn't 'no-data'. */
+        const drift = bucket === 'no-data' ? 0 : Math.abs(lufs!.i - lufs!.target);
         return { chapter: c, lufs, bucket, drift };
       }),
     [listenable],
@@ -175,7 +207,7 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
      default if no measured chapters exist yet (the empty state hides this
      line anyway, so the fallback is decorative). */
   const target =
-    classified.find((c) => c.lufs?.twoPass === true)?.lufs?.target ?? -16;
+    classified.find((c) => c.bucket !== 'no-data')?.lufs?.target ?? -16;
 
   /* Empty state: every chapter is "no-data". Either the book was
      generated before plan 71, AUDIO_LOUDNORM_ENABLED=false at encode
@@ -258,6 +290,12 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
                   <tbody>
                     {classified.map(({ chapter, lufs, bucket }) => {
                       const copy = BUCKET_COPY[bucket];
+                      /* plan 274 T6 — gate the Measured/Drift cells on
+                         `bucket`, not `twoPass` directly, so they can never
+                         disagree with the Status pill sitting next to them:
+                         a `measurementSource: 'loudnorm'` record has
+                         `twoPass: true` but must still read as untrusted. */
+                      const isTrusted = bucket !== 'no-data';
                       return (
                         <tr
                           key={chapter.id}
@@ -274,12 +312,10 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
                             </span>
                           </td>
                           <td className="py-2 px-3 tabular-nums text-ink/80">
-                            {lufs && lufs.twoPass === true ? formatLufs(lufs.i) : '—'}
+                            {isTrusted && lufs ? formatLufs(lufs.i) : '—'}
                           </td>
                           <td className="py-2 px-3 tabular-nums text-ink/80">
-                            {lufs && lufs.twoPass === true
-                              ? describeDrift(lufs.i, lufs.target)
-                              : '—'}
+                            {isTrusted && lufs ? describeDrift(lufs.i, lufs.target) : '—'}
                           </td>
                           <td className="py-2 px-3">
                             <Pill color={copy.pillColor}>{copy.label}</Pill>
@@ -297,10 +333,11 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
                 </table>
                 <p className="text-[11px] text-ink/50 mt-3 leading-relaxed">
                   Drift is measured against the target integrated loudness using
-                  the EBU R128 two-pass algorithm. Single-pass renders surface
-                  as "No measurement" because the value reported is the nominal
-                  target, not a post-filter measurement. Re-render a chapter to
-                  refresh its measurement.
+                  a real EBU R128 measurement of the finished chapter. A chapter
+                  shows "No measurement" when it hasn't rendered since this
+                  measurement was added, or when the measurement failed and only
+                  loudnorm's own self-reported figures are on hand — never shown
+                  as ground truth. Re-render a chapter to refresh it.
                 </p>
               </div>
             )}

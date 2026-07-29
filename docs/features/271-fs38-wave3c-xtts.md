@@ -369,6 +369,32 @@ that routes to Coqui today).
 
 ## Owed on-box acceptance
 
+> **ATTEMPTED 2026-07-29 — BLOCKED, none of E-1…E-7 discharged.** First on-box
+> run, SHA `2503bca6`. Coqui/XTTS **cannot load in a sidecar that has already
+> served ECAPA `/embed`** (`ImportError: Lazy import of
+> LazyModule(…speechbrain.integrations.k2_fsa)` → `RuntimeError: Failed to import
+> coqui-tts`, surfaced as a bare 500); a freshly-started sidecar returns a clean
+> 409 instead. Since cloning **always** calls `/embed` for the fidelity check,
+> the natural clone→render-on-Coqui sequence trips it. Filed as **#1944**, which
+> also covers two secondary defects: `/health` reports
+> `coqui_package_installed: true` from a spec probe that never imports (this is
+> how the run was mis-scoped as unblocked), and the `RuntimeError` text blames a
+> missing PyTorch when torch is installed and Qwen is rendering on GPU in the
+> same process.
+>
+> E-01 was attempted: the Coqui splice reported `splice_complete` but wrote **no
+> `voices\xtts\` artifacts** and left `characterSnapshots.wren.voiceEngine` as
+> `qwen`, because the character's own `ttsEngine: 'qwen'` overrides the requested
+> `modelKey`. To retry, flip the target character's engine to coqui (or use the
+> Russian Coalfall twin) **and** start from a sidecar that has never called
+> `/embed`. **Reassuringly, no silent substitution occurred** — the resulting
+> audio still measured as the cloned speaker (0.66 / 0.61 vs the human source),
+> so the never-substitute guarantee held even on the path that failed to reach
+> XTTS. E-08 (dual-slot provenance-gated assign) **did pass**, exercised from the
+> Qwen side via run-sheet B-07. Details in
+> [`docs/testing/fs38-wave3-onbox-acceptance.md`](../testing/fs38-wave3-onbox-acceptance.md) §7
+> and register row A1.
+
 None of the items below can be settled from a CI box — they need either a
 real GPU running the real sidecar, a real coqui-tts version bump, or a human
 ear. Tracked here rather than silently dropped; **not a merge blocker** per

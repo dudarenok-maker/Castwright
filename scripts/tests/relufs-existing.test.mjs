@@ -15,11 +15,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { iterChapters, parseEbur128Summary } from '../relufs-existing.mjs';
+import { iterChapters, parseEbur128Summary, rewriteSidecar } from '../relufs-existing.mjs';
 
 test('parseEbur128Summary extracts I, LRA, and Peak from a real-shape stderr', () => {
   /* Verbatim shape ffmpeg's ebur128 filter prints. The per-frame "I:" lines
@@ -132,6 +132,31 @@ test('iterChapters returns nothing when the books root does not exist', () => {
        without crashing. Fresh-clone workspaces hit this path. */
     const yielded = Array.from(iterChapters(join(tmp, 'books')));
     assert.deepEqual(yielded, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('rewriteSidecar stamps measurementSource: "ebur128" (plan 274 T5)', () => {
+  /* Decision 1 = A' (grandfather legacy sidecars). This script is the ONLY
+     way an operator upgrades a grandfathered row to a genuinely-attested
+     one, so its payload must carry the field the new UI predicate reads —
+     otherwise running it against a legacy chapter would be a no-op: the
+     rewritten sidecar would render exactly as untrustworthy as before. */
+  const tmp = mkdtempSync(join(tmpdir(), 'relufs-rewrite-'));
+  try {
+    const lufsPath = join(tmp, '01-intro.lufs.json');
+    writeFileSync(
+      lufsPath,
+      JSON.stringify({ i: -21.7, lra: 5.7, tp: -1.5, target: -16, twoPass: true }),
+    );
+    rewriteSidecar(lufsPath, { i: -16.0, lra: 7.2, tp: -1.2 });
+    const rewritten = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    assert.equal(rewritten.measurementSource, 'ebur128');
+    // It only ever writes a successful re-measurement (the caller already
+    // handled a failed one by skipping the rewrite), so no other value is
+    // ever legitimate here.
+    assert.equal(rewritten.i, -16.0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

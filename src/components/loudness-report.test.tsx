@@ -68,6 +68,41 @@ describe('classifyDrift — bucket thresholds', () => {
   });
 });
 
+describe('classifyDrift — measurementSource provenance (plan 274 T6)', () => {
+  it('treats a `loudnorm`-fallback record as no-data even though twoPass is true — the §1.10 lie', () => {
+    /* A `measurementSource: 'loudnorm'` record means the real ebur128
+       re-measurement failed and the sidecar is holding one of loudnorm's
+       self-reported shapes (the requested ceiling, or pre-filter input
+       loudness) — never a real measurement of the finished chapter, no
+       matter what twoPass says. Rendering it as ground truth is exactly
+       the bug this field exists to stop (plan §1.10). */
+    expect(classifyDrift(lufs(0.1, { measurementSource: 'loudnorm' }))).toBe('no-data');
+  });
+
+  it('renders a `ebur128`-attested record normally', () => {
+    expect(classifyDrift(lufs(0.1, { measurementSource: 'ebur128' }))).toBe('on-target');
+    expect(classifyDrift(lufs(2.6, { measurementSource: 'ebur128' }))).toBe('slight');
+  });
+
+  it('grandfathers a legacy single-pass record (no measurementSource) to no-data — the A\' delegation guard', () => {
+    /* No measurementSource at all means a pre-change sidecar. Decision 1 =
+       A' says: reproduce the OLD twoPass-only rule exactly, byte for byte —
+       a legacy single-pass row must NOT start rendering just because the
+       new predicate exists. */
+    expect(classifyDrift(lufs(0, { measurementSource: undefined, twoPass: false }))).toBe(
+      'no-data',
+    );
+  });
+
+  it('grandfathers a legacy two-pass record (no measurementSource) to its old bucket', () => {
+    /* Same delegation, the other arm: a pre-change two-pass row keeps
+       rendering exactly as it did before this field existed. */
+    expect(classifyDrift(lufs(0.1, { measurementSource: undefined, twoPass: true }))).toBe(
+      'on-target',
+    );
+  });
+});
+
 describe('LoudnessReport — summary + sparkline', () => {
   it('renders the on-target / measured count in the summary line when chapters are within target', () => {
     const chapters: Chapter[] = [
@@ -164,6 +199,27 @@ describe('LoudnessReport — single-pass gate (CRITICAL)', () => {
     /* The single-pass row's measured / drift cells show em-dashes — the
        value isn't a real measurement so we don't print it. */
     expect(within(row2).getByText('No measurement')).toBeInTheDocument();
+  });
+
+  it('a loudnorm-fallback row (plan 274 §1.10) hides its Measured/Drift cells too, not just the Status pill', () => {
+    /* Regression guard: `measurementSource: 'loudnorm'` + `twoPass: true`
+       is exactly the shape a real fallback sidecar carries. The Status
+       column already reads "No measurement" via `bucket`, but the
+       Measured/Drift table cells used to gate on `twoPass === true`
+       directly — which is TRUE here — so they would have kept printing
+       the fabricated `i`/target as if it were real, contradicting the
+       Status pill sitting right next to them. Both must agree. */
+    const chapters: Chapter[] = [
+      makeChapter(1, { lufs: lufs(0.1) }), // keeps the report card out of its empty state
+      makeChapter(2, { lufs: lufs(0.1, { measurementSource: 'loudnorm' }) }),
+    ];
+    render(<LoudnessReport chapters={chapters} />);
+    fireEvent.click(screen.getByTestId('loudness-report-toggle'));
+    const row2 = screen.getByTestId('loudness-report-row-2');
+    expect(row2.getAttribute('data-bucket')).toBe('no-data');
+    expect(within(row2).getByText('No measurement')).toBeInTheDocument();
+    // The em-dash cells — not the fabricated LUFS figure.
+    expect(within(row2).queryByText(/LUFS/)).toBeNull();
   });
 });
 

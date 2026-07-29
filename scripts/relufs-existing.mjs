@@ -217,8 +217,11 @@ function parseNum(s) {
    existing `target` so re-measured chapters keep their original normalisation
    target; sets `twoPass: true` because that's what loudnorm runs at production
    default (the script is fixing the post-fix sidecar contract — single-pass
-   chapters were always nominal-target and don't need re-measurement). */
-function rewriteSidecar(lufsPath, measurement) {
+   chapters were always nominal-target and don't need re-measurement).
+   Deliberately omits `normalizationType` (plan 274 T5) — `ebur128` has no
+   linear/dynamic mode, so there is nothing correct to stamp there; do not
+   add one. */
+export function rewriteSidecar(lufsPath, measurement) {
   let existing = null;
   try {
     existing = JSON.parse(readFileSync(lufsPath, 'utf8'));
@@ -233,6 +236,15 @@ function rewriteSidecar(lufsPath, measurement) {
     tp: measurement.tp,
     target,
     twoPass: true,
+    /* plan 274 T5 — this script only ever writes a successful re-measurement
+       (a failed one is skipped by the caller before rewriteSidecar runs), so
+       'ebur128' is the only value that's ever correct here. Under Decision 1
+       = A' (grandfather legacy sidecars), this is the ONLY way an operator
+       upgrades a grandfathered row (no measurementSource) to a genuinely
+       attested one — without it, running this script against a legacy
+       chapter would rewrite the numbers but leave the row exactly as
+       untrustworthy as before. */
+    measurementSource: 'ebur128',
     measuredAt: new Date().toISOString(),
   };
   const tmp = `${lufsPath}.tmp-${process.pid}-${Date.now()}`;

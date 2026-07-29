@@ -7,9 +7,9 @@
 
    Authored for the fs-26 splice path so a re-mix/re-record persists byte-
    identically to a full regen (same loudnorm target, same segments-file shape,
-   same `.previous.*` preservation, same state.json fields). generation.ts still
-   inlines the equivalent tail (woven into its job/SSE bookkeeping); converging
-   it onto this helper is a deliberate follow-up — see fs-26 plan doc. */
+   same `.previous.*` preservation, same state.json fields). srv-29 converged
+   `routes/generation.ts` onto this same helper (see its call site there) —
+   it no longer inlines its own tail. */
 
 import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,7 +19,7 @@ import { stampStateSchema } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { formatDuration } from './format-duration.js';
-import { measureLoudnessFile } from './measure-loudness.js';
+import { measureLoudnessFile, type MeasuredLoudness } from './measure-loudness.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -118,22 +118,17 @@ export async function finalizeChapterAudioWrite(
 
   /* EBU R128 loudness normalisation (plan 71). Default ON; opt out with
      AUDIO_LOUDNORM_ENABLED=false. Two-pass measure-then-apply runs inside
-     encodePcmToAudio; the callback persists the sidecar. */
+     encodePcmToAudio; the callback just captures loudnorm's self-reported
+     stats. The sidecar itself is written once, below, after the real
+     ebur128 re-measurement (plan 274 T1/T2) — no longer here. */
   const loudnorm = configValue<boolean>('audio.loudnorm.enabled') ? resolveLoudnormOptions() : undefined;
   let loudnormStats: LoudnormSidecarJson | null = null;
   const audioBuffer = await encodePcmToAudio(pcm, sampleRate, {
     format: audioFormat,
     quality: 2,
     loudnorm,
-    onLoudnessMeasured: async (stats) => {
+    onLoudnessMeasured: (stats) => {
       loudnormStats = stats;
-      try {
-        await writeChapterLufsFile(stats, lufsPath);
-      } catch (err) {
-        console.warn(
-          `[splice] failed to write loudness sidecar for ${chapter.slug}: ${(err as Error).message}`,
-        );
-      }
     },
   });
 
@@ -141,14 +136,113 @@ export async function finalizeChapterAudioWrite(
      forward progress before QA/snapshots/write (generation's watchdog bump). */
   if (input.onEncoded) await input.onEncoded();
 
+  const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmpAudio, audioBuffer);
+
+  /* plan 274 T1 — hoist the single real ebur128 measurement to immediately
+     after the encoded bytes hit disk (still at the temp path: the later
+     rename is a same-directory move that preserves bytes exactly, so
+     measuring `tmpAudio` and measuring `audioPath` are the same measurement
+     of the same artifact). One result now feeds three consumers — the QA
+     verdict below, the `.lufs.json` sidecar, and (T4) the `measurementSource`
+     provenance flag — instead of the sidecar being written twice (once from
+     loudnorm's self-report, once rewritten post-rename with the real
+     measurement). Fails soft: `realLoudness` stays null on any failure and
+     QA/sidecar fall back to loudnorm's self-reports (ops-36 finding 10; the
+     three-shape fail-soft immediately below). */
+  let realLoudness: MeasuredLoudness | null = null;
+  if (loudnormStats) {
+    try {
+      realLoudness = await measureLoudnessFile(tmpAudio);
+      if (!realLoudness) {
+        console.warn(
+          `[splice] ebur128 measurement unavailable for ${chapter.slug}; ` +
+            `sidecar keeps loudnorm's self-reported figures`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[splice] failed to measure loudness for ${chapter.slug}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /* plan 274 T1 — single sidecar write (collapsed from the old two-write
+     pattern: once from loudnorm's self-report during encode, once rewritten
+     post-rename with the real measurement). `i`/`lra`/`tp` are rendered to
+     users by the Listen view's loudness badge, and loudnorm's `output_tp` is
+     the ceiling it was ASKED for, not what the audio reached (ops-36 finding
+     10). Fails soft: on a failed measurement the sidecar keeps loudnorm's
+     self-reported figures rather than breaking the render.
+
+     plan 274 T4 — `measurementSource` records which of those two happened,
+     so a reader (and the UI, once T6 lands) can tell a real measurement from
+     a fallback rather than trusting every sidecar equally. */
+  if (loudnormStats) {
+    const sidecarPayload: LoudnormSidecarJson = realLoudness
+      ? {
+          ...(loudnormStats as LoudnormSidecarJson),
+          i: realLoudness.i,
+          lra: realLoudness.lra,
+          tp: realLoudness.tp,
+          measurementSource: 'ebur128',
+        }
+      : { ...(loudnormStats as LoudnormSidecarJson), measurementSource: 'loudnorm' };
+    try {
+      await writeChapterLufsFile(sidecarPayload, lufsPath);
+    } catch (err) {
+      console.warn(
+        `[splice] failed to write loudness sidecar for ${chapter.slug}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   /* srv-27 — advisory post-synthesis QA. `loudnormStats` is null when loudnorm
-     is disabled (only the duration check runs then). */
+     is disabled (only the duration check runs then).
+
+     plan 274 T2 — three-shape fail-soft (audio-qa.ts header + plan
+     §1.9/§2.2). `loudnormStats` has three reachable shapes, not one:
+       - Shape A (`normalizationType` set): `i` is genuinely post-filter;
+         `tp` is the REQUESTED ceiling, not a measurement (§1.3).
+       - Shape B (`normalizationType` undefined, `twoPass: true`): the
+         second-pass JSON was missing/unparseable/non-finite, so `i`/`tp`
+         are the PRE-filter input measurement (§1.9) — judging QA on that
+         risks a spurious `nearSilentLufs` trip on a chapter that actually
+         normalised fine (§1.10).
+       - Shape C (`twoPass: false`, unreachable in production — §1.5): `i`/`tp`
+         are the nominal target, not a measurement.
+     When `realLoudness` is present (the overwhelmingly common case) it feeds
+     BOTH fields, unconditionally — shape doesn't matter. Absent that, only
+     Shape A's `i` is trustworthy enough to judge on; `tp` NEVER falls back,
+     because no shape of `loudnormStats.tp` is a real measurement.
+
+     Not exhaustive: two more states exist beyond the three above.
+       - A fourth shape: a two-pass encode whose second-pass JSON parses and
+         passes `isSecondPassMeasurementUseable` (mp3.ts:436-455) but whose
+         `normalization_type` is absent/unrecognised yields
+         `normalizationType: undefined` while `i` is genuinely `output_i` —
+         a real post-filter measurement. The `shapeA` discriminator below
+         then misclassifies it as Shape B and sets `qaLufs = null`, silently
+         skipping the near-silent check. Fails closed (never fabricates a
+         measured figure), and today's ffmpeg always emits `linear`/`dynamic`,
+         so this is a doc gap, not a live bug.
+       - A fifth state: the first-pass measurement is unusable (dead-silent
+         input) → `pendingSidecar` stays `null` → `onLoudnessMeasured` never
+         fires → no sidecar and no QA figure at all. Handled correctly by the
+         `if (loudnormStats)` guard above. */
   const measured = loudnormStats as LoudnormSidecarJson | null;
+  const shapeA = measured?.normalizationType !== undefined;
+  const qaLufs = realLoudness
+    ? realLoudness.i
+    : shapeA
+      ? measured!.i
+      : null;
+  const qaTp = realLoudness ? realLoudness.tp : null;
   const baseQa: ChapterQaVerdict = evaluateChapterQa({
     durationSec,
     expectedSec: input.expectedSec ?? durationSec,
-    lufs: measured ? measured.i : null,
-    truePeakDb: measured ? measured.tp : null,
+    lufs: qaLufs,
+    truePeakDb: qaTp,
   });
   /* Roll the pre-assembly per-sentence gate (segment-qa.ts, plan 179) into the
      chapter-level verdict so the existing "Suspect" badge lights up when a
@@ -201,8 +295,6 @@ export async function finalizeChapterAudioWrite(
     qa: audioQa,
   };
 
-  const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmpAudio, audioBuffer);
   /* Rollback preservation: rename the live `<slug>.<ext>` + `.segments.json`
      to `.previous.*` BEFORE the new render lands. The revision-diff player
      auditions the preserved pair (A) vs this render (B). */
@@ -217,33 +309,6 @@ export async function finalizeChapterAudioWrite(
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
   } catch (err) {
     console.warn(`[splice] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`);
-  }
-
-  /* ops-36 finding 10 — replace loudnorm's self-reported figures with a real
-     EBU R128 measurement of the file we just wrote. `i`/`lra`/`tp` are rendered
-     to users by the Listen view's loudness badge, and loudnorm's `output_tp` is
-     the ceiling it was ASKED for, not what the audio reached. Fails soft: the
-     audio is already on disk, so a failed measurement leaves the loudnorm-
-     derived sidecar in place rather than breaking the render. */
-  if (loudnormStats) {
-    try {
-      const real = await measureLoudnessFile(audioPath);
-      if (real) {
-        await writeChapterLufsFile(
-          { ...(loudnormStats as LoudnormSidecarJson), i: real.i, lra: real.lra, tp: real.tp },
-          lufsPath,
-        );
-      } else {
-        console.warn(
-          `[splice] ebur128 measurement unavailable for ${chapter.slug}; ` +
-            `sidecar keeps loudnorm's self-reported figures`,
-        );
-      }
-    } catch (err) {
-      console.warn(
-        `[splice] failed to re-measure loudness for ${chapter.slug}: ${(err as Error).message}`,
-      );
-    }
   }
 
   /* Stamp duration / model / QA into state.json (read-modify-write, keyed by

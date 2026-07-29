@@ -420,6 +420,21 @@ thunks/components in isolation.
    Expected: the chapter fails loud (surfaces an error naming the cloned
    voice) rather than silently rendering in a substitute voice.
 
+> **PARTIALLY DISCHARGED 2026-07-29** — first on-box run, SHA `2503bca6`. Item
+> **(a) is now settled**: the ECAPA cosine reads sane and is genuinely computed
+> (three distinct values; two clones of the *same* fixture gave
+> 0.8914416029109107 vs 0.8812903511976901 — similar but not identical, so not a
+> mock constant), and a cloned voice renders recognisably in a real book
+> (Coalfall ch.3, `resolvedVoiceName` = the clone's storage key, `asr.verdict:
+> ok`, WER 0; `/embed` similarity to the human source: audition **0.822**,
+> in-book segments **0.564**/**0.706**, against a designed-voice control of
+> **0.158**). The *by-ear* half of (a) is still owed — a human must listen.
+> Item **(b) is still owed.** The run also found a Critical defect on shipped
+> `main` — every fresh clone 500'd on its first synthesis (#1941, fixed in PR
+> #1942, verified live). Full results in
+> [`docs/testing/fs38-wave3-onbox-acceptance.md`](../testing/fs38-wave3-onbox-acceptance.md) §7;
+> remaining debt in register row A1.
+>
 > **Owed — on-box live-GPU acceptance (spec §8), not yet run.** Steps 8/9
 > above are describable from the automated suite's mocked seams but have not
 > been walked on real hardware: (a) a real recorded/uploaded sample renders

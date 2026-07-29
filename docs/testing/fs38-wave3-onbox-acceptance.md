@@ -93,6 +93,47 @@ all three plans:
 meaningful against a recorded environment (VRAM/capacity behaviour especially —
 this box is dual-GPU).
 
+> ### Run 1 — captured 2026-07-29
+>
+> | # | Value |
+> |---|---|
+> | P-01 | 2026-07-29, ~13:40–16:10 local |
+> | P-02 | Claude Code (agent), on the repo owner's box |
+> | P-03 | `2503bca68d387bd155d337cef6746d8cfb812ac6` |
+> | P-04 | `main` |
+> | P-05 | CLEAN at run start |
+> | P-06 / P-07 / P-08 | 1.14.0 / 1.14.0 / 1.14.0 |
+> | P-09 | `engines: ["coqui","kokoro","qwen"]`, `devices_state: ready`, `poisoned: false` |
+> | P-10 | `0, NVIDIA GeForce RTX 4070 Laptop GPU, 8585 MB`, uuid `1831b67f-…` |
+> | P-11 | `1, NVIDIA GeForce RTX 5070 Ti, 17094 MB`, uuid `73e7270e-…` — **eGPU attached**, 2-card rows runnable |
+> | P-12 | 610.62 |
+> | P-13 / P-14 | Qwen weights present, `install_state: ready` / 1.7B-Base present |
+> | P-15 | `whisper_package_installed: true`; `faster-whisper-base` cached |
+> | P-16 | ECAPA `spkrec-ecapa-voxceleb` cached; `spk_device: cpu`; `/embed` returns dim 192 |
+> | P-17 | **`C:\AudiobookWorkspace`** |
+> | P-18 | `env` |
+> | P-19 | `coqui_package_installed: true`, `coqui_weights_present: true`, `coqui_version: 0.27.5` — **but see #1944: this field does not mean Coqui can actually load** |
+> | P-20 | `SEG_CAPACITY_ADMISSION=1` |
+> | P-21 | unset → local (Ollama present with `qwen36-cw-*` / `gemma4-cw-*`) |
+> | P-22 | `qwen3-tts-1.7b` |
+> | P-23 | unset at run start |
+> | P-24 | no pin; both GPUs idle, `resident: []` |
+> | P-25 | `autoStartSidecar: true` |
+>
+> **Deviation from §3's probes:** `server/.env` sets `LAN_HTTPS=1`, so the server
+> listens on **`https://localhost:8443`**, not `http://localhost:8080`. Every
+> `curl` in this sheet needs `curl.exe -k https://localhost:8443`. The sidecar is
+> unchanged at `http://localhost:9000`.
+>
+> **Fixtures:** built from public-domain LibriVox recordings (two distinct
+> narrators) and left at `C:\fixtures\fs38\` — F-1…F-9 plus `F8b-twospeaker`.
+> F-8 was regenerated at `volume=+6dB` rather than the sheet's `-8dB`, which
+> landed at −41.7 dBFS, only 3.3 dB above the −45 dBFS fatal-silence floor.
+>
+> **Baseline before the run:** `C:\AudiobookWorkspace\voice-library\` did not
+> exist and `voices\xtts\` did not exist — independent confirmation that no clone
+> had ever been created on this box. `voices\qwen\` held 1109 files / 605 `.pt`.
+
 | # | Item | How to obtain | Value (fill in) |
 |---|---|---|---|
 | P-01 | Run date / time | — | |
@@ -2531,31 +2572,31 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| A-01 | Clean ≥8 s clip → candidate + transcript | | |
-| A-02 | <4 s → 400 duration message | | |
-| A-03 | Near-silent → 400 | | |
-| A-04 | 4–8 s → warns, proceeds | | |
-| A-05 | Clipping → warns, proceeds | | |
-| A-06 | >60 s → capped, not rejected | | |
-| A-07 | Browser recorder (webm/opus) end to end | | |
-| A-08 | Mic denied → Upload fallback | | |
-| A-09 | Consent gates Continue | | |
-| A-10 | Write-time consent guard; nothing persisted | | |
-| A-11 | `/revoke` stamps `revokedAt` | | |
-| A-12 | Sample route 403s a revoked voice | | |
+| A-01 | Clean ≥8 s clip → candidate + transcript | **P** | 202; real Whisper transcript; 20.0 s; 24000 Hz; `qualityWarnings` []; `master.wav`+`candidate.json`; header `52 49 46 46 … 57 41 56 45` |
+| A-02 | <4 s → 400 duration message | **P** | 400, `Sample too short (2.0s) — need at least 4s.` exact; no candidate dir created |
+| A-03 | Near-silent → 400 | **P** | 400, `Sample is silent or too quiet — record closer to the mic.` exact |
+| A-04 | 4–8 s → warns, proceeds | **P** | 202; exactly one warning, `Sample is a little short (6.0s) — 8s+ clones better.` |
+| A-05 | Clipping → warns, proceeds | **P** | 202; `Audio is clipping — lower the input level or move back from the mic.` |
+| A-06 | >60 s → capped, not rejected | **P** | 202; `durationSeconds` 60 not 90; `master.wav` **2,880,044 bytes — delta 0**; no length warning |
+| A-07 | Browser recorder (webm/opus) end to end | **B** | needs a real browser + real microphone |
+| A-08 | Mic denied → Upload fallback | **B** | needs a browser with mic permission blocked |
+| A-09 | Consent gates Continue | **B** | wizard UI; needs a browser |
+| A-10 | Write-time consent guard; nothing persisted | **P** | 422 consent message; missing `candidateId` 400; unknown 404; lib entries 0→0; `.pt` 605→605; candidate NOT consumed |
+| A-11 | `/revoke` stamps `revokedAt` | **P** | 200; `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` unchanged; entry dir + `voice.json` survive; `master` now absent; unknown uuid → 404 |
+| A-12 | Sample route 403s a revoked voice | **P** | 403 `This cloned voice has no valid consent and cannot be played.` exact; healthy control 200 `cached:true` |
 | A-13 | Voice library unconditionally available | | |
 
 #### Section B — 3b1 (13)
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| B-01 | Wizard happy path (Upload) → ready cloned entry | | |
-| B-02 | Wizard happy path (Record) | | |
-| B-03 | Audition **sounds like the person** | | |
-| B-04 | ECAPA cosine is a real number, not a mock constant | | |
-| B-05 | Fidelity-unavailable is advisory, not fatal | | |
-| B-06 | Low-fidelity clip warns but still saves | | |
-| B-07 | Assign to a character | | |
+| B-01 | Wizard happy path (Upload) → ready cloned entry | **P** (route + disk) | 200; `$U` = `0abceba4-5eba-4d8f-8bdf-46bee14c931d`; baseModel `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; entry dir `voice.json`+`master.wav`; `qwen-$U.{pt,json}`; `.pt` 605→606; candidate consumed; manifest `clone:true`, `designModel:null`, `refText`=transcript; no `preview.mp3` (expected). **UI assertions (completion screen, card badge) still owed** — driven via the API, not the wizard |
+| B-02 | Wizard happy path (Record) | **B** | needs a real browser + microphone |
+| B-03 | Audition **sounds like the person** | **B** | requires a human listener. Objective half done: `/embed` cosine audition-vs-source **0.822**, designed-voice control **0.158**. A/B kit left at `C:\fixtures\fs38\_EARCHECK\` |
+| B-04 | ECAPA cosine is a real number, not a mock constant | **P** | Three distinct finite values in [-1,1]: F-1 **0.8914416029109107**, F-1 again **0.8812903511976901** (similar, not byte-identical → computed, not stubbed), two-speaker mix **0.7727**. `cloneFidelityUnavailable` absent. A 4th clone post-fix scored 0.8916 on an independent speaker |
+| B-05 | Fidelity-unavailable is advisory, not fatal | **B** | no way to fail `/embed` independently of the clone path — the sheet's own caveat |
+| B-06 | Low-fidelity clip warns but still saves | **B — not reachable as written** | See **#1945**. The cosine scores clone-vs-source *faithfulness*, so degrading the source degrades the clone equally: clean 0.891, band-limited **0.881** (not lower), two speakers 0.773. Nothing realistic nears `CLONE_FIDELITY_MIN = 0.3`; **the advisory-warning path has never fired on hardware** |
+| B-07 | Assign to a character | **P** | 200 `{updated:1, written:["qwen","coqui"]}`; qwen slot `{name:qwen-$U, libraryUuid:$U, provenance:cloned}`; **`variants` map dropped** (had a `whisper` variant); `voiceUuid` unchanged; **coqui slot also written** `{name:xtts-$U,…}` per Task 24; all 13 characters diffed — only the target changed |
 | B-08 | Cast sample plays in the cloned voice | | |
 | B-09 | Chapter renders, consistent across lines | | |
 | B-10 | Consistent across chapters | | |
@@ -2568,7 +2609,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | ID | Test | Result | Notes |
 |---|---|---|---|
 | **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | | |
-| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | | |
+| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **B** | needs a full-chapter render — blocked by the side-11 leak (see §7.2 BLOCKER-1) |
 | C-03 | Broken voice not in this chapter doesn't fail it | | |
 | C-04 | Title-beat narrator path is gated | | |
 | C-05 | Orphaned-characterId narrator path is gated | | |
@@ -2576,8 +2617,8 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-07 | Base-model bump → same re-derive | | |
 | C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | | |
 | C-09 | **Permanent** 4xx → persists `failed` (terminal) | | |
-| C-10 ⭐ | **Total erasure on revoke**, incl. the entry-dir recording | | |
-| C-11 | Delete also removes the entry dir + clears cast refs | | |
+| C-10 ⭐ | **Total erasure on revoke**, incl. the entry-dir recording | **P** | Pre-state 7 artifacts / 3 locations (`.pt`, `.json`, `__1.7b.pt`, `master.wav`, `voice.json`, 2 cached mp3s). After revoke: 200 with **no `artifactPurgeIncomplete`**; every GONE-table row gone; **wildcard sweep 0 files**; sample cache 0. Survives: entry dir + `voice.json`, `revokedAt` set, rest of consent intact, `master` block absent |
+| C-11 | Delete also removes the entry dir + clears cast refs | **P** | Unconfirmed DELETE → **409** with `usage:[{bookId, bookTitle, characterId, characterName}]`, nothing erased. `?confirm=1` → 200 `{deleted:true}`; artifacts 2→0; **entry dir removed**; the referencing character's **qwen *and* coqui** slots both cleared |
 | C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | | |
 | C-13 | `wrong-engine` diagnosed distinctly at render time | | |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | | |
@@ -2585,7 +2626,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-16 | Broken / Repairable card chip | | |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | |
 | C-18 | §2.3 stale `.pt` deliberately left alone | | |
-| C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | | |
+| C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
 | C-20 | Pause during a repair derive → no failure/toast | | |
 | C-21 | Partial erasure is reported, not claimed as success | | |
 
@@ -2593,10 +2634,10 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| D-01 | Concurrent multi-book render sharing a cloned voice | | |
-| D-02 | Full-book render with a cloned character | | |
-| D-03 | Server + sidecar restart → still renders (cache-independent) | | |
-| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | | |
+| D-01 | Concurrent multi-book render sharing a cloned voice | | not reached |
+| D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
+| D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
+| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | | not reached |
 
 #### Section E — 3c: cloned + designed voices on Coqui XTTS v2 (9)
 
@@ -2609,21 +2650,90 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | E-05 | Audition matches render (KL-o caveat) | | |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
 | **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
-| E-08 | Assign writes both slots, provenance-gated (Task 24) | | |
-| E-09 | Total erasure of the three Coqui artifact paths on delete | | |
+| E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
+| E-09 | Total erasure of the three Coqui artifact paths on delete | **N/A this run** | The three `voices\xtts\` paths never existed — no XTTS derive ever ran (see E-01). C-11 confirmed the sweep is issued; it was a no-op here |
+
+**Section E status: BLOCKED, not failed — see #1944.** Coqui/XTTS will not load in
+a sidecar that has already served ECAPA `/embed`, and cloning always calls
+`/embed`. A fresh sidecar returns a clean 409 `voice_not_designed`; a used one a
+bare 500. E-01 was attempted: the Coqui splice reported `splice_complete` but
+wrote no `voices\xtts\` artifacts and left `voiceEngine: qwen`, because the
+character's own `ttsEngine: 'qwen'` overrides the requested `modelKey`. **No
+substitution occurred** — the resulting audio still measured as the cloned
+speaker (0.66 / 0.61 vs source), so the never-substitute guarantee held.
 
 #### Totals
 
-| Section | Total | P | F | B | N/A |
-|---|---|---|---|---|---|
-| A (3a) | 13 | | | | |
-| B (3b1) | 13 | | | | |
-| C (3b2) | 21 | | | | |
-| D (cross-cutting) | 4 | | | | |
-| E (3c) | 9 | | | | |
-| **All** | **60** | | | | |
+Run 1 — 2026-07-29. "not reached" tests are counted as neither P/F/B/N/A.
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
+| B (3b1) | 13 | 3 | 0 | 4 | 0 | 6 |
+| C (3b2) | 21 | 3 | 0 | 1 | 0 | 17 |
+| D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
+| E (3c) | 9 | 1 | 0 | 0 | 1 | 7 |
+| **All** | **60** | **17** | **0** | **9** | **1** | **33** |
+
+**Zero failures** — but that is not an acceptance signal: 33 tests were never
+reached and 9 are blocked, including all of the highest-risk ⭐ set except C-10.
+The one Critical defect this run found (#1941) was discovered *outside* the
+scripted steps, while populating an artifact set for C-10.
 
 ### 7.2 Defects found
+
+#### Run 1 — 2026-07-29
+
+**DEF-A · CRITICAL · #1941 · fixed in PR #1942 · verified live**
+**What:** every freshly cloned Qwen voice returns HTTP 500 on its first
+synthesis until the sidecar is restarted — including the wizard's own
+completion-screen audition.
+**Test ID:** found outside the scripted steps, while populating artifacts for C-10.
+**Repro:** 1. `POST /api/voice-library/clone` (200, `.pt` correct on disk).
+2. `POST /api/voice-library/{uuid}/sample` → **500**. 3. Restart the sidecar;
+the *identical* request → **200**.
+**Expected:** the audition plays. **Actual:** `ValueError: not enough values to
+unpack (expected 2, got 1)` at `main.py:5510`.
+**Evidence:** `clone_voice` (`main.py:5290`) cached a bare `prompt` where
+`_prompt_cache` is `dict[str, tuple[Any, str]]` (`:4123`) and the three other
+writers store `(prompt, lang)`. Three separate clones reproduced it; post-fix a
+new clone synthesised immediately in-process (200, 54.8 s).
+**Severity:** blocker.
+
+**DEF-B · MAJOR · #1943 — consent record cannot name the real attester.**
+`voice-library.ts:1036` hardcodes `attestedBy: consentDraft.personName`, so for
+`family-with-permission` and `guardian-of-minor` the record names the wrong
+party — a guardian's attestation is stored as the *minor* attesting to their own
+voice being cloned. The wizard has no attester field, and
+`voice-library.test.ts:2435` asserts the incorrect behaviour. Needs a product
+decision, so filed rather than fixed in-run.
+
+**DEF-C · MINOR · #1945 — the clone-fidelity advisory has never fired.** B-06's
+fixture recipe cannot lower a metric that scores clone-vs-source faithfulness.
+See the B-06 row above for the three measurements.
+
+**DEF-D · MAJOR · #1944 — Coqui/XTTS unloadable after ECAPA, and `/health` lies
+about it.** Blocks all of Section E. `coqui_package_installed: true` comes from
+a spec probe that never imports.
+
+**Not defects (recorded so they are not re-filed).** (1) `ASR_DEVICE` and
+`ASR_COMPUTE_TYPE` must agree — setting the device to `cpu` while
+`ASR_COMPUTE_TYPE=int8_float16` stays pinned 500s every `/transcribe`.
+`_compute_type()` is correct; the pairing is simply unenforced. (2) `npm start`
+looks like it spawns two sidecars but does not — the venv `python.exe` is a
+launcher that re-execs the base interpreter as a child; one process holds :9000.
+(3) `npm run stop` reported `[GONE] tts pid=… (already exited)` for a pid
+matching neither live process across several restarts — pid tracking drifts;
+minor, unfiled.
+
+**Pre-existing, not caused by this wave:** the **side-11 host-memory leak**
+(committed memory peaked at 29,395 MB, sidecar recycled 3×) makes full-chapter
+renders unreliable on this box. Also observed: `segments.json` attributes a
+13.4 s ch.3 span to `wren` whose ASR transcript is plainly narration — an
+attribution/segmentation question for the srv side, noted here only because it
+briefly produced a false "silent substitution" reading during this run.
+
+---
 
 One block per defect. Copy the template as many times as needed.
 
@@ -2679,19 +2789,35 @@ Specifically confirm these are back to their P-20 / P-22 / P-23 values:
 
 > **fs-38 Wave 3 (3a + 3b1 + 3b2) is:  ☐ ACCEPTED  ☐ ACCEPTED WITH DEFECTS  ☐ REJECTED**
 >
+> **Run 1 (2026-07-29) reaches NONE of these — the run is INCOMPLETE.**
+>
 > Accept only if **every ⭐ test passed** and there are **zero blocker defects**.
 > "Accepted with defects" requires each open defect to be filed, linked, and
 > explicitly judged non-blocking above.
 
 **Rationale (2–3 sentences):**
 
-_____________________________________________________________________________
+16 of 60 tests were executed (15 pass, 1 blocked); of the ⭐ set only **C-10**
+passed, so the acceptance bar is not met and cannot be met until Section E is
+unblocked (#1944) and the remaining ⭐ tests C-01 / C-08 / C-12 / C-17 are run.
+The run did establish the wave's central claim — a cloned voice renders inside a
+real book as the cloned speaker, measured via the production `/embed` (audition
+vs human source **0.822**, in-book segments **0.564** / **0.706**, designed-voice
+control **0.158**) with `asr.verdict: ok` and WER 0 — and it found one Critical
+defect on shipped `main` (#1941, fixed in PR #1942, verified live): every fresh
+clone 500'd on its first synthesis, i.e. the wizard's own completion audition
+failed for every user until a sidecar restart.
 
-_____________________________________________________________________________
+Two environment blockers, not fs-38 defects, gate the remainder: the **side-11
+host-memory leak** makes any full-chapter render unreliable (blocks C-02, D-02,
+D-04 — use the per-character splice path instead), and **Coqui/XTTS will not
+load in a sidecar that has already served ECAPA `/embed`** (#1944), which blocks
+all of Section E. `/health` reports Coqui available regardless, which is how this
+run was mis-scoped as unblocked.
 
-**Tester:** ______________________   **Date:** ______________________
+**Tester:** Claude Code (agent), on the repo owner's dual-GPU box   **Date:** 2026-07-29
 
-**Git SHA accepted (from P-03):** ______________________________________
+**Git SHA accepted (from P-03):** none — `2503bca6` was **tested, not accepted**
 
 ---
 

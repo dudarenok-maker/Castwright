@@ -358,7 +358,7 @@ function ChapterListenRow({
                   : `Play chapter ${chapter.id}`
             }
             {...(isFirstListenable ? { 'data-tour-id': 'chapter-1-play' } : {})}
-            className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${
+            className={`shrink-0 w-9 h-9 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full grid place-items-center transition-all ${
               !hasAudio
                 ? 'bg-canvas border border-ink/10 text-ink/30 opacity-50 cursor-not-allowed'
                 : isPlaying
@@ -474,7 +474,7 @@ function ChapterListenRow({
               title="Rename chapter"
               aria-label={`Rename chapter ${chapter.id}`}
               data-testid={`chapter-row-${chapter.id}-rename`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/4"
+              className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4"
             >
               <IconPencil className="w-4 h-4" />
             </button>
@@ -482,7 +482,7 @@ function ChapterListenRow({
               onClick={() => onRegenerate(chapter)}
               title="Regenerate"
               aria-label={`Regenerate chapter ${chapter.id}`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/4"
+              className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4"
             >
               <IconRefresh className="w-4 h-4" />
             </button>
@@ -496,7 +496,7 @@ function ChapterListenRow({
                   : `Chapter ${chapter.id} has no audio to share yet`
               }
               data-testid={`chapter-row-${chapter.id}-share-clip`}
-              className={`grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full ${
+              className={`grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full ${
                 hasAudio
                   ? 'text-ink/40 hover:text-magenta hover:bg-ink/4'
                   : 'text-ink/20 opacity-50 cursor-not-allowed'
@@ -511,19 +511,18 @@ function ChapterListenRow({
   );
 }
 
-/* Plan 77 — per-chapter EBU R128 drift badge. Renders only when the
-   chapter has a real two-pass loudness measurement on disk; single-pass
-   values are NOT post-filter measurements (they're the nominal target
-   restated) so they degrade to a null render rather than mislead. The
-   colour mirrors the report-card sparkline: green (≤2 LU), amber (2–4 LU),
+/* Plan 77 — per-chapter EBU R128 drift badge. Renders only when
+   `classifyDrift` trusts the record (plan 274 T6: gated on measurement
+   PROVENANCE, not `twoPass` — a `measurementSource: 'loudnorm'` fallback
+   record is untrusted even though `twoPass` reads true). The colour
+   mirrors the report-card sparkline: green (≤2 LU), amber (2–4 LU),
    rose (>4 LU). Hover reveals i / lra / tp / target / measured-at via
    the native title tooltip — keeps the row chrome light without dragging
    in a popover primitive just for this. */
 function LoudnessBadge({ chapter }: { chapter: Chapter }) {
   const lufs = chapter.lufs;
   const bucket = classifyDrift(lufs ?? null);
-  if (bucket === 'no-data') return null;
-  if (!lufs || lufs.twoPass !== true) return null;
+  if (bucket === 'no-data' || !lufs) return null;
   const pillColor: 'success' | 'warning' | 'danger' =
     bucket === 'on-target' ? 'success' : bucket === 'slight' ? 'warning' : 'danger';
   const driftLabel =
@@ -634,7 +633,7 @@ function MarkersPanel({
                       type="button"
                       onClick={() => onFixLine(m)}
                       data-testid={`listen-marker-fix-${m.id}`}
-                      className="shrink-0 px-3 min-h-[44px] md:min-h-0 md:py-1.5 grid place-items-center rounded-full text-xs font-semibold text-magenta hover:bg-magenta/10"
+                      className="shrink-0 px-3 py-1.5 coarse-pointer:min-h-[44px] grid place-items-center rounded-full text-xs font-semibold text-magenta hover:bg-magenta/10"
                     >
                       Fix this line
                     </button>
@@ -656,7 +655,7 @@ function MarkersPanel({
                         : 'Mark for re-record'
                     }
                     data-testid={`listen-marker-kind-${m.id}`}
-                    className={`shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full hover:bg-ink/4 ${m.kind === 'rerecord' ? 'text-magenta' : 'text-ink/40 hover:text-magenta'}`}
+                    className={`shrink-0 w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center rounded-full hover:bg-ink/4 ${m.kind === 'rerecord' ? 'text-magenta' : 'text-ink/40 hover:text-magenta'}`}
                   >
                     <IconRefresh className="w-4 h-4" />
                   </button>
@@ -665,7 +664,7 @@ function MarkersPanel({
                     onClick={() => onDelete(m.id)}
                     aria-label="Delete marker"
                     data-testid={`listen-marker-delete-${m.id}`}
-                    className="shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full text-ink/40 hover:text-rose-500 hover:bg-ink/4"
+                    className="shrink-0 w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 grid place-items-center rounded-full text-ink/40 hover:text-rose-500 hover:bg-ink/4"
                   >
                     ×
                   </button>

@@ -230,24 +230,25 @@ Related: [`archive/185-golden-audio-regression.md`](archive/185-golden-audio-reg
   it lives in Suite A (Python/pytest, real Kokoro weights), and folding it
   in here would make this a two-harness PR whose new leg cannot be
   verified from this repo checkout.
-- **Reordering the QA true-peak check.** [#1922](https://github.com/dudarenok-maker/Castwright/issues/1922) —
-  `finalize-chapter-write.ts` feeds `evaluateChapterQa` from the
-  **pre-rename** measurement, which is loudnorm's requested `-1.5` dBTP
-  ceiling, not a real reading. `audio-qa.ts`'s default `clipTpDb` is `-0.1`,
-  so the clipping check is fed a value that can never reach it under
-  default config — the check is currently inert. This is the answer to
-  Task 4c step 4's open question (resolved during implementation, not
-  left open): moving the QA call after the rename has its own blast
-  radius and is left as a separate fix.
-- **Gating the Listen-view loudness UI on real single-pass data.**
-  [#1923](https://github.com/dudarenok-maker/Castwright/issues/1923) — the
-  UI (`loudness-report.tsx`, `listen-player-region.tsx`) gates every figure
-  on `twoPass === true`, which was correct when single-pass `i`/`lra`/`tp`
-  were nominal targets. Single-pass chapters now carry a real post-write
-  `ebur128` measurement (`measureLoudnessFile` runs regardless of
-  `twoPass`), so the gate now discards real data. Not a regression — a
-  lost opportunity, deliberately left as a follow-up rather than widening
-  this PR into a UI change.
+- **Reordering the QA true-peak check** and **gating the Listen-view
+  loudness UI on real single-pass data** — [#1922](https://github.com/dudarenok-maker/Castwright/issues/1922)
+  and [#1923](https://github.com/dudarenok-maker/Castwright/issues/1923),
+  both fixed by [plan 274](archive/274-loudness-measurement-provenance.md):
+  the single `ebur128` measurement is hoisted to run immediately after the
+  encoded bytes hit the temp file (before QA, before the rename), so QA and
+  the `.lufs.json` sidecar read the same real number instead of QA judging
+  on loudnorm's self-reported `output_tp`. **Correction to the premise this
+  file originally recorded:** "QA gates whether the rename is even
+  reached" was the reason given here for deferring the fix — plan 274
+  §1.4 traced this to a stale comment in `finalize-chapter-write.ts` and
+  found it false: `evaluateChapterQa`'s one call site only *stores* the
+  verdict: no branch, throw, or early return reads it before the rename.
+  The real constraint was narrower (a data-flow ordering issue, not a
+  control-flow one) and plan 274's hoist dissolves it without moving any
+  write. #1923 itself closed as not-reproducible-as-filed (`twoPass` is
+  hardcoded `true`, so single-pass output never ships) — plan 274 instead
+  fixes the reachable version of the same bug: a real-measurement fallback
+  rendering as trusted ground truth.
 
 ## Pin risk
 
