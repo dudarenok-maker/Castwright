@@ -12,12 +12,16 @@
    surfaces the reason in the Generate + Listen views so the user can decide
    whether to regenerate. No done-gating, no auto-regen.
 
-   The loudness signals come from the loudnorm pass already measured during
-   encode (mp3.ts `onLoudnessMeasured` → LoudnormSidecarJson). In two-pass mode
-   those are POST-normalisation values, so a genuinely near-silent SOURCE is
-   usually caught by loudnorm's own measurement-unusable fallback (it leaves the
-   sidecar's i/tp degenerate) rather than by a post-norm reading; the duration
-   check is the most robust signal and is independent of loudnorm. */
+   The loudness signals come from a real `ebur128` measurement of the encoded
+   chapter (`server/src/audio/measure-loudness.ts`), hoisted to run before this
+   evaluation so QA and the `.lufs.json` sidecar can never disagree (plan 274).
+   When that measurement fails, the caller falls back per the three reachable
+   shapes of loudnorm's own self-reported `LoudnormSidecarJson` (mp3.ts
+   `onLoudnessMeasured`) — only a genuinely post-filter shape is trustworthy
+   enough to feed `lufs`, and `truePeakDb` never falls back at all, since no
+   shape of loudnorm's self-reported peak is a measurement (see
+   finalize-chapter-write.ts). The duration check is the most robust signal
+   and is independent of loudnorm entirely. */
 
 export type QaStatus = 'ok' | 'suspect';
 
