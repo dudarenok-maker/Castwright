@@ -540,7 +540,8 @@ def test_steps_run_cheapest_reload_first(monkeypatch):
     ]
 
 
-# --- plan 273: the evict runs on a worker thread, off the event loop (T2) --
+# --- plan 273: the evict + reclaim run on a worker thread, off the event
+#     loop (T2, T3) ---------------------------------------------------------
 #
 # `_evict_until` is `async def` and offloads each step's `run()` via
 # `asyncio.to_thread` — an engine lock is never acquired from the loop.
@@ -567,8 +568,8 @@ def test_an_eviction_step_does_not_stall_the_event_loop():
     can run any code until that wait times out. The heartbeat can accrue at
     most one stale "catch-up" tick once the freeze ends (a coroutine's
     `asyncio.sleep` reschedules relative to `now`, so an overdue timer never
-    bursts more than once), never the ~5 real ticks the fix produces in the
-    same 50ms window."""
+    bursts more than once), never the ~10+ real ticks the fix produces in the
+    same 150ms window."""
     entry = threading.Event()
     release = threading.Event()
 
@@ -593,10 +594,10 @@ def test_an_eviction_step_does_not_stall_the_event_loop():
         )
         evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
 
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.15)
         assert entry.is_set(), "the step never entered — test would pass vacuously"
         assert len(ticks) >= 3, (
-            f"heartbeat only ticked {len(ticks)} times in 50ms while the evict "
+            f"heartbeat only ticked {len(ticks)} times in 150ms while the evict "
             "step was parked — the event loop stalled"
         )
 
@@ -609,6 +610,135 @@ def test_an_eviction_step_does_not_stall_the_event_loop():
             pass
 
     asyncio.run(body())
+
+
+def test_the_post_evict_reclaim_does_not_stall_the_event_loop(monkeypatch):
+    """T3: the reclaim (`_reclaim_after_drop`'s `gc.collect()` +
+    `empty_cache()`) must ALSO run off the loop, not just the lock wait — it
+    is the correction #1919's issue calls out and rev 1 of this plan missed.
+    Uses a REAL `CoquiEngine.maybe_free_idle`, driven through the REAL
+    `PlacementController._evict_until` (not a fake EvictStep), with
+    `_reclaim_after_drop` monkeypatched to block on an Event standing in for
+    a multi-GB `gc.collect()`/`empty_cache()`.
+
+    Mutation-fails against the 'half fix' — offloading only the lock's wait
+    and leaving the drop + reclaim synchronous on the loop: that passes T2's
+    test (a monolithic fake step can't distinguish a partial fix) but fails
+    this one, because the real reclaim is what's parked here. In practice
+    (see the report) the only mutation constructible against this codebase's
+    opaque `EvictStep.run` interface is the full T2 revert, which this test
+    also fails against, for the same reason."""
+    eng = main.CoquiEngine()
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda model, device=None, *, lock_held=False: None)
+    eng._tts = object()  # any non-None sentinel — maybe_free_idle only checks identity
+    eng._resolved_device = "cuda:0"
+    eng._device = "cuda:0"
+    eng._last_used = time.monotonic() - 3600  # long idle, clears the TTL guard
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    def blocking_reclaim(torch_module, reason="unloaded"):
+        entry.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(eng, "_reclaim_after_drop", blocking_reclaim)
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng_id: [
+                main.EvictStep("coqui", "coqui", lambda: eng.maybe_free_idle(0.0))
+            ],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.15)
+        assert entry.is_set(), "the reclaim never entered — test would pass vacuously"
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times while the reclaim was parked"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
+    assert eng._tts is None  # maybe_free_idle's contract ("True iff it actually freed") held
+
+
+def test_a_qwen_eviction_step_does_not_stall_the_event_loop():
+    """T3: the Qwen twin — Qwen carries `reserved_key=None` (#1920B can never
+    protect it, §1.1) and is the default GPU engine, so its two steps are the
+    LEAST protected of the five. `maybe_free_idle_design`'s fast-out checks
+    only `_design_in_flight`, not the Base forward, so with VoiceDesign warm
+    and a Base forward in flight the step reaches `_synth_lock` and blocks —
+    the #1919 race, reached on the default path. A separate thread holds
+    `_synth_lock` here, standing in for that in-flight Base forward."""
+    eng = main.QwenEngine()
+    eng._design = object()  # a resident VoiceDesign
+    eng._design_last_used = time.monotonic() - 3600  # long idle
+
+    lock_acquired = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        eng._synth_lock.acquire()
+        lock_acquired.set()
+        release.wait(timeout=1.0)
+        eng._synth_lock.release()
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5), "holder thread never acquired _synth_lock"
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng_id: [
+                main.EvictStep("qwen.design", None, lambda: eng.maybe_free_idle_design(0.0))
+            ],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.15)
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times while queued on _synth_lock"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
+    holder.join(timeout=5)
+    assert eng._design is None  # the fast-out passed, then the step still froze it
 
 
 def test_try_hold_is_atomic_under_concurrency():
