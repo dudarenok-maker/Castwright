@@ -329,6 +329,22 @@ only exercises the frontend/store seams.
    `-preview`/`__master.wav` siblings are all gone from disk; the entry no
    longer appears anywhere in the library.
 
+> **PARTIALLY DISCHARGED 2026-07-29** — first on-box run, SHA `2503bca6`. Item
+> **(c) is now settled and passed** (run-sheet C-10 ⭐): after a real revoke, the
+> base `.pt`, the sidecar manifest, `__1.7b.pt`, **the entry-dir `master.wav`**
+> and both cached audition mp3s were all gone, a wildcard sweep of the storage
+> key returned **0 files**, the response carried **no `artifactPurgeIncomplete`**,
+> and the entry + `voice.json` survived with `revokedAt` stamped and the rest of
+> consent intact. C-11 (delete) also passed, including the 409-with-usage guard
+> and the cast-reference cascade clearing **both** engine slots.
+> Items **(a) and (b) remain owed** — (a) needs a full-chapter render, which is
+> currently blocked on this box by the side-11 host-memory leak (use the
+> per-character splice path as a partial substitute). The ⭐ concurrency and
+> atomicity tests (C-01, C-08, C-12, C-17) were **not reached** and remain the
+> highest-risk unproven behaviour in this plan. See
+> [`docs/testing/fs38-wave3-onbox-acceptance.md`](../testing/fs38-wave3-onbox-acceptance.md) §7
+> and register row A1.
+>
 > **Owed — on-box live-GPU acceptance, not yet run.** (a) a real revoked
 > voice fails a live render loud, exactly as described in step 2 above; (b) a
 > voice re-derives identically after a real base-model bump (step 3, but

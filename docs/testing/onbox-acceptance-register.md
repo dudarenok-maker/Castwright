@@ -94,23 +94,115 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **60 tests, entirely unexecuted**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **16 of 60 run 2026-07-29 · ~44 still owed**
 
-The run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` is complete and has
-never been run — every `Result:` line still reads `☐ P ☐ F ☐ B ☐ N/A`, §7.1's
-tables blank. PR #1837 shipped the template (3a/3b1/3b2, 51 tests); Wave 3c
-added **Section E** (9 tests, cloned + designed voices on Coqui XTTS v2) —
-also unexecuted.
+**Partially discharged.** First execution 2026-07-29 by Claude Code on the
+dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
+mock mode. **16 tests executed: 15 pass, 1 blocked.** Results are recorded in
+the run sheet `docs/testing/fs38-wave3-onbox-acceptance.md` (§2 preconditions
+filled, per-test `Result:` lines and §7.1 completed for the tests run). PR #1837
+shipped the template (3a/3b1/3b2, 51 tests); Wave 3c added **Section E** (9
+tests) — Section E remains entirely unrun, see the blockers below.
 
-Starred, highest-risk: **C-01** revoke mid-derive leaves no live `.pt` and
-`revokedAt` survives · **C-08** a transient failure does not brick a voice ·
-**C-10** revoke does total erasure including the original recording · **C-17**
+**The run found one Critical defect, now fixed.** Every freshly cloned Qwen
+voice returned HTTP 500 on its first synthesis until the sidecar restarted —
+including the clone wizard's own completion-screen audition, i.e. the first
+thing a user does after cloning. `clone_voice` cached a bare prompt where
+`_load_voice_prompt` unpacks a `(prompt, language)` tuple
+(`ValueError: not enough values to unpack`). Filed as **#1941**, fixed in
+**PR #1942**, verified live on-box (clone → immediate synth in the same process
+now returns 200). *This is the case for this register existing:* the feature's
+central path was broken on shipped `main`, and no automated suite could see it
+because unit tests mock the engine and no pytest exercised clone→synth in one
+process against the real cache.
+
+**Discharged (do not re-run):** A-01…A-06 (ingest + the full quality-gate tier
+set — including the 60s truncation landing at 2,880,044 bytes, delta 0), A-10
+(write-time consent guard: 422/400/404, nothing written), A-11 (`/revoke`
+stamps `revokedAt`, rest of consent intact, entry survives), A-12 (sample route
+403s a revoked clone, healthy control 200), B-01 (route + on-disk half —
+UI assertions still owed), B-04 (ECAPA cosine is real: three distinct finite
+values, two clones of the same fixture gave 0.8914 vs 0.8813 — not a mock
+constant), B-07 (assign writes both qwen **and** coqui slots per Task 24, drops
+the stale `variants` map, leaves `voiceUuid` untouched; all 13 characters
+diffed, only the target changed), **C-10** ⭐ (total erasure on revoke — 7
+artifacts across 3 locations all gone including both cached mp3s and the
+original recording; wildcard sweep 0 files; entry + `voice.json` survive with
+`revokedAt`), **C-11** (409-with-usage then `{deleted:true}`, entry dir removed,
+both cast slots cascade-cleared), C-19 first half (1.7B tier renders a cloned
+voice; its erasure is covered by C-10).
+
+**Also proven — the wave's central claim, measured not asserted.** A cloned
+voice renders inside a real book: `wren`'s segments re-recorded into Coalfall
+ch.3, `characterSnapshots.wren.resolvedVoiceName` = the clone's storage key,
+segments carrying `asr.verdict: ok` / **WER 0**. Speaker identity via the
+production `/embed`: 20s audition vs human source **0.822**; in-book segments
+**0.564** and **0.706**; designed-voice control **0.158**. The by-ear
+confirmation (B-03, E-06) is still owed — a human must listen.
+
+**Still owed (~44), and why:**
+- **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
+  A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
+  with a real microphone.
+- **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
+  the objective half only.
+- **Section E, all 9 — BLOCKED by #1944.** Coqui/XTTS cannot load in a sidecar
+  that has already served ECAPA `/embed`, and cloning always calls `/embed` for
+  the fidelity check. A fresh sidecar returns a clean 409; a used one a bare
+  500. Note `/health` reports `coqui_package_installed: true` regardless, which
+  is how this row was previously scoped as unblocked — treat that field with
+  suspicion when planning.
+- **C-02, D-02 and any full-book work — BLOCKED by the side-11 host-memory
+  leak.** Two full-chapter render attempts died: one at the QA gate (ASR could
+  not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar
+  recycled 3× (committed memory peaked at 29,395 MB). The sidecar's own log
+  names it: *"expected for the variable-shape leak; the restart ceiling is the
+  real guard"*. **Workaround that works today:** the per-character re-record
+  (splice) path renders one character's lines without the full-chapter memory
+  churn — that is how the central claim above was proven.
+- **B-06 — cannot pass as written, see #1945.** The clone-fidelity cosine scores
+  clone-vs-source *faithfulness*, so degrading the source degrades the clone
+  equally and the number does not fall (measured: clean 0.891, band-limited
+  0.881, two speakers overlaid 0.773). The advisory-warning path has therefore
+  **never fired on real hardware**.
+- **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
+  (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
+  derive) are untouched and remain the highest-risk unproven behaviour here.
+
+**Two findings that are NOT defects, recorded so they are not re-filed.** (1)
+`ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
+device to `cpu` while `ASR_COMPUTE_TYPE=int8_float16` remains pinned makes every
+`/transcribe` 500. `_compute_type()` is correct; nothing enforces the pairing.
+(2) `npm start` appears to launch two sidecars but does not — the venv
+`python.exe` is a launcher that re-execs the base interpreter as a child. Only
+one holds :9000. Separately, `npm run stop` repeatedly reported
+`[GONE] tts pid=… (already exited)` for a pid matching neither live process, so
+its pid tracking drifts across restarts — minor, unfiled.
+
+**Also opened by this run:** #1943 (consent record cannot name the real
+attester — `attestedBy` is overwritten with `personName`, which inverts
+`guardian-of-minor`).
+
+Starred, highest-risk — **C-10 is now discharged (passed 2026-07-29)**; the rest
+remain: **C-01** revoke mid-derive leaves no live `.pt` and `revokedAt` survives ·
+**C-08** a transient failure does not brick a voice · **C-17**
 designed-voice self-heal preserves persona · **C-12** a killed mid-write leaves
 no truncated `.pt` · **E-01** clone → cast on Coqui → generate · **E-02**
 audition-then-revoke refuses Play on the Coqui path · **E-06** the one place
 D-B's synthetic-clip-vs-catalogue quality question can actually be judged, by
 ear · **E-07** a forced designed-derive failure still renders the chapter
 (fail-soft, the opposite policy from cloned's fail-loud).
+
+**E-01 was attempted and is blocked, not failed.** A Coqui splice reported
+`splice_complete` but wrote no `voices\xtts\` artifacts and left
+`characterSnapshots.wren.voiceEngine` as `qwen` — the character's own
+`ttsEngine: 'qwen'` overrides the requested `modelKey`. To attempt Section E,
+first flip the target character's engine to coqui (or use the Russian Coalfall
+twin, which routes there natively), **and** start from a sidecar that has never
+called `/embed` (#1944). Reassuringly, the post-splice audio still measured as
+the cloned speaker (0.66 / 0.61 vs source), so **no silent substitution
+occurred** — the never-substitute guarantee held even on the path that failed to
+reach XTTS.
 
 C-08 and C-12 deliberately kill the sidecar mid-write — nothing else in flight.
 D-01 deliberately runs two concurrent book renders sharing one cloned voice.
@@ -120,7 +212,19 @@ E-03 deliberately races a revoke against an in-flight Coqui derive.
 Coalfall fixture with ≥2 speaking characters/chapter, the 9 audio fixtures in §4,
 and (for Section E) a Coqui-capable sidecar plus a non-English (e.g. Russian)
 book fixture that actually routes to Coqui.
-*Plans:* 267, 268, 271 — all `status: active`, Ship notes empty. *Cost:* multi-hour.
+*Prerequisites confirmed present on the box 2026-07-29:* Qwen 0.6B/1.7B-Base +
+VoiceDesign, `faster-whisper-base`, ECAPA `spkrec-ecapa-voxceleb`, coqui-tts
+0.27.5 + xtts_v2 weights, both GPUs (the eGPU was attached, so 2-card rows are
+runnable), and Coalfall already imported and analysed in 7 languages incl. the
+Russian twin. **The §4 audio fixtures now exist** at `C:\fixtures\fs38\` —
+public-domain LibriVox, two distinct narrators, F-1…F-9 built and verified
+against the `clone-quality.ts` thresholds — so a follow-up session does not need
+to rebuild them. Note the box runs `LAN_HTTPS=1`, so the server is on
+`https://localhost:8443`, **not** the `http://localhost:8080` the run sheet's
+§3 probes assume.
+*Plans:* 267, 268, 271 — all `status: active`, Ship notes now record this
+partial run. *Cost:* multi-hour; the 2026-07-29 session spent roughly half its
+time on the three environment blockers above rather than on tests.
 
 **Six checks added by the post-32 follow-up campaign, same box/setup as
 above — batch them into the same session:**
