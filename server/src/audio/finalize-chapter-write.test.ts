@@ -11,7 +11,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { measureLoudnessFile } from './measure-loudness.js';
 import { resolveLoudnormOptions } from '../tts/loudnorm.js';
 
@@ -20,6 +21,18 @@ const SERIES = 'Standalones';
 const TITLE = 'Finalize Story';
 const SLUG = 'chapter-one';
 const SR = 24_000;
+
+/* plan 274 T8 — the committed golden-fixture PCM (real synthesised speech,
+   captured by the golden-audio harness), NOT a synthetic tone. §1.8's
+   five-ceiling measurement was run against this exact fixture, and it is
+   the only signal in this repo known to reproduce the requested/measured
+   true-peak gap: a pure sine tone's low crest factor lands loudnorm's
+   output nowhere near the ceiling regardless of amplitude (verified before
+   writing this test), while this fixture's speech-like dynamics measure
+   requested -1.5 / real -1.2, matching §1.8's row exactly. */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const goldenChapterPcm = readFileSync(join(HERE, '..', 'tts', '__fixtures__', 'golden-chapter.pcm'));
+const goldenChapterDurationSec = goldenChapterPcm.length / 2 / SR;
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -252,6 +265,76 @@ describe('finalizeChapterAudioWrite QA vs sidecar (plan 274 T3 — the two surfa
     // ...and it is a real measurement, not the ceiling loudnorm was asked for.
     expect(audioQa.truePeakDb).not.toBe(resolveLoudnormOptions().tp);
   });
+});
+
+describe('finalizeChapterAudioWrite QA clip check — the centrepiece (plan 274 T8)', () => {
+  afterEach(() => {
+    delete process.env.QA_CLIP_TP_DB;
+  });
+
+  it('stays quiet at defaults, then fires once the threshold moves into the requested/measured gap', async () => {
+    /* Clean arm: default ceiling (resolveLoudnormOptions().tp), default
+       QA_CLIP_TP_DB (-0.1). Both arms run at DEFAULT loudnorm config — more
+       faithful to production audio than moving the ceiling (plan §1.8: there
+       is no ceiling where `requested < -0.1 <= measured`, so the fix has to
+       move the THRESHOLD into the gap, not the ceiling). */
+    const goldenInput = {
+      ...baseInput(),
+      pcm: goldenChapterPcm,
+      durationSec: goldenChapterDurationSec,
+    };
+    const { audioQa: cleanQa } = await finalizeChapterAudioWrite(goldenInput);
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    const measured: number = sidecar.tp;
+    const { tp: requested } = resolveLoudnormOptions();
+
+    expect(cleanQa.status).toBe('ok');
+    expect(cleanQa.reasons.some((r) => /clip/i.test(r))).toBe(false);
+    // Non-vacuousness: the clean arm reads the REAL measured peak, not the
+    // requested ceiling loudnorm was asked for (plan 274 T2).
+    expect(cleanQa.truePeakDb).toBeCloseTo(measured, 5);
+    expect(cleanQa.truePeakDb).not.toBe(requested);
+
+    /* Self-calibrating guard (plan §1.8 / risk register: "medium" — ffmpeg-
+       version drift could silently close this window). If the measured
+       peak has drifted down to within 0.1 dB of the requested ceiling on
+       THIS ffmpeg build, there is no threshold left that can discriminate
+       clipping from clean without also tripping the clean arm above — fail
+       LOUDLY, don't silently skip and let a green run masquerade as proof. */
+    if (measured <= requested + 0.1) {
+      throw new Error(
+        `plan 274 T8: the true-peak overshoot window has collapsed on this ` +
+          `ffmpeg build (requested=${requested}, measured=${measured}). This ` +
+          `test can no longer discriminate the clip check — investigate ` +
+          `before trusting a green result here.`,
+      );
+    }
+
+    /* Clipping arm: the SAME audio, the SAME ceiling — only QA_CLIP_TP_DB
+       moves, into the gap between the requested ceiling and the real
+       measured peak. This is the only variable that changes between arms. */
+    process.env.QA_CLIP_TP_DB = String(measured - 0.05);
+    const { audioQa: clipQa } = await finalizeChapterAudioWrite(goldenInput);
+    expect(clipQa.status).toBe('suspect');
+    expect(clipQa.reasons.some((r) => /clip/i.test(r))).toBe(true);
+  });
+
+  /* Covers T1's probe risk: `tmpAudio` has no real extension
+     (`<slug>.<ext>.tmp-<pid>-<ts>`), so ffmpeg must probe by content for
+     every format the encoder supports, not just the ones easy to sniff. */
+  it.each(['mp3', 'aac-m4a', 'opus'] as const)(
+    'measures a real true peak for %s at the extensionless temp path',
+    async (format) => {
+      const { audioQa } = await finalizeChapterAudioWrite({
+        ...baseInput(),
+        pcm: goldenChapterPcm,
+        durationSec: goldenChapterDurationSec,
+        audioFormat: format,
+      });
+      expect(audioQa.truePeakDb).not.toBeNull();
+    },
+  );
 });
 
 describe('finalizeChapterAudioWrite QA — three-shape fail-soft (plan 274 T2)', () => {
