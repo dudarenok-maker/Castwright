@@ -344,6 +344,17 @@ export function AnalysingView({
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
+  /* In-flight op counter — guards the /health poll's unconditional pending-
+     clear below against a Load/Stop that is still awaiting its response.
+     handleStopAnalyzer awaits api.unloadAnalyzer() and handleLoadAnalyzer
+     awaits api.unloadSidecar() (the TTS route #1921 moved to a 90s budget),
+     so the 30s poll tick can land WHILE either is still pending. Without
+     this guard the poll would clear the optimistic pending override and the
+     pill would flip back to a stale reading mid-operation — mirrors
+     `inFlightOps` in src/lib/use-tts-lifecycle.ts (#1921/#1930). Incremented
+     at the top of each handler, decremented in a finally so a throw can't
+     leak it and freeze the pill's optimistic state permanently. */
+  const inFlightAnalyzerOps = useRef(0);
   const [analyzerEvictionNotice, setAnalyzerEvictionNotice] = useState<string | null>(null);
   /* Rose banner shown when Load / Stop returns {status:'error', ...} or
      throws. Without it the auto-load path looks stuck on "Loading…" and
@@ -947,12 +958,12 @@ export function AnalysingView({
         .then((h) => {
           if (cancelled) return;
           setOllamaHealth(h);
-          setPendingAnalyzerPill(null);
+          if (inFlightAnalyzerOps.current === 0) setPendingAnalyzerPill(null);
         })
         .catch(() => {
           if (cancelled) return;
           setOllamaHealth({ status: 'unreachable', url: '', error: 'Probe failed.' });
-          setPendingAnalyzerPill(null);
+          if (inFlightAnalyzerOps.current === 0) setPendingAnalyzerPill(null);
         });
     };
     probe();
@@ -994,56 +1005,71 @@ export function AnalysingView({
   })();
 
   const handleLoadAnalyzer = async () => {
-    setPendingAnalyzerPill('loading');
-    setAnalyzerEvictionNotice(null);
-    setAnalyzerLoadError(null);
-    /* Auto-evict the TTS sidecar before warming the analyzer — they fight
-       for the same VRAM. Only surface the banner when the unload actually
-       freed something so we don't lie about state. */
-    let sidecarHadModel = false;
+    inFlightAnalyzerOps.current += 1;
     try {
-      const sc = await api.getSidecarHealth();
-      sidecarHadModel = sc.status === 'reachable' && sc.modelLoaded === true;
-    } catch {}
-    try {
-      await api.unloadSidecar();
-      if (sidecarHadModel) setAnalyzerEvictionNotice('Voice engine unloaded to free VRAM for the analyzer.');
-    } catch {}
-    /* loadAnalyzer's HTTP-level failures land in the result body
-       (status:'error') with a 5xx — only fetch-itself failures throw.
-       Check both paths so a silent error doesn't strand the pill on
-       "Loading…" until the probe ticks. */
-    try {
-      /* Warm the model the run will ACTUALLY execute on (per-run override or
-         per-phase pick), not the server's configured default. Passing no model
-         here is what made the view re-warm qwen behind a gemma run. */
-      const result = await api.loadAnalyzer(runModelToWarm ? { model: runModelToWarm } : undefined);
-      if (result.status === 'error') {
-        setAnalyzerLoadError(result.error || 'Analyzer failed to load. Check Ollama is running.');
+      setPendingAnalyzerPill('loading');
+      setAnalyzerEvictionNotice(null);
+      setAnalyzerLoadError(null);
+      /* Auto-evict the TTS sidecar before warming the analyzer — they fight
+         for the same VRAM. Only surface the banner when the unload actually
+         freed something so we don't lie about state. */
+      let sidecarHadModel = false;
+      try {
+        const sc = await api.getSidecarHealth();
+        sidecarHadModel = sc.status === 'reachable' && sc.modelLoaded === true;
+      } catch {}
+      try {
+        await api.unloadSidecar();
+        if (sidecarHadModel) setAnalyzerEvictionNotice('Voice engine unloaded to free VRAM for the analyzer.');
+      } catch {}
+      /* loadAnalyzer's HTTP-level failures land in the result body
+         (status:'error') with a 5xx — only fetch-itself failures throw.
+         Check both paths so a silent error doesn't strand the pill on
+         "Loading…" until the probe ticks. */
+      try {
+        /* Warm the model the run will ACTUALLY execute on (per-run override or
+           per-phase pick), not the server's configured default. Passing no model
+           here is what made the view re-warm qwen behind a gemma run. */
+        const result = await api.loadAnalyzer(runModelToWarm ? { model: runModelToWarm } : undefined);
+        if (result.status === 'error') {
+          setAnalyzerLoadError(result.error || 'Analyzer failed to load. Check Ollama is running.');
+          setPendingAnalyzerPill(null);
+        }
+      } catch (e) {
+        setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
         setPendingAnalyzerPill(null);
       }
-    } catch (e) {
-      setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
-      setPendingAnalyzerPill(null);
+      setAnalyzerProbeKey((k) => k + 1);
+    } finally {
+      inFlightAnalyzerOps.current -= 1;
     }
-    setAnalyzerProbeKey((k) => k + 1);
   };
 
   const handleStopAnalyzer = async () => {
-    setPendingAnalyzerPill('idle');
-    setAnalyzerEvictionNotice(null);
-    setAnalyzerLoadError(null);
+    inFlightAnalyzerOps.current += 1;
     try {
-      const result = await api.unloadAnalyzer();
-      if (result.status === 'error') {
-        setAnalyzerLoadError(result.error || 'Analyzer failed to unload.');
+      /* #1929: pending goes to 'unloading', not 'idle' — 'idle' invited a
+         Load click against a model that hadn't actually unloaded yet while
+         api.unloadAnalyzer() was still in flight. Left uncleared on success
+         (mirrors doStop in use-tts-lifecycle.ts) — the /health poll's own
+         guarded clear above is what confirms the transition. */
+      setPendingAnalyzerPill('unloading');
+      setAnalyzerEvictionNotice(null);
+      setAnalyzerLoadError(null);
+      try {
+        const result = await api.unloadAnalyzer();
+        if (result.status === 'error') {
+          setAnalyzerLoadError(result.error || 'Analyzer failed to unload.');
+          setPendingAnalyzerPill(null);
+        }
+      } catch (e) {
+        setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
         setPendingAnalyzerPill(null);
       }
-    } catch (e) {
-      setAnalyzerLoadError(`Couldn't reach Ollama: ${(e as Error).message ?? 'fetch failed'}`);
-      setPendingAnalyzerPill(null);
+      setAnalyzerProbeKey((k) => k + 1);
+    } finally {
+      inFlightAnalyzerOps.current -= 1;
     }
-    setAnalyzerProbeKey((k) => k + 1);
   };
 
   /* Auto-warm the analyzer on arrival when:

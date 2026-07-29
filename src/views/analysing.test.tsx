@@ -30,6 +30,7 @@ let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) |
    stage1_shrink_refused, etc.) without rewiring the whole mock. */
 let analyseManuscriptRejection: unknown | undefined;
 const loadAnalyzerSpy = vi.fn();
+const unloadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
 const getSidecarHealthSpy = vi.fn();
 const getOllamaHealthSpy = vi.fn();
@@ -66,12 +67,9 @@ vi.mock('../lib/api', async () => {
       getOllamaHealth: () => getOllamaHealthSpy(),
       getSidecarHealth: () => getSidecarHealthSpy(),
       loadAnalyzer: () => loadAnalyzerSpy(),
-      unloadAnalyzer: () => Promise.resolve({ status: 'unloaded' as const }),
+      unloadAnalyzer: () => unloadAnalyzerSpy(),
       loadSidecar: () => Promise.resolve({ status: 'ready' as const }),
-      unloadSidecar: () => {
-        unloadSidecarSpy();
-        return Promise.resolve({ status: 'idle' as const });
-      },
+      unloadSidecar: () => unloadSidecarSpy(),
     },
   };
 });
@@ -84,11 +82,14 @@ beforeEach(() => {
   getDroppedQuotesImpl = undefined;
   analyseManuscriptRejection = undefined;
   loadAnalyzerSpy.mockReset();
+  unloadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
   getSidecarHealthSpy.mockReset();
   getOllamaHealthSpy.mockReset();
   getSidecarHealthSpy.mockResolvedValue({ status: 'reachable', url: '(test)', modelLoaded: false });
   loadAnalyzerSpy.mockResolvedValue({ status: 'ready' as const });
+  unloadAnalyzerSpy.mockResolvedValue({ status: 'unloaded' as const });
+  unloadSidecarSpy.mockResolvedValue({ status: 'idle' as const });
   /* Default to "reachable AND model resident" — the analysis effect is
      gated on isAnalyzerReady, so tests that drive phase/log events
      through capturedOpts need the analysis to actually have fired.
@@ -729,6 +730,346 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
     expect(
       screen.queryByRole('button', { name: /load model \(analyzer\)/i }),
     ).not.toBeInTheDocument();
+  });
+});
+
+/* #1929: the analyzer pill on this screen ran its own Load/Stop lifecycle,
+   parallel to (and repeating both defects already fixed for the voice-engine
+   pill in `useTtsLifecycle`/#1930):
+
+     1. `handleStopAnalyzer` used to set the optimistic pending state straight
+        to 'idle', so the pill read "Analyzer idle · Load model" — inviting a
+        Load click against a model that hadn't actually unloaded yet — while
+        `api.unloadAnalyzer()` was still in flight.
+     2. The screen's own 30s /health-adjacent poll (the `getOllamaHealth`
+        effect below) unconditionally cleared `pendingAnalyzerPill` on every
+        tick, with no in-flight guard — so a poll tick landing mid-unload (or
+        mid-load; `handleLoadAnalyzer` awaits `api.unloadSidecar()`, the TTS
+        route #1921 moved to a 90s budget) would revert the pill to a stale
+        reading while the real operation was still running.
+
+   Mirrors `src/lib/use-tts-lifecycle.ts`'s `doStop`/`doLoad`: pending goes to
+   'unloading' (not 'idle') on Stop, and an in-flight ref counter guards the
+   poll's unconditional clear in both `.then` and `.catch`. */
+describe('AnalysingView — analyzer pill Stop/Load in-flight guard (#1929)', () => {
+  function renderNoManuscript() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <AnalysingView manuscriptId={null} title="Demo" wordCount={500} onComplete={() => {}} />
+      </Provider>,
+    );
+  }
+
+  it('shows "Stopping analyzer…" with the action disabled until unloadAnalyzer actually resolves', async () => {
+    /* Default beforeEach mock already reads as resident (modelResident:
+       true, resident: ['qwen3.5:4b']) — the pill starts 'ready' with a Stop
+       button. Hold unloadAnalyzer open so we can assert mid-flight. */
+    let resolveUnload: (v: { status: string }) => void = () => {};
+    unloadAnalyzerSpy.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveUnload = r;
+      }),
+    );
+
+    renderNoManuscript();
+    const stopBtn = await screen.findByRole('button', { name: /^stop \(analyzer\)$/i });
+    await act(async () => {
+      fireEvent.click(stopBtn);
+    });
+
+    const stoppingBtn = await screen.findByRole('button', { name: /^stopping…\s*\(analyzer\)$/i });
+    expect(stoppingBtn).toBeDisabled();
+    expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveUnload({ status: 'unloaded' });
+      await Promise.resolve();
+    });
+  });
+
+  it('keeps the "unloading" pill across a poll tick while the analyzer unload is still in flight', async () => {
+    /* Fake timers MUST be enabled before mount — the 30s poll's setInterval
+       is created on mount, and switching to fake timers afterward does not
+       retroactively convert an already-scheduled real timer, so a later
+       switch would leave `advanceTimersByTimeAsync` unable to fire it.
+       `findByRole`/`waitFor` also can't be used once fake timers are active
+       (their internal polling hangs) — every lookup below is a synchronous
+       query preceded by an explicit microtask flush via `act`. */
+    vi.useFakeTimers();
+    try {
+      let resolveUnload: (v: { status: string }) => void = () => {};
+      unloadAnalyzerSpy.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveUnload = r;
+        }),
+      );
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const stopBtn = screen.getByRole('button', { name: /^stop \(analyzer\)$/i });
+      await act(async () => {
+        fireEvent.click(stopBtn);
+        await Promise.resolve();
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      /* Advance past the 30s poll tick while the unload is STILL pending —
+         getOllamaHealthSpy resolves (mocked as always resident) but must not
+         clear the 'unloading' override. Fails against the old unguarded
+         poll: after this tick, the pill would flip back to "Analyzer ready ·
+         Stop" while the analyzer is still resident. */
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUnload({ status: 'unloaded' });
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the "unloading" pill across a poll tick whose health probe itself rejects (fetch failure) while the analyzer unload is still in flight', async () => {
+    /* Same fake-timers rationale as the sibling `.then` test above — mirrors
+       it exactly but drives the poll's OTHER branch: `getOllamaHealth()`
+       itself REJECTING (a dead fetch), not merely resolving with a
+       'reachable' status. No prior test drove this branch, so a mutation
+       deleting the in-flight guard from the poll's `.catch` handler
+       (analysing.tsx) killed nothing. */
+    vi.useFakeTimers();
+    try {
+      let resolveUnload: (v: { status: string }) => void = () => {};
+      unloadAnalyzerSpy.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveUnload = r;
+        }),
+      );
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const stopBtn = screen.getByRole('button', { name: /^stop \(analyzer\)$/i });
+      await act(async () => {
+        fireEvent.click(stopBtn);
+        await Promise.resolve();
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      /* The NEXT getOllamaHealth() call — the 30s poll tick below — rejects
+         outright, landing in the probe's `.catch`, while the unload is
+         STILL pending. Fails against an unguarded `.catch`: the pill would
+         flip away from "Stopping analyzer…" (to the 'unreachable' reading)
+         even though the unload the user asked for hasn't resolved yet. */
+      getOllamaHealthSpy.mockRejectedValueOnce(new Error('probe failed'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUnload({ status: 'unloaded' });
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not leak the in-flight counter when handleStopAnalyzer\'s own catch throws (non-Error rejection)', async () => {
+    /* `catch (e) { ...(e as Error).message... }` would throw a TypeError if
+       `e` were not an Error — but production can't actually reach that:
+       both `realUnloadAnalyzer` (src/lib/api.ts:7833) and
+       `realGetOllamaHealth` only reject when `fetch` itself rejects, which
+       throws a TypeError or DOMException — both of which carry `.message`.
+       This test drives the throw with a synthetic `undefined` rejection
+       (`mockRejectedValueOnce(undefined)`) purely to exercise the
+       MECHANISM at that level: that throw escapes past the inner
+       try/catch; only an outer try/finally around the whole handler can
+       still decrement the in-flight counter. Without it, the counter is
+       stuck at 1 forever and the poll's in-flight guard permanently refuses
+       to clear `pendingAnalyzerPill` — the pill freezes on "Stopping
+       analyzer…" even though the failed unload is long over.
+
+       Fake timers again enabled before mount (same reasoning as above), so
+       the 30s poll used to prove recovery is the SAME interval instance the
+       throw happened under. */
+    const onUnhandled = vi.fn();
+    process.on('unhandledRejection', onUnhandled);
+    vi.useFakeTimers();
+    try {
+      unloadAnalyzerSpy.mockRejectedValueOnce(undefined);
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const stopBtn = screen.getByRole('button', { name: /^stop \(analyzer\)$/i });
+      await act(async () => {
+        fireEvent.click(stopBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      /* The escaping throw was expected — confirm it actually happened,
+         otherwise this test would trivially pass without exercising the
+         throw path at all. */
+      expect(onUnhandled).toHaveBeenCalled();
+
+      /* The pill is still reading the optimistic 'unloading' state (the
+         catch's own cleanup line never ran, since the throw happened before
+         it) — that alone is expected. What must NOT happen is the guard
+         staying stuck: the next natural /health poll tick has to be able to
+         clear it, which only happens if the in-flight counter was correctly
+         decremented back to 0 despite the throw. */
+      expect(screen.getByText(/stopping analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(screen.queryByText(/stopping analyzer/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('shows "Loading analyzer…" with the action disabled until handleLoadAnalyzer actually resolves', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      models: ['qwen3.5:4b'],
+      expectedModel: 'qwen3.5:4b',
+      modelPulled: true,
+      resident: [],
+      modelResident: false,
+    });
+    let resolveLoad: (v: { status: string }) => void = () => {};
+    loadAnalyzerSpy.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveLoad = r;
+      }),
+    );
+
+    renderNoManuscript();
+    const loadBtn = await screen.findByRole('button', { name: /load model \(analyzer\)/i });
+    await act(async () => {
+      fireEvent.click(loadBtn);
+    });
+
+    const loadingBtn = await screen.findByRole('button', { name: /^loading…\s*\(analyzer\)$/i });
+    expect(loadingBtn).toBeDisabled();
+    expect(screen.getByText(/loading analyzer/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveLoad({ status: 'ready' });
+      await Promise.resolve();
+    });
+  });
+
+  it('keeps the "loading" pill across a poll tick while handleLoadAnalyzer\'s unloadSidecar call is still in flight', async () => {
+    /* handleLoadAnalyzer awaits api.unloadSidecar() BEFORE api.loadAnalyzer()
+       — the TTS route #1921 moved to a 90s budget, so this call alone can
+       outlive the 30s poll interval. Fake timers before mount + synchronous
+       queries only, same reasoning as the Stop-side poll test above. */
+    vi.useFakeTimers();
+    try {
+      getOllamaHealthSpy.mockResolvedValue({
+        status: 'reachable',
+        url: '(test)',
+        models: ['qwen3.5:4b'],
+        expectedModel: 'qwen3.5:4b',
+        modelPulled: true,
+        resident: [],
+        modelResident: false,
+      });
+      let resolveUnloadSidecar: (v: { status: string }) => void = () => {};
+      unloadSidecarSpy.mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolveUnloadSidecar = r;
+          }),
+      );
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const loadBtn = screen.getByRole('button', { name: /load model \(analyzer\)/i });
+      await act(async () => {
+        fireEvent.click(loadBtn);
+        await Promise.resolve();
+      });
+      expect(screen.getByText(/loading analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByText(/loading analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        resolveUnloadSidecar({ status: 'idle' });
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not leak the in-flight counter when handleLoadAnalyzer\'s own catch throws (non-Error rejection)', async () => {
+    const onUnhandled = vi.fn();
+    process.on('unhandledRejection', onUnhandled);
+    vi.useFakeTimers();
+    try {
+      getOllamaHealthSpy.mockResolvedValue({
+        status: 'reachable',
+        url: '(test)',
+        models: ['qwen3.5:4b'],
+        expectedModel: 'qwen3.5:4b',
+        modelPulled: true,
+        resident: [],
+        modelResident: false,
+      });
+      loadAnalyzerSpy.mockRejectedValueOnce(undefined);
+
+      renderNoManuscript();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const loadBtn = screen.getByRole('button', { name: /load model \(analyzer\)/i });
+      await act(async () => {
+        fireEvent.click(loadBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(onUnhandled).toHaveBeenCalled();
+
+      expect(screen.getByText(/loading analyzer/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(screen.queryByText(/loading analyzer/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
 
