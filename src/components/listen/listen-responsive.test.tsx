@@ -176,12 +176,17 @@ describe('ListenPlayerRegion — phone viewport render (plan 81 wave 3)', () => 
     expect(screen.getByTestId('chapter-row-1')).toBeInTheDocument();
     expect(screen.getByTestId('chapter-row-1-rename')).toBeInTheDocument();
     expect(screen.getByTestId('chapter-row-1-share-clip')).toBeInTheDocument();
-    /* The action buttons hit WCAG 2.5.5: w-11 h-11 on phone, w-8 on
-       desktop. Inspect the class to confirm the responsive pair lives
-       on the button. */
+    /* The action buttons hit WCAG 2.5.5 via the pointer-media-query
+       idiom (#1935) — a fixed min-h/min-w-[44px] floor that only drops
+       to the compact w-8/h-8 box on an actual fine (mouse) pointer, so
+       the target survives at ANY width on a touch device (unlike the
+       superseded `sm:`/`md:` width-breakpoint shrink it replaced,
+       which collapsed the target across the whole tablet range). */
     const renameBtn = screen.getByTestId('chapter-row-1-rename');
-    expect(renameBtn.className).toMatch(/w-11/);
-    expect(renameBtn.className).toMatch(/md:w-8/);
+    expect(renameBtn.className).toMatch(/min-h-\[44px\]/);
+    expect(renameBtn.className).toMatch(/min-w-\[44px\]/);
+    expect(renameBtn.className).toMatch(/fine-pointer:min-h-0/);
+    expect(renameBtn.className).toMatch(/fine-pointer:min-w-0/);
   });
 
   it('the row container does NOT pin a fixed wide grid template without an md: gate', () => {
