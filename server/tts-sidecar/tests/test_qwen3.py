@@ -112,6 +112,20 @@ class _FakeInnerModule:
         return ([np.array([1, 2, 3])], None)
 
 
+class _FakeVoiceClonePromptItem:
+    """Stand-in for qwen_tts's `VoiceClonePromptItem` — the element type of
+    `create_voice_clone_prompt`'s real return value. Real production code
+    only ever touches `.ref_code` (main.py:5388, 5597, 5911) and `.ref_text`
+    (main.py:5603) on an item, so those are the only attributes faithfully
+    reproduced here. `ref_code=None` mirrors the SimpleNamespace fakes used
+    elsewhere in this file (e.g. :1248) — it skips the ICL decode-trim branch
+    cleanly, since that branch needs real tensor ops (covered on-box)."""
+
+    def __init__(self, ref_text: str) -> None:
+        self.ref_text = ref_text
+        self.ref_code: Any = None
+
+
 class _FakeQwenModel:
     """Stand-in for qwen_tts.Qwen3TTSModel — a thin WRAPPER (NOT an nn.Module).
     The real nn.Module lives at `.model`; the wrapper caches its device at
@@ -139,9 +153,14 @@ class _FakeQwenModel:
 
     def create_voice_clone_prompt(self, ref_audio: Any, ref_text: str, **_kwargs: Any):
         self.prompt_calls.append((ref_audio, ref_text))
-        # A reusable prompt is opaque to us — return a sentinel the fake
-        # torch.save/load round-trips.
-        return {"_prompt": True, "ref_text": ref_text}
+        # Real qwen_tts create_voice_clone_prompt returns a LIST of
+        # VoiceClonePromptItem, normally length 1 (main.py:5908-5911) — NOT
+        # a dict. A dict happens to unpack into 2 values without raising,
+        # which let a real bug (clone_voice caching a bare prompt instead of
+        # a (prompt, lang) tuple) slip past a naive regression test (#1951).
+        # Faithful to the real shape here so any test built on this fake
+        # exercises the real unpack/attribute-access failure modes.
+        return [_FakeVoiceClonePromptItem(ref_text)]
 
     def generate_voice_clone(self, text: Any, language: Any, voice_clone_prompt: Any):
         self.clone_calls.append((text, voice_clone_prompt))
@@ -1311,10 +1330,11 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
             (np.zeros(6000, "float32"), 24000),
         )[1],
     )
-    # CRITICAL: the shared fake's create_voice_clone_prompt returns a DICT (no
-    # .ref_code), so stub _load_voice_prompt to hand back a ref_code-bearing
-    # item (ref_code=None skips the fake decode-trim cleanly). Without this,
-    # mint_variant's `base_item.ref_code` AttributeErrors.
+    # The shared fake's create_voice_clone_prompt now returns a faithful
+    # list-of-ref_code-bearing-items shape (#1951), so this override is no
+    # longer needed to avoid an AttributeError on `base_item.ref_code` — it's
+    # kept to isolate this test from design_voice's own prompt-caching
+    # internals and to pin ref_code=None (skips the fake decode-trim cleanly).
     import types as _types
     monkeypatch.setattr(
         eng,
@@ -1481,8 +1501,9 @@ def test_synth_17b_calls_ensure_base17_and_derives_native_prompt(
     eng.design_voice("tara", "A warm British narrator.", "English", None)
 
     # Provide a ref_code-bearing item from _load_voice_prompt so _load_voice_prompt_17b
-    # can access base_item.ref_code.  (The shared fake's create_voice_clone_prompt
-    # returns a DICT, not a PromptItem, so we monkeypatch like mint_variant's test.)
+    # can access base_item.ref_code. The shared fake's create_voice_clone_prompt is
+    # now faithful (list of ref_code-bearing items, #1951), so this isn't needed to
+    # avoid an AttributeError — kept for the same isolation reason as mint_variant's test.
     monkeypatch.setattr(
         eng,
         "_load_voice_prompt",
