@@ -7,9 +7,9 @@
 
    Authored for the fs-26 splice path so a re-mix/re-record persists byte-
    identically to a full regen (same loudnorm target, same segments-file shape,
-   same `.previous.*` preservation, same state.json fields). generation.ts still
-   inlines the equivalent tail (woven into its job/SSE bookkeeping); converging
-   it onto this helper is a deliberate follow-up — see fs-26 plan doc. */
+   same `.previous.*` preservation, same state.json fields). srv-29 converged
+   `routes/generation.ts` onto this same helper (see its call site there) —
+   it no longer inlines its own tail. */
 
 import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

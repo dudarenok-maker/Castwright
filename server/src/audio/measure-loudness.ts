@@ -9,9 +9,11 @@
    below sample peak is impossible). The Listen view renders those numbers to
    users, so they have to be real.
 
-   Deliberately fails SOFT: the audio is already on disk by the time this runs,
-   so a measurement failure must degrade to "no sidecar values", never break
-   the finalize path. */
+   Deliberately fails SOFT: the encoded bytes are already on disk by the time
+   this runs — at the temp path, before the atomic rename to the chapter's
+   final name (plan 274 T1 hoisted the call site to here) — so a measurement
+   failure must degrade to "no sidecar values", never break the finalize
+   path. */
 
 import { spawn } from 'node:child_process';
 
@@ -61,11 +63,15 @@ export function parseEbur128Summary(stderr: string): MeasuredLoudness | null {
   return { i, lra, tp };
 }
 
-/* This spawn runs AFTER `input.onEncoded()` fires — the chapter's audio is
-   already safely on disk, so a wedged ffmpeg here buys nothing but a stuck
-   promise. 120 s is ~80x headroom over the ~1.5 s/10-min measured cost, so
-   it should never trip on a healthy process; it exists purely to bound a
-   hang. */
+/* plan 274 T1 hoisted this call to run BEFORE the atomic rename (and before
+   `preserveExistingAsPrevious`), not after — so, unlike the original
+   post-rename call site this replaced, the render is NOT yet committed to
+   its final name when this spawns. A wedged ffmpeg here therefore delays
+   the render rather than being free: `finalizeChapterAudioWrite` can't
+   proceed to displace the previous take or write `segments.json` until this
+   settles. 120 s is ~80x headroom over the ~1.5 s/10-min measured cost, so
+   it should never trip on a healthy process; it exists purely to bound how
+   long a hang can stall a render, not to protect an already-finished file. */
 const MEASURE_TIMEOUT_MS = 120_000;
 
 /** Run one `ebur128` analysis pass over `path`. ~1.5 s per 10 minutes of

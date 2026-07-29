@@ -58,9 +58,11 @@ export type Revision = components['schemas']['Revision'];
    ChapterAudio meta endpoint and in the book-state response's
    per-chapter `chapterLufs` map. Persisted disk shape lives at
    <bookDir>/audio/<slug>.lufs.json (plan 71). Field names are stable
-   contract with the sidecar JSON. Consumers MUST gate drift
-   comparisons on twoPass === true — single-pass values are nominal
-   target values, not real post-filter measurements. */
+   contract with the sidecar JSON. Consumers MUST gate drift comparisons
+   on measurement PROVENANCE (`measurementSource`, plan 274), not on
+   `twoPass` — `twoPass` only says which loudnorm pass ran, not whether
+   the figures are a real measurement; see `classifyDrift` in
+   loudness-report.tsx. */
 export type ChapterLoudness = components['schemas']['ChapterLoudness'];
 /* srv-27 — advisory post-synthesis audio QA verdict. */
 export type ChapterQaVerdict = components['schemas']['ChapterQaVerdict'];

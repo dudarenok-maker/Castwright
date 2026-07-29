@@ -64,12 +64,13 @@ export interface LoudnormFirstPassStats {
  *  reads this back; field names are stable contract.
  *
  *  `i` / `lra` / `tp` are measured from the FINISHED file by a real `ebur128`
- *  pass (`server/src/audio/measure-loudness.ts`), run after the audio is
- *  encoded and renamed into place — not loudnorm's self-reported `output_*`
- *  figures (ops-36 finding 10: `output_tp` in particular is the ceiling
- *  loudnorm was ASKED to hit, not what the audio measured, and can sit below
- *  the true sample peak). On measurement failure — the audio is already on
- *  disk by then — they fall back to loudnorm's self-reports, which are NOT
+ *  pass (`server/src/audio/measure-loudness.ts`), run once the audio is fully
+ *  encoded — at the temp path, before the atomic rename (plan 274 T1
+ *  hoisted this from its original post-rename call site) — not loudnorm's
+ *  self-reported `output_*` figures (ops-36 finding 10: `output_tp` in
+ *  particular is the ceiling loudnorm was ASKED to hit, not what the audio
+ *  measured, and can sit below the true sample peak). On measurement
+ *  failure they fall back to loudnorm's self-reports, which are NOT
  *  measurements. */
 export interface LoudnormSidecarJson {
   /** Integrated loudness (LUFS) of the finished chapter, as measured by
