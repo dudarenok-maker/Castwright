@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 20 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 23 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**37 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**40 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -458,6 +458,53 @@ non-English book. *Criteria:* the spec at
 `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` §6; the TTL
 rationale is in the comment on `_COQUI_IDLE_TTL_DEFAULT` in `tts-sidecar/main.py`.
 *Cost:* short.
+
+### A21 · Real-book QA/badge agreement after the loudness measurement hoist (plan [274](../features/archive/274-loudness-measurement-provenance.md), [#1922](https://github.com/dudarenok-maker/Castwright/issues/1922), [#1923](https://github.com/dudarenok-maker/Castwright/issues/1923))
+
+Everything is proven in-repo with real ffmpeg (no GPU) against a recorded-PCM fixture
+— what that cannot reach is a full multi-chapter render of genuinely synthesised
+speech, where the hoisted `ebur128` measurement runs against real TTS output rather
+than a single committed clip.
+
+- Render a full book (any engine). For every chapter, confirm the Suspect badge's
+  true-peak reason (when present) and the Listen-view loudness badge's dBTP figure
+  quote the **same number** — they can no longer be two different readings of the
+  same chapter.
+
+*Needs:* a working TTS engine + a real book. *Criteria:* plan 274 §6 row 1.
+*Cost:* short (rides along with any other real-book render session).
+
+### A22 · Real-corpus true-peak distribution (plan [274](../features/archive/274-loudness-measurement-provenance.md)) · feeds [#1909](https://github.com/dudarenok-maker/Castwright/issues/1909)
+
+Plan 274 §1.8 measured the requested/measured true-peak overshoot on ONE recorded
+fixture (dynamic loudnorm pins the peak ~0.1–0.3 dB above the requested `-1.5` dBTP
+ceiling). Decision 3 deliberately left `QA_CLIP_TP_DB` untuned because retuning
+against a single fixture's peak distribution risked recalibrating twice once #1909
+settles the ceiling/mode question.
+
+- Across a real book render, record the measured `tp` spread per chapter. Confirm
+  whether any chapter approaches the default `-0.1` dBTP clip threshold, or whether
+  §1.8's "pinned just above the ceiling" pattern holds on real narrated material.
+
+*Needs:* a working TTS engine + a real book (can ride along with A21). *Criteria:*
+plan 274 §6 row 2 — this is the evidence #1909's eventual retune needs, not a
+pass/fail gate on its own. *Cost:* short.
+
+### A23 · Measurement-failure path renders as untrusted, not as a fabricated reading (plan [274](../features/archive/274-loudness-measurement-provenance.md))
+
+T2/T6 cover the fail-soft fallback and the grandfather predicate at unit level with a
+forced (mocked) `measureLoudnessFile` failure. Not yet observed: the real, hard-to-force
+failure path on a live render.
+
+- Force (or catch) a chapter whose real `ebur128` re-measurement fails on a genuine
+  render. Confirm the sidecar carries `measurementSource: 'loudnorm'` and that both
+  the Listen-view badge and the report-card row show "No measurement" rather than a
+  fabricated figure.
+
+*Needs:* a working TTS engine + a real book; this failure is hard to force naturally,
+so treat it as opportunistic (catch one if ffmpeg genuinely fails during a render)
+rather than something to engineer. *Criteria:* plan 274 §6 row 3. *Cost:* short,
+opportunistic.
 
 ---
 
