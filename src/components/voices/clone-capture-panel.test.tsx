@@ -115,4 +115,87 @@ describe('CloneCapturePanel', () => {
       'I attest I have this person’s permission to clone their voice.',
     );
   });
+
+  /* #1943 — the real attester (e.g. a guardian) is not necessarily the
+     person whose voice this is. The field only appears for the two
+     relationships where that can differ; asking someone to type their own
+     name twice for 'self' is noise. */
+  it('shows the attester field only for non-self relationships, and omits it for self', async () => {
+    render(wrap(<CloneCapturePanel onReady={vi.fn()} />));
+    expect(screen.queryByLabelText(/attester name/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/relationship/i), {
+      target: { value: 'family-with-permission' },
+    });
+    expect(screen.getByLabelText(/attester name/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/relationship/i), { target: { value: 'guardian-of-minor' } });
+    expect(screen.getByLabelText(/attester name/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/relationship/i), { target: { value: 'self' } });
+    expect(screen.queryByLabelText(/attester name/i)).not.toBeInTheDocument();
+  });
+
+  it('requires the attester name before Continue for guardian-of-minor, and forwards it', async () => {
+    const onReady = vi.fn();
+    render(wrap(<CloneCapturePanel onReady={onReady} />));
+    const cont = () => screen.getByRole('button', { name: /continue/i });
+
+    const file = new File([new Uint8Array([1, 2, 3])], 's.wav', { type: 'audio/wav' });
+    fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText('transcript')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/person/i), { target: { value: 'Ana' } });
+    fireEvent.change(screen.getByLabelText(/relationship/i), { target: { value: 'guardian-of-minor' } });
+    fireEvent.click(screen.getByLabelText(/i attest/i));
+
+    // Still gated — attester name not filled in yet.
+    expect(cont()).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/attester name/i), { target: { value: 'Dana' } });
+    await waitFor(() => expect(cont()).toBeEnabled());
+
+    fireEvent.click(cont());
+    expect(onReady).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consent: expect.objectContaining({
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: 'Dana',
+        }),
+      }),
+    );
+  });
+
+  it('does not require or send an attester for self', async () => {
+    const onReady = vi.fn();
+    render(wrap(<CloneCapturePanel onReady={onReady} />));
+
+    const file = new File([new Uint8Array([1, 2, 3])], 's.wav', { type: 'audio/wav' });
+    fireEvent.change(screen.getByLabelText(/upload/i), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText('transcript')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/person/i), { target: { value: 'Mum' } });
+    fireEvent.click(screen.getByLabelText(/i attest/i));
+    await waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    expect(onReady).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consent: { personName: 'Mum', relationship: 'self', permittedUse: 'personal' },
+      }),
+    );
+  });
+
+  it('shows the guardian-specific attestation sentence for guardian-of-minor', () => {
+    render(wrap(<CloneCapturePanel onReady={vi.fn()} />));
+    fireEvent.change(screen.getByLabelText(/relationship/i), { target: { value: 'guardian-of-minor' } });
+    const checkbox = screen.getByLabelText(/i attest/i);
+    const describedById = checkbox.getAttribute('aria-describedby');
+    expect(describedById).toBeTruthy();
+    const sentence = document.getElementById(describedById!);
+    expect(sentence).toHaveTextContent(
+      'I attest, as this child’s guardian, that I consent to cloning their voice.',
+    );
+  });
 });
