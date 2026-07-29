@@ -8252,7 +8252,7 @@ async def load_model(req: Request) -> JSONResponse:
             try:
                 if _capacity_admission_enabled():
                     cap = _ENGINE_CAPACITY_PROFILE.get("kokoro", {"cpu_capable": True, "heavy": False})
-                    with _placement.reservation(
+                    async with _placement.reservation(
                         "kokoro", None, {},
                         cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                         pinned=_engine_env_pin("kokoro"),
@@ -8287,7 +8287,7 @@ async def load_model(req: Request) -> JSONResponse:
                 try:
                     if _capacity_admission_enabled():
                         cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
-                        with _placement.reservation(
+                        async with _placement.reservation(
                             "qwen", "1.7b", {},
                             cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                             pinned=_engine_env_pin("qwen"),
@@ -8312,7 +8312,7 @@ async def load_model(req: Request) -> JSONResponse:
             try:
                 if _capacity_admission_enabled():
                     cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
-                    with _placement.reservation(
+                    async with _placement.reservation(
                         "qwen", None, {},
                         cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                         pinned=_engine_env_pin("qwen"),
@@ -8353,7 +8353,7 @@ async def load_model(req: Request) -> JSONResponse:
         try:
             if _capacity_admission_enabled():
                 cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
-                with _placement.reservation(
+                async with _placement.reservation(
                     "coqui", None, {},
                     cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                     pinned=_engine_env_pin("coqui"),
@@ -8531,7 +8531,7 @@ async def qwen_design_voice(req: Request) -> Response:
         # design forward, released on exit either way. Flag-OFF leaves the call
         # byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "1.7b", {"op": "design"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -8653,7 +8653,7 @@ async def qwen_clone_voice(req: Request) -> Response:
     _inflight_synth += 1
     try:
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "0.6b", {"op": "clone"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -8749,7 +8749,7 @@ async def qwen_mint_variant(req: Request) -> Response:
         # and being drowned in — the synth-dominated window (#1738). Flag-OFF
         # leaves the call byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "1.7b", {"op": "mint"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -8940,7 +8940,7 @@ async def xtts_clone_voice(req: Request) -> Response:
     try:
         if _capacity_admission_enabled():
             cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
-            with _placement.reservation(
+            async with _placement.reservation(
                 "coqui", None, {},
                 cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                 pinned=_engine_env_pin("coqui"),
@@ -9161,7 +9161,7 @@ async def synthesize(req: Request) -> Response:
         # held before the call starts. Off (the default): unchanged behaviour.
         if _capacity_admission_enabled():
             cap = _ENGINE_CAPACITY_PROFILE.get(engine_id, {"cpu_capable": False, "heavy": True})
-            with _placement.reservation(
+            async with _placement.reservation(
                 engine_id, model, {}, cpu_capable=cap["cpu_capable"], heavy=cap["heavy"]
             ) as adm:
                 if "noCapacity" in adm:
@@ -9314,7 +9314,7 @@ async def transcribe(req: Request) -> Response:
         # probe 503s before the (possibly cold) load ever runs.
         on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "asr", None, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("asr"),
@@ -9389,7 +9389,7 @@ async def embed(req: Request) -> Response:
         # embed call.
         on_gpu = _parse_device(SPK.device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "spk", None, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("spk"),
