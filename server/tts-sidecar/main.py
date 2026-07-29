@@ -5287,7 +5287,7 @@ class QwenEngine(Engine):
         # Warm the in-memory cache + drop any stale 1.7B-native prompt, OUTSIDE
         # the synth lock (mirrors design_voice's post-lock cache handling).
         with self._cache_lock:
-            self._prompt_cache[voice_id] = prompt
+            self._prompt_cache[voice_id] = (prompt, lang)
         self._evict_17b_prompt(voice_id)
         log.info("Cloned + cached Qwen voice '%s' from caller clip.", voice_id)
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
