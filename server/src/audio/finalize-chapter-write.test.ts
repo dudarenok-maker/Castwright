@@ -208,6 +208,38 @@ describe('finalizeChapterAudioWrite loudness sidecar (ops-36 finding 10)', () =>
   });
 });
 
+describe('finalizeChapterAudioWrite measurementSource provenance (plan 274 T4)', () => {
+  afterEach(() => {
+    vi.doUnmock('./measure-loudness.js');
+    vi.resetModules();
+  });
+
+  it('stamps "ebur128" when the real re-measurement succeeds', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    expect(sidecar.measurementSource).toBe('ebur128');
+  });
+
+  it('stamps "loudnorm" when the real re-measurement fails (fallback to loudnorm self-reports)', async () => {
+    vi.resetModules();
+    vi.doMock('./measure-loudness.js', () => ({
+      measureLoudnessFile: async () => null,
+    }));
+
+    const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
+    await finalizeMocked(baseInput());
+
+    const lufsPath = join(audioRoot, `${SLUG}.lufs.json`);
+    const sidecar = JSON.parse(readFileSync(lufsPath, 'utf8'));
+    expect(sidecar.measurementSource).toBe('loudnorm');
+    // Sanity: this is the real re-measurement failing, not a forced Shape B —
+    // loudnorm's own second-pass parse still succeeded normally.
+    expect(sidecar.normalizationType).toBeDefined();
+  });
+});
+
 describe('finalizeChapterAudioWrite QA vs sidecar (plan 274 T3 — the two surfaces can never disagree)', () => {
   it('QA truePeakDb matches the sidecar tp exactly, and neither is the requested ceiling', async () => {
     const { audioQa } = await finalizeChapterAudioWrite(baseInput());

@@ -173,11 +173,21 @@ export async function finalizeChapterAudioWrite(
      users by the Listen view's loudness badge, and loudnorm's `output_tp` is
      the ceiling it was ASKED for, not what the audio reached (ops-36 finding
      10). Fails soft: on a failed measurement the sidecar keeps loudnorm's
-     self-reported figures rather than breaking the render. */
+     self-reported figures rather than breaking the render.
+
+     plan 274 T4 — `measurementSource` records which of those two happened,
+     so a reader (and the UI, once T6 lands) can tell a real measurement from
+     a fallback rather than trusting every sidecar equally. */
   if (loudnormStats) {
     const sidecarPayload: LoudnormSidecarJson = realLoudness
-      ? { ...(loudnormStats as LoudnormSidecarJson), i: realLoudness.i, lra: realLoudness.lra, tp: realLoudness.tp }
-      : (loudnormStats as LoudnormSidecarJson);
+      ? {
+          ...(loudnormStats as LoudnormSidecarJson),
+          i: realLoudness.i,
+          lra: realLoudness.lra,
+          tp: realLoudness.tp,
+          measurementSource: 'ebur128',
+        }
+      : { ...(loudnormStats as LoudnormSidecarJson), measurementSource: 'loudnorm' };
     try {
       await writeChapterLufsFile(sidecarPayload, lufsPath);
     } catch (err) {
@@ -205,11 +215,12 @@ export async function finalizeChapterAudioWrite(
      BOTH fields, unconditionally — shape doesn't matter. Absent that, only
      Shape A's `i` is trustworthy enough to judge on; `tp` NEVER falls back,
      because no shape of `loudnormStats.tp` is a real measurement. */
-  const shapeA = loudnormStats?.normalizationType !== undefined;
+  const measured = loudnormStats as LoudnormSidecarJson | null;
+  const shapeA = measured?.normalizationType !== undefined;
   const qaLufs = realLoudness
     ? realLoudness.i
     : shapeA
-      ? loudnormStats!.i
+      ? measured!.i
       : null;
   const qaTp = realLoudness ? realLoudness.tp : null;
   const baseQa: ChapterQaVerdict = evaluateChapterQa({

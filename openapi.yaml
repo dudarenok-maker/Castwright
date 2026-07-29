@@ -5609,6 +5609,21 @@ components:
             output, for sidecars written by scripts/relufs-existing.mjs, and
             for a two-pass encode whose second-pass JSON failed to parse —
             so consumers MUST NOT infer presence from `twoPass`.
+        measurementSource:
+          type: string
+          enum: [ebur128, loudnorm]
+          description: |
+            Provenance of `i`/`lra`/`tp` (plan 274). `ebur128` — a real
+            post-write measurement of the finished file. `loudnorm` — the
+            real measurement failed and the fields fall back to loudnorm's
+            self-reported figures (which, depending on shape, may be the
+            requested ceiling rather than a measurement, or pre-filter input
+            loudness rather than the normalised output). OPTIONAL: absent
+            means a sidecar written before this field existed — treated as
+            trustworthy-by-assumption (grandfathered) rather than blanked,
+            since the distinguishing information was never recorded for
+            those chapters. `scripts/relufs-existing.mjs` re-measures a
+            chapter and upgrades a grandfathered row to `ebur128`.
         measuredAt:
           type: string
           format: date-time
