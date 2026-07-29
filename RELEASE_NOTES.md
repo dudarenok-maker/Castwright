@@ -1,187 +1,44 @@
 # Castwright 1.15.0
 
-- **Castwright now needs Node 22.22 or newer.** If you install Castwright yourself, please check your
-  Node version before you update — and check it deliberately, because nothing will stop you: the
-  installer only prints a warning that's easy to miss in the scroll, then carries on and installs
-  anyway. On an older Node you may not find out until something fails later, with nothing pointing at
-  the real cause. Run `node --version` first. Node 20 stopped receiving security fixes in April 2026,
-  so this moves us onto a version that's still being looked after. If you installed through Pinokio,
-  there's nothing for you to install by hand — Castwright now sets up its own Node 24 as part of the
-  Pinokio install. One wrinkle if you already have Castwright through Pinokio: the update that brings
-  you to this version still runs on your old setup, and the new Node only takes effect from the update
-  after that. Everything keeps working in between; it just means Pinokio installs settle onto the new
-  version one release later than fresh ones do.
-- **The speech engine now runs on a version we've actually tested.** Until now, the exact
-  speech runtime Castwright installed depended on the day you installed it — two people with
-  identical machines could quietly end up on different builds, which made "it sounds different
-  on my computer" almost impossible to chase down. It's pinned now. Some installs will step
-  back to the tested version the next time they update.
-- **Setting up the voice engine now shows you it's working.** Installing the Python runtime
-  takes several minutes and downloads a couple of gigabytes — and until now, the whole time it
-  ran, the screen just showed the "Set up the voice engine runtime" button you'd already
-  pressed. No spinner, no progress line, no sign anything was happening. The progress card was
-  there all along; it was checking for a status the server never actually sends, so it never
-  appeared. It does now, from the moment you press the button until the runtime is ready.
-- **Castwright now tells you when a piece of your setup is too old to trust.** Every finished
-  chapter is levelled by a free tool called ffmpeg, and Castwright reads ffmpeg's own loudness
-  measurements back to do it. That means the version matters — an old one can quietly hand back
-  numbers we don't expect, and the result is audio that's levelled differently with nothing to
-  explain why. Castwright now asks for **ffmpeg 6.0 or newer**, tells you the version you have
-  and the one it wants, and points at the command to upgrade. It won't stop you: if your ffmpeg
-  is older, you'll see a note rather than a locked door, because older doesn't mean broken —
-  it means untested. Two smaller things follow from it. If you install through Pinokio, the
-  setup now asks for a version that clears the bar, on updates as well as fresh installs. And
-  we've moved our tested-on Linux from Ubuntu 22.04 to 24.04, because 22.04's own copy of
-  ffmpeg is too old — 22.04 still works if you install a newer ffmpeg yourself.
-- **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with
-  a live audition — and it's yours to cast in any book, not just the one you designed it for.
-  Not happy with a take? Redesign it and compare old against new side by side before you commit.
-  Fallen for a voice you built for one character? Save it to My voices and hand it to someone
-  else next time, in a different book entirely.
-- **In-app Help now answers "Is my data private?" and "Does it work offline?"** — the same plain-language answers as the website, so both agree: analysis reads your book on a local model by default, and the optional cloud fallback is on by default but a single switch turns it off for good.
-- **The series cast card reads properly on a light screen — and travels that way.** The card you
-  share to show a cast kept true across a series is always dark, but its pink accent was quietly
-  taking its cue from whichever theme you were using. On a light theme that left the wording on it
-  too dim to read comfortably — and because the card saves out as an image, that dimmed version was
-  what you sent to other people. The card now looks the same wherever you are, and the buttons
-  around it read cleanly too.
-- **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
-- **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
-- **You can see the chapter title on the timeline now.** Every chapter opens with its title read
-  aloud — the player now shows that opening beat as a small marker at the start of the track, so
-  what you see matches what you hear.
-- **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a
-  line for re-recording could quietly re-record the line before it, or fail with a confusing error
-  about segment indices. Both are fixed.
-- **Fix a flagged chapter without regenerating the whole thing.** When Castwright marks a
-  finished chapter "Suspect" — a line that came out silent, clipped, or the wrong length — the
-  chapter row now has a button that re-records just those lines and stitches them back in. It
-  keeps your previous take, so you can always go back. Castwright has been able to do this
-  under the hood for a while; there was simply no way to ask for it.
-- **Re-recording a character now tells you when one of their voices had to be dropped.** If a
-  voice you'd designed turns out to have been built for a different language than the book
-  you're fixing, Castwright sets it aside rather than reading the line in the wrong language —
-  and it now says so on screen. It was already doing the setting-aside quietly; you just never
-  heard about it, so a line could come back in a voice you didn't choose with no explanation.
-- **The groundwork for cloning a real voice is quietly taking shape.** Recording, quality
-  checks, and consent — the plumbing behind _"even in your own voice"_ — are now in place
-  under the hood. Nothing to try yet; the first voice you can actually clone and cast is
-  coming in a follow-up update.
-- **Clone a voice you have permission to use — and cast it anywhere.** Record or upload a
-  short sample, confirm it's yours (or a family member's, with their say-so), and Castwright
-  builds a reusable voice you can hand to any character. It'll never quietly swap in a
-  stand-in: if it can't use your cloned voice, it tells you rather than faking it.
-- **Fixing a misheard word in your voice sample now actually counts.** When you record a sample
-  for cloning, Castwright writes down what it heard — and if it misheard you, you can correct it.
-  Until now those corrections were quietly ignored, and the clone was built against the wrong
-  words. Your edit is now what the voice is built from, and it sticks, so a later touch-up
-  doesn't undo it.
-- **A cloned voice now tells you clearly when it can't be used — instead of quietly rendering
-  as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so,
-  right down to the reason — a revoked voice, a missing sample, or a book set to the wrong
-  engine — so you always know a chapter used the real voice or didn't run at all. And revoking
-  a voice now really does erase it: your original recording, and everything Castwright built
-  from it, is gone for good — not just the visible entry. Castwright tells you exactly what
-  you're about to lose and asks you to confirm before it happens.
-- **Cloned and designed voices now work on the second speech engine too, not just the first.**
-  Until now a cloned voice only worked reliably on one of Castwright's two speech engines —
-  cast it on a book that used the other one and you'd either hit a wall or, worse, quietly get
-  a stand-in voice instead. Both are covered now — for a cloned voice, the same promise holds
-  either way: it renders as the real voice, or it tells you it can't — never a silent swap.
-- **Your consent record for a cloned voice is now enforced everywhere it applies.** Revoking a
-  clone was already final — Castwright stopped rendering it and erased what it could be rebuilt
-  from. That same check now reaches a couple of paths inside your own install that hadn't been
-  covered yet: linking one character's voice to another's, and a plain cast save. A voice you've
-  revoked, or never gave consent for in the first place, can't be quietly carried across either
-  one.
-- **A chapter that needs to rebuild a voice now shows you it's happening.** Before narration
-  starts, Castwright sometimes has to quietly re-derive a cloned voice or self-heal a designed
-  one — that could look like nothing was happening for several seconds. The Generate screen now
-  shows a "Preparing voice" step and names the character, so a quiet pause reads as progress,
-  not a stall.
-- **Assigning a voice that won't work now tells you why.** In My voices, trying to assign a
-  library voice Castwright can't actually use on that character — the wrong engine, say — used to
-  fail with no visible response. It now shows the reason right in the panel.
-- **Promoting a voice into your library can no longer lose the one it's replacing.** Promoting a
-  redesigned voice removed the live version first and only afterwards checked whether the
-  redesign meant to replace it actually existed — so promoting a second time, before a first
-  promote had produced anything new, could delete your live voice for nothing. It now checks
-  first.
-- **A cloned voice can no longer be silently overwritten by a redesign.** Editing a cloned voice's
-  persona used to be able to replace it in place with a completely different, synthesised voice —
-  while everything on screen kept calling it by the original name and nothing warned you. Redesigning
-  or promoting a cloned voice is now refused outright, so the voice you cloned stays the one you get.
-- **Take a library voice back off a character.** Until now there was no way to undo an assignment —
-  you could put a My-voices entry on a character, but never remove just that link, short of picking
-  a different voice over it. There's a Remove-voice control right in the profile drawer now, and if
-  Castwright can't actually put a voice on the engine you're using — a designed voice with no saved
-  sample, say — it tells you which part of the assignment stuck instead of quietly showing one that
-  isn't really there.
-- **Deleting a library voice now only claims success when it actually erased everything.** If a
-  stray file couldn't be removed, Castwright used to say the voice was gone anyway. It's honest
-  about it now, and keeps the entry around so you — and Castwright's own consent checks — can still
-  see it and try again.
-- **Previewing a voice in My voices now uses whichever copy is actually ready.** The Play button on
-  a voice's card always tried its Qwen copy first, even when that copy wasn't ready and the other
-  engine's was — so it could fail on a voice that genuinely had something to play. It now plays
-  whichever copy is ready.
-- Voice previews now play in the engine you picked for that character, at the quality your book is set to render in — so the cast list matches the book you're about to make. The same voice now sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
+- **Castwright now needs Node 22.22 or newer.** If you install Castwright yourself, check `node --version` before you update — because nothing will stop you if you don't. The installer only prints a warning that's easy to miss in the scroll and then installs anyway, so on an older Node you may not find out until something fails later, with nothing pointing at the real cause. Node 20 stopped receiving security fixes in April 2026, so this moves us onto a version that's still being looked after. If you installed through Pinokio there's nothing to install by hand — Castwright now sets up its own Node 24 as part of the Pinokio install. One wrinkle if you're already on Pinokio: the update that brings you to this version still runs on your old setup, so the new Node only takes effect from the update after that. Everything keeps working in between.
+- **The speech engine now runs on a version we've actually tested.** Until now, the exact speech runtime Castwright installed depended on the day you installed it — two people with identical machines could quietly end up on different builds, which made "it sounds different on my computer" almost impossible to chase down. It's pinned now, and some installs will step back to the tested version the next time they update.
+- **Castwright now tells you when a piece of your setup is too old to trust.** Every finished chapter is levelled by a free tool called ffmpeg, and Castwright reads ffmpeg's own loudness measurements back to do it — so the version matters. An old one can quietly hand back numbers we don't expect, and the result is audio that's levelled differently with nothing to explain why. Castwright now asks for **ffmpeg 6.0 or newer**, tells you the version you have and the one it wants, and points at the command to upgrade. It won't stop you: you'll see a note rather than a locked door, because older doesn't mean broken — it means untested. Pinokio installs now ask for a version that clears the bar on updates as well as fresh installs, and we've moved our tested-on Linux from Ubuntu 22.04 to 24.04, because 22.04's own copy of ffmpeg is too old (22.04 still works if you install a newer ffmpeg yourself).
+- **Setting up the voice engine now shows you it's working.** Installing the Python runtime takes several minutes and downloads a couple of gigabytes — and until now, the whole time it ran, the screen just showed the "Set up the voice engine runtime" button you'd already pressed. No spinner, no progress line, no sign anything was happening. The progress card was there all along; it was checking for a status the server never actually sends, so it never appeared. It does now, from the moment you press the button until the runtime is ready.
+- **Build your own stable of narrators in My voices.** Design a voice once — from a persona, with a live audition — and it's yours to cast in any book, not just the one you designed it for. Not happy with a take? Redesign it and compare old against new side by side before you commit. Fallen for a voice you built for one character? Save it to My voices and hand it to someone else next time, in a different book entirely.
+- **Clone a voice you have permission to use — and cast it anywhere.** Record or upload a short sample, confirm it's yours (or a family member's, with their say-so), and Castwright builds a reusable voice you can hand to any character.
+- **A cloned voice tells you clearly when it can't be used — instead of quietly rendering as someone else.** If Castwright can't rebuild a cloned voice as itself, it stops and says so, right down to the reason — a revoked voice, a missing sample, or a book set to the wrong engine — so you always know a chapter used the real voice or didn't run at all. That promise now holds on **both** of Castwright's speech engines, not just one: until now a cloned voice only worked reliably on one of them, and casting it on a book that used the other could either hit a wall or, worse, quietly get you a stand-in.
+- **Revoking a cloned voice now really does erase it.** Your original recording, and everything Castwright built from it, is gone for good — not just the visible entry. Castwright tells you exactly what you're about to lose and asks you to confirm before it happens. Revoke also holds up under an unusual spelling of a voice's own key: Castwright now refuses to play a voice under anything but its canonical name, closing a corner where a copy could keep working after a revoke reported everything erased.
+- **Your consent record for a cloned voice is now enforced on every path that could carry it.** That check now reaches the last couple of paths inside your own install that hadn't been covered: linking one character's voice to another's, and a plain cast save. A cast save that simply leaves a cloned character's voice out no longer silently drops it — it's restored — and one that tries to swap it for something else is refused, and refused as a plain refusal rather than a crash. A voice you've revoked, or never gave consent for in the first place, can't be quietly carried across any of them.
+- **Fixing a misheard word in your voice sample now actually counts.** When you record a sample for cloning, Castwright writes down what it heard — and if it misheard you, you can correct it. Until now those corrections were quietly ignored, and the clone was built against the wrong words. Your edit is now what the voice is built from, and it sticks, so a later touch-up doesn't undo it.
+- **A cloned voice can no longer be silently overwritten by a redesign.** Editing a cloned voice's persona used to be able to replace it in place with a completely different, synthesised voice — while everything on screen kept calling it by the original name and nothing warned you. Redesigning or promoting a cloned voice is now refused outright, so the voice you cloned stays the one you get.
+- **Designing your whole cast at once no longer knocks a cloned character off their clone.** A bulk "Design full cast" used to be able to retarget an already-cloned character onto a fresh, uncloned voice without telling you. It now skips them and names who, right in the summary — and designing a single already-cloned character on its own is refused with a reason instead of quietly doing the wrong thing.
+- **A chapter that needs to rebuild a voice now shows you it's happening.** Before narration starts, Castwright sometimes has to quietly re-derive a cloned voice or self-heal a designed one — which could look like nothing was happening for several seconds. The Generate screen now shows a "Preparing voice" step and names the character, so a quiet pause reads as progress, not a stall.
+- **A voice-clone build that collided with Castwright freeing up graphics-card memory** used to fail with an unhelpful error. It now either recovers on its own or tells you plainly that the model was unloaded and to try again.
+- **Take a library voice back off a character.** Until now there was no way to undo an assignment — you could put a My-voices entry on a character, but never remove just that link, short of picking a different voice over it. There's a Remove-voice control right in the profile drawer now.
+- **Assigning a voice from My voices now tells you what actually happened.** Trying to assign a library voice Castwright can't use on that character — the wrong engine, say — used to fail with no visible response at all. And an assignment Castwright could only write to one of your book's two engines used to close the panel with no notice either, leaving it half-done with nothing on screen to say so. Both now show the reason, and which part of the assignment stuck, right where you made it.
+- **Promoting a voice into your library can no longer lose the one it's replacing.** Promoting a redesigned voice removed the live version first and only afterwards checked whether the redesign meant to replace it actually existed — so promoting a second time, before a first promote had produced anything new, could delete your live voice for nothing. It now checks first.
+- **Deleting a library voice now only claims success when it actually erased everything.** If a stray file couldn't be removed, Castwright used to say the voice was gone anyway. It's honest about it now, and keeps the entry around so you — and Castwright's own consent checks — can still see it and try again.
+- **Voice previews now play in the engine you picked for that character, at the quality your book is set to render in** — so the cast list matches the book you're about to make, and the same voice sounds the same wherever you play it: on a cast row, on its card in My voices, while you're designing it, and on both sides of a redesign comparison. A preview also uses whichever copy of a voice is actually ready, instead of always reaching for the Qwen one and failing on a voice that genuinely had something to play, and it keeps matching the book right after you've picked a different voice over a clone. (A character you've pinned to a higher quality than the rest of the book still previews at the book's quality.)
 - Auditioning a voice you just designed no longer re-records it. The take from the design was already sitting there; now it actually gets used, so the first play is instant.
 - The higher-quality 1.7B voice model is greyed out until you've actually downloaded it, instead of failing partway into a run.
 - Previewing a voice will now put away a voice model it isn't using to make room, rather than giving up when your graphics card looks full. If something it can't put away is in the way, it tells you which model that is and where the button to stop it lives — instead of just saying the card is full.
-- Filtering your voices by language can't strand you any more. If you'd narrowed the Voices list to, say, Russian and then the last Russian voice in it went away while you were looking — you cleared its designed voice, or deleted it — the list emptied out and the language buttons went with it, leaving a filter still switched on and nothing on screen to switch it off. Worse, it told you to go and set up a book, on a library that was perfectly full. The list now shows everything again the moment the language you'd picked is no longer there.
-- The Voices list stops telling you it's empty when it's simply filtered. Narrow it to Russian and then look at "This book", and if that book has no Russian voices the list used to go blank and invite you to go and set up a book — on a library that was perfectly full — while quietly taking the language buttons away with it. Now it says plainly that nothing matches, tells you which filter is doing it, and leaves every button you'd need to undo it right there on screen. The "Variants" filter got the same treatment, and it needed it more: switching your speech engine away from Qwen used to make its buttons vanish with the filter still on, emptying the whole list with no way back short of reloading the page.
+- **The Voices list stops telling you it's empty when it's simply filtered.** Narrow it to Russian and then look at "This book", and if that book has no Russian voices the list used to go blank and invite you to go and set up a book — on a library that was perfectly full — while quietly taking the language buttons away with it, leaving a filter still switched on and nothing on screen to switch it off. The same happened when the last voice in the language you'd picked went away while you were looking at it. Now it says plainly that nothing matches, tells you which filter is doing it, and leaves every button you'd need to undo it right there on screen. The "Variants" filter got the same treatment, and it needed it more: switching your speech engine away from Qwen used to make its buttons vanish with the filter still on, emptying the whole list with no way back short of reloading the page.
 - When you link a character to the same person from an earlier book, they no longer arrive carrying a voice engine this book can't use. Linking copies the earlier character's engine across, and if that book was in another language the engine came too — invisibly. The picker showed "Default", so there was nothing to see and nothing to correct, but saving the character quietly wrote the old engine back. The picker and what gets saved now agree. Your books always rendered correctly regardless — Castwright picks the right engine at recording time no matter what the character says. (Characters picked up automatically from earlier books in a series were never affected: Castwright already refuses to carry a voice across a language boundary there.)
-- A chapter that uses two different voice engines no longer gives up over a piece of housekeeping.
-  When one chapter needs both of your speech engines, Castwright records them in turn and puts the
-  first one away in between, so a smaller graphics card only ever holds one at a time. If putting
-  it away didn't work, the whole chapter stopped there — even though the recording itself was
-  fine. Now it notes the problem in the log and carries on with the chapter. It also no longer
-  waits forever when the speech engine is busy with another book, and it stops promptly when you
-  pause. It also now puts the second engine away again once it's done with it for that chapter,
-  instead of leaving it taking up room through chapters that never needed it.
-- **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the
-  outside code Castwright is built on — including the component that opens your EPUB files, where a
-  malformed book could previously have made Castwright try to swallow far more memory than it should.
-  Nothing to do at your end, and nothing looks different.
-- Generation no longer stalls when a voice model you're done with is still
-  holding the graphics card — it now steps aside on its own. Because Castwright
-  handles this itself now, the out-of-memory message no longer asks you to go
-  and stop Coqui by hand. And stopping Coqui mid-render can no longer interrupt
-  the chapter being recorded.
-- **Pressing Stop on a voice engine now tells you the truth while it works.** It used to
-  report an error a couple of seconds in and then quietly finish stopping the model on its
-  own, up to a minute later. Now the button says "Stopping…" and waits — no false error,
-  no guessing whether it worked.
-- Chapter loudness figures on the Listen view are now measured from the finished audio. The
-  loudness-range and true-peak numbers were previously reported by the normaliser rather than
-  measured, so they could be well off — the integrated loudness reading was always right.
-- **A cast save can no longer quietly damage a cloned voice.** Saving your whole cast used to
-  accept a save that simply left out a cloned character's engine assignment — and silently drop
-  it. A save that leaves one out now restores it instead; one that tries to swap it for something
-  else is refused, and refused as a plain refusal, not a crash.
-- **Designing your whole cast at once no longer knocks a cloned character off their clone.** A
-  bulk "Design full cast" used to be able to retarget an already-cloned character onto a fresh,
-  uncloned voice without telling you. It now skips them and names who, right in the summary —
-  and designing a single already-cloned character on its own is refused with a reason instead of
-  quietly doing the wrong thing.
-- **Assigning a voice from My voices now tells you when only part of it landed.** A voice that
-  could only be written to one of your book's two engines used to close the panel with no notice
-  at all, leaving the assignment half-done with nothing on screen to say so.
-- **Previewing a voice now always matches what the book will actually render**, even right after
-  you've picked a different voice over a clone.
-- **A background repair or splice can no longer mark the wrong book as done.** Finishing one
-  while you'd already switched books could stamp another book's same-numbered chapter as freshly
-  rendered. And a repair that hits an unexpected error no longer leaves its spinner running
-  forever — it now fails cleanly, the same way a normal finish does.
-- **The audio-repair button is now a proper tap target on tablets**, instead of shrinking below
-  the size your thumb needs.
-- Revoking a cloned voice is airtight even under an unusual spelling of its own key — Castwright
-  now refuses to play a voice under anything but its own canonical name, closing a corner where a
-  copy could keep working after a revoke reported everything erased.
-- A voice-clone build that collided with Castwright freeing up graphics-card memory used to fail
-  with an unhelpful error. It now either recovers on its own or tells you plainly that the model
-  was unloaded and to try again.
+- **Re-recording a character now tells you when one of their voices had to be dropped.** If a voice you'd designed turns out to have been built for a different language than the book you're fixing, Castwright sets it aside rather than reading the line in the wrong language — and it now says so on screen. It was already doing the setting-aside quietly; you just never heard about it, so a line could come back in a voice you didn't choose with no explanation.
+- **Fix a flagged chapter without regenerating the whole thing.** When Castwright marks a finished chapter "Suspect" — a line that came out silent, clipped, or the wrong length — the chapter row now has a button that re-records just those lines and stitches them back in. It keeps your previous take, so you can always go back. Castwright has been able to do this under the hood for a while; there was simply no way to ask for it.
+- **A background repair or splice can no longer mark the wrong book as done.** Finishing one while you'd already switched books could stamp another book's same-numbered chapter as freshly rendered. And a repair that hits an unexpected error no longer leaves its spinner running forever — it now fails cleanly, the same way a normal finish does.
+- **The audio-repair button is now a proper tap target on tablets**, instead of shrinking below the size your thumb needs.
+- **Re-detect one chapter, not the whole book.** Edited a single chapter? "Detect emotions" now works on just the chapter you're reading — the whole-book pass is one click away in its menu.
+- **You can see the chapter title on the timeline now.** Every chapter opens with its title read aloud — the player now shows that opening beat as a small marker at the start of the track, so what you see matches what you hear.
+- **"Fix this line" now fixes the line you marked.** On chapters with a spoken title, marking a line for re-recording could quietly re-record the line before it, or fail with a confusing error about segment indices. Both are fixed.
+- Chapter loudness figures on the Listen view are now measured from the finished audio. The loudness-range and true-peak numbers were previously reported by the normaliser rather than measured, so they could be well off — the integrated loudness reading was always right.
+- A chapter that uses two different voice engines no longer gives up over a piece of housekeeping. When one chapter needs both of your speech engines, Castwright records them in turn and puts the first one away in between, so a smaller graphics card only ever holds one at a time. If putting it away didn't work, the whole chapter stopped there — even though the recording itself was fine. Now it notes the problem in the log and carries on. It also no longer waits forever when the speech engine is busy with another book, it stops promptly when you pause, and it now puts the second engine away once it's done with it for that chapter, instead of leaving it taking up room through chapters that never needed it.
+- Generation no longer stalls when a voice model you're done with is still holding the graphics card — it now steps aside on its own. Because Castwright handles this itself now, the out-of-memory message no longer asks you to go and stop Coqui by hand. And stopping Coqui mid-render can no longer interrupt the chapter being recorded.
+- **Pressing Stop on a voice engine now tells you the truth while it works.** It used to report an error a couple of seconds in and then quietly finish stopping the model on its own, up to a minute later. Now the button says "Stopping…" and waits — no false error, no guessing whether it worked.
+- **In-app Help now answers "Is my data private?" and "Does it work offline?"** — the same plain-language answers as the website, so both agree: analysis reads your book on a local model by default, and the optional cloud fallback is on by default but a single switch turns it off for good.
+- **The series cast card reads properly on a light screen — and travels that way.** The card you share to show a cast kept true across a series is always dark, but its pink accent was quietly taking its cue from whichever theme you were using. On a light theme that left the wording on it too dim to read comfortably — and because the card saves out as an image, that dimmed version was what you sent to other people. The card now looks the same wherever you are, and the buttons around it read cleanly too.
+- **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
+- **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the outside code Castwright is built on — including the component that opens your EPUB files, where a malformed book could previously have made Castwright try to swallow far more memory than it should. Nothing to do at your end, and nothing looks different.
 
 # Castwright 1.14.0
 
