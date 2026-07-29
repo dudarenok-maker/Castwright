@@ -741,6 +741,74 @@ def test_a_qwen_eviction_step_does_not_stall_the_event_loop():
     assert eng._design is None  # the fast-out passed, then the step still froze it
 
 
+# --- plan 273 T4: reservation()/admit() are async; the admission phase is
+#     serialised so two concurrent ops' eviction phases can't interleave ----
+#
+# Converting `reservation()` to async inserts `await` points into what used
+# to be atomic by virtue of the loop (`_evict_until` now suspends at its
+# `asyncio.to_thread` call). Two concurrent handlers could otherwise
+# interleave probe -> evict -> try_hold and over-evict, or decide against a
+# stale probe. `_admit_lock` serialises just the admission-RESOLUTION phase
+# (probe/try_hold/evict), not the `yield`/`finally` — wrapping those would
+# serialise every op against every other op for its entire duration.
+
+
+def test_two_concurrent_admissions_do_not_interleave_their_eviction_phase():
+    """Two `reservation()` calls as concurrent tasks on ONE loop. Each one's
+    fake eviction step logs (id, "enter") / (id, "exit") around a brief real
+    sleep. Without `_admit_lock`, T2's own to_thread-offload lets both
+    admissions' steps run concurrently on the thread pool and interleave;
+    the assertion below requires every admission's evict phase to be
+    contiguous — no `A-enter` while `B` is still active.
+
+    Mutation-fails against deleting `async with self._admit_lock:` (calling
+    `_resolve_admission` unguarded): the two steps run concurrently on
+    separate worker threads (both offloaded by T2) and interleave, failing
+    the contiguity assertion. Without this test, T4 ships a new concurrency
+    bug (over-eviction / stale-probe admission, #1894 second-order per the
+    plan's §4) behind a green suite."""
+    events: list[tuple[str, str]] = []
+    ev_lock = threading.Lock()
+
+    def make_step(admission_id: str):
+        def run() -> bool:
+            with ev_lock:
+                events.append((admission_id, "enter"))
+            time.sleep(0.05)
+            with ev_lock:
+                events.append((admission_id, "exit"))
+            return True
+        return run
+
+    async def body():
+        pc = main.PlacementController(
+            probe=lambda: [dev(free=100, total=8192)],  # never enough -> always evicts
+            footprints=type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [main.EvictStep(eng, None, make_step(eng))],
+            is_resident=lambda e: None,
+        )
+
+        async def do_reservation(admission_id: str):
+            async with pc.reservation(admission_id, "m", {}, cpu_capable=False, heavy=True):
+                pass
+
+        await asyncio.gather(do_reservation("A"), do_reservation("B"))
+
+        active = None
+        for admission_id, kind in events:
+            if kind == "enter":
+                assert active is None, f"{admission_id} entered while {active} was active: {events}"
+                active = admission_id
+            else:
+                assert active == admission_id, f"unexpected exit order: {events}"
+                active = None
+        assert active is None
+
+    asyncio.run(body())
+
+
 def test_try_hold_is_atomic_under_concurrency():
     """The decide+hold must be atomic: N threads racing to reserve a device
     that fits only ONE peak must grant exactly one — proving the ledger's

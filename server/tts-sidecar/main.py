@@ -3419,6 +3419,16 @@ class PlacementController:
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+        # Serialises the admission-RESOLUTION phase only (probe -> try_hold ->
+        # evict -> resolve) across concurrent `reservation()` calls (plan 273,
+        # T4) — NOT the `yield`/`finally` (that would serialise every op
+        # against every other op for its whole duration, not just admission).
+        # Needed because T2 made `_evict_until` suspend at its
+        # `asyncio.to_thread` call: two concurrent handlers could otherwise
+        # interleave probe -> evict -> try_hold and over-evict, or decide
+        # against a stale probe (§2.4). `admit()` deliberately does NOT take
+        # this lock — see its docstring.
+        self._admit_lock = asyncio.Lock()
 
     @staticmethod
     def _device_key(d: dict) -> str:
@@ -3512,7 +3522,7 @@ class PlacementController:
                 return got
         return None
 
-    def admit(
+    async def admit(
         self,
         engine: str,
         model: Optional[str],
@@ -3531,7 +3541,16 @@ class PlacementController:
         `evictWouldHelp` from /api/ps. `pinned` is an operator-configured
         device key (e.g. from an engine's *_DEVICE env) restricting candidates
         to that one device when the engine isn't already resident — residency
-        always takes precedence since the model is already loaded there."""
+        always takes precedence since the model is already loaded there.
+
+        Deliberately does NOT take `_admit_lock` (plan 273, T4), unlike
+        `reservation()` — two reasons, not one:
+        (1) `asyncio.Lock` is non-reentrant, and `test_placement.py` calls
+        `admit()` from INSIDE an open `with pc.reservation(...)` block —
+        taking the lock here symmetrically would deadlock.
+        (2) It's unnecessary: `admit()` holds NO reservation (see above), so
+        it cannot double-book anything the lock would need to protect — it's
+        a pure decision, always re-checked live by its caller."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
@@ -3553,7 +3572,7 @@ class PlacementController:
                     self._gpu_candidates(probed, constraint), peak, reserve_cap
                 )
 
-            key = self._evict_until(worst, engine, _fits)
+            key = await self._evict_until(worst, engine, _fits)
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(self.probe())
@@ -3597,24 +3616,21 @@ class PlacementController:
         except Exception:
             pass
 
-    @contextmanager
-    def reservation(
+    async def _resolve_admission(
         self,
         engine: str,
         model: Optional[str],
         cfg: Optional[dict],
-        cpu_capable: bool = False,
-        heavy: bool = False,
-        pinned: Optional[str] = None,
-    ):
-        """Atomically admits AND holds the peak reservation for the op, yields
-        the Admission, and on exit (success OR exception) releases the hold and
-        records the observed peak — VRAM bookkeeping only; callers still take
-        their own `_synth_lock`/`_infer_lock`/load lock around the actual
-        forward. Unlike `admit()`, this path performs the hold (via the ledger's
-        atomic `try_hold`), so two concurrent reservations can't double-book.
-        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
-        takes precedence)."""
+        cpu_capable: bool,
+        heavy: bool,
+        pinned: Optional[str],
+    ) -> tuple[dict, Optional[tuple]]:
+        """The probe -> try_hold -> evict -> resolve body of `reservation()`
+        (plan 273, T4) — extracted so `reservation()` can run it under
+        `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
+        the lock. Returns `(admission, held)`; `held` is the ledger token
+        `reservation()` must release on exit, or None (cpu / noCapacity —
+        nothing was held)."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
@@ -3632,7 +3648,7 @@ class PlacementController:
                         self._gpu_candidates(probed, constraint), peak, reserve_cap, engine
                     )
 
-                held = self._evict_until(worst, engine, _fits)
+                held = await self._evict_until(worst, engine, _fits)
             if held is None:
                 devices = self.probe()
 
@@ -3648,7 +3664,47 @@ class PlacementController:
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
+        return admission, held
 
+    @asynccontextmanager
+    async def reservation(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool = False,
+        heavy: bool = False,
+        pinned: Optional[str] = None,
+    ):
+        """Atomically admits AND holds the peak reservation for the op, yields
+        the Admission, and on exit (success OR exception) releases the hold and
+        records the observed peak — VRAM bookkeeping only; callers still take
+        their own `_synth_lock`/`_infer_lock`/load lock around the actual
+        forward. Unlike `admit()`, this path performs the hold (via the ledger's
+        atomic `try_hold`), so two concurrent reservations can't double-book.
+        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
+        takes precedence).
+
+        Async since plan 273 (T4): the admission-RESOLUTION phase
+        (`_resolve_admission` — probe/try_hold/evict) runs under
+        `_admit_lock` so two concurrent reservations' eviction phases can't
+        interleave (T2 made `_evict_until` suspend at its worker-thread hop,
+        which is what makes that interleaving possible in the first place —
+        see §2.4). The `yield` and the `finally` release are deliberately
+        OUTSIDE the lock: holding it across the caller's own forward would
+        serialise every admitted op against every other one, not just the
+        admission decision.
+
+        Hazard: `asyncio.Lock` binds to the first event loop that awaits it.
+        Reusing one `PlacementController` across two separate `asyncio.run()`
+        calls raises "bound to a different event loop" — not reachable in
+        production (uvicorn owns one loop for the process lifetime), but a
+        real hazard for tests, which must therefore each drive this
+        `PlacementController` under exactly one `asyncio.run()`."""
+        async with self._admit_lock:
+            admission, held = await self._resolve_admission(
+                engine, model, cfg, cpu_capable, heavy, pinned
+            )
         try:
             yield admission
         finally:
