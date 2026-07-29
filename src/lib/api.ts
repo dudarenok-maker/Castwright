@@ -924,15 +924,26 @@ function buildSolwayBayMockState(): BookStateResponse {
      (one) chapters so the demo content exercises every badge colour. Two
      chapters intentionally carry `twoPass: false` to exercise the
      single-pass-degrades-to-neutral path, and one is left as `null` to
-     prove the missing-sidecar fallback. */
+     prove the missing-sidecar fallback.
+
+     plan 274 T6 — chapter 6 additionally carries `measurementSource:
+     'loudnorm'` (a real fallback record, §1.10): the real ebur128
+     re-measurement failed and the sidecar is holding loudnorm's
+     self-reported figures, so it must render as untrusted even though
+     `twoPass` reads true. Every OTHER chapter here is left with no
+     `measurementSource` at all (a pre-change/grandfathered sidecar, Decision
+     1 = A') so none of them changes appearance — this is the single
+     deliberate addition this task makes to the demo corpus. */
   const target = -16;
-  const driftPattern: Array<{ deltaFromTarget: number; twoPass: boolean } | null> = [
+  const driftPattern: Array<
+    { deltaFromTarget: number; twoPass: boolean; measurementSource?: 'ebur128' | 'loudnorm' } | null
+  > = [
     { deltaFromTarget: 0.1, twoPass: true },
     { deltaFromTarget: -1.2, twoPass: true },
     { deltaFromTarget: 0.4, twoPass: true },
     { deltaFromTarget: 2.6, twoPass: true },
     { deltaFromTarget: -0.5, twoPass: true },
-    { deltaFromTarget: 0.0, twoPass: true },
+    { deltaFromTarget: 0.0, twoPass: true, measurementSource: 'loudnorm' },
     { deltaFromTarget: -3.2, twoPass: true },
     { deltaFromTarget: 0.7, twoPass: true },
     { deltaFromTarget: 4.4, twoPass: true },
@@ -960,6 +971,7 @@ function buildSolwayBayMockState(): BookStateResponse {
       tp: -1.5 - (i % 2) * 0.4,
       target,
       twoPass: pattern.twoPass,
+      measurementSource: pattern.measurementSource,
       measuredAt: new Date(Date.now() - (i + 1) * 36_000_000).toISOString(),
     };
   }

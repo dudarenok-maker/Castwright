@@ -88,4 +88,19 @@ test.describe('listen loudness report card', () => {
     await expect(page.getByTestId('chapter-row-14')).toBeVisible();
     await expect(page.getByTestId('chapter-row-14-lufs-badge')).toHaveCount(0);
   });
+
+  test('a loudnorm-fallback chapter shows no badge, even though twoPass is true (plan 274 T6, §1.10)', async ({
+    page,
+  }) => {
+    await page.goto('/#/books/sb/listen');
+    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
+    });
+    /* Chapter 6 in the mock seed carries `measurementSource: 'loudnorm'`
+       (the real ebur128 re-measurement failed and the sidecar holds
+       loudnorm's self-reported figures) with `twoPass: true` — the shape
+       that used to render as a trusted badge before plan 274. */
+    await expect(page.getByTestId('chapter-row-6')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('chapter-row-6-lufs-badge')).toHaveCount(0);
+  });
 });
