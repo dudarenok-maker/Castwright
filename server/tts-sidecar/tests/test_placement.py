@@ -8,7 +8,10 @@ VRAM the first one already claimed; `reservation()` releases that hold (and
 records the observed peak) on exit, whether the op succeeded or raised."""
 from __future__ import annotations
 
+import asyncio
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -535,6 +538,77 @@ def test_steps_run_cheapest_reload_first(monkeypatch):
         ("qwen.base17", None),
         ("coqui", "coqui"),
     ]
+
+
+# --- plan 273: the evict runs on a worker thread, off the event loop (T2) --
+#
+# `_evict_until` is `async def` and offloads each step's `run()` via
+# `asyncio.to_thread` — an engine lock is never acquired from the loop.
+# Every test below drives a heartbeat task (ticking every 10ms) concurrently
+# with the eviction and asserts it keeps ticking WHILE the step is parked —
+# a stalled loop cannot advance the heartbeat, no matter how long the block
+# lasts, because a synchronous block freezes the whole thread (nothing,
+# including an overdue timer, can run until it releases). A stalled-loop
+# mutation therefore starves the heartbeat to at most one stale catch-up
+# tick in the same window that the fix lets it tick ~5 times.
+
+
+def test_an_eviction_step_does_not_stall_the_event_loop():
+    """T2: `_evict_until` must run each step's `run()` on a worker thread, not
+    synchronously on the calling coroutine — a step that blocks (e.g. on a
+    contended engine lock) must not stall other coroutines sharing the loop
+    (e.g. /health).
+
+    Mutation-fails against a `step.run()` revert (dropping the
+    `asyncio.to_thread` wrap): the mutated step then executes synchronously
+    on the loop's own thread the moment `_evict_until`'s task is scheduled,
+    which freezes the ENTIRE thread for the duration of the step's own
+    internal wait — nothing else, including this test's own heartbeat task,
+    can run any code until that wait times out. The heartbeat can accrue at
+    most one stale "catch-up" tick once the freeze ends (a coroutine's
+    `asyncio.sleep` reschedules relative to `now`, so an overdue timer never
+    bursts more than once), never the ~5 real ticks the fix produces in the
+    same 50ms window."""
+    entry = threading.Event()
+    release = threading.Event()
+
+    def blocking_step() -> bool:
+        entry.set()
+        release.wait(timeout=1.0)
+        return True
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng: [main.EvictStep("blocks", None, blocking_step)],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.05)
+        assert entry.is_set(), "the step never entered — test would pass vacuously"
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times in 50ms while the evict "
+            "step was parked — the event loop stalled"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
 
 
 def test_try_hold_is_atomic_under_concurrency():

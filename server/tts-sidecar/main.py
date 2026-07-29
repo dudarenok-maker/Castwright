@@ -3461,7 +3461,7 @@ class PlacementController:
                 best_key, best_headroom = key, headroom
         return best_key
 
-    def _evict_until(
+    async def _evict_until(
         self, device_key: str, engine: str, fits: Callable[[], Any]
     ) -> Any:
         """Run eviction steps one at a time, re-probing after each, and stop the
@@ -3474,6 +3474,16 @@ class PlacementController:
 
         A step that raises is skipped, not fatal: eviction is best-effort, and
         one engine's teardown failing must not deny the whole admission.
+
+        `step.run()` runs on a worker thread via `asyncio.to_thread` (plan
+        273, T2/T3) — an engine lock is never acquired from the event loop.
+        Contention is resolved by *waiting*, but the wait — and everything
+        downstream of it, including a step's `gc.collect()`/`empty_cache()`
+        reclaim — happens off the loop. The `maybe_free_idle*` methods keep
+        their blocking `acquire()` and re-validate legs byte for byte; only
+        the CALLER of `step.run()` moved. This mirrors the idle watchdogs
+        (`:6455`, `:6458`, `:6516`), which already offload these same
+        methods so the event loop and /health stay live.
         """
         for step in self.idle_evict_steps(device_key, engine):
             # Re-read on every iteration, not once before the loop: nothing
@@ -3492,7 +3502,7 @@ class PlacementController:
                 # window before its worker thread claims the in-flight counter.
                 continue
             try:
-                if not step.run():
+                if not await asyncio.to_thread(step.run):
                     continue
             except Exception:
                 log.warning("evict step %s failed", step.name, exc_info=True)
