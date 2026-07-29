@@ -834,7 +834,7 @@ export function MiniPlayer({
                   aria-label="Next issue"
                   title={`Next issue · ${issueSummary}`}
                   data-testid="mini-player-next-issue"
-                  className="grid place-items-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:p-2 rounded-full hover:bg-canvas/10 text-amber-300"
+                  className="grid place-items-center p-2 min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 rounded-full hover:bg-canvas/10 text-amber-300"
                 >
                   <span aria-hidden>⚠›</span>
                 </button>
