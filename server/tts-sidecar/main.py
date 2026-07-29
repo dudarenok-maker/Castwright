@@ -2156,7 +2156,19 @@ class CoquiEngine(Engine):
             # renders identically whether reached via clone_voice's audition or
             # this cached-latents synth branch.
             with self._synth_lock:
-                assert self._tts is not None
+                # A loud guard, not `assert self._tts is not None` (GATE 1
+                # MIN-2): `_load_voice_latents` above releases `_latents_lock`
+                # across its own (possibly slow) disk I/O before this lock is
+                # even acquired, so an explicit `/unload` (Stop button /
+                # analyzer auto-evict) landing in that gap is reachable — it
+                # checks only `_synth_lock`, not any in-flight claim. A bare
+                # assert is stripped under `python -O`, and even live it
+                # reads as a programmer error rather than a reachable runtime
+                # race.
+                if self._tts is None:
+                    raise RuntimeError(
+                        "Coqui model was unloaded before this render started — reload it and retry."
+                    )
                 # Task 11a — re-check the epoch here, immediately before the
                 # GPU forward: `_load_voice_latents` can return well before
                 # this lock is acquired (it releases `_latents_lock` across
@@ -2286,8 +2298,18 @@ class CoquiEngine(Engine):
 
         Returns (audio, sample_rate).
         """
-        assert self._tts is not None
-        tts_model = self._tts.synthesizer.tts_model
+        # A loud guard, not `assert self._tts is not None` (GATE 1 MIN-2):
+        # both callers document holding `_synth_lock` across their own
+        # pre-check, but an explicit `/unload` checks only `_synth_lock` —
+        # never any in-flight claim — so the same reachable-race shape
+        # already fixed on the other bare asserts in this file applies here
+        # too, and a bare assert would be stripped under `python -O`.
+        tts = self._tts
+        if tts is None:
+            raise RuntimeError(
+                "Coqui model was unloaded before this render started — reload it and retry."
+            )
+        tts_model = tts.synthesizer.tts_model
         config = tts_model.config
         inference_settings = {
             key: config.get(key, default)
@@ -2307,7 +2329,7 @@ class CoquiEngine(Engine):
             enable_text_splitting=True,
             **inference_settings,
         )
-        sample_rate = int(getattr(self._tts.synthesizer, "output_sample_rate", 24000))
+        sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         return result["wav"], sample_rate
 
     def clone_voice(

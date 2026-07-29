@@ -1688,6 +1688,71 @@ def test_cloned_branch_unloaded_model_fails_with_a_clear_error(monkeypatch, tmp_
     assert not isinstance(excinfo.value, AttributeError)
 
 
+def test_cached_latents_forward_unloaded_model_fails_with_a_clear_error(monkeypatch, tmp_path) -> None:
+    """A merge-sweep finding, same MIN-2 shape at a DIFFERENT reachable
+    window than the test above: the branch's OWN `with self._synth_lock:`
+    re-check (immediately before the Task 11a epoch re-check and the GPU
+    forward) was still a bare `assert self._tts is not None`. Unlike the
+    `_ensure_loaded`-guarded read tested above, `_load_voice_latents` runs
+    entirely OFF the lock (its own docstring), so an explicit `/unload`
+    (Stop button / analyzer auto-evict) landing between it returning and
+    this branch's `with self._synth_lock:` acquisition is independently
+    reachable - it checks only `_synth_lock`, never any in-flight claim.
+
+    Reproduced deterministically: wrap `_load_voice_latents` so it calls the
+    real `unload()` right after returning, landing the race in exactly that
+    window every time. Before the fix this crashes with `AssertionError`
+    (or, under `python -O`, an `AttributeError` one line later); after the
+    fix it must raise the same loud `RuntimeError` `/synthesize`'s other
+    branches already use."""
+    eng, _voices_dir, tts_instance = _make_engine(monkeypatch, tmp_path)
+    _clone(eng, "xtts-unloaded2")
+    tts_model = tts_instance.synthesizer.tts_model
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    real_load = eng._load_voice_latents
+
+    def _load_then_unload(voice_id: str) -> Any:
+        result = real_load(voice_id)
+        eng.unload()  # an explicit Stop wins the race right here
+        return result
+
+    monkeypatch.setattr(eng, "_load_voice_latents", _load_then_unload)
+
+    with pytest.raises(RuntimeError, match="unloaded") as excinfo:
+        eng.synthesize("xtts_v2", "xtts-unloaded2", "hello there")
+
+    # Specifically NOT an AssertionError (stripped under -O) and NOT an
+    # AttributeError on None - both were the pre-fix outcomes.
+    assert not isinstance(excinfo.value, AssertionError)
+    assert not isinstance(excinfo.value, AttributeError)
+    assert tts_model.infer_calls == [], "the GPU forward must never run once the model was unloaded"
+
+
+def test_infer_from_latents_unloaded_model_fails_with_a_clear_error(monkeypatch, tmp_path) -> None:
+    """A merge-sweep finding: `_infer_from_latents` — the low-level forward
+    helper Task 9 built and shared between `clone_voice`'s audition preview
+    and this cached-latents `/synthesize` branch (its own docstring) — still
+    carried its OWN bare `assert self._tts is not None` at its very first
+    line, the same MIN-2 shape already fixed on both of its callers'
+    pre-checks. `CALLER MUST HOLD _synth_lock` per its docstring, but the
+    guard itself is what the caller relies on to fail loud rather than
+    dereference `None` a line later — drives the method directly with the
+    model already dropped (the state a completed `/unload` leaves behind),
+    same technique as `test_publish_loaded_locked_stamps_last_used_before_publishing_tts`
+    in test_coqui_publish_race.py uses for another guard-only helper."""
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path)
+    eng._tts = None  # the state a completed /unload leaves behind
+
+    with pytest.raises(RuntimeError, match="unloaded") as excinfo:
+        eng._infer_from_latents("LATENT", "EMBEDDING", "hello there", "en")
+
+    # Specifically NOT an AssertionError (stripped under -O) and NOT an
+    # AttributeError on None - both were the pre-fix outcomes.
+    assert not isinstance(excinfo.value, AssertionError)
+    assert not isinstance(excinfo.value, AttributeError)
+
+
 def test_unsupported_language_raises_its_own_error_type(monkeypatch, tmp_path) -> None:
     """MIN-4 - the language gate raised a bare `VoiceNotDesignedError`, which
     /synthesize maps to "has not been designed yet". The voice IS cloned; the
