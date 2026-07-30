@@ -1454,7 +1454,8 @@ export function ProfileDrawer({
             )}
 
             {/* fs-25 — Qwen-only emotion variant design (gated on the base voice
-                existing, handled inside the component). */}
+                existing, and — #1954 — refused outright for a cloned voice;
+                both handled inside the component, which reads `character`). */}
             {effectiveEngine === 'qwen' && bookId && (
               <EmotionVariantDesigner
                 bookId={bookId}
