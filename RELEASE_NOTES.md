@@ -45,6 +45,7 @@
 - **The series cast card reads properly on a light screen — and travels that way.** The card you share to show a cast kept true across a series is always dark, but its pink accent was quietly taking its cue from whichever theme you were using. On a light theme that left the wording on it too dim to read comfortably — and because the card saves out as an image, that dimmed version was what you sent to other people. The card now looks the same wherever you are, and the buttons around it read cleanly too.
 - **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the outside code Castwright is built on — including the component that opens your EPUB files, where a malformed book could previously have made Castwright try to swallow far more memory than it should. Nothing to do at your end, and nothing looks different.
+- **Picking a language Castwright doesn't support yet is now caught the moment you confirm the upload.** It used to slip straight through, and the only sign anything was wrong was a chapter failing to render much later — after analysis and casting. Now you find out right away, with the languages Castwright does support named on screen.
 
 # Castwright 1.14.0
 

@@ -346,6 +346,90 @@ describe('POST /api/books — fs-2 language persistence', () => {
   });
 });
 
+/* Issue #1955 — the confirm route is the sole writer of state.language, and
+   it persisted whatever primary subtag `normaliseBookLanguage` produced with
+   no check that the language is one the app actually supports (the registry
+   has exactly seven entries). A direct API call (bypassing the UI-only
+   confirm-screen dropdown) could persist e.g. 'pt' onto a book, which would
+   only surface later as an opaque chapter_failed at render time
+   (sidecarLanguageName's throw in generation.ts). This gate rejects the
+   request at the import boundary instead, and persists nothing. */
+describe('POST /api/books — unsupported language rejected at the import boundary (#1955)', () => {
+  it('returns 400 naming the supported languages for an unsupported code, and persists nothing', async () => {
+    const md = '# A Book\n\n## Chapter One\n\nSome opening prose for the parser to chew on.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'unsupported-lang.md' });
+    expect(importRes.status).toBe(200);
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Unsupported Lang Author',
+      title: 'Unsupported Lang Book',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'pt',
+    });
+
+    expect(confirmRes.status).toBe(400);
+    expect(confirmRes.body.error).toBe('unsupported_language');
+    /* Actionable: names the supported set so the caller can self-correct. */
+    expect(confirmRes.body.message).toContain('pt');
+    expect(confirmRes.body.supportedLanguages).toEqual([
+      { code: 'en', label: 'English' },
+      { code: 'ru', label: 'Russian' },
+      { code: 'es', label: 'Spanish' },
+      { code: 'fr', label: 'French' },
+      { code: 'de', label: 'German' },
+      { code: 'zh', label: 'Chinese' },
+      { code: 'ja', label: 'Japanese' },
+    ]);
+
+    /* Nothing persisted: no book directory written to the workspace, and
+       the staging entry survives so a corrected retry can still consume it
+       (a 410 on retry would mean the reject path already burned the entry —
+       a second, quieter way to get "persists nothing" wrong). */
+    const bookDir = join(
+      workspaceRoot,
+      'books',
+      'Unsupported Lang Author',
+      'Standalones',
+      'Unsupported Lang Book',
+    );
+    expect(existsSync(bookDir)).toBe(false);
+
+    const retryRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Unsupported Lang Author',
+      title: 'Unsupported Lang Book',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'en',
+    });
+    expect(retryRes.status).toBe(201);
+  });
+
+  it('imports a supported language (fr) unchanged', async () => {
+    const md = '# Un Livre\n\n## Chapitre Un\n\nUne ouverture pour le test.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'french.md' });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'French Author',
+      title: 'French Book',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'fr',
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('fr');
+  });
+});
+
 /* Plan 105 — multer 2.x guard. The import route mounts
    `upload.single('file')` with no bespoke MulterError branch, so an
    upload riding an unexpected field name raises a MulterError
