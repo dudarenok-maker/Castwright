@@ -1674,6 +1674,200 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
   });
 });
 
+describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953)', () => {
+  it('warns (200, not 409) when a designed voice baked in Russian is assigned on an ENGLISH book — the gap nothing covered before this fix', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-ru-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-ru-1'),
+      JSON.stringify({ language: 'Russian', instruct: 'x' }),
+    );
+    // No `language` field on state.json -> normalises to 'en' / sidecar "English".
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-en-mismatch', [
+      { id: 'char-ada', name: 'Ada' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-ru-1/assign')
+      .send({ bookId: 'book-en-mismatch', characterId: 'char-ada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Ada/);
+    expect(res.body.warning).toMatch(/Russian/);
+    expect(res.body.warning).toMatch(/English/);
+  });
+
+  it('also warns when a designed voice baked in English is assigned on a non-English (Russian) book', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-en-2', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-en-2'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    const bookDir = join(dir, 'books', 'Della Renwick', 'The Hollow Tide', 'Book Two');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'book-ru-mismatch',
+        manuscriptId: 'm_book-ru-mismatch',
+        title: 'Book Two',
+        author: 'Della Renwick',
+        series: 'The Hollow Tide',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        language: 'ru',
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'char-oduvan', name: 'Oduvan' }] }),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-en-2/assign')
+      .send({ bookId: 'book-ru-mismatch', characterId: 'char-oduvan' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Oduvan/);
+    expect(res.body.warning).toMatch(/English/);
+    expect(res.body.warning).toMatch(/Russian/);
+  });
+
+  it('does not warn when the designed voice language matches the book language', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-en-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-en-1'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-en-match', [
+      { id: 'char-ada', name: 'Ada' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-en-1/assign')
+      .send({ bookId: 'book-en-match', characterId: 'char-ada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* Review round 2 — `sidecarLanguageName` throws for any book language
+     outside the registry (language.ts's fail-loud safety net), and the
+     confirm-screen gate that's supposed to keep an unsupported language from
+     reaching this far is client-side only: `routes/import.ts` persists an
+     unchecked language (see #1955), so a pre-existing book with e.g.
+     `language: 'pt'` can already be on disk. Assign must not 500 on a route
+     that worked fine for such a book before this warning existed — with no
+     registry entry there's no sidecar word to compare against, so the
+     correct behaviour is to skip the warning silently, not throw. */
+  it('does not 500 (and does not warn) when the book language is unregistered — skips the comparison instead of throwing', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-pt-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-pt-1'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    const bookDir = join(dir, 'books', 'Della Renwick', 'The Hollow Tide', 'Book Three');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'book-pt-unregistered',
+        manuscriptId: 'm_book-pt-unregistered',
+        title: 'Book Three',
+        author: 'Della Renwick',
+        series: 'The Hollow Tide',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // Not in language-registry.ts's ENTRIES — mirrors a pre-existing book
+        // imported before #1955's import-time gate landed.
+        language: 'pt',
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'char-ines', name: 'Ines' }] }),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-pt-1/assign')
+      .send({ bookId: 'book-pt-unregistered', characterId: 'char-ines' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('never warns for a CLONED voice (no baked design language) — the existing 409 guard is untouched', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-lang-1',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-lang', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-lang-1/assign')
+      .send({ bookId: 'book-clone-lang', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('still 409s a cloned voice routed to a non-clone-capable engine — unaffected by the new warning branch', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-lang-409',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-409', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-lang-409/assign')
+      .send({ bookId: 'book-clone-409', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.warning).toBeUndefined();
+  });
+});
+
 /* Fix wave 2 (review) — the guard's first cut computed the effective engine
    purely from the PERSISTED account default (getResolvedTtsModelKey()), which
    is not what actually renders: the Voices-page engine picker (and the

@@ -275,7 +275,7 @@ export function VoiceLibraryPanel({
                     assignVoice({ voiceUuid: entry.voiceUuid, bookId, characterId, modelKey }),
                   )
                     .unwrap()
-                    .then(({ written }) => {
+                    .then(({ written, warning }) => {
                       /* Gate 2 C-2 — mirror the profile drawer's `useMyVoice`
                          reconcile-from-the-response discipline: a 200 only
                          means the slots in `written` actually landed (`qwen`
@@ -310,6 +310,12 @@ export function VoiceLibraryPanel({
                           `“${entry.name}” can’t be used on Coqui XTTS v2 — it has no recording to derive from. ` +
                             `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
                         );
+                      } else if (warning) {
+                        /* #1953 — non-fatal advisory (a designed voice's baked
+                           language doesn't match this book's); the assign still
+                           succeeded. Reuse the same inline slot the coqui-decline
+                           notice above uses, mirroring profile-drawer.tsx. */
+                        setMyVoicesAssignError(warning);
                       }
                     })
                     .catch((e) => {
