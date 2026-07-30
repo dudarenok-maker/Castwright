@@ -1515,8 +1515,20 @@ class CoquiEngine(Engine):
             try:
                 from TTS.api import TTS  # type: ignore
                 _record_coqui_import_result(True)
-            except ImportError as e:
+            except BaseException as e:
+                # Record on ANY failure, not just ImportError (#1962 review
+                # finding 3). The second documented failure shape of this very
+                # collision is a duplicate `wait_tensor` kernel-registration
+                # RuntimeError, which is NOT an ImportError -- so an
+                # ImportError-only record left `coqui_import_ok` at None (or at
+                # True from an earlier successful boot pin) while the engine
+                # was genuinely unstartable. That is exactly the "advertises an
+                # engine that cannot start" defect this field exists to close.
+                # Non-ImportError failures re-raise unchanged below so their
+                # own diagnostic is not swallowed by the coqui-tts message.
                 _record_coqui_import_result(False)
+                if not isinstance(e, ImportError):
+                    raise
                 raise RuntimeError(
                     f"Failed to import coqui-tts ({e}). PyTorch IS installed and "
                     "importable in this venv, so this is not a missing-PyTorch "
@@ -7438,12 +7450,19 @@ async def _stop_memory_watchdog() -> None:
 
 
 def _import_tts_api_for_pin() -> None:
-    """Synchronous half of `_pin_coqui_import_order`, run via `to_thread` so
-    the event loop isn't blocked for the ~seconds a cold `TTS.api` import
-    takes. A bare `import` statement — its only job is the ordering side
-    effect of pulling `TTS.api` (and therefore `transformers`/`torch`) into
+    """Synchronous half of `_pin_coqui_import_order`, run via `to_thread`.
+    A bare `import` statement — its only job is the ordering side effect of
+    pulling `TTS.api` (and therefore `transformers`/`torch`) into
     `sys.modules` before anything else (namely `SpeakerEngine._load_on`'s
-    ECAPA import) gets a chance to."""
+    ECAPA import) gets a chance to.
+
+    The `to_thread` offload buys nothing here and is NOT a latency
+    optimisation (#1962 review finding 5): this runs inside `_lifespan`
+    startup, where nothing else is scheduled and uvicorn has not yet bound
+    the listening socket, so `await`ing it blocks boot exactly as a direct
+    call would. Measured: 14.6 s before /health answers, versus 2.9 s with
+    the pin skipped. The cost is "sidecar unreachable", not "sidecar slow" —
+    do not assume /health responds during this import."""
     import TTS.api  # noqa: F401
 
 
@@ -7459,20 +7478,35 @@ async def _pin_coqui_import_order() -> None:
     narrow-pre-import candidate.
 
     Behind COQUI_PIN_IMPORT_ORDER (registry key tts.coqui.pinImportOrder),
-    default ON — this costs real startup latency, which is why
+    default ON — but gated on this install ACTUALLY USING COQUI, see below.
+    The pin costs real startup latency, which is why
     `CoquiEngine._ensure_loaded`'s normal lazy-import design exists in the
     first place (so the process can start, and /health respond, before the
     heavy ML deps load). Turning it off leaves
     `_disarm_speechbrain_lazy_modules` (called from `SpeakerEngine._load_on`)
     as the remaining protection.
 
+    **Weights-gated (#1962 review finding 2).** Measured on this box: the pin
+    holds the listening socket CLOSED for 14.6 s versus 2.9 s without it —
+    uvicorn binds only after lifespan startup returns, so the cost is
+    "sidecar unreachable", not "sidecar slow". Paying +11.7 s on every boot
+    for every install would tax Qwen-only and Kokoro-only users, who can
+    never hit a collision that requires BOTH cloning (which calls /embed) and
+    Coqui rendering. So the package being importable is not the gate — the
+    XTTS v2 WEIGHTS being on disk is. `coqui-tts` ships as an ordinary
+    dependency and is always present; the ~2 GB `model.pth` only exists if
+    someone deliberately installed Coqui, which makes it a reliable "this
+    install uses Coqui" signal. Same reasoning that flipped PRELOAD_KOKORO
+    off in fs-60: an always-paid, engine-specific cost stops being a good
+    default once not everyone uses that engine.
+
     The Python default here MUST match the registry knob's default (a known
     past bug class in this repo — see `_QWEN_DEGEN_GUARD_ENABLED` /
     `PRELOAD_KOKORO` for the same caution) — both are True.
 
-    Never aborts boot: skipped (with a log line) when the knob is off or the
-    coqui package isn't installed; an unexpected import failure is caught and
-    logged as a warning rather than propagated."""
+    Never aborts boot: skipped (with a log line) when the knob is off, the
+    coqui package isn't installed, or the weights are absent; an unexpected
+    import failure is caught and logged as a warning rather than propagated."""
     if not _parse_bool(os.environ.get("COQUI_PIN_IMPORT_ORDER"), True):
         log.info(
             "COQUI_PIN_IMPORT_ORDER=0 -- skipping the eager TTS.api import-order "
@@ -7481,6 +7515,14 @@ async def _pin_coqui_import_order() -> None:
         return
     if not _coqui_package_installed():
         log.info("Coqui package not installed -- skipping the TTS.api import-order pin.")
+        return
+    if not _coqui_weights_present():
+        log.info(
+            "Coqui XTTS weights absent -- this install does not use Coqui, so "
+            "skipping the eager TTS.api import-order pin (it would cost ~12 s of "
+            "startup for a collision this install cannot hit). The speechbrain "
+            "lazy-proxy disarm still runs on every ECAPA load."
+        )
         return
     try:
         await asyncio.to_thread(_import_tts_api_for_pin)

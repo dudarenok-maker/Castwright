@@ -203,6 +203,10 @@ def load_stubs(monkeypatch) -> _LoadFixture:
 def test_coqui_import_failure_does_not_blame_torch_when_torch_imports_fine(monkeypatch):
     """torch importable + `TTS.api` failing → the raised message must NOT
     recommend installing torch, and must surface the underlying error."""
+    # Restore the sticky global afterwards (#1962 review finding 6): driving
+    # the failure branch sets `_COQUI_IMPORT_OK = False` process-wide, and
+    # leaking that would let a later test read a verdict this one wrote.
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", None)
     fake_torch = types.ModuleType("torch")
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     # Force `from TTS.api import TTS` to fail — the standard
@@ -226,6 +230,7 @@ def test_coqui_import_failure_still_blames_torch_when_torch_is_actually_missing(
     """The opposite case must keep working: when torch genuinely fails to
     import, the message must still point at installing torch (and must not
     even attempt the TTS.api import)."""
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", None)  # see finding 6 above
     monkeypatch.delitem(sys.modules, "torch", raising=False)
     monkeypatch.setitem(sys.modules, "torch", None)
 

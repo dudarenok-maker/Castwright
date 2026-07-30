@@ -1298,6 +1298,33 @@ describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38
     await request(makeApp()).get('/api/sidecar/health');
     expect(getLastKnownCoquiInstallState()).toBe('ready');
   });
+
+  /* #1962 review finding 4 — `null` is the MOST COMMON wire value, not an
+     edge case: the field is sticky-null until a real import is attempted, so
+     a current sidecar sends it on every poll until something actually loads
+     Coqui (always, when the boot pin is off or weights-gated out). The `===
+     false` check handles it correctly, but nothing pinned that — a refactor
+     to `!body.coqui_import_ok` or any truthiness test would flip every fresh
+     sidecar to 'not-installed' and still pass the suite. */
+  it('#1944 — coqui_import_ok: null (a current sidecar that has not yet attempted a real import) is NOT treated as a failed import', async () => {
+    mockCoquiWeightsPresent.mockReturnValue(true);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: false,
+          coqui_package_installed: true,
+          coqui_weights_present: true,
+          coqui_import_ok: null,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    await request(makeApp()).get('/api/sidecar/health');
+    expect(getLastKnownCoquiInstallState()).toBe('ready');
+  });
 });
 
 describe('GET /api/sidecar/health — coqui_version oracle (fs-38 Wave 3c Task 19)', () => {
