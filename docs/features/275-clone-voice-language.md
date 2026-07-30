@@ -400,3 +400,52 @@ that synthesise the same voice disagreeing with it.
 ## Ship notes
 
 (To be filled when status flips to `stable`.)
+
+**Not yet `stable`** — the code shipped in **PR #1964** (merge `b5479e9c`,
+2026-07-30), but register row **A24** is only partly discharged.
+
+### On-box acceptance, run 2026-07-31 (SHA `b5479e9c`, clean tree)
+
+**§"On-box acceptance" step 1 — PASS.** German Coalfall ch.2, cloned voice
+`563501c7-…` cast onto `oduvan`, re-recorded via splice so the render went over
+the **`/synthesize-batch`** wire — the transport the original fix would have
+missed. 12 spans (27.2 s) through `/transcribe` with **no `x-language`**:
+
+| Audio | detected | `avg_logprob` |
+|---|---|---|
+| Cloned `oduvan` | **`de`** | **−0.233** |
+| Designed `narrator` control, same chapter | `de` | −0.352 |
+| Pre-fix baseline (2026-07-30) | `en` | −1.303 |
+
+`characterSnapshots.oduvan.resolvedVoiceName` stayed `qwen-563501c7-…`.
+
+Corroborated on the single-synth wire, with an identity control the criterion
+did not ask for but which matters — the fix changes *what language the model is
+told to speak*, so it is worth knowing whether the cloned timbre survives it:
+
+| Call | detected | `avg_logprob` | cos vs source clip |
+|---|---|---|---|
+| English text + `language: English` | `en` | −0.258 | 0.865 |
+| German text + `language: German` | **`de`** | −0.699 | **0.809** |
+| German text, language omitted (pre-fix) | `en` | −0.904 | 0.876 |
+
+Row 3 reproduces the shipped bug live: German input, English phonetics,
+transcript garbage. Identity holds at 0.809 against a ~0.03 different-speaker
+floor. **The same claim also holds on Coqui** — run 2's E-01 rendered the
+Russian Coalfall with this clone and measured `ru` at −0.368.
+
+**Step 2 — NOT RUN.** The designed-self-heal → restart → re-render comparison
+is still owed.
+
+**Step 3 / C-17 — NOT RUN.**
+
+**The §"On-box acceptance" QA sub-check FAILED, and this plan's stated cause was
+wrong.** The register row predicted a `voice-mismatch` flood from an English
+audition reference scored against a German chapter. That cannot happen:
+`auditionCentroid` does carry the book's language (`audition-centroid.ts:50-57`,
+this plan's own change). The actual cause is unrelated to language — a persisted
+`audition` centroid is reused unconditionally after a character's voice is
+reassigned, so the clone was scored against the *previous* voice's reference
+(`{cleanMean 0.8388, pSevere 0.7852}` → clone at 0.750 → `severity: severe`).
+Filed as [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969).
+Correct the register text when that lands.

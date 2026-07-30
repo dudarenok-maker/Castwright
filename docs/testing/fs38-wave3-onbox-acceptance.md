@@ -136,6 +136,39 @@ this box is dual-GPU).
 > exist and `voices\xtts\` did not exist — independent confirmation that no clone
 > had ever been created on this box. `voices\qwen\` held 1109 files / 605 `.pt`.
 
+> ### Run 2 — captured 2026-07-31
+>
+> Deltas from Run 1 only; everything not listed was unchanged.
+>
+> | # | Value |
+> |---|---|
+> | P-01 | 2026-07-31, ~08:30–09:20 local |
+> | P-02 | Claude Code (agent), on the repo owner's box |
+> | P-03 | `b5479e9ca5f79916b4012efbc2a2330ded342875` |
+> | P-04 / P-05 | `main` / CLEAN |
+> | P-06 / P-07 / P-08 | 1.14.0 / 1.14.0 / 1.14.0 |
+> | P-10 / P-11 / P-12 | unchanged — both cards present, driver 610.62; **eGPU attached**, 2-card rows runnable |
+> | P-19 | `coqui_version: 0.27.5`; Coqui **does** now load in a post-`/embed` process (#1962) — but its **clone derive** is separately broken, see DEF-D |
+> | P-22 / P-23 | `qwen3-tts-1.7b` (account default) / per-splice `modelKey` used explicitly |
+> | P-25 | `autoStartSidecar: true` — and, unlike run 1, the server genuinely **owns** the child this time (`POST /api/sidecar/restart` → 200, not 409) |
+>
+> **Stack hygiene, and why it mattered.** At run start the sidecar was orphaned
+> (its parent server was gone) and dated from *before* both #1962 and #1964, so
+> it carried neither the speechbrain fix nor the language plumbing; the server
+> tree's own launching shell had also exited. Both were killed and the stack
+> restarted via `npm start`, which is what put the sidecar back under the
+> supervisor. **Check `POST /api/sidecar/restart` returns 200, not 409, before
+> trusting a session** — a 409 means nothing is supervising the process you are
+> testing.
+>
+> **Baseline before the run:** `voice-library\` held 4 entries (1 already
+> revoked); the per-workspace `C:\AudiobookWorkspace\voices\qwen\` held 1115
+> files / 608 `.pt`; `voices\xtts\` still did not exist. Note the *sidecar-local*
+> `server\tts-sidecar\voices\qwen\` holds only 9 stale files — it is **not** the
+> tree in use. `QWEN_VOICES_DIR` points the sidecar at the per-workspace tree
+> (`main.py:4239-4245`), so measure that one; the local directory looks alarmingly
+> empty and means nothing.
+
 | # | Item | How to obtain | Value (fill in) |
 |---|---|---|---|
 | P-01 | Run date / time | — | |
@@ -2667,15 +2700,15 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | | |
-| **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | | |
+| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | **P** (run 2) | Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui` — no substitution. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** Not run: the no-re-derive-on-second-render half, and the by-ear check |
+| **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
 | E-03 | Revoke lands during an in-flight Coqui derive | | |
 | E-04 | A long sentence on a cloned Coqui voice | | |
 | E-05 | Audition matches render (KL-o caveat) | | |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
 | **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
-| E-09 | Total erasure of the three Coqui artifact paths on delete | **N/A this run** | The three `voices\xtts\` paths never existed — no XTTS derive ever ran (see E-01). C-11 confirmed the sweep is issued; it was a no-op here |
+| E-09 | Total erasure of the three Coqui artifact paths on delete | **P** (run 2) | Run 1 recorded this `N/A` because `voices\xtts\` had never existed; run 2's E-01 produced real artifacts, so this is its first genuine exercise. Pre-revoke set: **5 files across 3 locations** — `voices\qwen\qwen-$U.{json,pt}`, `qwen-$U__1.7b.pt`, `voices\xtts\xtts-$U.{json,pt}`, plus the cached audition mp3 under `server\audio\voices\`. After revoke: **0 remaining anywhere**, both `voices\xtts\` paths included. Entry dir survives holding **only `voice.json`** |
 
 **Section E status: was BLOCKED — UNBLOCKED 2026-07-30 by #1944 (PR #1962).
 Not yet run.** Coqui/XTTS would not load in a sidecar that had already served
@@ -2685,8 +2718,18 @@ on-box: with `COQUI_PIN_IMPORT_ORDER=0` (so the `sys.modules` disarm was the
 thing under test), `/embed` → `POST /load {coqui}` returned **500 on `main`
 @ `0edde146`** and **200 `{"status":"ready"}` on the fix @ `d6af415d`**, the
 latter logging 7 evicted speechbrain lazy proxies and `Coqui ready — 58
-speakers in manifest`. **A re-run of Section E is now possible and still
-owed** — the nine tests below have not been executed. E-01 was attempted: the Coqui splice reported `splice_complete` but
+speakers in manifest`.
+
+**Run 2 (2026-07-31) executed the first four of the nine: E-01, E-02, E-08 and
+E-09 all pass** — including the first real exercise of the XTTS erasure path,
+which had never had artifacts to erase. **E-03…E-07 remain owed.** Getting there
+first required clearing a blocker of its own: every XTTS clone derive failed
+because `torchcodec` cannot load without shared FFmpeg libraries (**DEF-D**,
+[#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) — a static
+`ffmpeg.exe`, which is the normal Windows install, is not enough. Section E is
+unrunnable on a stock box until that is fixed.
+
+Run 1's E-01 attempt is preserved for the trap it documents: the Coqui splice reported `splice_complete` but
 wrote no `voices\xtts\` artifacts and left `voiceEngine: qwen`, because the
 character's own `ttsEngine: 'qwen'` overrides the requested `modelKey`. **No
 substitution occurred** — the resulting audio still measured as the cloned
@@ -2704,6 +2747,25 @@ Run 1 — 2026-07-29. "not reached" tests are counted as neither P/F/B/N/A.
 | D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
 | E (3c) | 9 | 1 | 0 | 0 | 1 | 7 |
 | **All** | **60** | **17** | **0** | **8** | **2** | **33** |
+
+Cumulative after Run 2 — 2026-07-31. Only Section E moved: E-01 and E-02 ran
+for the first time, and E-09 went `N/A` → **P** because run 2 finally produced
+XTTS artifacts for it to erase.
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
+| B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
+| C (3b2) | 21 | 3 | 0 | 1 | 0 | 17 |
+| D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
+| E (3c) | 9 | **4** | 0 | 0 | **0** | **5** |
+| **All** | **60** | **20** | **0** | **8** | **1** | **31** |
+
+Run 2 also discharged the **core** criterion of register row **A24** (a cloned
+voice renders a non-English book in the book's language) — not one of the 60,
+tracked separately on the register. Two of A24's sub-checks remain: the
+designed-self-heal-then-restart comparison, and the "no `voice-mismatch` rows"
+check, which **failed** for a reason unrelated to language — see **DEF-E**.
 
 *(B-06's B → N/A reclassification landed 2026-07-30 alongside #1945's
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
@@ -2787,6 +2849,63 @@ renders unreliable on this box. Also observed: `segments.json` attributes a
 attribution/segmentation question for the srv side, noted here only because it
 briefly produced a false "silent substitution" reading during this run.
 
+#### Run 2 — 2026-07-31
+
+**DEF-D · HIGH · #1967 · open · blocks all of Section E on a stock box**
+**What:** every cloned-voice derive on Coqui/XTTS fails on a box whose FFmpeg is
+a **static** build — which is the normal Windows install, and the one the
+project's own docs steer you to (`winget install Gyan.FFmpeg`).
+**Test ID:** E-01.
+**Repro:** 1. Confirm no `avcodec*.dll` on `PATH` (a gyan.dev `full_build` is
+`--enable-static`: `ffmpeg.exe` only). 2. Assign a cloned voice to a character
+and force `ttsEngine: 'coqui'`. 3. Render → `derive-failed`.
+Fastest check without a render: `.venv\Scripts\python.exe -c "import torchcodec"`.
+**Expected:** the derive writes `voices\xtts\xtts-$U.{pt,json}`.
+**Actual:** `Splice failed: Cloned voice(s) unavailable … "Одуван"
+(derive-failed). Re-enable **Qwen** …` — note the copy names the wrong engine.
+`logs/tts.err.log` carries the real cause: `main.py:2502 clone_voice` →
+`get_conditioning_latents` → `TTS/tts/models/xtts.py:84 load_audio` →
+`torchaudio.load` → `load_with_torchcodec` → `import torchcodec` →
+`OSError: Could not load this library: …libtorchcodec_core{8,7,6,5,4}.dll`.
+**Why it hid:** stock XTTS voices read the speaker manifest, never a file, so
+they never reach `load_audio`. Only the Wave 3c clone path does.
+**Docs are wrong, and that is the cause:** `docs/wiki/Installing-Castwright.md:41`
+states the sidecar "never calls `torchaudio.load`" and that `torchcodec` "is
+never actually called at runtime" — which is *why* the installer drops it in
+with `--no-deps` and never provisions its native FFmpeg dependency.
+**Note:** `PATH` alone cannot fix this on Windows — CPython ≥3.8 ignores `PATH`
+for `ctypes.CDLL`; the DLLs need `os.add_dll_directory()` or must sit beside the
+library being loaded. Verified.
+**Workaround used to unblock this run** (see §7.3): copy PyAV's bundled FFmpeg 8
+shared set from `site-packages/av.libs/*.dll` into `site-packages/torchcodec/`,
+adding canonical-named copies (`avcodec-62.dll`, `avutil-60.dll`, …) beside the
+hash-suffixed originals so their internal imports still resolve.
+
+**DEF-E · MEDIUM · #1969 · open**
+**What:** reassigning a character's voice keeps scoring it against the **old**
+voice's persisted audition centroid, so every line of the new voice is flagged
+`voice-mismatch` / `severity: severe` on audio that is correct.
+**Test ID:** register row A24, final bullet ("no `voice-mismatch` rows").
+**Repro:** 1. A character thin enough on in-book anchors to take the audition
+reference path, rendered once so `render-integrity.centroids.json` holds an
+`audition` row. 2. Reassign it to a clearly different voice. 3. Re-render.
+**Expected:** correct audio is not flagged. **Actual:** the pre-existing row
+`{cleanMean 0.8388, pSevere 0.7852, referenceKind "audition"}` — built from the
+*designed* voice — is reused, and the clone's 0.750 falls below it → severe.
+**Why:** `CharacterCentroid` (`centroids-io.ts:19-36`) records nothing
+identifying the voice it was built from, and `resolveCharacterReference`
+(`aggregate.ts:221-223`) returns a persisted `audition` row unconditionally.
+`in-book` references are rebuilt each pass and self-heal; only `audition`
+persists.
+**Not a language problem.** A24's own text predicted this symptom via an English
+reference against a German chapter — that hypothesis is wrong: `auditionCentroid`
+*does* carry the book's language (`audition-centroid.ts:50-57`, #1951). Measured
+directly through the production `/synthesize` + `/embed` path, the clone scores
+**0.833** against its own audition and **0.809** against the human source clip,
+against a ~0.03 different-speaker floor. The audio is fine; the reference is stale.
+**Amplifier:** `SEG_SPK_AUTO_REPAIR=1` is a shipped default, so each affected
+line burns a re-render every pass and still ends up flagged.
+
 ---
 
 One block per defect. Copy the template as many times as needed.
@@ -2828,6 +2947,19 @@ loaded, preferences toggled) — and whether you **restored** it:
 | 1 | | | ☐ |
 | 2 | | | ☐ |
 | 3 | | | ☐ |
+
+**Run 2 — 2026-07-31**
+
+| # | What changed | Why | Restored? |
+|---|---|---|---|
+| 1 | FFmpeg shared libraries staged into `…/.venv/Lib/site-packages/torchcodec/` — copies of PyAV's own bundled FFmpeg 8 set from `site-packages/av.libs`, given canonical names alongside the hash-suffixed originals | **DEF-D / #1967.** Without it `import torchcodec` fails and every XTTS clone derive returns `derive-failed`, making all nine Section E tests unrunnable | ☒ **left in place deliberately** — reverting it re-blocks Section E. Undo by deleting the non-hash-suffixed `*.dll` from that directory |
+| 2 | `oduvan` reassigned to cloned voice `563501c7-…` in the German **and** Russian Coalfall books; the Russian one's `ttsEngine` set to `coqui` | A24 needed a cloned character in a non-English book; E-01 needed one that actually routes to Coqui rather than being overridden by the character's own engine | ☒ both books restored from `C:\fixtures\fs38\_run2_backup\`; `cast.json` **MD5 matches the pre-run file** for both, and every chapter-2 audio artifact was restored |
+| 3 | Cloned voice `563501c7-…` revoked | E-02 / E-09 are revoke tests | ☒ n/a — revocation is the test's outcome, and it is deliberately irreversible. Two healthy clones (`0abceba4-…`, `e530d3ae-…`) remain for later runs |
+| 4 | Sidecar restarted 3× mid-run | Each render leaves ~3.9 GB reserved on `cuda:0`, after which an out-of-band `/transcribe` is refused `503 {"noCapacity":…}` even though ASR is already loaded and `cuda:1` has 15 GB free. A restart clears the pool. In-band QA ASR *during* a render was unaffected; not filed (#1720 already records that ASR is not capacity-wrapped) | ☒ stack left healthy |
+
+An empty `C:\AudiobookWorkspace\voices\xtts\` directory remains after E-09 —
+the files are gone, the directory is not removed. Harmless; noted so a later run
+does not read its existence as leftover artifacts.
 
 Specifically confirm these are back to their P-20 / P-22 / P-23 values:
 
