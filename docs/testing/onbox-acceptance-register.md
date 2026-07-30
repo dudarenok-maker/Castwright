@@ -94,7 +94,7 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **16 of 60 run 2026-07-29 · ~44 still owed**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **21 of 60 run (2026-07-29, 2026-07-31) · ~39 still owed · first FAILURE**
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
@@ -154,14 +154,58 @@ could never pass as written) is retired in favour of an automated test,
 further on-box run is owed for this item — it no longer needs real hardware
 to prove.
 
-**Still owed (~44), and why:**
+**Run 2 — 2026-07-31, SHA `b5479e9c`, clean tree.** Four more discharged, all in
+Section E: **E-01** ⭐ (clone → Coqui-routed Russian book → generate: the first
+`voices\xtts\xtts-$U.{pt,json}` ever written on this box, `resolvedVoiceName` =
+`xtts-$U`, Whisper auto-detect **`ru`** at `avg_logprob` **−0.368**), **E-02** ⭐
+(sample 200 → revoke → sample **403** with the exact copy, and the
+previously-cached audition URL now **404**), **E-08** (re-confirmed on two more
+assigns), and **E-09** — which run 1 could only mark `N/A` because no XTTS
+artifact had ever existed. Its first real exercise: 5 files across 3 locations
+pre-revoke, **0 remaining** after, both `voices\xtts\` paths included, entry dir
+left holding only `voice.json`.
+
+**Run 2 found two defects, both open.**
+[**#1967**](https://github.com/dudarenok-maker/Castwright/issues/1967) is the
+serious one and it **blocks Section E on any stock box**: every XTTS clone
+derive fails because `torchcodec` cannot load without *shared* FFmpeg libraries,
+and the normal Windows install (`winget install Gyan.FFmpeg`) is a static build
+shipping `ffmpeg.exe` alone. The install docs assert the sidecar "never calls
+`torchaudio.load`" — it does, on exactly this path — which is why the installer
+drops `torchcodec` in with `--no-deps` and never provisions its native
+dependency. Section E above was only reachable after staging PyAV's own bundled
+FFmpeg set into the `torchcodec` package directory; that workaround is still in
+place on this box (run sheet §7.3).
+[**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969) is why
+A24 below is not fully discharged.
+
+**C-17 ⭐ ran and FAILED — the sheet's first `F`, and the best argument yet for
+this register.** A **designed** voice whose `.pt` is missing did not self-heal
+from its retained clip, and the chapter then rendered that character's lines
+**in the narrator's voice** — while `characterSnapshots.<id>.resolvedVoiceName`
+recorded the assigned voice and nothing was logged. The chapter *completed*;
+every on-disk artifact claimed the right voice; only the sidecar's own synth log
+disagreed, naming `qwen-fDtxqBAQEy9Os1LA5yVUo` on four synths whose durations
+match the character's four segments exactly. The sidecar itself refuses cleanly
+when probed (409 `voice_not_designed`), so the substitution is Node-side. Filed
+as [**#1972**](https://github.com/dudarenok-maker/Castwright/issues/1972); this
+is the failure mode 268 Invariant 8 and the plan-149 persona guard exist to
+prevent, and no automated suite was positioned to see it.
+
+**Still owed (~39), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E, all 9 — UNBLOCKED 2026-07-30 (#1944 fixed, PR #1962).** Still
-  owed as tests, but the blocker is gone: Coqui/XTTS could not load in a
+- **Section E — 4 of 9 now run (2026-07-31); E-03…E-07 still owed, and
+  re-blocked by #1967 on a stock box.** The #1944 blocker below is genuinely
+  gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
+  `Coqui ready — 58 speakers in manifest`. But a *second*, separate blocker sits
+  behind it: the clone **derive** fails without shared FFmpeg libraries
+  (#1967), so E-03…E-07 cannot be attempted on an unpatched box. History of the
+  first blocker follows, kept because it is what the run-2 result confirms:
+  Coqui/XTTS could not load in a
   sidecar that had already served ECAPA `/embed`, and cloning always calls
   `/embed` for the fidelity check. **Acceptance run on the dev box**, both
   halves on `cuda:1` on a dedicated port so the live sidecar was untouched,
@@ -644,6 +688,32 @@ rather than something to engineer. *Criteria:* plan 274 §6 row 3. *Cost:* short
 opportunistic.
 
 ### A24 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
+
+> **Core criterion DISCHARGED 2026-07-31** (run 2, SHA `b5479e9c`). German
+> Coalfall ch.2, cloned voice `563501c7-…` cast onto `oduvan`, spliced over the
+> **`/synthesize-batch`** wire — the path the fix had to reach. 12 spans (27.2 s)
+> through `/transcribe` with **no `x-language`**: detected **`de`**,
+> `avg_logprob` **−0.233**, against a designed-voice control at −0.352 in the
+> same chapter and the pre-fix baseline of `en` / −1.303.
+> `resolvedVoiceName` stayed `qwen-563501c7-…` — never-substitute held.
+> Corroborated on the single-synth wire with an identity control: the same clone,
+> same sentence, gave `en`/0.865-cos with `language: English`, **`de`**/0.809-cos
+> with `language: German`, and — reproducing the shipped bug live — `en` with
+> unintelligible phonetics when the language was omitted. Speaker identity
+> survives the language switch (0.809 vs the human source clip, ~0.03
+> different-speaker floor). E-01 additionally proved the same claim on **Coqui**:
+> Russian book, detected `ru` at −0.368.
+>
+> **Two sub-checks still owed, and one of them FAILED.** The
+> designed-self-heal-then-restart comparison was not run. The final bullet's "no
+> `voice-mismatch` rows" check **failed** — but *not* for the reason this row
+> predicted. `auditionCentroid` **does** carry the book's language
+> (`audition-centroid.ts:50-57`); the flag came from a stale persisted reference
+> centroid built from the character's *previous* voice, which is reused
+> unconditionally after a reassignment. Filed as
+> [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969); the
+> hypothesis in the bullet below is superseded, keep the check but expect it to
+> stay red until #1969 lands.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
