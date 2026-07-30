@@ -10,6 +10,11 @@ const sidecarVenvPresent = vi.fn();
 const getActiveSupervisor = vi.fn();
 const probeSidecarHealth = vi.fn();
 const findPython312 = vi.fn();
+/* #1963 — a controllable spy (not the plain `() => false` the other two
+   disk probes below use) so the coqui-import-honesty regression test can
+   flip the disk probe to true for the one case that needs packageOnDisk
+   true to observe packageBroken flip. */
+const coquiPackageInstalledDisk = vi.fn(() => false);
 
 // Mock the I/O seams so the route is deterministic.
 vi.mock('../diagnostics/venv.js', () => ({ sidecarVenvPresent: () => sidecarVenvPresent() }));
@@ -27,7 +32,7 @@ vi.mock('../tts/qwen-install-detect.js', () => ({
   qwenPackageInstalled: () => false, qwenWeightsPresent: () => false,
 }));
 vi.mock('../tts/coqui-install-detect.js', () => ({
-  coquiPackageInstalled: () => false, coquiWeightsPresent: () => false,
+  coquiPackageInstalled: () => coquiPackageInstalledDisk(), coquiWeightsPresent: () => false,
 }));
 
 import { computeModelsStatus } from './models-status.js';
@@ -48,6 +53,7 @@ describe('computeModelsStatus', () => {
       qwenPackageInstalled: false, coquiPackageInstalled: false, modelLoaded: false,
     });
     findPython312.mockReturnValue(null);
+    coquiPackageInstalledDisk.mockReturnValue(false);
   });
 
   it('reports kokoro ready, qwen not-installed, and runtime installed + reachable', async () => {
@@ -79,5 +85,62 @@ describe('computeModelsStatus', () => {
 
     expect(probeSidecarHealth).not.toHaveBeenCalled();
     expect(s.runtime.process).toBe('starting');
+  });
+});
+
+describe('computeModelsStatus — coqui import honesty (#1963)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetPythonProbeCacheForTests();
+    sidecarVenvPresent.mockReturnValue(true);
+    getActiveSupervisor.mockReturnValue({ tripEvent: () => null, exhaustedEvent: () => false });
+    findPython312.mockReturnValue(null);
+    // Package present on disk so packageBroken's `p.packageOnDisk && …` half
+    // can actually flip true — this is the producer half of the regression:
+    // without it, packageBroken would read false regardless of importable.
+    coquiPackageInstalledDisk.mockReturnValue(true);
+  });
+
+  it('coqui_import_ok: false flags coqui packageBroken even though find_spec (coquiPackageInstalled) says true', async () => {
+    /* THE DEFECT (#1963): before the fix, coqui's livePackageImportable read
+       straight off coquiPackageInstalled (find_spec), so a package that
+       cannot actually import — the #1944 speechbrain lazy-proxy collision —
+       reported packageBroken: false and the engine looked usable. */
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      modelLoaded: false,
+      coquiPackageInstalled: true,
+      coquiImportOk: false,
+    });
+
+    const s = await computeModelsStatus('/repo');
+
+    expect(s.engines.coqui.packageBroken).toBe(true);
+  });
+
+  it('coqui_import_ok: null falls back to coquiPackageInstalled — packageBroken stays false, unchanged from today', async () => {
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      modelLoaded: false,
+      coquiPackageInstalled: true,
+      coquiImportOk: null,
+    });
+
+    const s = await computeModelsStatus('/repo');
+
+    expect(s.engines.coqui.packageBroken).toBe(false);
+  });
+
+  it('coqui_import_ok: true reports packageBroken false', async () => {
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      modelLoaded: false,
+      coquiPackageInstalled: true,
+      coquiImportOk: true,
+    });
+
+    const s = await computeModelsStatus('/repo');
+
+    expect(s.engines.coqui.packageBroken).toBe(false);
   });
 });
