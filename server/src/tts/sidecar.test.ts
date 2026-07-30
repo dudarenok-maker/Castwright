@@ -353,14 +353,18 @@ describe('#1951 — per-request language for cloned Qwen voices', () => {
     expect(bodies[0]).not.toHaveProperty('language');
   });
 
-  /* Invariant 6 / the live 500 risk. routes/voice-sample.ts passes a
-     CLIENT-supplied, unvalidated `language` and no `cloned` flag. If the flag
-     were not required, an unregistered code from that route would reach
-     `sidecarLanguageName`, which THROWS by design — turning a working audition
-     into a 500. The regression is closed structurally (no `cloned` → no
-     mapping attempt), not by a try/catch, so this asserts the structural
-     property with a language code the registry does not know. */
-  it('a voice-sample-shaped call (language, no cloned flag) never reaches sidecarLanguageName', async () => {
+  /* Invariant 6. Any caller that supplies a `language` but no `cloned` flag
+     must never reach `sidecarLanguageName`, which THROWS by design for an
+     unregistered code — asserted here with a code the registry does not know.
+
+     NOTE (#1951 review fix, M4): this is no longer routes/voice-sample.ts's
+     protection. That route now DOES flag cloned voices, so its unvalidated,
+     client-supplied language is protected by `resolveWireLanguage`'s try/catch
+     instead — see the next test, and the end-to-end route test in
+     routes/voice-sample-cloned-language.test.ts. What this pins today is the
+     DESIGNED-voice case: a designed voice must stay byte-identical to
+     pre-#1951 behaviour whatever language its caller passes. */
+  it('a call with a language but no cloned flag never reaches sidecarLanguageName', async () => {
     const bodies: unknown[] = [];
     stubFetch(capturingFetch(bodies));
     await expect(

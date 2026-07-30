@@ -29,8 +29,12 @@ export interface CloneSampleCandidateResult {
       is why `deriveEngineArtifact` had nothing to put in `X-Language` and every
       cloned voice's manifest read "English" — mislabelling the voice in the
       library and making the wizard's completion audition speak the wrong
-      language. Internal only: no OpenAPI change, and it lands on the entry's
-      existing `languageCode` field. */
+      language. Returned verbatim by `POST /api/voice-library/clone-sample`, so
+      it IS part of the wire contract — documented as
+      `CloneSampleCandidate.detectedLanguage` in openapi.yaml. It also lands on
+      the entry's existing `languageCode` field, but only after `/clone`
+      validates it against the supported-language registry; the value here is
+      RAW (see `VoiceMaster.languageCode`). */
   detectedLanguage: string | null;
 }
 

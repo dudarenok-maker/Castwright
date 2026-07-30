@@ -7,9 +7,9 @@ owner: null
 # Cloned Qwen voices honour the book's language (fs-38 follow-up)
 
 > Status: active
-> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/index.ts`, `server/tts-sidecar/main.py` (`synthesize`, `synthesize_batch`, `/synthesize-batch` route), `server/src/tts/clone-ingest.ts`, `server/src/routes/voice-library.ts`, `server/src/tts/clone-voice-resolver.ts`
-> URL surface: indirect — every chapter render using a cloned Qwen voice; the clone wizard's completion audition
-> OpenAPI ops: none (one new optional field on an internal sidecar wire)
+> Key files: `server/src/tts/sidecar.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/index.ts`, `server/tts-sidecar/main.py` (`synthesize`, `synthesize_batch`, `/synthesize-batch` route), `server/src/tts/clone-ingest.ts`, `server/src/routes/voice-library.ts`, `server/src/tts/clone-voice-resolver.ts`, `server/src/audio/render-integrity/audition-centroid.ts` + `aggregate.ts`, `server/src/routes/voice-sample.ts`
+> URL surface: indirect — every chapter render using a cloned Qwen voice; the clone wizard's completion audition; the cast-row / profile-drawer Play-sample audition
+> OpenAPI ops: none new. Two schemas gain a field they already shipped undocumented — `CloneSampleCandidate.detectedLanguage` and `VoiceMaster.languageCode` (the RAW Whisper detection; `VoiceLibraryEntry.languageCode` is the validated one).
 
 Fixes [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951).
 Related: [#1953](https://github.com/dudarenok-maker/Castwright/issues/1953) (designed-voice
@@ -332,21 +332,70 @@ Real sidecar, real weights — not mock mode.
    `characterSnapshots.<id>.resolvedVoiceName` is the clone's storage key (no substitution).
 3. Restart the sidecar, re-render → audibly identical.
 
+## Folded in / also delivered
+
+Three items this plan originally listed as out of scope ship in the SAME PR, at
+the repo owner's direction. They are recorded here rather than struck out so the
+plan stays readable as the design of record for what actually landed.
+
+- **Designed voices whose language disagrees with the book** —
+  [#1953](https://github.com/dudarenok-maker/Castwright/issues/1953), an
+  assign-time warning. Deliberately a warning on a 200, not a 409: the guard at
+  `voice-library.ts:1260` is scoped to cloned voices precisely because a hard
+  failure for designed voices would be a regression. Covers English books, which
+  the render-time gate skips entirely.
+- **`import.ts:320` could persist an unregistered language code**
+  (`normaliseBookLanguage` only lower-cases the primary subtag; no
+  `isSupportedLanguage` check) — [#1955](https://github.com/dudarenok-maker/Castwright/issues/1955).
+  Now rejected at the import boundary, before any disk write, instead of failing
+  at render time as an opaque `chapter_failed`. The `generation.ts` throw is
+  untouched: it remains the backstop for the splice and QA-repair paths.
+- **`qwen-voice.ts:312` minted variants of a clone against the wrong identity**
+  (`baseVoiceId = qwenStorageKey(...)` cannot produce `qwen-<libraryUuid>`) —
+  [#1954](https://github.com/dudarenok-maker/Castwright/issues/1954). Same
+  `qwenStorageKey`-vs-`libraryUuid` class as the bug
+  `verify-designed-voice-language.ts:45-47` was written to fix. Resolved by
+  **refusing** rather than re-anchoring: correct anchoring would mint derived
+  artifacts of a real person's voice that consent revocation cannot erase
+  (`purgeCloneArtifacts` anchors on a `.` boundary, so `qwen-<uuid>__angry.pt`
+  matches neither its fixed path list nor its orphan sweep). Verified latent —
+  zero such artifacts exist today — and kept that way.
+
+Plus two seams the PR review found still passing no language, folded in for the
+same reason: a fix that reaches only the render path leaves the other places
+that synthesise the same voice disagreeing with it.
+
+- **The speaker-drift reference** (`audio/render-integrity/audition-centroid.ts`,
+  fed by `aggregate.ts`). `auditionCentroid` builds the centroid every chapter
+  segment is compared against; rendering it in English against a German chapter
+  would be a *new* source of false `voice-mismatch` flags on precisely the
+  cloned voices this plan fixes. It now carries the same `language` + `cloned`
+  pair as the render, for the same comparability reason `modelKey` is already
+  threaded through it. The language comes from the book's `state.json` and the
+  provenance from `cast.json` (`hasClonedProvenance`, against the character's
+  own rendering engine). An unreadable `state.json` passes NO language rather
+  than guessing English.
+- **`POST /api/voices/:voiceId/sample`** now marks a cloned voice as cloned, so
+  a supplied `language` reaches the Qwen mapping instead of the clone's English
+  manifest. Cloned-ness is read from the library ENTRY, never the
+  client-supplied `provenance` — a designed voice resolves to the identical
+  `qwen-<uuid>` key shape. That makes `sidecarLanguageName` reachable from a
+  route carrying an unvalidated, client-supplied language, so the route is now
+  protected only by `resolveWireLanguage`'s try/catch rather than structurally;
+  `routes/voice-sample-cloned-language.test.ts` drives the real provider through
+  the real route to pin it (removing the catch turns a working Play-sample click
+  into a 502).
+
 ## Out of scope
 
-- **Designed voices whose language disagrees with the book** — [#1953](https://github.com/dudarenok-maker/Castwright/issues/1953)
-  adds an assign-time warning. Deliberately a warning, not a 409: the guard at
-  `voice-library.ts:1260` is scoped to cloned voices precisely because a hard
-  failure for designed voices would be a regression.
-- **`import.ts:320` can persist an unregistered language code**
-  (`normaliseBookLanguage` only lower-cases the primary subtag; no
-  `isSupportedLanguage` check). Pre-existing gap, and the reason the
-  `generation.ts` throw exists. Needs its own `type:chore` issue.
-- **`qwen-voice.ts:312` mints variants of a clone against the wrong identity**
-  (`baseVoiceId = qwenStorageKey(...)` cannot produce `qwen-<libraryUuid>`).
-  Surfaced by the review; same `qwenStorageKey`-vs-`libraryUuid` class as the bug
-  `verify-designed-voice-language.ts:45-47` was written to fix. Its own issue.
 - **Backfilling existing clone manifests.** See "Migration story".
+- **Threading the BOOK's language into `POST /api/voices/:voiceId/sample`.**
+  The route now flags cloned voices (so a supplied `language` reaches the Qwen
+  mapping), but no frontend caller sends one — `realGetVoiceSample` omits the
+  field, and `VoiceSampleArgs` has no slot for it. Making the cast-row Play
+  button audition in the book's language is a frontend change across every
+  `playSampleWithAutoLoad` call site, and needs a decision for the surfaces with
+  no book in scope. Not done here; see the review note on M4 seam 1.
 
 ## Ship notes
 

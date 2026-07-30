@@ -2881,6 +2881,16 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.languageCode).toBeUndefined();
     const lastDerive = deriveMock.mock.calls[deriveMock.mock.calls.length - 1];
     expect(lastDerive[2]).not.toHaveProperty('language');
+    /* #1951 review fix (M3) — and `master` KEEPS the raw `kl`. The two fields
+       are deliberately different things: `entry.languageCode` is the VALIDATED
+       language (gated on `isSupportedLanguage`, safe to render or hand to
+       `sidecarLanguageName`), `entry.master.languageCode` is the RAW Whisper
+       detection for the clip. Keeping the raw code is the only record of what
+       Whisper actually heard — the difference between "Greenlandic, which we
+       don't support" and "Whisper detected nothing". Nothing consumes it, so it
+       cannot leak into a synth call. If a future change strips it, this
+       assertion is the one that should stop it. */
+    expect(res.body.master.languageCode).toBe('kl');
   });
 
   it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {

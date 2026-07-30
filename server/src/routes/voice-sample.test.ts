@@ -493,6 +493,83 @@ describe('voice-sample router', () => {
     });
   });
 
+  /* #1951 review fix (M4, seam 1). The route now tells the provider whether
+     the voice it resolved is CLONED, so a supplied `language` can actually
+     reach Qwen's cloned-voice mapping (`resolveWireLanguage`). Without the
+     flag the audition renders from the clone's permanently-"English" manifest
+     while the chapter renders in the book's language.
+
+     Cloned-ness is read off the LIBRARY ENTRY (`entry.provenance`), not the
+     client-supplied `voice.overrideTtsVoices[…].provenance`, for the same
+     reason the consent gate directly above does: the client is not trusted
+     with this fact, and the route already holds the authoritative entry by
+     this point. */
+  describe('#1951 — cloned flag threaded to the provider', () => {
+    const consent = {
+      personName: 'Gran',
+      relationship: 'family-with-permission' as const,
+      permittedUse: 'personal' as const,
+      attestedAt: '2026-01-01T00:00:00.000Z',
+      attestedBy: 'me',
+    };
+
+    async function seedCloned(voiceUuid: string, provenance: 'cloned' | 'designed') {
+      await writeEntry({
+        voiceUuid,
+        name: 'Gran',
+        provenance,
+        tags: [],
+        pinned: false,
+        engines: {},
+        ...(provenance === 'cloned' ? { consent: { ...consent } } : {}),
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+    }
+
+    function sampleBody(voiceUuid: string, language?: string) {
+      return {
+        modelKey: 'qwen3-tts-0.6b',
+        voice: {
+          id: 'v_gran',
+          character: 'Gran',
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${voiceUuid}`, libraryUuid: voiceUuid, provenance: 'cloned' as const },
+          },
+        },
+        text: 'Guten Abend.',
+        ...(language ? { language } : {}),
+      };
+    }
+
+    it('sends cloned:true for a cloned library voice', async () => {
+      const voiceUuid = 'cloned-lang-1';
+      await seedCloned(voiceUuid, 'cloned');
+
+      const res = await request(app).post('/api/voices/v_gran/sample').send(sampleBody(voiceUuid, 'de'));
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { cloned?: boolean; language?: string };
+      expect(args.cloned).toBe(true);
+      expect(args.language).toBe('de');
+    });
+
+    /* A DESIGNED voice resolves to the identical `qwen-<uuid>` key shape, so
+       key shape can never be the test — provenance is. It must stay unflagged:
+       its manifest language already matches the book, and flagging it would
+       change behaviour for every designed voice. */
+    it('does not flag a designed library voice sharing the same key shape', async () => {
+      const voiceUuid = 'designed-lang-1';
+      await seedCloned(voiceUuid, 'designed');
+
+      const res = await request(app).post('/api/voices/v_gran/sample').send(sampleBody(voiceUuid, 'de'));
+
+      expect(res.status).toBe(200);
+      const args = synthesize.mock.calls[0][0] as { cloned?: boolean };
+      expect(args.cloned).toBeFalsy();
+    });
+  });
+
   describe('provider errors', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));

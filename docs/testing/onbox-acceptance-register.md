@@ -648,6 +648,14 @@ every mechanism test while leaving the whole book wrong.
   the two must be audibly identical. This is the cache-vs-disk divergence half;
   before the fix the warm cache and the on-disk manifest disagreed, so a restart
   silently changed the output.
+- **Then open the chapter's QA report and check the cloned character has no
+  `voice-mismatch` rows.** The speaker-drift detector compares each segment against
+  a reference the server renders itself (`auditionCentroid`), and that reference now
+  carries the book's language too — an English reference against a German chapter
+  would flag the voice as drifting when nothing is wrong. Only reachable with a
+  character thin enough on in-book anchors to trigger the audition fallback (a
+  few-line character is the easy way), so treat it as opportunistic within this same
+  render rather than something to engineer.
 
 *Needs:* a single GPU with Qwen resident, a non-English book, and ASR available
 (`ASR_DEVICE` and `ASR_COMPUTE_TYPE` must agree — a `cpu` device with a pinned

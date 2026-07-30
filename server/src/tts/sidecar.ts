@@ -64,9 +64,16 @@ import { sidecarLanguageName } from './language.js';
    `routes/voice-sample.ts` passes a client-supplied, unvalidated language, and
    a chapter render whose language is unmappable already fails loud upstream in
    `generation.ts` (plus chapter-splice.ts / chapter-qa-repair.ts) BEFORE any
-   synth runs. So catch it and degrade to the manifest language. voice-sample
-   is additionally protected structurally — it sends no `cloned` flag, so it
-   can never reach the mapping at all. */
+   synth runs. So catch it and degrade to the manifest language.
+
+   This try/catch is the ONLY thing protecting voice-sample. That route used to
+   be safe structurally too (it sent no `cloned` flag, so it could never reach
+   the mapping) — no longer: the #1951 review fix made it flag cloned voices so
+   an audition stops rendering in English on a non-English book, which is
+   exactly what puts an unvalidated language in front of `sidecarLanguageName`.
+   Removing the catch turns a working Play-sample click into a 500. Pinned by
+   `routes/voice-sample-cloned-language.test.ts`, which drives the real
+   provider through the real route. */
 function resolveWireLanguage(
   engine: TtsEngine,
   language: string | undefined,
