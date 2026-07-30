@@ -11,7 +11,7 @@ describe('mockCloneVoice', () => {
     const before = (await mockListVoiceLibrary()).voices.length;
     const entry = await mockCloneVoice({
       candidateId: 'cand-1',
-      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal', attestedBy: 'Dad' },
     });
     expect(entry.provenance).toBe('cloned');
     expect(entry.engines.qwen?.status).toBe('ready');
@@ -28,7 +28,7 @@ describe('mockCloneVoice', () => {
     const entry = await mockCloneVoice({
       candidateId: 'cand-1',
       transcript: 'the quick brown fox jumped over',
-      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal', attestedBy: 'Dad' },
     });
     expect(entry.master?.transcript).toBe('the quick brown fox jumped over');
     expect(entry.master?.transcriptSource).toBe('user');
@@ -105,6 +105,89 @@ describe('mockCloneVoice', () => {
     });
     expect(entry.master?.transcript).toBe('the quick brown fox jumped');
     expect(entry.master?.transcriptSource).toBe('whisper');
+  });
+
+  /* #1959 — a non-self relationship must have a non-blank attestedBy. For
+     `guardian-of-minor` omitting it would persist a record claiming the minor
+     attested for themselves — the exact defect #1943 exists to fix. */
+  it('rejects a guardian-of-minor clone with no attestedBy', async () => {
+    const before = (await mockListVoiceLibrary()).voices.length;
+    await expect(
+      mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: { personName: 'Alice', relationship: 'guardian-of-minor', permittedUse: 'personal' },
+      }),
+    ).rejects.toThrow(
+      new Error(`Voice clone failed (400): {"error":"\`consent.attestedBy\` is required when \`consent.relationship\` is not \\"self\\"."}`)
+    );
+    /* Rejected outright, not persisted — no entry appears. */
+    expect((await mockListVoiceLibrary()).voices.length).toBe(before);
+  });
+
+  it('rejects a guardian-of-minor clone with blank attestedBy', async () => {
+    const before = (await mockListVoiceLibrary()).voices.length;
+    await expect(
+      mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: {
+          personName: 'Alice',
+          relationship: 'guardian-of-minor',
+          permittedUse: 'personal',
+          attestedBy: '   ',
+        },
+      }),
+    ).rejects.toThrow(
+      new Error(`Voice clone failed (400): {"error":"\`consent.attestedBy\` is required when \`consent.relationship\` is not \\"self\\"."}`)
+    );
+    expect((await mockListVoiceLibrary()).voices.length).toBe(before);
+  });
+
+  it('accepts a self clone with no attestedBy and records personName as attestedBy', async () => {
+    const entry = await mockCloneVoice({
+      candidateId: 'cand-1',
+      consent: { personName: 'Bob', relationship: 'self', permittedUse: 'personal' },
+    });
+    expect(entry.provenance).toBe('cloned');
+    expect(entry.consent?.personName).toBe('Bob');
+    expect(entry.consent?.attestedBy).toBe('Bob');
+  });
+
+  it('accepts a self clone with blank attestedBy and records personName as attestedBy', async () => {
+    const entry = await mockCloneVoice({
+      candidateId: 'cand-1',
+      consent: { personName: 'Bob', relationship: 'self', permittedUse: 'personal', attestedBy: '   ' },
+    });
+    expect(entry.provenance).toBe('cloned');
+    expect(entry.consent?.personName).toBe('Bob');
+    expect(entry.consent?.attestedBy).toBe('Bob');
+  });
+
+  it('accepts a family-with-permission clone with attestedBy', async () => {
+    const entry = await mockCloneVoice({
+      candidateId: 'cand-1',
+      consent: {
+        personName: 'Charlie',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedBy: 'David (parent)',
+      },
+    });
+    expect(entry.provenance).toBe('cloned');
+    expect(entry.consent?.personName).toBe('Charlie');
+    expect(entry.consent?.attestedBy).toBe('David (parent)');
+  });
+
+  it('rejects a family-with-permission clone with no attestedBy', async () => {
+    const before = (await mockListVoiceLibrary()).voices.length;
+    await expect(
+      mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: { personName: 'Charlie', relationship: 'family-with-permission', permittedUse: 'personal' },
+      }),
+    ).rejects.toThrow(
+      new Error(`Voice clone failed (400): {"error":"\`consent.attestedBy\` is required when \`consent.relationship\` is not \\"self\\"."}`)
+    );
+    expect((await mockListVoiceLibrary()).voices.length).toBe(before);
   });
 });
 
