@@ -240,8 +240,16 @@ def test_publish_loaded_locked_stamps_last_used_before_publishing_tts():
 
 
 def test_the_reensure_under_the_lock_does_not_deadlock(monkeypatch):
-    """`synthesize` calls `_ensure_loaded` while HOLDING `_synth_lock`; a publish
-    that unconditionally acquires that non-reentrant lock self-deadlocks.
+    """`lock_held=True` means the caller already holds `_synth_lock` while
+    calling `_ensure_loaded`; a publish that unconditionally acquires that
+    non-reentrant lock self-deadlocks.
+
+    No production caller passes `lock_held=True` any more — the fs-38 Wave 3c
+    merge (#1936) moved `synthesize`'s re-ensure outside the lock, and plan
+    273 confirmed it stays there (§1.2). This test is the only remaining
+    driver of the branch; it exists because the parameter itself is kept
+    deliberately (main.py's `_ensure_loaded` docstring) rather than deleted as
+    dead code, so it still needs a guard against self-deadlock.
 
     Drives `_ensure_loaded(..., lock_held=True)` DIRECTLY on a cold engine
     while holding `_synth_lock` — going through `synthesize` instead would

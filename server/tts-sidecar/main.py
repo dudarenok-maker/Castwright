@@ -1784,12 +1784,12 @@ class CoquiEngine(Engine):
 
     def _reclaim_after_drop(self, torch_module: Any, reason: str = "unloaded") -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_synth_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        `gc.collect()`/`empty_cache()` runs on the event loop either way,
-        lock held or not); it's released because holding `_synth_lock` across
-        this multi-second reclaim would block concurrent synth calls that
-        only need the lock briefly, for no benefit.
+        `_synth_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_synth_lock` across this multi-second reclaim would
+        block concurrent synth calls that only need the lock briefly, for no
+        benefit.
 
         `reason` names what happened, for the closing log line only — a real
         `unload()` (the default) reads differently from a discarded cold load
@@ -2000,19 +2000,24 @@ class CoquiEngine(Engine):
                 # None. No-op on the warm path (`_ensure_loaded` early-returns
                 # when `_tts` is set).
                 #
-                # On `main` this call sits INSIDE `with self._synth_lock:` with
-                # `lock_held=True`. On THIS branch it cannot, for a structural
-                # reason: `_synthesize_claimed` below does not run under one
+                # This call sits OUTSIDE `with self._synth_lock:`. The fs-38
+                # Wave 3c merge (#1936) moved it here from inside the lock with
+                # `lock_held=True` — that was the last production caller of
+                # that path (plan 273 §1.2); only a test drives `lock_held=True`
+                # now. It cannot go back inside, for a structural reason:
+                # `_synthesize_claimed` below does not run under one
                 # enclosing acquisition — its cloned-voice branch must do
                 # seconds of latents disk I/O OFF the lock and take
                 # `_synth_lock` only around the GPU forward — so there is no
                 # single block to put a re-ensure inside. Pushing it into
                 # either branch's own block instead would DEADLOCK:
                 # `threading.Lock` is non-reentrant and `_ensure_loaded`'s
-                # publish acquires `_synth_lock` itself. Sibling engines whose
-                # `_ensure_loaded` is lock-free (QwenEngine, WhisperEngine)
-                # keep main's placement. Do NOT "fix" that inconsistency by
-                # moving this line under the lock.
+                # publish acquires `_synth_lock` itself. Sibling engines'
+                # `_ensure_loaded` is lock-free too (QwenEngine, WhisperEngine
+                # — the latter also moved its re-ensure outside its lock,
+                # plan 273 T7) and re-ensures at the same outside-the-lock
+                # spot. Do NOT "fix" this into looking asymmetric by moving
+                # this line under the lock.
                 #
                 # What that costs: a window between this line and each branch's
                 # `with self._synth_lock:` below. `maybe_free_idle` cannot use
@@ -2045,7 +2050,7 @@ class CoquiEngine(Engine):
         is the caller's `_in_flight` claim plus its re-ensure. Because the
         re-ensure sits OUTSIDE the lock here (see `synthesize`), an explicit
         `/unload` landing in the gap is reachable, so each capture is checked
-        with a loud `RuntimeError` rather than main's bare `assert`, which `-O`
+        with a loud `RuntimeError` rather than a bare `assert`, which `-O`
         strips.
         """
         effective_language = language or self._language
@@ -2250,13 +2255,12 @@ class CoquiEngine(Engine):
             # Bind `self._tts` to a local up front (#1894) so the forward — and
             # the `output_sample_rate` read after it — never re-reads an
             # attribute a concurrent unload could null. This is a LOUD guard,
-            # not `assert tts is not None` as on `main`: there the caller
-            # re-ensures INSIDE this lock so the model is guaranteed present,
-            # whereas here `synthesize`'s re-ensure sits just outside it (see
-            # its comment — `_ensure_loaded` self-locks and is non-reentrant),
-            # so an explicit `/unload` landing in that gap is reachable. Under
-            # `python -O` a bare assert is stripped and the next line would
-            # raise `AttributeError: 'NoneType' object has no attribute 'tts'`
+            # not a bare `assert tts is not None` — `synthesize`'s re-ensure
+            # sits just outside this lock (see its comment — `_ensure_loaded`
+            # self-locks and is non-reentrant), so an explicit `/unload`
+            # landing in that gap is reachable. Under `python -O` a bare
+            # assert is stripped and the next line would raise
+            # `AttributeError: 'NoneType' object has no attribute 'tts'`
             # — the same GATE 1 MIN-2 defect already fixed on the cloned-voice
             # branch above.
             tts = self._tts
@@ -6344,12 +6348,12 @@ class WhisperEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        the `gc.collect()`-scale work here runs on the event loop either way,
-        lock held or not); it's released because holding `_infer_lock` across
-        this multi-second reclaim would block concurrent transcribe calls
-        that only need the lock briefly, for no benefit."""
+        `_infer_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_infer_lock` across this multi-second reclaim would
+        block concurrent transcribe calls that only need the lock briefly,
+        for no benefit."""
         _reclaim_host_and_vram()
         log.info("Whisper ASR model unloaded.")
 
@@ -6535,10 +6539,17 @@ class SpeakerEngine:
             # the ordering matters.
             try:
                 with self._infer_lock, torch.no_grad():
-                    # `ensure_loaded` is async here, so unlike WhisperEngine we
-                    # cannot reload under the lock — re-check and surface the
-                    # documented precondition. The `_in_flight` claim above
-                    # is what actually stops an idle-evict getting here (#1894).
+                    # `ensure_loaded` is async here, so this method — sync,
+                    # already inside `_infer_lock` — cannot reload even if it
+                    # wanted to. WhisperEngine's `_ensure_loaded` is sync/
+                    # lock-free and COULD be called here, it just no longer is
+                    # (plan 273 T7 moved its re-ensure outside `_infer_lock`
+                    # too, to avoid holding the lock across an unbounded
+                    # weights pull) — so both engines now share the same
+                    # outside-the-lock re-ensure, for different reasons.
+                    # Re-check and surface the documented precondition here.
+                    # The `_in_flight` claim above is what actually stops an
+                    # idle-evict getting here (#1894).
                     model = self._model
                     if model is None:
                         raise RuntimeError("model was unloaded during embed()")
@@ -6565,12 +6576,12 @@ class SpeakerEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        the `gc.collect()`-scale work here runs on the event loop either way,
-        lock held or not); it's released because holding `_infer_lock` across
-        this multi-second reclaim would block concurrent embed calls that
-        only need the lock briefly, for no benefit."""
+        `_infer_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_infer_lock` across this multi-second reclaim would
+        block concurrent embed calls that only need the lock briefly, for no
+        benefit."""
         _reclaim_host_and_vram()
         log.info("ECAPA speaker model unloaded.")
 
