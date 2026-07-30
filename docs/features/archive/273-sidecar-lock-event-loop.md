@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-07-31
 owner: null
 ---
 
@@ -964,3 +964,26 @@ Re-run `npm run check:onbox-register` after editing.
    `server/tts-sidecar/`; docs are the only thing outside it.
 9. **Incidental fix declared** — the bare `assert` at `:6108` becomes a loud
    raise (`-O` strips asserts), in code T7 already touches.
+
+## Ship notes
+
+Shipped 2026-07-31 on `fix/sidecar-plan-273-lock-event-loop`, closing #1919
+(fixed) and #1925 (closed as superseded — its symptom was already removed by
+the fs-38 Wave 3c merge, `6a2e4e17`/PR #1936, before this branch existed; T1
+pins that fix with the regression test the issue itself was missing).
+
+Commits, in task order: `0245e4b7` (T1), `6ae80fc8` (T2), `c601b165` (T3),
+`091383a1` (T4), `2225e266` (T5), `9f56c0e4` + `d5665d88` (T6), `0419e0e6`
+(T7), `55bcfb8d` (T8).
+
+Behaviour delta vs. the plan: none — T1–T8 landed exactly as designed,
+including the Qwen/Whisper widening (D1) in this same branch rather than as a
+follow-up issue. The one deliberate, called-out behaviour change on the
+default engine (§4's new risk row) shipped as designed: a `/unload` or
+automatic evict landing in the narrow re-ensure→forward gap now raises a loud
+`RuntimeError` instead of being silently absorbed, on both `QwenEngine` and
+`WhisperEngine`.
+
+On-box acceptance row A25 recorded in
+`docs/testing/onbox-acceptance-register.md` (Group A) — does not block this
+merge; run sheet at `docs/testing/sidecar-evict-latency-onbox-acceptance.md`.

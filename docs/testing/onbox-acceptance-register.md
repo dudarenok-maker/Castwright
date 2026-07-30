@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 24 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 25 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**41 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**42 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -686,6 +686,40 @@ every mechanism test while leaving the whole book wrong.
 `int8_float16` makes every `/transcribe` 500). **Run with A1's remaining Section C/D
 items** — same box, same book, same sidecar session. *Criteria:* plan 275
 §"On-box acceptance". *Cost:* one chapter render plus a sidecar restart.
+
+### A25 · `/health` stays live through a contended eviction on the default Qwen path (plan [273](../features/archive/273-sidecar-lock-event-loop.md), [#1919](https://github.com/dudarenok-maker/Castwright/issues/1919)) · **single 8 GB card**
+
+Automated tests prove each eviction step — and the reclaim that follows it — now
+runs on a worker thread rather than the asyncio event loop. What they cannot reach
+is whether `/health`, and every other in-flight request, actually stays responsive
+when a real multi-GB `gc.collect()`/`empty_cache()` and a real contended
+`_synth_lock` are in play — on the **default** Qwen path, with no opt-in env var.
+Run sheet: [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md).
+
+- **Run pinned to ONE card** — `CUDA_VISIBLE_DEVICES=0` (runnable alongside
+  A19/A5/A20 in the same session). `SEG_CAPACITY_ADMISSION=1` (the default) and
+  Qwen as the generation engine (also the default).
+- Run a cast-review **voice design** so Qwen VoiceDesign is warm-resident
+  (`QWEN_DESIGN_IDLE_TTL` keeps it ~120 s), then start a Qwen **chapter render** —
+  each sentence's forward holds `_synth_lock` for its duration.
+- While that render is in flight, trigger a second admission on the same card
+  (`POST /load` for coqui, or `/xtts/clone-voice`). Its `qwen.design` eviction
+  step's fast-out passes (nothing is *designing*), so it blocks on `_synth_lock`
+  held by the in-flight Base forward — the exact race #1919 describes.
+- From a second shell, poll `GET /health` every 250 ms **throughout** — from
+  before the render starts until the second admission resolves — and record the
+  **maximum inter-response gap, in milliseconds.** Before this fix the expected
+  gap is on the order of one Qwen forward pass (seconds); after, it should stay
+  under roughly 500 ms, bounded by the poll interval rather than by the render.
+- Also confirm the evict **actually frees the VRAM** — the second admission
+  succeeds rather than 503-ing `noCapacity`. A near-zero `/health` gap because the
+  evict silently declined and did nothing would look like a pass and isn't one.
+- **Optional second pass** with `SEG_ASR_ENABLED=1` + `ASR_DEVICE=cuda` to exercise
+  the `asr` eviction step too. Not required for this row to clear.
+
+*Needs:* the 8 GB card only, pinned via `CUDA_VISIBLE_DEVICES=0`, a book with a
+designed Qwen voice in progress plus a second admission target (a Coqui `/load` or
+an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 ---
 
