@@ -5787,6 +5787,9 @@ class QwenEngine(Engine):
                 self._ensure_base17_loaded()
                 load_start = time.perf_counter()
                 prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
+                # #1951 — the caller's language WINS over the manifest's when
+                # supplied. See the 0.6B path below for the full rationale.
+                lang = language or lang
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
                 # Guarded forward (re-ensures under `_synth_lock`; reloads+retries
@@ -5809,6 +5812,18 @@ class QwenEngine(Engine):
         # fast WITHOUT paying the (heavy) Base-model load.
         load_start = time.perf_counter()
         prompt, lang, cache_hit = self._load_voice_prompt(voice)
+        # #1951 — the caller's language WINS over the voice manifest's when one
+        # is supplied; the manifest stays the FALLBACK. This argument was
+        # accepted and silently ignored before, which is why a cloned voice
+        # (whose manifest always says "English", its derive never having sent
+        # X-Language) rendered every book in every language as English.
+        #
+        # The sidecar deliberately does NOT decide what a clone is: Node holds
+        # the authoritative `hasClonedProvenance` answer and signals it purely
+        # by WHETHER it sends this field. Absent → manifest language → today's
+        # behaviour byte-for-byte, which is what keeps designed voices
+        # unchanged. Never default to English here.
+        lang = language or lang
         load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
@@ -5831,8 +5846,9 @@ class QwenEngine(Engine):
         """TRUE batching (plan 112): synth N sentences in ONE batched forward.
 
         Each item is `{voice, text}` (plus an optional `instruct` on the 1.7B
-        live-instruct path). We load every item's cached clone prompt + manifest
-        language and pass parallel lists to a single
+        live-instruct path, and an optional `language` that OVERRIDES that
+        item's manifest language — #1951). We load every item's cached clone
+        prompt + manifest language and pass parallel lists to a single
         `generate_voice_clone(text=[…], language=[…], voice_clone_prompt=[…])`
         call, so the model runs one batched forward per decode step instead of
         N separate ones. Two properties make this safe where plan 70d's
@@ -5906,7 +5922,12 @@ class QwenEngine(Engine):
                     except RuntimeError as e:
                         raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
                     texts.append(text)
-                    langs.append(lang)
+                    # #1951 — PER-ITEM language override (see the 0.6B loop
+                    # below for the full rationale). Per-item, not per-batch:
+                    # a batch may MIX voices, so one batch can hold a cloned
+                    # character's line (takes the book's language) beside a
+                    # designed narrator's (keeps its manifest language).
+                    langs.append(item.get("language") or lang)
                     prompt_lists.append(prompt if isinstance(prompt, list) else [prompt])
                     # Flatten per-voice prompt-item list (same rationale as the 0.6B
                     # path below; see comment there for the list-of-lists danger).
@@ -5948,7 +5969,27 @@ class QwenEngine(Engine):
                 except RuntimeError as e:
                     raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
                 texts.append(text)
-                langs.append(lang)
+                # #1951 — PER-ITEM language override: the caller's `language`
+                # wins over this voice's manifest language, which stays the
+                # FALLBACK for items that omit it.
+                #
+                # THIS is the path that matters for a book. Qwen chapter
+                # SENTENCES batch through here (QWEN_BATCH_SIZE defaults to 32);
+                # the only single /synthesize in a chapter is the title beat. A
+                # fix applied to `synthesize` alone would ship a German title
+                # over an entirely English book.
+                #
+                # Per-item rather than per-call because a batch may MIX voices
+                # (see this method's docstring): a cloned character's line must
+                # take the book's language while a designed narrator's line in
+                # the SAME batch keeps its manifest language. A batch-level
+                # field could not express that.
+                #
+                # The sidecar never learns what a clone is — Node decides that
+                # (`hasClonedProvenance`) and signals it purely by whether the
+                # field is present. Absent → manifest language → byte-identical
+                # to today.
+                langs.append(item.get("language") or lang)
                 # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
                 # (qwen_tts create_voice_clone_prompt's return shape), normally
                 # length 1. generate_voice_clone wants a FLAT prompt-item list with
@@ -9595,6 +9636,23 @@ async def synthesize_batch(req: Request) -> Response:
             raise HTTPException(
                 status_code=400,
                 detail=f"item {i}: `instruct` too long ({len(instruct_val)} chars > {_cap} cap).",
+            )
+        # #1951 — OPTIONAL per-item `language` (the sidecar language WORD, e.g.
+        # "German"). Absent is the normal case and means "use this voice's
+        # manifest language"; Node sends it only for a cloned voice, whose
+        # manifest language is meaningless for book synth. There is deliberately
+        # NO route-level language field and no `synthesize_batch` signature
+        # change — the value rides on the item dict, which is handed to the
+        # engine verbatim.
+        #
+        # Present-but-not-a-string is a caller bug, and silently ignoring it
+        # would render a whole chapter in the wrong language with no signal at
+        # all — 400 it, exactly as `voice`/`text` are validated above. Do NOT
+        # coerce: str(42) would be accepted downstream as a language word.
+        if "language" in item and not isinstance(item["language"], str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"item {i}: `language` must be a string when present.",
             )
 
     engine = ENGINES["qwen"]

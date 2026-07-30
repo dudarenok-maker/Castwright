@@ -22,8 +22,9 @@
 
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { audioDir, castJsonPath } from '../../workspace/paths.js';
+import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
+import { bookStateLanguage, type BookStateJson } from '../../workspace/scan.js';
 import { loadSegmentsFiles } from '../segments-io.js';
 import { readEmbeddings, type EmbeddingRow } from './embeddings-io.js';
 import { writeAttempted, attemptedPath, mergeVerdictRows, type VerdictRow } from './verdicts-io.js';
@@ -43,6 +44,7 @@ import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } f
 import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
 import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
+import { hasClonedProvenance } from '../../tts/clone-engines.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -270,6 +272,26 @@ async function readCastJson(bookDir: string): Promise<CastCharacter[] | null> {
   }
 }
 
+/** #1951 — the book's BCP-47 language, or undefined when it genuinely cannot
+ *  be read (no/malformed state.json). Best-effort, exactly like `readCastJson`
+ *  above: scoring is a non-fatal background pass and must never fail on it.
+ *
+ *  Returns `undefined` rather than `'en'` for an unreadable book, and that
+ *  distinction is the point: an absent language means the audition sends none,
+ *  so the voice's own manifest language stands (today's behaviour). Guessing
+ *  English here is the exact defect #1951 exists to fix. A state.json that
+ *  simply carries no `language` key is a DIFFERENT case — `bookStateLanguage`
+ *  resolves it to `'en'`, the same value `synthesiseChapter` rendered the audio
+ *  under, which is what keeps the audition comparable to the chapter. */
+async function readBookLanguage(bookDir: string): Promise<string | undefined> {
+  try {
+    const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    return state ? bookStateLanguage(state) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Key for joining embedding rows to segment rows ─────────────────────────
 
 function segKey(characterId: string, sentenceIds: number[]): string {
@@ -453,6 +475,10 @@ export async function scoreBook(
   // instead of one repeated canned line.
   const castChars = await readCastJson(bookDir);
   const castById = new Map((castChars ?? []).map((c) => [c.id, c] as const));
+  // #1951 — the language the chapters were rendered in. Read once per run and
+  // stamped onto every Option-B audition below, for the same comparability
+  // reason the render TIER is (see the renderKey comment further down).
+  const bookLanguage = await readBookLanguage(bookDir);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   for (const cd of chapterData) {
@@ -482,6 +508,19 @@ export async function scoreBook(
             attributes: snap.attributes,
           },
           hint: castChar ? buildHintFromCast(castChar) : undefined,
+          /* #1951 — render the audition in the SAME language the chapter was
+             rendered in. Spread so an unknown book language stays an absent
+             key (no wire field → the voice's manifest language), never a
+             guessed English. */
+          ...(bookLanguage != null ? { language: bookLanguage } : {}),
+          /* Tested against THIS character's rendering engine, not a hardcoded
+             'qwen': provenance lives per-engine slot, and `resolveWireLanguage`
+             only consults the flag for qwen anyway (coqui takes a BCP-47 code
+             for every voice). FAIL-SAFE `hasClonedProvenance`, matching
+             synthesise-chapter.ts's own `cloned` resolution — a malformed-but-
+             real cloned slot must still read as cloned. Missing cast.json →
+             false, i.e. today's behaviour. */
+          cloned: castChar ? hasClonedProvenance(castChar, engine) : false,
         });
       }
     }

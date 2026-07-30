@@ -121,6 +121,26 @@ const characters = [
     voiceId: 'v_other',
     overrideTtsVoices: { qwen: { name: 'qwen-custom-name' } },
   },
+  /* #1954 — CLONED on qwen (a voice-library clone assigned to this character).
+     The slot carries a `name`, so every `overrideTtsVoices?.qwen?.name` check
+     reads "already designed"; but the artifact lives at `qwen-<libraryUuid>`,
+     which `qwenStorageKey` (voiceUuid/voiceId-derived) cannot produce. The
+     divergence is deliberate here: `voiceUuid` and `libraryUuid` are different
+     strings, exactly as the real /assign route leaves them (it writes
+     `libraryUuid` onto the slot and never touches `character.voiceUuid`). */
+  {
+    id: 'lyra',
+    name: 'Lyra',
+    role: 'lead',
+    color: 'rose',
+    voiceId: 'v_lyra',
+    voiceUuid: 'v_lyra',
+    voiceStyle: 'a warm, low-voiced woman',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-lyra-lib-uuid', libraryUuid: 'lyra-lib-uuid', provenance: 'cloned' },
+    },
+  },
 ];
 
 /** Write a designed-voice JSON sidecar under the workspace's voices/qwen dir. */
@@ -589,6 +609,83 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     const cast = readCast();
     const maerin = cast.characters.find((c) => c.id === 'maerin') as Record<string, any>;
     expect(maerin.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+});
+
+/* #1954 — an emotion variant of a CLONED voice is refused, not anchored.
+
+   Pre-fix, the variant path computed its anchor as `qwenStorageKey(character,
+   characterId)`, which for `lyra` is `qwen-v_lyra` — while her actual cloned
+   artifact lives at `qwen-lyra-lib-uuid`. So the mint either anchored to a
+   DIFFERENT voice's `.pt` (whatever `qwen-v_lyra` happens to be) or to nothing,
+   and the variant it wrote landed under a key the render path never looks up
+   (`pickVoiceForEngine` resolves a cloned qwen slot to `qwen-<libraryUuid>`, so
+   `pickEmotionVariantVoice` asks for `qwen-lyra-lib-uuid__angry`).
+
+   The chosen resolution is REFUSAL rather than correct anchoring — see the
+   guard's own comment in qwen-voice.ts. */
+describe('#1954 — emotion variants for a CLONED voice', () => {
+  it('refuses with 409 clone_protected, never calls the sidecar, and persists nothing', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/lyra/design-voice`)
+      .send({ sampleVoiceId: 'v_lyra', modelKey: QWEN_KEY, emotion: 'angry' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+    /* Actionable, not just a refusal: it names the character and says what to
+       do instead. */
+    expect(res.body.error).toContain('Lyra');
+    expect(res.body.error).toMatch(/designed voice/i);
+
+    /* No GPU work at all — the refusal lands before the sidecar is touched. */
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    /* And nothing was written onto the cloned slot: no variants map, and the
+       clone marker is byte-identical to what was seeded. */
+    const lyra = readCast().characters.find((c) => c.id === 'lyra') as Record<string, any>;
+    expect(lyra.overrideTtsVoices.qwen).toEqual({
+      name: 'qwen-lyra-lib-uuid',
+      libraryUuid: 'lyra-lib-uuid',
+      provenance: 'cloned',
+    });
+  });
+
+  it('the refusal lives at the shared design core, so every caller is covered', async () => {
+    /* The route guard above is the UX; this is the load-bearing one. The bug
+       was reachable precisely because the anchor computation had no guard of
+       its own — a second caller (the bulk job, or any future one) reproduced
+       it. Pinning the core means the wrong anchor can no longer be COMPUTED,
+       not merely no longer offered. */
+    const { designQwenVoiceForCharacter } = await import('./qwen-voice.js');
+    const clonedCharacter = characters.find((c) => c.id === 'lyra')!;
+
+    await expect(
+      designQwenVoiceForCharacter({
+        bookDir: join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK),
+        character: clonedCharacter as never,
+        characterId: 'lyra',
+        persona: 'a warm, low-voiced woman',
+        sampleVoiceId: 'v_lyra',
+        modelKey: QWEN_KEY,
+        language: 'English',
+        emotion: 'angry',
+      }),
+    ).rejects.toThrow(/cloned voice/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT refuse a BASE design for the same cloned character (variants only)', async () => {
+    /* Scope discipline: this fix is about the variant anchor. A base design on
+       this route writes `qwen-<voiceUuid>.pt` and persists nothing, so it never
+       touches the clone — gating it too would be an unrelated behaviour change. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/lyra/design-voice`)
+      .send({ sampleVoiceId: 'v_lyra', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9000/qwen/design-voice');
   });
 });
 

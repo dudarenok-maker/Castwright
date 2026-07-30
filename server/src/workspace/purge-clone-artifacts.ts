@@ -184,7 +184,15 @@ function isSidecarNotRunning(err: unknown): boolean {
     audio). This module reads only the JSON `{ok, evicted}` shape, never
     main.py, so that caveat is otherwise invisible from here — recorded
     at the one Node-side call site both engines' evicts share. */
-async function evictSidecarVoice(
+/* #1951 — exported (was module-private) so the designed-voice self-heal in
+   clone-voice-resolver.ts can evict after restoring a manifest. That restore
+   puts the designed `language` back on disk while the sidecar's warm
+   `_prompt_cache` still holds the "English" the re-derive cached, and
+   `/qwen/evict-voice`'s own docstring names the mechanism: "the cache has no
+   on-disk mtime check". Without the evict, disk and cache disagree and a
+   sidecar RESTART silently changes the audio. The resolver takes it as an
+   INJECTED dep, never a direct import — see that module's header. */
+export async function evictSidecarVoice(
   route: 'qwen' | 'xtts',
   voiceId: string,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {

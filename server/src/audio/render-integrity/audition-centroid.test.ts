@@ -407,4 +407,59 @@ describe('auditionCentroid', () => {
     expect(result!.kind).toBe('audition');
     expect(callIdx).toBe(3);
   });
+
+  /* #1951 (M4, seam 2) — the reference must be rendered under the same
+     language the chapter was, or a cloned Qwen voice's English-manifest
+     audition becomes a false-drift generator for every non-English book. */
+  describe('#1951 — language/cloned reach every synth call', () => {
+    type SynthArgs = { language?: string; cloned?: boolean };
+
+    async function capture(character: AuditionCharacter, pcm = ABOVE_FLOOR_PCM) {
+      const calls: SynthArgs[] = [];
+      const synthFn = async (input: SynthArgs): Promise<SynthesizeOutput> => {
+        calls.push({ language: input.language, cloned: input.cloned });
+        return makeSynthOut(pcm);
+      };
+      let i = 0;
+      const embedFn = async (): Promise<Float32Array> => axisVec(0, i++);
+      await auditionCentroid(character, { synthFn, embedFn, targetN: 2, margin: 0 });
+      return calls;
+    }
+
+    it('stamps the book language and cloned flag on the primary render', async () => {
+      const calls = await capture({ ...CHARACTER, language: 'de', cloned: true });
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) {
+        expect(c.language).toBe('de');
+        expect(c.cloned).toBe(true);
+      }
+    });
+
+    /* The duration-floor retry is a SECOND synth call. Missing the pair there
+       would render half a too-short character's pool in the wrong language —
+       precisely the mixed pool that corrupts a centroid. */
+    it('stamps them on the duration-floor retry render too', async () => {
+      const calls = await capture(
+        { ...CHARACTER_WITH_EVIDENCE, language: 'de', cloned: true },
+        BELOW_FLOOR_PCM,
+      );
+      // Under-floor renders trigger the at-most-once retry per slot.
+      expect(calls.length).toBeGreaterThan(2);
+      for (const c of calls) {
+        expect(c.language).toBe('de');
+        expect(c.cloned).toBe(true);
+      }
+    });
+
+    /* Never a guessed default: an unknown book language must leave the key
+       ABSENT so `resolveWireLanguage` short-circuits and the voice's own
+       manifest language stands — byte-identical to pre-#1951 behaviour. */
+    it('omits the keys entirely when the character carries neither', async () => {
+      const calls = await capture(CHARACTER);
+      for (const c of calls) {
+        expect(c.language).toBeUndefined();
+        expect(c.cloned).toBeUndefined();
+      }
+    });
+  });
 });

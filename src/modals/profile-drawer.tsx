@@ -426,7 +426,7 @@ export function ProfileDrawer({
          a real backend — this thunk fires the assign immediately, ahead of
          Save. `charModelKey` carries a pending 1.7B tier pin, if any. */
       const intendedModelKey = modelKeyForEngineChoice(engineChoice, ttsModelKey, charModelKey);
-      const { written } = await dispatch(
+      const { written, warning } = await dispatch(
         assignVoice({
           voiceUuid: entry.voiceUuid,
           bookId,
@@ -488,6 +488,13 @@ export function ProfileDrawer({
           `“${entry.name}” can’t be used on Coqui XTTS v2 — it has no recording to derive from. ` +
             `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
         );
+      } else if (warning) {
+        /* #1953 — the assign still succeeded; the server's `warning` is a
+           non-fatal advisory (a designed voice's baked language doesn't
+           match this book's), not a failure. Reuse the same inline slot
+           the coqui-decline notice above uses — this file's existing
+           convention for a non-fatal advisory at the point of assignment. */
+        setLibraryActionError(warning);
       }
     } catch (e) {
       setLibraryActionError((e as Error).message || 'Could not assign this voice.');
@@ -1454,7 +1461,8 @@ export function ProfileDrawer({
             )}
 
             {/* fs-25 — Qwen-only emotion variant design (gated on the base voice
-                existing, handled inside the component). */}
+                existing, and — #1954 — refused outright for a cloned voice;
+                both handled inside the component, which reads `character`). */}
             {effectiveEngine === 'qwen' && bookId && (
               <EmotionVariantDesigner
                 bookId={bookId}

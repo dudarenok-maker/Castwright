@@ -36,6 +36,62 @@ import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry
 import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { coquiLanguageCode } from './voice-mapping.js';
 import { manifestSlotFor } from './clone-engines.js';
+import { sidecarLanguageName } from './language.js';
+
+/* #1951 — decide what (if anything) goes in the request's `language` field for
+   ONE synth item, given the caller's BCP-47 language and whether the voice is
+   cloned. The single place the two engines' different language contracts are
+   reconciled; both `synthesize` and each `synthesizeBatch` item run through it.
+
+   Per engine:
+     - coqui  — ALWAYS a BCP-47 code, cloned or not. Unchanged since fs-60; the
+                fs-59 W4b `zh` → `zh-cn` map applies here and NOWHERE else.
+     - qwen   — the sidecar language WORD ("German"), and ONLY for a cloned
+                voice. A cloned voice's manifest permanently says "English", so
+                without this it renders every book in English (#1951). A
+                DESIGNED qwen voice gets nothing: its manifest language is
+                already forced to match the book by
+                `clearMismatchedDesignedVoices`, so sending one would change
+                behaviour for 302 designed manifests to fix a 3-manifest case.
+     - others — nothing (kokoro/gemini ignore it).
+
+   Omitting the field is NOT an English default: the sidecar falls through to
+   the voice's manifest language, i.e. byte-identical to pre-#1951 behaviour.
+
+   `sidecarLanguageName` THROWS for a language the registry doesn't know — by
+   design, so an unsupported language can't silently ship cross-language
+   garbage. That throw must not become fatal HERE, on a path that works today:
+   `routes/voice-sample.ts` passes a client-supplied, unvalidated language, and
+   a chapter render whose language is unmappable already fails loud upstream in
+   `generation.ts` (plus chapter-splice.ts / chapter-qa-repair.ts) BEFORE any
+   synth runs. So catch it and degrade to the manifest language.
+
+   This try/catch is the ONLY thing protecting voice-sample. That route used to
+   be safe structurally too (it sent no `cloned` flag, so it could never reach
+   the mapping) — no longer: the #1951 review fix made it flag cloned voices so
+   an audition stops rendering in English on a non-English book, which is
+   exactly what puts an unvalidated language in front of `sidecarLanguageName`.
+   Removing the catch turns a working Play-sample click into a 500. Pinned by
+   `routes/voice-sample-cloned-language.test.ts`, which drives the real
+   provider through the real route. */
+function resolveWireLanguage(
+  engine: TtsEngine,
+  language: string | undefined,
+  cloned: boolean | undefined,
+): string | undefined {
+  if (language == null) return undefined;
+  if (engine === 'coqui') return coquiLanguageCode(language);
+  if (engine !== 'qwen' || !cloned) return undefined;
+  try {
+    return sidecarLanguageName(language);
+  } catch (e) {
+    console.warn(
+      `[tts] no sidecar language word for "${language}" — falling back to the voice's manifest language`,
+      e,
+    );
+    return undefined;
+  }
+}
 
 /* Re-exported from ../gpu/capacity-retry.ts (the no-capacity poll-wait counter
    moved there in Task 5, #1720) so server/src/routes/gpu-queue.ts's import
@@ -145,15 +201,16 @@ export class SidecarTtsProvider implements TtsProvider {
     voiceName,
     modelKey,
     language,
+    cloned,
     signal,
   }: SynthesizeInput): Promise<SynthesizeOutput> {
     /* fs-59 W4b — XTTS's own language table uses `zh-cn` where every other
        engine/the registry uses `zh` (Task 4b.0). Map ONLY at this
        sidecar-request boundary, and ONLY for the Coqui engine — the caller's
        `language` (and the shared `langCode` upstream that feeds
-       `expandForSpeech`) must never see the mapped code. */
-    const wireLanguage =
-      language != null && this.engine === 'coqui' ? coquiLanguageCode(language) : language;
+       `expandForSpeech`) must never see the mapped code. #1951 folded that
+       decision, and Qwen's cloned-voice case, into `resolveWireLanguage`. */
+    const wireLanguage = resolveWireLanguage(this.engine, language, cloned);
     const body = JSON.stringify({
       engine: this.engine,
       model: sidecarModelId(modelKey),
@@ -266,6 +323,7 @@ export class SidecarTtsProvider implements TtsProvider {
     items,
     modelKey,
     liveInstruct,
+    language,
     signal,
   }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
     const body = JSON.stringify({
@@ -276,12 +334,21 @@ export class SidecarTtsProvider implements TtsProvider {
          without an instruct on the liveInstruct path (PR2-Mi1). The single
          /synthesize body is unchanged (live instruct is batch-only, PR2-M3). */
       liveInstruct: liveInstruct ?? false,
-      items: items.map((it) => ({
-        voice: it.voiceName,
-        text: it.text,
-        ...(it.instruct != null ? { instruct: it.instruct } : {}),
-        ...(it.emotion != null ? { emotion: it.emotion } : {}),
-      })),
+      items: items.map((it) => {
+        /* #1951 — resolved PER ITEM, not once for the batch. A batch may MIX
+           voices, so a cloned character's line (takes the book language) can
+           sit beside a designed narrator's (keeps its manifest language) in the
+           same forward. Absent key → that item falls back to its manifest
+           language in the sidecar. */
+        const itemLang = resolveWireLanguage(this.engine, language, it.cloned);
+        return {
+          voice: it.voiceName,
+          text: it.text,
+          ...(it.instruct != null ? { instruct: it.instruct } : {}),
+          ...(it.emotion != null ? { emotion: it.emotion } : {}),
+          ...(itemLang != null ? { language: itemLang } : {}),
+        };
+      }),
     });
 
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */

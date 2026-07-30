@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 23 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 24 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**40 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**41 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -642,6 +642,50 @@ failure path on a live render.
 so treat it as opportunistic (catch one if ffmpeg genuinely fails during a render)
 rather than something to engineer. *Criteria:* plan 274 §6 row 3. *Cost:* short,
 opportunistic.
+
+### A24 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
+
+Before this fix a cloned Qwen voice rendered **every** book, in every language, as
+English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
+clone's manifest always said `"English"`. The unit and pytest coverage asserts the
+*mechanism* (the right language reaches `generate_voice_clone`). Only a real render
+proves the *outcome*, and the outcome is what the bug destroyed.
+
+The criterion is deliberately outcome-level, because a mechanism-level assertion is
+exactly what would have let the original defect ship: the batch path carries the
+language separately from the title beat, and a fix covering only one of them passes
+every mechanism test while leaving the whole book wrong.
+
+- Cast a **cloned** voice onto a character with dialogue in a non-English book and
+  render one chapter. Transcribe the output through the sidecar's `/transcribe` with
+  Whisper **auto-detect** (send no `x-language`). **Pass = the detected language is
+  the book's, and `avg_logprob` is better than ≈ −0.5.** Measured 2026-07-30 on the
+  pre-fix build for reference: detected `en`, `avg_logprob` **−1.303**,
+  unintelligible; with the language corrected, `de` at **−0.366**; a natively
+  designed German control scored **−0.201**.
+- Confirm `characterSnapshots.<id>.resolvedVoiceName` is still the clone's storage
+  key — the never-substitute guarantee must hold while the language changes.
+- **Check the chapter title too, not just the sentences.** The title beat is the only
+  `/synthesize` call in an otherwise batched chapter, so a regression there hides
+  behind correct-sounding body audio.
+- Render with a **designed self-healed** voice, restart the sidecar, render again —
+  the two must be audibly identical. This is the cache-vs-disk divergence half;
+  before the fix the warm cache and the on-disk manifest disagreed, so a restart
+  silently changed the output.
+- **Then open the chapter's QA report and check the cloned character has no
+  `voice-mismatch` rows.** The speaker-drift detector compares each segment against
+  a reference the server renders itself (`auditionCentroid`), and that reference now
+  carries the book's language too — an English reference against a German chapter
+  would flag the voice as drifting when nothing is wrong. Only reachable with a
+  character thin enough on in-book anchors to trigger the audition fallback (a
+  few-line character is the easy way), so treat it as opportunistic within this same
+  render rather than something to engineer.
+
+*Needs:* a single GPU with Qwen resident, a non-English book, and ASR available
+(`ASR_DEVICE` and `ASR_COMPUTE_TYPE` must agree — a `cpu` device with a pinned
+`int8_float16` makes every `/transcribe` 500). **Run with A1's remaining Section C/D
+items** — same box, same book, same sidecar session. *Criteria:* plan 275
+§"On-box acceptance". *Cost:* one chapter render plus a sidecar restart.
 
 ---
 

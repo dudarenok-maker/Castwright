@@ -24,6 +24,18 @@ export interface CloneSampleCandidateResult {
   durationSeconds: number;
   sampleRate: number;
   qualityWarnings: string[];
+  /** #1951 — the language Whisper DETECTED in the reference clip, BCP-47-ish
+      (`'de'`), or null when it reported none. Previously discarded here, which
+      is why `deriveEngineArtifact` had nothing to put in `X-Language` and every
+      cloned voice's manifest read "English" — mislabelling the voice in the
+      library and making the wizard's completion audition speak the wrong
+      language. Returned verbatim by `POST /api/voice-library/clone-sample`, so
+      it IS part of the wire contract — documented as
+      `CloneSampleCandidate.detectedLanguage` in openapi.yaml. It also lands on
+      the entry's existing `languageCode` field, but only after `/clone`
+      validates it against the supported-language registry; the value here is
+      RAW (see `VoiceMaster.languageCode`). */
+  detectedLanguage: string | null;
 }
 
 export async function ingestCloneSample(
@@ -50,9 +62,27 @@ export async function ingestCloneSample(
 
   await writeCandidate(
     opts.candidateId,
-    { sampleRate, durationSeconds: quality.durationSeconds, transcript, transcriptSource: 'whisper', captureMethod: opts.captureMethod },
+    {
+      sampleRate,
+      durationSeconds: quality.durationSeconds,
+      transcript,
+      transcriptSource: 'whisper',
+      captureMethod: opts.captureMethod,
+      /* #1951 — persisted because `POST /clone` is a SEPARATE request and the
+         candidate's master is the only state that survives between the two.
+         Omit the key entirely when Whisper reported no language, so "unknown"
+         stays distinguishable from a real detection. */
+      ...(t.language ? { languageCode: t.language } : {}),
+    },
     wav,
   );
 
-  return { candidateId: opts.candidateId, transcript, durationSeconds: quality.durationSeconds, sampleRate, qualityWarnings: quality.warnings };
+  return {
+    candidateId: opts.candidateId,
+    transcript,
+    durationSeconds: quality.durationSeconds,
+    sampleRate,
+    qualityWarnings: quality.warnings,
+    detectedLanguage: t.language,
+  };
 }

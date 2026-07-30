@@ -3,7 +3,8 @@
    existing — until then the controls are replaced by a "Design the main voice
    first" hint (a variant is designed from the persona + an emotion clause, and
    only makes sense once the base identity is set). Neutral is the base, never a
-   variant.
+   variant. #1954 — gated OFF entirely for a CLONED voice, matching the server's
+   409 `clone_protected`.
 
    Each variant designs INDEPENDENTLY via the existing design route (Wave 3,
    `api.designQwenVoice` with `emotion`); designing one never blocks the others,
@@ -102,6 +103,36 @@ export function EmotionVariantDesigner({
       setPlayBusy((p) => ({ ...p, [emotion]: false }));
     }
   };
+
+  /* #1954 — a cloned voice cannot carry emotion variants; the server refuses
+     with 409 `clone_protected` (routes/qwen-voice.ts, which documents why
+     refusal rather than correct anchoring is the resolution). Gated here too
+     rather than left to the round-trip, for the same reason the drawer's
+     Design button is: api.ts's mock layer is stateless for cast, so under
+     mock/e2e/dev it would happily "design" a cloned character's variant.
+
+     Derived from `character` rather than taken as a prop deliberately — the
+     entire defect was a gate that existed on one branch and not another, so
+     there is no version of this the caller can forget to pass. Reads the
+     whole character (qwen OR coqui), matching the server's
+     `characterHasClonedSlot` and the drawer's existing cloned check; a
+     coqui-cloned character loses nothing, since Qwen emotion variants are
+     never read on another engine.
+
+     Checked BEFORE `baseDesigned`: a cloned slot carries a name, so
+     `baseDesigned` is true for exactly the characters this must refuse —
+     which is why the old `!baseDesigned`-only gate let them through. */
+  const cloned =
+    character.overrideTtsVoices?.qwen?.provenance === 'cloned' ||
+    character.overrideTtsVoices?.coqui?.provenance === 'cloned';
+  if (cloned) {
+    return (
+      <p data-testid="variant-cloned-hint" className="text-xs text-ink/50 mt-2">
+        {character.name} uses a cloned voice, so emotion variants are unavailable — they are
+        only offered for a designed voice. Assign a designed voice to add them.
+      </p>
+    );
+  }
 
   if (!baseDesigned) {
     return (

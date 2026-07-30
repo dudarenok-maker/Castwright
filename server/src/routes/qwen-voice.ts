@@ -51,6 +51,7 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { nanoid } from 'nanoid';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
@@ -88,6 +89,20 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
   Emotion,
   'neutral'
 >[];
+
+/* #1954 — the single refusal message for "you cannot mint an emotion variant
+   of a cloned voice", shared by the route's 409 and the design core's throw so
+   the two can never drift. Names the character and says what to do instead —
+   a bare "not supported" leaves the user with no next step. */
+export function clonedVariantRefusal(name: string): string {
+  return (
+    `"${name}" uses a cloned voice, so emotion variants are unavailable — ` +
+    `they are only offered for a designed voice. Minting one would re-derive a ` +
+    `new performance of a real person's voice under a key their consent record ` +
+    `does not cover and revoking consent does not erase. Assign a designed ` +
+    `voice to this character to use emotion variants.`
+  );
+}
 
 /* Emotion delivery clause sent to /qwen/mint-variant as `emotionInstruct`.
    The base persona is already baked into the base voice identity; this clause
@@ -309,6 +324,58 @@ export interface DesignQwenVoiceParams {
 export async function designQwenVoiceForCharacter(
   p: DesignQwenVoiceParams,
 ): Promise<{ voiceId: string; url: string; fellBackToDesignVoice?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }> {
+  /* #1954 — a VARIANT of a cloned voice is refused, not anchored. The guard
+     sits here, at the choke point where the anchor is computed, because that
+     is what made the defect reachable: `qwenStorageKey` below derives a
+     DESIGNED-voice key (`qwen-<voiceUuid|voiceId>`), while a cloned voice's
+     artifact lives at `qwen-<libraryUuid>` — a key `qwenStorageKey` cannot
+     produce. So the mint anchored to a different voice's `.pt` (or to
+     nothing), and wrote the variant under a key the render path never looks
+     up (`pickVoiceForEngine` resolves a cloned qwen slot to
+     `qwen-<libraryUuid>`, so `pickEmotionVariantVoice` asks for
+     `qwen-<libraryUuid>__<emotion>`). Same `qwenStorageKey`-vs-`libraryUuid`
+     confusion documented at tts/verify-designed-voice-language.ts:45-47.
+
+     WHY REFUSE rather than fix the anchor (the issue left the choice open):
+     `mint_variant` (tts-sidecar/main.py) would in fact accept a cloned `.pt`
+     — a clone prompt and a designed prompt are the same `create_voice_clone_
+     prompt` object — so anchoring is technically possible. It is nonetheless
+     the wrong answer here, for three reasons that all point the same way:
+
+       1. A minted variant is not the person's voice; it is the 1.7B model's
+          re-performance of them, decoded and re-distilled through an
+          emotion instruct ("explosive, furious rage"). Whether a consented
+          clone may be re-performed that way is a product/consent decision
+          — the consent record (personName/relationship/permittedUse) has no
+          dimension for it — not something a bug fix should settle silently.
+       2. The variant would be UNERASABLE by consent revocation.
+          `purgeCloneArtifacts` (workspace/purge-clone-artifacts.ts) matches
+          on `name === key || name.startsWith(key + '.')`; the boundary is a
+          literal `.`, so `qwen-<uuid>__angry.pt` matches neither. Revoke
+          would report clean erasure while a derived artifact of a real
+          person survived on disk — the exact class of hole that module was
+          written to close.
+       3. `mint_variant` never writes `"clone": true` into the variant
+          manifest, so the variant would also lose its clone provenance at
+          the sidecar level. Fixing that reaches into main.py, and covering
+          (2) reaches into the consent-erasure module — i.e. correct
+          anchoring is a feature with its own blast radius, and features go
+          through design, not through this fix.
+
+     Whole-character `characterHasClonedSlot` (the fail-safe, provenance-only
+     predicate), matching the base branch at cast-design.ts and the identical
+     guard in single-design.ts — deliberately NOT the uuid-validating
+     resolution predicates, so a malformed cloned slot still refuses. A
+     coqui-cloned character loses nothing: `pickEmotionVariantVoice` is a
+     strict no-op for every engine except qwen, so a qwen variant would never
+     have been read for it anyway.
+
+     Unreachable from the two callers today (the route below answers 409 first
+     and the bulk job skips first) — deliberately. This is the invariant; those
+     are the two places that report it nicely. */
+  if (p.emotion && characterHasClonedSlot(p.character)) {
+    throw new Error(clonedVariantRefusal(p.character.name ?? p.characterId));
+  }
   const baseVoiceId = qwenStorageKey(p.character, p.characterId);
   const designedId = p.emotion ? `${baseVoiceId}__${p.emotion}` : baseVoiceId;
   const voiceId = p.preview ? previewVoiceIdFor(designedId) : designedId;
@@ -449,9 +516,17 @@ qwenVoiceRouter.post(
       });
     }
     /* fs-2 — design the voice in the BOOK's language. The sidecar bakes this
-       into the cached voice manifest, so every later /synthesize of this
-       voice speaks the right language (synth itself carries no language).
-       A Russian book therefore yields Russian-speaking designed voices. */
+       into the cached voice manifest, and for a DESIGNED voice that manifest
+       language is what every later synth speaks. A Russian book therefore
+       yields Russian-speaking designed voices.
+
+       #1951 corrected the parenthetical that used to sit here ("synth itself
+       carries no language"): synth now CAN carry one. Node sends a per-request
+       language for a CLONED voice only, where it overrides the manifest — a
+       clone's manifest permanently says "English", so without it a clone reads
+       every book in English. Designed voices are unaffected: no language is
+       sent for them, so the baked manifest word still wins, exactly as before.
+       See tts/sidecar.ts `resolveWireLanguage`. */
     const designLanguage = sidecarLanguageName(bookStateLanguage(located.state));
 
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
@@ -463,6 +538,22 @@ qwenVoiceRouter.post(
     const character = cast.characters.find((c) => c.id === characterId);
     if (!character) {
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    /* #1954 — refuse an emotion variant for a cloned character. The design
+       core holds the same invariant (see its comment for WHY refusal is the
+       chosen resolution); this is the user-facing half, refused before any
+       persona resolution or GPU work so the answer is an honest 409 rather
+       than a 502 from the core's throw. Mirrors single-design.ts's
+       `clone_protected` 409 — same code, so the drawer's existing handling
+       reads it identically. Only the VARIANT path is gated: a base design on
+       this route writes `qwen-<voiceUuid>.pt` and persists no override, so it
+       never touches the clone. */
+    if (emotion && characterHasClonedSlot(character)) {
+      return res.status(409).json({
+        error: clonedVariantRefusal(character.name ?? characterId),
+        code: 'clone_protected',
+      });
     }
 
     /* Persona precedence: explicit body wins, else the persisted

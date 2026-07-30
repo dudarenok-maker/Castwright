@@ -65,7 +65,7 @@ const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?:
 /* fs-38 Wave 1, Task 16 — "My voices" picker + "Save to my voices". */
 const assignLibraryVoice = vi.fn(
   (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
-    Promise.resolve<{ updated: number; written: ('qwen' | 'coqui')[] }>({
+    Promise.resolve<{ updated: number; written: ('qwen' | 'coqui')[]; warning?: string }>({
       updated: 1,
       written: ['qwen'],
     }),
@@ -2276,6 +2276,29 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     // The partial result is surfaced, not swallowed.
     expect(screen.getByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
       'can’t be used on Coqui XTTS v2',
+    );
+  });
+
+  /* #1953 — the server assigns successfully (200) but flags a designed
+     voice's baked language mismatch as a non-fatal `warning`. The drawer
+     must surface it at the point of assignment, not swallow a 200 as
+     silent success. */
+  it('#1953 surfaces the server\'s language-mismatch warning after a successful assign', async () => {
+    assignLibraryVoice.mockResolvedValue({
+      updated: 1,
+      written: ['qwen'],
+      warning:
+        '"Ada"\'s voice was designed in Russian but this book is English — the audio will be unintelligible. Re-design the voice in English to fix it.',
+    });
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: myVoicesFixture },
+    );
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib1'));
+
+    expect(await screen.findByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
+      'designed in Russian but this book is English',
     );
   });
 

@@ -4015,6 +4015,21 @@ export interface components {
             transcriptSource: "whisper" | "user";
             /** @enum {string} */
             captureMethod: "upload" | "record";
+            /**
+             * @description #1951 — the RAW language Whisper detected in this clip, exactly as
+             *     it reported it, when it reported one. Absent on a pre-#1951 clip and
+             *     on one Whisper could not classify; treat missing as "unknown", never
+             *     as English.
+             *
+             *     NOT validated: unlike `VoiceLibraryEntry.languageCode` — which is
+             *     gated on the supported-language registry and is the field to render
+             *     or act on — this can hold a code the app does not support (`kl`), so
+             *     for a clip in an unsupported language the entry has NO
+             *     `languageCode` while `master.languageCode` still names it. That is
+             *     deliberate: it is the only surviving record of what Whisper actually
+             *     heard, and it answers "why has my clone no language?".
+             */
+            languageCode?: string;
         };
         CloneSampleCandidate: {
             candidateId: string;
@@ -4022,6 +4037,14 @@ export interface components {
             durationSeconds: number;
             sampleRate: number;
             qualityWarnings: string[];
+            /**
+             * @description #1951 — the language Whisper detected in the uploaded clip
+             *     (BCP-47-ish, e.g. `de`), or null when it reported none. Raw and
+             *     unvalidated, the same value persisted as
+             *     `VoiceMaster.languageCode`; `POST /api/voice-library/clone` is what
+             *     later validates it into the entry's own `languageCode`.
+             */
+            detectedLanguage: string | null;
             clipPreviewUrl?: string;
         };
         VoiceLibraryEntry: {
@@ -8010,6 +8033,17 @@ export interface operations {
                          *     UI shows an assignment the server declined to make.
                          */
                         written: ("qwen" | "coqui")[];
+                        /**
+                         * @description Non-fatal advisory (#1953) — set when a DESIGNED voice's baked
+                         *     manifest language differs from the book's language. The
+                         *     assignment still succeeds; this is a warning, never a 409 (see
+                         *     the cloned-voice wrong-engine 409 below, which is a distinct,
+                         *     unrelated guard). Applies on an English book as well as a
+                         *     non-English one. Absent for a cloned/imported entry (which has
+                         *     no baked design language) and for a matching-language designed
+                         *     voice.
+                         */
+                        warning?: string | null;
                     };
                 };
             };

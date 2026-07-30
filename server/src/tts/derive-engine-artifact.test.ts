@@ -131,3 +131,53 @@ describe('deriveEngineArtifact (engine validation)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+/* #1951 — the clone's own manifest language. Without `X-Language` the sidecar
+   computes `lang = DEFAULT_LANGUAGE`, which is why every cloned voice's
+   manifest has always read "English" — mislabelling the voice in the library
+   and making the wizard's completion audition speak the wrong language. */
+describe('deriveEngineArtifact — X-Language (#1951)', () => {
+  function headersOf(spy: ReturnType<typeof vi.spyOn>) {
+    const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    return init.headers as Record<string, string>;
+  }
+
+  it('sends X-Language on a qwen derive when input.language is set', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'abc',
+      'qwen',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000, refText: 't', language: 'German' },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Language']).toBe('German');
+  });
+
+  it('sends X-Language on a coqui derive too (the sidecar reads it on both branches)', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'u1',
+      'coqui',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000, language: 'German' },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Language']).toBe('German');
+  });
+
+  it('omits X-Language entirely when no language is known, leaving the sidecar default', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'abc',
+      'qwen',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000, refText: 't' },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Language']).toBeUndefined();
+  });
+});

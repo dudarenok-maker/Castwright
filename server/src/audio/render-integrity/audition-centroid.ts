@@ -47,6 +47,21 @@ export interface AuditionCharacter {
   voice: VoiceLike;
   /** Optional hint carrying evidence quotes; absent = canned fallback text. */
   hint?: CharacterHint;
+  /** #1951 — the BOOK's BCP-47 language, i.e. the language the chapter audio
+   *  this reference is compared against was rendered in. Threaded for the same
+   *  reason `modelKey` is (see the caller's renderKey comment in aggregate.ts):
+   *  an audition rendered under different synth parameters than the chapter
+   *  produces embeddings that aren't comparable to the in-book anchors. Absent
+   *  when the book's language is genuinely unknown — that degrades to the
+   *  voice's own manifest language, never to a guessed English. */
+  language?: string;
+  /** #1951 — true when this character's voice on the rendering engine is
+   *  CLONED (`hasClonedProvenance`). Qwen-only in effect: a clone's manifest
+   *  permanently says "English", so without this its audition renders English
+   *  while the chapter renders German — a new source of false drift flags.
+   *  See `SynthesizeInput.cloned`; `resolveWireLanguage` owns the per-engine
+   *  decision, this only reports the fact. */
+  cloned?: boolean;
 }
 
 /** Injection seams for unit tests (default to the real implementations). */
@@ -56,6 +71,8 @@ export interface AuditionCentroidOpts {
     text: string;
     voiceName: string;
     modelKey: TtsModelKey;
+    language?: string;
+    cloned?: boolean;
   }) => Promise<SynthesizeOutput>;
   /** Override the embed fn (default: embedSegment). */
   embedFn?: (pcm: Buffer, sampleRate: number) => Promise<Float32Array>;
@@ -140,15 +157,29 @@ export async function auditionCentroid(
   character: AuditionCharacter,
   opts?: AuditionCentroidOpts,
 ): Promise<{ centroid: Float32Array; embeddings: Float32Array[]; kind: 'audition' | 'too-short' } | null> {
-  const { voiceName, modelKey, voice, hint } = character;
+  const { voiceName, modelKey, voice, hint, language, cloned } = character;
   const targetN = opts?.targetN ?? AUDITION_POOL_TARGET_N;
   const margin = opts?.margin ?? AUDITION_POOL_MARGIN;
   const existingAnchors = opts?.existingAnchors ?? [];
 
   const synth =
     opts?.synthFn ??
-    ((input: { text: string; voiceName: string; modelKey: TtsModelKey }) =>
-      selectTtsProvider(input.modelKey).synthesize(input));
+    ((input: {
+      text: string;
+      voiceName: string;
+      modelKey: TtsModelKey;
+      language?: string;
+      cloned?: boolean;
+    }) => selectTtsProvider(input.modelKey).synthesize(input));
+
+  /* #1951 — every audition render carries the SAME language/cloned pair, so
+     build it once. Spread (rather than passing `undefined`) so an absent book
+     language stays an absent key on the wire: `resolveWireLanguage` short-
+     circuits on `language == null`, which is exactly today's behaviour. */
+  const langArgs = {
+    ...(language != null ? { language } : {}),
+    ...(cloned != null ? { cloned } : {}),
+  };
   const embed = opts?.embedFn ?? embedSegment;
 
   /** One render+floor-retry+embed attempt. Returns the embedding on
@@ -157,12 +188,12 @@ export async function auditionCentroid(
    *  "sidecar unavailable, bail entirely"); a throw from the RETRY synth
    *  call is swallowed (keeps the original under-floor render). */
   async function renderAndEmbed(text: string, retryText: string | null): Promise<Float32Array | null> {
-    const primary = await synth({ text, voiceName, modelKey });
+    const primary = await synth({ text, voiceName, modelKey, ...langArgs });
     let { pcm, sampleRate } = primary;
 
     if (!isAboveFloor(pcm, sampleRate) && retryText !== null) {
       try {
-        const extended = await synth({ text: `${text} ${retryText}`, voiceName, modelKey });
+        const extended = await synth({ text: `${text} ${retryText}`, voiceName, modelKey, ...langArgs });
         pcm = extended.pcm;
         sampleRate = extended.sampleRate;
       } catch {

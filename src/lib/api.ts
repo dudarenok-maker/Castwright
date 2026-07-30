@@ -10051,6 +10051,11 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
     durationSeconds: 9,
     sampleRate: 24_000,
     qualityWarnings: [],
+    /* #1951 — `null` is the real "Whisper reported no language" value, not a
+       stand-in for a missing field: mock mode never runs Whisper, so claiming a
+       detection here would make the mock wizard label a clone with a language
+       nothing detected. */
+    detectedLanguage: null,
   };
 }
 
