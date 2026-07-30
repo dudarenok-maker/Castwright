@@ -660,6 +660,16 @@ export const KNOBS: ConfigKnob[] = [
     default: false, // ← PRELOAD_QWEN_BASE17 default in tts-sidecar/main.py (_parse_bool default=False)
     apply: 'restart-sidecar', risk: 'high',
   },
+  {
+    key: 'tts.coqui.pinImportOrder',
+    env: 'COQUI_PIN_IMPORT_ORDER',
+    group: 'tts-engine',
+    label: 'Pin Coqui import order at startup',
+    help: 'When true (default), a sidecar that ACTUALLY USES COQUI synchronously imports TTS.api at startup, before an ECAPA (#1944) speaker-embed can plant speechbrain\'s lazy-proxy modules in sys.modules and make a later Coqui load fail with a misleading ImportError. Gated on the XTTS v2 weights being present on disk, not merely on the coqui-tts package (which ships as an ordinary dependency and is always installed) — so Qwen-only and Kokoro-only installs pay nothing. Where it does apply the cost is real and measured: the sidecar is UNREACHABLE for ~14.6 s at boot versus ~2.9 s without it, because uvicorn binds its socket only after startup completes. Turning this off leaves the sidecar\'s unconditional sys.modules eviction (which runs on every ECAPA load, always on) as the remaining protection. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: true, // ← COQUI_PIN_IMPORT_ORDER default in tts-sidecar/main.py (_pin_coqui_import_order, _parse_bool default=True)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
 
   // ── gpu-lifecycle ─────────────────────────────────────────────────────────
   {

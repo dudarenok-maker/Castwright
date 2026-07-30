@@ -53,6 +53,40 @@ def test_health_exposes_whisper_package_installed(client: TestClient) -> None:
     assert isinstance(body["whisper_package_installed"], bool)
 
 
+# ── coqui_import_ok (#1944) — sticky, real-import-attempt truth ─────────
+#
+# Distinct from coqui_package_installed's find_spec-only probe above, which
+# can report "installed" for a package that genuinely cannot load (the
+# speechbrain lazy-proxy collision #1944 fixes). None until a real
+# `from TTS.api import TTS` has been attempted (the eager startup pin or a
+# real CoquiEngine._ensure_loaded cold-load); True/False after that.
+
+
+def test_health_exposes_coqui_import_ok_as_none_before_any_attempt(
+    client: TestClient, monkeypatch
+) -> None:
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", None)
+    body = client.get("/health").json()
+    assert "coqui_import_ok" in body
+    assert body["coqui_import_ok"] is None
+
+
+def test_health_exposes_coqui_import_ok_false_after_a_failed_import(
+    client: TestClient, monkeypatch
+) -> None:
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", False)
+    body = client.get("/health").json()
+    assert body["coqui_import_ok"] is False
+
+
+def test_health_exposes_coqui_import_ok_true_after_a_successful_import(
+    client: TestClient, monkeypatch
+) -> None:
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", True)
+    body = client.get("/health").json()
+    assert body["coqui_import_ok"] is True
+
+
 # ── Monkeypatching the module-level helpers affects /health ─────────────
 
 
