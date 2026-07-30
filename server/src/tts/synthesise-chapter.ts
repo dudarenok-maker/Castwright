@@ -52,7 +52,7 @@ import {
   entryDir,
   type VoiceLibraryEntry,
 } from '../workspace/voice-library.js';
-import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
+import { purgeCloneArtifacts, evictSidecarVoice } from '../workspace/purge-clone-artifacts.js';
 import { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { getLastKnownCoquiVersion } from './coqui-version-state.js';
@@ -64,6 +64,7 @@ import {
   characterHasClonedSlot,
   hasClonedProvenance,
   libraryVoiceForEngine,
+  cloneStorageKey,
 } from './clone-engines.js';
 import { decodeAudioToPcm } from './mp3.js';
 import {
@@ -1207,6 +1208,10 @@ function buildDefaultDesignedResolverDeps(
     ptExists: defaultPtExists,
     readDesignedMasterPcm: readDesignedMasterPcmDefault,
     writeSidecarManifest: writeSidecarManifestDefault,
+    /* #1951 — the manifest restore above is only effective if the sidecar's
+       warm prompt cache is dropped too; see the dep's doc comment. The route
+       is keyed by the qwen STORAGE KEY, not the bare uuid. */
+    evictSidecarVoice: (uuid) => evictSidecarVoice('qwen', cloneStorageKey('qwen', uuid)),
     readEntry,
     writeEntry,
     updateEntry,
@@ -2110,6 +2115,11 @@ export async function synthesiseChapter(
               voiceName: narratorVoice,
               modelKey: titleRoute.modelKey,
               language: langCode,
+              /* #1951 — the title beat is a SEPARATE synth from the body's, and
+                 in a normally-batched Qwen chapter it is the ONLY /synthesize
+                 call. Omitting the flag here would render a German book under
+                 an English chapter title. */
+              cloned: hasClonedProvenance(narratorChar, 'qwen'),
               signal: sig,
             }),
           { signal: sig },
@@ -2150,7 +2160,13 @@ export async function synthesiseChapter(
      `pickVoiceForEngine` runs at most once per group even though both consult
      it. Mixed engines reassemble cleanly because the index-order concat below
      resamples any per-engine sample-rate mismatch to the chapter anchor. */
-  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine; configuredEngine: TtsEngine };
+  /* `cloned` (#1951) — is this group's character backed by a CLONED Qwen voice?
+     Resolved here, alongside the route, because both synth call sites need it
+     and `resolveGroup` already owns the orphaned-character fallback that
+     decides WHICH character actually speaks the line. It reaches the sidecar as
+     the book language on the wire; a designed voice sends none and keeps its
+     manifest language. See `SynthesizeInput.cloned`. */
+  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine; configuredEngine: TtsEngine; cloned: boolean };
   const resolvedByIndex = new Map<number, GroupRoute>();
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
@@ -2214,6 +2230,16 @@ export async function synthesiseChapter(
           : undefined,
       ),
       configuredEngine,
+      /* Tested against 'qwen' specifically — the only engine whose synth honours
+         a per-request language for clones. Coqui gets a BCP-47 code for EVERY
+         voice regardless, so its own cloned slots need no flag. Uses the
+         FAIL-SAFE `hasClonedProvenance` (not the uuid-validating
+         `clonedSlotForEngine`), matching the cloned-voice exemption at
+         verify-designed-voice-language.ts:55 that this flag exists to complete.
+         Emotion variants fall out for free: the VARIANT voiceId is what gets
+         synthesised, but provenance lives on the CHARACTER, so a variant of a
+         cloned voice is still flagged. */
+      cloned: hasClonedProvenance(character, 'qwen'),
     };
     resolvedByIndex.set(group.index, r);
     return r;
@@ -2305,7 +2331,7 @@ export async function synthesiseChapter(
      flaky transients; non-transient throws bubble out as today's
      `chapter_failed`. */
   async function synthGroup(group: SentenceGroup): Promise<GroupResult> {
-    const { route, voiceName } = resolveGroup(group);
+    const { route, voiceName, cloned } = resolveGroup(group);
     return withHeartbeat(group, () =>
       withCallTimeout('synthesize', (sig) =>
         withTtsRetry(
@@ -2315,6 +2341,7 @@ export async function synthesiseChapter(
               voiceName,
               modelKey: route.modelKey,
               language: langCode,
+              cloned,
               signal: sig,
             }),
           {
@@ -2364,10 +2391,14 @@ export async function synthesiseChapter(
        this), so one derivation covers the whole batch. */
     const is17b = route.modelKey === 'qwen3-tts-1.7b';
     const items = batchGroups.map((g) => {
-      const { voiceName } = resolveGroup(g);
+      const { voiceName, cloned } = resolveGroup(g);
       return {
         text: normaliseForTts(g.text, langCode),
         voiceName,
+        /* #1951 — per ITEM, because this batch may mix a cloned character's
+           line with a designed narrator's and they need different languages
+           in the same forward. The language itself is batch-level below. */
+        cloned,
         /* 1.7B implies prosody — attach the resolved instruct phrase when is17b.
            resolveInstructForGroup returns {} when is17b=false,
            so the spread is a no-op on the 0.6B path. */
@@ -2380,7 +2411,17 @@ export async function synthesiseChapter(
     const out = await withHeartbeat(lead, () =>
       withCallTimeout('batch', (sig) =>
         withTtsRetry(
-          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, liveInstruct: is17b, signal: sig }),
+          () =>
+            batchFn.call(route.provider, {
+              items,
+              modelKey: route.modelKey,
+              liveInstruct: is17b,
+              /* #1951 — one chapter = one book = one language. Per-item
+                 `cloned` above decides which items actually put it on the
+                 wire. */
+              language: langCode,
+              signal: sig,
+            }),
           {
             signal: sig,
             onRetry: (info) =>

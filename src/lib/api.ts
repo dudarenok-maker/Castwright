@@ -10051,6 +10051,11 @@ export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSample
     durationSeconds: 9,
     sampleRate: 24_000,
     qualityWarnings: [],
+    /* #1951 — `null` is the real "Whisper reported no language" value, not a
+       stand-in for a missing field: mock mode never runs Whisper, so claiming a
+       detection here would make the mock wizard label a clone with a language
+       nothing detected. */
+    detectedLanguage: null,
   };
 }
 
@@ -10086,7 +10091,16 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     provenance: 'cloned',
     tags: [],
     pinned: false,
-    consent: { ...body.consent, attestedAt: now, attestedBy: body.consent.personName },
+    /* #1943 — mirror the real route here too: the attester is not necessarily
+       the person being cloned, and hardcoding personName made the mock
+       reproduce the very bug the real path just fixed (a guardian-of-minor
+       record claiming the child attested for themselves). Same trim +
+       blank-falls-back-to-personName normalisation as validateConsentDraft. */
+    consent: {
+      ...body.consent,
+      attestedAt: now,
+      attestedBy: body.consent.attestedBy?.trim() || body.consent.personName,
+    },
     master: {
       clipFile: 'master.wav',
       sampleRate: 24_000,

@@ -104,6 +104,15 @@ interface SidecarHealthBody {
   /* Task 8 — per-engine pip-importability booleans from the sidecar's
      find_spec probe. Absent on an older sidecar → false (default-safe). */
   coqui_package_installed?: boolean;
+  /* #1944 — sticky, real-import-attempt truth from the sidecar, distinct
+     from `coqui_package_installed`'s find_spec-only probe above (which can
+     say "installed" for a package that genuinely cannot load — the
+     speechbrain lazy-proxy collision this field exists to catch). `null`
+     until the sidecar has attempted a real `from TTS.api import TTS` (the
+     eager startup pin or a real cold-load); `true`/`false` after that.
+     Absent on an older sidecar predating this field → behaves exactly like
+     `null` (see deriveCoquiInstallState). */
+  coqui_import_ok?: boolean | null;
   /* fs-38 Wave 3c, Task 20 fix round 1 (IMPORTANT-1) — the wire counterpart
      of `qwen_weights_present`: a real stat() of the XTTS v2 `model.pth`
      blob, from the sidecar's OWN box. Absent on an older sidecar predating
@@ -263,9 +272,20 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
      - `coqui_package_installed` absent (an even older sidecar predating
        BOTH fields): no wire signal for EITHER half, so this falls back to
        the full local disk probe — unchanged from this function's original
-       (pre-fix-round) behaviour, and no worse than it was. */
+       (pre-fix-round) behaviour, and no worse than it was.
+
+     #1944 — `coqui_import_ok: false` (a REAL attempted `from TTS.api import
+     TTS` failed, not just a find_spec probe) is checked right after
+     `model_loaded` and BEFORE `coqui_package_installed`: it is stronger
+     evidence than a package-installed boolean that never actually imports,
+     and it means the engine genuinely cannot start regardless of what that
+     boolean says. `undefined`/`null` (an older sidecar, or no real attempt
+     yet) falls through unchanged to the existing package/weights logic
+     below — this field only ever narrows, never contradicts, that
+     behaviour. */
 function deriveCoquiInstallState(body: SidecarHealthBody): CloneEngineInstallState {
   if (body.model_loaded === true) return 'loaded';
+  if (body.coqui_import_ok === false) return 'not-installed';
   if (body.coqui_package_installed === false) return 'not-installed';
   if (body.coqui_package_installed === true) {
     const weightsPresent =

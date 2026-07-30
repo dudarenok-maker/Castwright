@@ -667,6 +667,7 @@ async def _lifespan(_app: FastAPI):
     await _start_spk_idle_watchdog()
     await _start_device_probe()
     await _start_memory_watchdog()
+    await _pin_coqui_import_order()
     await _preload_default_engines()
     await _startup_cuda_env_shadow_check()
     try:
@@ -1216,6 +1217,24 @@ class Engine:
         raise NotImplementedError
 
 
+# (#1944) Sticky, once-a-real-attempt-has-happened import status for the Coqui
+# import chain. `None` until either the eager startup pin
+# (`_pin_coqui_import_order`, gated by COQUI_PIN_IMPORT_ORDER) or a real
+# `CoquiEngine._ensure_loaded` cold-load has attempted `from TTS.api import
+# TTS`; `True`/`False` after that, reflecting the most recent real attempt.
+# Exists because `_coqui_package_installed()` is a `find_spec`-only probe that
+# never imports — it can report "installed" for a package that genuinely
+# cannot load (the speechbrain lazy-proxy collision this issue fixes), which
+# is exactly what let /health advertise an engine Section E's acceptance run
+# then found unloadable. `/health`'s `coqui_import_ok` field surfaces this.
+_COQUI_IMPORT_OK: Optional[bool] = None
+
+
+def _record_coqui_import_result(ok: bool) -> None:
+    global _COQUI_IMPORT_OK
+    _COQUI_IMPORT_OK = ok
+
+
 class CoquiEngine(Engine):
     """Coqui XTTS v2 via the `TTS` package. The model is loaded once on first
     call. XTTS speaks ~24 kHz; we down/up nothing — emit at native rate and
@@ -1477,16 +1496,14 @@ class CoquiEngine(Engine):
             # Surface the *actual* import error so the Node-side log/UI carries
             # a useful diagnostic (torch missing vs TTS missing vs a third-party
             # incompatibility) instead of a one-size-fits-all message.
-            try:
-                from TTS.api import TTS  # type: ignore
-            except ImportError as e:
-                raise RuntimeError(
-                    f"Failed to import coqui-tts ({e}). "
-                    "Most common cause: PyTorch isn't installed in this venv — "
-                    "coqui-tts excludes it from its deps so you can pick CPU vs CUDA. "
-                    "Run `.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
-                    "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
-                ) from e
+            #
+            # Probe torch FIRST (#1944). The old order tried `TTS.api` first and
+            # blamed a missing PyTorch on ANY ImportError out of that import —
+            # including the speechbrain lazy-proxy collision this issue fixes,
+            # where torch is installed and working fine (Qwen renders on GPU in
+            # the same process) and the real cause is a poisoned `sys.modules`
+            # entry from a prior ECAPA load. Checking torch up front lets each
+            # branch's message stay honest about which dependency actually failed.
             try:
                 import torch  # type: ignore
             except ImportError as e:
@@ -1494,6 +1511,33 @@ class CoquiEngine(Engine):
                     f"PyTorch missing from this venv ({e}). Install with: "
                     "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
                     "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
+                ) from e
+            try:
+                from TTS.api import TTS  # type: ignore
+                _record_coqui_import_result(True)
+            except BaseException as e:
+                # Record on ANY failure, not just ImportError (#1962 review
+                # finding 3). The second documented failure shape of this very
+                # collision is a duplicate `wait_tensor` kernel-registration
+                # RuntimeError, which is NOT an ImportError -- so an
+                # ImportError-only record left `coqui_import_ok` at None (or at
+                # True from an earlier successful boot pin) while the engine
+                # was genuinely unstartable. That is exactly the "advertises an
+                # engine that cannot start" defect this field exists to close.
+                # Non-ImportError failures re-raise unchanged below so their
+                # own diagnostic is not swallowed by the coqui-tts message.
+                _record_coqui_import_result(False)
+                if not isinstance(e, ImportError):
+                    raise
+                raise RuntimeError(
+                    f"Failed to import coqui-tts ({e}). PyTorch IS installed and "
+                    "importable in this venv, so this is not a missing-PyTorch "
+                    "problem. This shape usually means a prior speechbrain (ECAPA) "
+                    "import left a lazy-proxy module in sys.modules that something "
+                    "in TTS.api's own import chain then tripped over (#1944) — "
+                    "restart the sidecar, or check the log for the 'Disarmed N "
+                    "speechbrain lazy-proxy module(s)' line that should have "
+                    "prevented this."
                 ) from e
 
             _apply_torch_perf_flags(torch)
@@ -5809,6 +5853,9 @@ class QwenEngine(Engine):
                 self._ensure_base17_loaded()
                 load_start = time.perf_counter()
                 prompt, lang, cache_hit = self._load_voice_prompt_17b(voice)
+                # #1951 — the caller's language WINS over the manifest's when
+                # supplied. See the 0.6B path below for the full rationale.
+                lang = language or lang
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
                 # Guarded forward (re-ensures under `_synth_lock`; reloads+retries
@@ -5831,6 +5878,18 @@ class QwenEngine(Engine):
         # fast WITHOUT paying the (heavy) Base-model load.
         load_start = time.perf_counter()
         prompt, lang, cache_hit = self._load_voice_prompt(voice)
+        # #1951 — the caller's language WINS over the voice manifest's when one
+        # is supplied; the manifest stays the FALLBACK. This argument was
+        # accepted and silently ignored before, which is why a cloned voice
+        # (whose manifest always says "English", its derive never having sent
+        # X-Language) rendered every book in every language as English.
+        #
+        # The sidecar deliberately does NOT decide what a clone is: Node holds
+        # the authoritative `hasClonedProvenance` answer and signals it purely
+        # by WHETHER it sends this field. Absent → manifest language → today's
+        # behaviour byte-for-byte, which is what keeps designed voices
+        # unchanged. Never default to English here.
+        lang = language or lang
         load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
@@ -5853,8 +5912,9 @@ class QwenEngine(Engine):
         """TRUE batching (plan 112): synth N sentences in ONE batched forward.
 
         Each item is `{voice, text}` (plus an optional `instruct` on the 1.7B
-        live-instruct path). We load every item's cached clone prompt + manifest
-        language and pass parallel lists to a single
+        live-instruct path, and an optional `language` that OVERRIDES that
+        item's manifest language — #1951). We load every item's cached clone
+        prompt + manifest language and pass parallel lists to a single
         `generate_voice_clone(text=[…], language=[…], voice_clone_prompt=[…])`
         call, so the model runs one batched forward per decode step instead of
         N separate ones. Two properties make this safe where plan 70d's
@@ -5928,7 +5988,12 @@ class QwenEngine(Engine):
                     except RuntimeError as e:
                         raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
                     texts.append(text)
-                    langs.append(lang)
+                    # #1951 — PER-ITEM language override (see the 0.6B loop
+                    # below for the full rationale). Per-item, not per-batch:
+                    # a batch may MIX voices, so one batch can hold a cloned
+                    # character's line (takes the book's language) beside a
+                    # designed narrator's (keeps its manifest language).
+                    langs.append(item.get("language") or lang)
                     prompt_lists.append(prompt if isinstance(prompt, list) else [prompt])
                     # Flatten per-voice prompt-item list (same rationale as the 0.6B
                     # path below; see comment there for the list-of-lists danger).
@@ -5970,7 +6035,27 @@ class QwenEngine(Engine):
                 except RuntimeError as e:
                     raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
                 texts.append(text)
-                langs.append(lang)
+                # #1951 — PER-ITEM language override: the caller's `language`
+                # wins over this voice's manifest language, which stays the
+                # FALLBACK for items that omit it.
+                #
+                # THIS is the path that matters for a book. Qwen chapter
+                # SENTENCES batch through here (QWEN_BATCH_SIZE defaults to 32);
+                # the only single /synthesize in a chapter is the title beat. A
+                # fix applied to `synthesize` alone would ship a German title
+                # over an entirely English book.
+                #
+                # Per-item rather than per-call because a batch may MIX voices
+                # (see this method's docstring): a cloned character's line must
+                # take the book's language while a designed narrator's line in
+                # the SAME batch keeps its manifest language. A batch-level
+                # field could not express that.
+                #
+                # The sidecar never learns what a clone is — Node decides that
+                # (`hasClonedProvenance`) and signals it purely by whether the
+                # field is present. Absent → manifest language → byte-identical
+                # to today.
+                langs.append(item.get("language") or lang)
                 # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
                 # (qwen_tts create_voice_clone_prompt's return shape), normally
                 # length 1. generate_voice_clone wants a FLAT prompt-item list with
@@ -6282,6 +6367,45 @@ class WhisperEngine:
 ASR = WhisperEngine()
 
 
+def _disarm_speechbrain_lazy_modules() -> list[str]:
+    """(#1944) speechbrain 1.1.0 leaves several lazy-proxy modules in
+    `sys.modules` after an ECAPA import — deprecated-path redirects and
+    optional-integration shims (`speechbrain.utils.importutils.LazyModule` /
+    its `DeprecatedModuleRedirect` subclass) whose `__getattr__` raises
+    `ImportError` (not `AttributeError`) when the backing optional dep (e.g.
+    `k2`) is missing. CPython's `inspect.getmodule()` walks every entry in
+    `sys.modules` on a cache miss and does `hasattr(module, '__file__')` on
+    each one; `hasattr` only swallows `AttributeError`, so the proxy's
+    `ImportError` escapes and detonates whatever unrelated code triggered the
+    walk — observed as `import TTS.api` failing only in a process that has
+    already served an ECAPA `/embed`.
+
+    Unconditional eviction ONLY — never probe a proxy (no `ensure_module`, no
+    `importlib.import_module` of its target, no touching `__file__`).
+    Probing forces a half-import of the backing package (e.g. `transformers`),
+    which breaks the subsequent `TTS.api` import a SECOND, more confusing way
+    (a duplicate `wait_tensor` kernel-registration `RuntimeError`) — measured
+    during this issue's investigation, see #1944's implementation brief.
+
+    Returns the names evicted. Never raises: if a future speechbrain
+    renames/drops `LazyModule`, this no-ops rather than breaking ECAPA
+    loading, which currently works."""
+    try:
+        from speechbrain.utils.importutils import LazyModule
+    except Exception:
+        return []
+    try:
+        evicted = [
+            name for name, module in list(sys.modules.items())
+            if isinstance(module, LazyModule)
+        ]
+        for name in evicted:
+            del sys.modules[name]
+        return evicted
+    except Exception:
+        return []
+
+
 class SpeakerEngine:
     """ECAPA-TDNN speaker embedding (srv-36). Defaults to CPU (zero VRAM); the
     optional cuda path (srv-47, SPK_DEVICE=cuda) is VRAM-semaphore-gated on the
@@ -6305,6 +6429,17 @@ class SpeakerEngine:
     def _load_on(self, device: str):
         """Synchronous ECAPA load on a concrete device. Run via to_thread."""
         from speechbrain.inference.speaker import EncoderClassifier
+        # (#1944) Disarm speechbrain's lazy-proxy modules immediately after
+        # this import plants them — see _disarm_speechbrain_lazy_modules's
+        # doc comment for why eviction is unconditional. Without this, a
+        # later `import TTS.api` in the SAME process can die on an unrelated
+        # proxy's ImportError.
+        evicted = _disarm_speechbrain_lazy_modules()
+        if evicted:
+            log.info(
+                "Disarmed %d speechbrain lazy-proxy module(s) after ECAPA import (#1944): %s",
+                len(evicted), ", ".join(sorted(evicted)),
+            )
         return EncoderClassifier.from_hparams(
             source="speechbrain/spkrec-ecapa-voxceleb",
             run_opts={"device": device},
@@ -7421,6 +7556,94 @@ async def _stop_memory_watchdog() -> None:
         _mem_watchdog_task = None
 
 
+def _import_tts_api_for_pin() -> None:
+    """Synchronous half of `_pin_coqui_import_order`, run via `to_thread`.
+    A bare `import` statement — its only job is the ordering side effect of
+    pulling `TTS.api` (and therefore `transformers`/`torch`) into
+    `sys.modules` before anything else (namely `SpeakerEngine._load_on`'s
+    ECAPA import) gets a chance to.
+
+    The `to_thread` offload buys nothing here and is NOT a latency
+    optimisation (#1962 review finding 5): this runs inside `_lifespan`
+    startup, where nothing else is scheduled and uvicorn has not yet bound
+    the listening socket, so `await`ing it blocks boot exactly as a direct
+    call would. Measured: 14.6 s before /health answers, versus 2.9 s with
+    the pin skipped. The cost is "sidecar unreachable", not "sidecar slow" —
+    do not assume /health responds during this import."""
+    import TTS.api  # noqa: F401
+
+
+async def _pin_coqui_import_order() -> None:
+    """(#1944) Belt-and-braces defense in depth alongside
+    `_disarm_speechbrain_lazy_modules`: synchronously import `TTS.api` during
+    startup, before ECAPA (or anything else) can import speechbrain and plant
+    its lazy-proxy modules in `sys.modules`. Measured on-box: importing
+    `TTS.api` first avoids the collision entirely; a narrow pre-import of a
+    single torch submodule does NOT (`TTS.api`'s own import reaches other
+    inspect/`custom_op` paths) — only the full ordering works. See #1944's
+    implementation brief for the measured evidence; do not reintroduce the
+    narrow-pre-import candidate.
+
+    Behind COQUI_PIN_IMPORT_ORDER (registry key tts.coqui.pinImportOrder),
+    default ON — but gated on this install ACTUALLY USING COQUI, see below.
+    The pin costs real startup latency, which is why
+    `CoquiEngine._ensure_loaded`'s normal lazy-import design exists in the
+    first place (so the process can start, and /health respond, before the
+    heavy ML deps load). Turning it off leaves
+    `_disarm_speechbrain_lazy_modules` (called from `SpeakerEngine._load_on`)
+    as the remaining protection.
+
+    **Weights-gated (#1962 review finding 2).** Measured on this box: the pin
+    holds the listening socket CLOSED for 14.6 s versus 2.9 s without it —
+    uvicorn binds only after lifespan startup returns, so the cost is
+    "sidecar unreachable", not "sidecar slow". Paying +11.7 s on every boot
+    for every install would tax Qwen-only and Kokoro-only users, who can
+    never hit a collision that requires BOTH cloning (which calls /embed) and
+    Coqui rendering. So the package being importable is not the gate — the
+    XTTS v2 WEIGHTS being on disk is. `coqui-tts` ships as an ordinary
+    dependency and is always present; the ~2 GB `model.pth` only exists if
+    someone deliberately installed Coqui, which makes it a reliable "this
+    install uses Coqui" signal. Same reasoning that flipped PRELOAD_KOKORO
+    off in fs-60: an always-paid, engine-specific cost stops being a good
+    default once not everyone uses that engine.
+
+    The Python default here MUST match the registry knob's default (a known
+    past bug class in this repo — see `_QWEN_DEGEN_GUARD_ENABLED` /
+    `PRELOAD_KOKORO` for the same caution) — both are True.
+
+    Never aborts boot: skipped (with a log line) when the knob is off, the
+    coqui package isn't installed, or the weights are absent; an unexpected
+    import failure is caught and logged as a warning rather than propagated."""
+    if not _parse_bool(os.environ.get("COQUI_PIN_IMPORT_ORDER"), True):
+        log.info(
+            "COQUI_PIN_IMPORT_ORDER=0 -- skipping the eager TTS.api import-order "
+            "pin; the speechbrain lazy-proxy disarm is the remaining protection."
+        )
+        return
+    if not _coqui_package_installed():
+        log.info("Coqui package not installed -- skipping the TTS.api import-order pin.")
+        return
+    if not _coqui_weights_present():
+        log.info(
+            "Coqui XTTS weights absent -- this install does not use Coqui, so "
+            "skipping the eager TTS.api import-order pin (it would cost ~12 s of "
+            "startup for a collision this install cannot hit). The speechbrain "
+            "lazy-proxy disarm still runs on every ECAPA load."
+        )
+        return
+    try:
+        await asyncio.to_thread(_import_tts_api_for_pin)
+        _record_coqui_import_result(True)
+        log.info("Pinned TTS.api import order at startup (COQUI_PIN_IMPORT_ORDER=1).")
+    except Exception as e:
+        _record_coqui_import_result(False)
+        log.warning(
+            "Eager TTS.api import-order pin failed (%s); startup continues -- "
+            "the speechbrain disarm and the per-request lazy import remain.",
+            e,
+        )
+
+
 async def _preload_default_engines() -> None:
     """Engine preload at startup.
 
@@ -8052,6 +8275,13 @@ def health() -> dict[str, Any]:
         "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
+        # (#1944) Sticky, real-import-attempt truth — distinct from
+        # coqui_package_installed's find_spec-only probe above, which can say
+        # "installed" for a package that genuinely cannot load. None until a
+        # real `from TTS.api import TTS` has been attempted (the eager startup
+        # pin or a real cold-load); True/False after that. See
+        # _COQUI_IMPORT_OK's doc comment.
+        "coqui_import_ok": _COQUI_IMPORT_OK,
         "coqui_weights_present": _coqui_weights_present(),
         "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
@@ -9472,6 +9702,23 @@ async def synthesize_batch(req: Request) -> Response:
             raise HTTPException(
                 status_code=400,
                 detail=f"item {i}: `instruct` too long ({len(instruct_val)} chars > {_cap} cap).",
+            )
+        # #1951 — OPTIONAL per-item `language` (the sidecar language WORD, e.g.
+        # "German"). Absent is the normal case and means "use this voice's
+        # manifest language"; Node sends it only for a cloned voice, whose
+        # manifest language is meaningless for book synth. There is deliberately
+        # NO route-level language field and no `synthesize_batch` signature
+        # change — the value rides on the item dict, which is handed to the
+        # engine verbatim.
+        #
+        # Present-but-not-a-string is a caller bug, and silently ignoring it
+        # would render a whole chapter in the wrong language with no signal at
+        # all — 400 it, exactly as `voice`/`text` are validated above. Do NOT
+        # coerce: str(42) would be accepted downstream as a language word.
+        if "language" in item and not isinstance(item["language"], str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"item {i}: `language` must be a string when present.",
             )
 
     engine = ENGINES["qwen"]

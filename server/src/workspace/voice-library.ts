@@ -55,6 +55,30 @@ export interface VoiceMaster {
   transcript: string;
   transcriptSource: 'whisper' | 'user';
   captureMethod: 'upload' | 'record';
+  /** #1951 — BCP-47-ish language Whisper detected in THIS clip, when it
+      reported one. Persisted on the master because ingest and `POST /clone`
+      are separate requests and the candidate's `master` is the only thing that
+      survives between them. `/clone` promotes it to the entry's own
+      `languageCode` and sends the sidecar word as `X-Language` so the clone's
+      manifest stops claiming "English".
+
+      Absent on every pre-#1951 candidate/entry, and on a clip Whisper could
+      not classify — treat missing as "unknown", never as English.
+
+      THIS IS THE RAW DETECTION AND IS NOT VALIDATED. `VoiceLibraryEntry`'s own
+      `languageCode` is the validated one: `/clone` gates it on
+      `isSupportedLanguage` and leaves it unset for anything the registry
+      doesn't know, while this field keeps whatever Whisper said. So a clip in
+      an unsupported language yields `entry.languageCode: undefined` alongside
+      `entry.master.languageCode: 'kl'`, and the two disagreeing is correct, not
+      drift. Deliberate: nothing consumes this field, and it is the only
+      surviving record of what Whisper actually heard — the difference between
+      "we don't support Greenlandic" and "Whisper detected nothing" when a user
+      asks why their clone has no language. Read `entry.languageCode` — never
+      this — anywhere the value is rendered or fed to `sidecarLanguageName`,
+      which throws on an unregistered code. Pinned by voice-library.test.ts's
+      "keeps the RAW detection on master" case. */
+  languageCode?: string;
 }
 
 export interface VoiceLibraryEntry {

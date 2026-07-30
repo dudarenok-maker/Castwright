@@ -5,7 +5,21 @@ import { MAX_CLONE_TRANSCRIPT_CHARS } from '../../lib/clone-transcript-limit';
 import { VoiceRecorder } from './voice-recorder';
 
 type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
-export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; }
+export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; attestedBy?: string; }
+
+/* #1943 — the attestation sentence's fixed "relaying permission" phrasing is
+   wrong for guardian-of-minor: a guardian isn't relaying the child's
+   permission, they're consenting on the child's behalf. */
+/* self and family-with-permission share ONE literal rather than repeating it:
+   two copies of the same sentence is how one arm silently drifts when the
+   other is edited, and family-with-permission is the arm where a relative —
+   not the subject — is attesting, so a drift there matters most. */
+const PERMISSION_SENTENCE = 'I attest I have this person’s permission to clone their voice.';
+const ATTEST_SENTENCE: Record<Relationship, string> = {
+  self: PERMISSION_SENTENCE,
+  'family-with-permission': PERMISSION_SENTENCE,
+  'guardian-of-minor': 'I attest, as this child’s guardian, that I consent to cloning their voice.',
+};
 
 export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: string; transcript: string; consent: ConsentDraft }) => void }) {
   const dispatch = useAppDispatch();
@@ -16,6 +30,7 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
   const [busy, setBusy] = useState(false);
   const [personName, setPersonName] = useState('');
   const [relationship, setRelationship] = useState<Relationship>('self');
+  const [attestedBy, setAttestedBy] = useState('');
   const [attested, setAttested] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +53,13 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
      server 400 would leave nowhere to fix it. The route (and the mock) still
      enforce the same cap for non-UI callers. */
   const transcriptTooLong = transcript.length > MAX_CLONE_TRANSCRIPT_CHARS;
-  const consentComplete = personName.trim().length > 0 && attested;
+  /* #1943 — the attester is who is ACTUALLY attesting, distinct from the
+     person being cloned for the two non-self relationships. Required there
+     (asking someone to name themselves twice for 'self' is noise, so the
+     field is omitted entirely and the server falls back to personName). */
+  const attesterRequired = relationship !== 'self';
+  const consentComplete =
+    personName.trim().length > 0 && attested && (!attesterRequired || attestedBy.trim().length > 0);
   const canContinue = !!candidateId && consentComplete && !busy && !transcriptTooLong;
 
   return (
@@ -76,16 +97,38 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
             <option value="guardian-of-minor">My child (I’m their guardian)</option>
           </select>
         </label>
+        {attesterRequired && (
+          <label>Your name (the attester)
+            <input
+              aria-label="attester name"
+              value={attestedBy}
+              onChange={(e) => setAttestedBy(e.target.value)}
+              className="min-h-[44px] fine-pointer:min-h-0"
+            />
+          </label>
+        )}
         <div className="flex items-center gap-2">
           <input type="checkbox" aria-label="I attest" aria-describedby="clone-attest-sentence" checked={attested} onChange={(e) => setAttested(e.target.checked)} />
-          <span id="clone-attest-sentence">I attest I have this person’s permission to clone their voice.</span>
+          <span id="clone-attest-sentence">{ATTEST_SENTENCE[relationship]}</span>
         </div>
       </fieldset>
 
       <button
         className="min-h-[44px] fine-pointer:min-h-0"
         disabled={!canContinue}
-        onClick={() => candidateId && onReady({ candidateId, transcript, consent: { personName: personName.trim(), relationship, permittedUse: 'personal' } })}
+        onClick={() =>
+          candidateId &&
+          onReady({
+            candidateId,
+            transcript,
+            consent: {
+              personName: personName.trim(),
+              relationship,
+              permittedUse: 'personal',
+              ...(attesterRequired ? { attestedBy: attestedBy.trim() } : {}),
+            },
+          })
+        }
       >Continue</button>
     </div>
   );

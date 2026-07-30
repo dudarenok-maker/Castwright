@@ -112,6 +112,20 @@ class _FakeInnerModule:
         return ([np.array([1, 2, 3])], None)
 
 
+class _FakeVoiceClonePromptItem:
+    """Stand-in for qwen_tts's `VoiceClonePromptItem` — the element type of
+    `create_voice_clone_prompt`'s real return value. Real production code
+    only ever touches `.ref_code` (main.py:5388, 5597, 5911) and `.ref_text`
+    (main.py:5603) on an item, so those are the only attributes faithfully
+    reproduced here. `ref_code=None` mirrors the SimpleNamespace fakes used
+    elsewhere in this file (e.g. :1248) — it skips the ICL decode-trim branch
+    cleanly, since that branch needs real tensor ops (covered on-box)."""
+
+    def __init__(self, ref_text: str) -> None:
+        self.ref_text = ref_text
+        self.ref_code: Any = None
+
+
 class _FakeQwenModel:
     """Stand-in for qwen_tts.Qwen3TTSModel — a thin WRAPPER (NOT an nn.Module).
     The real nn.Module lives at `.model`; the wrapper caches its device at
@@ -139,9 +153,14 @@ class _FakeQwenModel:
 
     def create_voice_clone_prompt(self, ref_audio: Any, ref_text: str, **_kwargs: Any):
         self.prompt_calls.append((ref_audio, ref_text))
-        # A reusable prompt is opaque to us — return a sentinel the fake
-        # torch.save/load round-trips.
-        return {"_prompt": True, "ref_text": ref_text}
+        # Real qwen_tts create_voice_clone_prompt returns a LIST of
+        # VoiceClonePromptItem, normally length 1 (main.py:5908-5911) — NOT
+        # a dict. A dict happens to unpack into 2 values without raising,
+        # which let a real bug (clone_voice caching a bare prompt instead of
+        # a (prompt, lang) tuple) slip past a naive regression test (#1951).
+        # Faithful to the real shape here so any test built on this fake
+        # exercises the real unpack/attribute-access failure modes.
+        return [_FakeVoiceClonePromptItem(ref_text)]
 
     def generate_voice_clone(self, text: Any, language: Any, voice_clone_prompt: Any):
         self.clone_calls.append((text, voice_clone_prompt))
@@ -1311,10 +1330,11 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
             (np.zeros(6000, "float32"), 24000),
         )[1],
     )
-    # CRITICAL: the shared fake's create_voice_clone_prompt returns a DICT (no
-    # .ref_code), so stub _load_voice_prompt to hand back a ref_code-bearing
-    # item (ref_code=None skips the fake decode-trim cleanly). Without this,
-    # mint_variant's `base_item.ref_code` AttributeErrors.
+    # The shared fake's create_voice_clone_prompt now returns a faithful
+    # list-of-ref_code-bearing-items shape (#1951), so this override is no
+    # longer needed to avoid an AttributeError on `base_item.ref_code` — it's
+    # kept to isolate this test from design_voice's own prompt-caching
+    # internals and to pin ref_code=None (skips the fake decode-trim cleanly).
     import types as _types
     monkeypatch.setattr(
         eng,
@@ -1481,8 +1501,9 @@ def test_synth_17b_calls_ensure_base17_and_derives_native_prompt(
     eng.design_voice("tara", "A warm British narrator.", "English", None)
 
     # Provide a ref_code-bearing item from _load_voice_prompt so _load_voice_prompt_17b
-    # can access base_item.ref_code.  (The shared fake's create_voice_clone_prompt
-    # returns a DICT, not a PromptItem, so we monkeypatch like mint_variant's test.)
+    # can access base_item.ref_code. The shared fake's create_voice_clone_prompt is
+    # now faithful (list of ref_code-bearing items, #1951), so this isn't needed to
+    # avoid an AttributeError — kept for the same isolation reason as mint_variant's test.
     monkeypatch.setattr(
         eng,
         "_load_voice_prompt",
@@ -2023,3 +2044,124 @@ def test_design_voice_manifest_unchanged_without_provenance(fake_qwen_runtime):
     _pt, jpath = eng._voice_paths("qwen-y")
     meta = json.loads(open(jpath, encoding="utf-8").read())
     assert "mintMethod" not in meta and "fallbackFor" not in meta
+
+
+# ── #1951 / plan 275: the caller's `language` overrides the manifest's ──────
+#
+# `QwenEngine.synthesize` has always ACCEPTED a `language` argument and never
+# read it — the language came solely from `_load_voice_prompt`'s manifest word.
+# A cloned voice's manifest always says "English" (its derive never sent
+# X-Language), so a clone rendered every book in every language as English.
+#
+# The contract: if the caller supplied a language, use it; otherwise fall back
+# to the manifest's. The sidecar never learns what a clone is — the PRESENCE of
+# the argument is the whole signal, decided in Node.
+#
+# In a chapter this path only renders the TITLE beat (sentences go through
+# /synthesize-batch — see test_batch_synthesis.py), but the title must not be
+# left speaking English while the body is German.
+
+
+def _spy_clone_language(monkeypatch, model) -> list:
+    """Record the `language=` kwarg of every generate_voice_clone call."""
+    seen: list = []
+    real = model.generate_voice_clone
+
+    def _spy(text, language, voice_clone_prompt):
+        seen.append(language)
+        return real(text=text, language=language, voice_clone_prompt=voice_clone_prompt)
+
+    monkeypatch.setattr(model, "generate_voice_clone", _spy)
+    return seen
+
+
+def test_synthesize_0_6b_honours_the_caller_supplied_language(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """0.6B single path: an explicit `language` beats the "English" manifest."""
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("maerin", "a bright, confident teenage girl", "English", None)
+    seen = _spy_clone_language(monkeypatch, eng._base)
+
+    eng.synthesize("qwen3-tts-0.6b", "maerin", "Der alte Leuchtturm.", language="German")
+
+    assert seen == [["German"]]
+
+
+def test_synthesize_0_6b_falls_back_to_the_manifest_language(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """Omitting `language` keeps today's behaviour byte-for-byte: the manifest
+    word wins. This is what makes designed voices unaffected — Node simply stops
+    sending a field for them.
+
+    Green before AND after by design — it is the characterization pin on the
+    fallback arm, not a red/green regression test. Its job is to fail if the
+    override is ever implemented as an unconditional default (e.g.
+    `language or DEFAULT_LANGUAGE`), which would silently retune all 302
+    designed English manifests."""
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("maerin", "a bright, confident teenage girl", "English", None)
+    seen = _spy_clone_language(monkeypatch, eng._base)
+
+    eng.synthesize("qwen3-tts-0.6b", "maerin", "The old lighthouse.")
+
+    assert seen == [["English"]]
+
+
+def test_synthesize_1_7b_honours_the_caller_supplied_language(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """The 1.7B single path resolves its language through a DIFFERENT loader
+    (`_load_voice_prompt_17b`), so it needs its own override or the Quality tier
+    keeps speaking English."""
+    import types as _types
+
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("tara", "A warm British narrator.", "English", None)
+    monkeypatch.setattr(
+        eng,
+        "_load_voice_prompt_17b",
+        lambda v: ([_types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", True),
+    )
+    eng._base17 = type(eng._base)("1.7b")
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda: None)
+    seen = _spy_clone_language(monkeypatch, eng._base17)
+
+    eng.synthesize("1.7b", "tara", "Der alte Leuchtturm.", language="German")
+
+    assert seen == [["German"]]
+
+
+def test_synthesize_route_forwards_the_language_field(fake_qwen_runtime, monkeypatch) -> None:
+    """End of the wire: POST /synthesize's existing `language` body field must
+    reach the engine call.
+
+    Green before AND after — the route already forwarded the field (Coqui reads
+    it); the defect was purely that `QwenEngine.synthesize` ignored the argument
+    once it arrived. Kept as the wire-level guard for the Node contract change:
+    sidecar.ts now sends the sidecar language WORD ("German") for a cloned qwen
+    voice, where before it sent nothing for any qwen voice."""
+    eng = fake_qwen_runtime["engine"]
+    eng.design_voice("maerin", "a bright, confident teenage girl", "English", None)
+
+    seen: dict = {}
+
+    def _spy(model, voice, text, language=None):
+        seen["language"] = language
+        return main.SynthResult(pcm=b"\x00\x00", sample_rate=24000)
+
+    monkeypatch.setattr(eng, "synthesize", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize",
+        json={
+            "engine": "qwen",
+            "model": "qwen3-tts-0.6b",
+            "voice": "maerin",
+            "text": "Der alte Leuchtturm.",
+            "language": "German",
+        },
+    )
+    assert resp.status_code == 200
+    assert seen["language"] == "German"

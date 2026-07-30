@@ -25,11 +25,30 @@ export interface SynthesizeInput {
   text: string;
   voiceName: string;
   modelKey: TtsModelKey;
-  /** fs-60 — BCP-47 primary subtag for this synth call. Only Coqui honors it
-      (threaded to the sidecar's per-request `language` field); every other
-      engine/provider ignores it. Optional — omitted means "use the sidecar's
-      boot-time COQUI_LANGUAGE default" (backward-compatible for English). */
+  /** fs-60 — BCP-47 primary subtag for this synth call. Coqui always honors it
+      (threaded to the sidecar's per-request `language` field). Since #1951 Qwen
+      honors it too, but ONLY for a cloned voice — see `cloned` below. Every
+      other engine/provider ignores it. Optional — omitted means "use the
+      sidecar's boot-time COQUI_LANGUAGE default" (backward-compatible for
+      English). */
   language?: string;
+  /** #1951 — true when this synth is backed by a CLONED voice
+      (`hasClonedProvenance`). Qwen-only in effect. A cloned voice's sidecar
+      manifest permanently says "English" (its derive never sent `X-Language`),
+      and cloned voices are deliberately exempt from
+      `clearMismatchedDesignedVoices` so they can be reused across books — so
+      nothing else supplies a language and the clone renders every book in
+      English. This flag is what tells `sidecar.ts` to put the book's language
+      on the wire, where it OVERRIDES the manifest word.
+
+      Decided in Node and never re-derived in the sidecar: the wire signal is
+      simply whether a `language` is present on the request, so the sidecar
+      never learns what a clone is. Absent/false → no language is sent for Qwen
+      → the manifest language stands → byte-identical to pre-#1951 behaviour,
+      which is what keeps designed voices unchanged. Callers that pass an
+      unvalidated, client-supplied `language` (routes/voice-sample.ts) must NOT
+      set this — see `resolveWireLanguage`. */
+  cloned?: boolean;
   /** Optional abort signal — providers that can honour it should pass it
       through to their underlying HTTP/SDK call so a mid-call cancellation
       (e.g. server-side per-book mutex aborting a stale generation handler)
@@ -67,11 +86,25 @@ export interface SynthesizeBatchItem {
       uses this (not the voice name suffix) to look up the output gain on the
       liveInstruct path. Absent → unity gain (1.0). */
   emotion?: string;
+  /** #1951 — true when THIS item's voice is cloned (`hasClonedProvenance`).
+      Per-item, not per-batch, and that is forced rather than stylistic: a
+      batch may MIX voices (a cloned character's line beside a designed
+      narrator's), and those need different languages in the same forward. See
+      `SynthesizeInput.cloned` for the full rationale; the batch's language
+      itself is `SynthesizeBatchInput.language`. */
+  cloned?: boolean;
 }
 
 export interface SynthesizeBatchInput {
   items: SynthesizeBatchItem[];
   modelKey: TtsModelKey;
+  /** #1951 — BCP-47 primary subtag of the BOOK, for the whole batch. Batch-level
+      because a batch is always one chapter of one book, so there is exactly one
+      book language; what varies per item is `cloned`, which decides whether this
+      language reaches the wire for that item (Qwen), and the wire field is
+      therefore per-item. Absent → no item carries a language, i.e. every voice
+      keeps its manifest language (pre-#1951 behaviour). */
+  language?: string;
   /** fs-57 — when true the sidecar activates the liveInstruct path for the
       whole batch (1.7B-only). Per-item `instruct` carries the phrase; absent
       items get the sidecar's NEUTRAL_INSTRUCT fill (PR2-Mi1). Default false

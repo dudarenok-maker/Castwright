@@ -52,11 +52,30 @@ function sentence(id: number, characterId: string): SentenceOutput {
   return { id, chapterId: 1, characterId, text: 'Hello, this is an English test sentence.' };
 }
 
-/** Tags every sidecar `/unload` call with the engine it targeted (the ONLY
-    thing `global.fetch` is hit for anywhere in this suite — both providers
-    and `deriveEngineArtifact` are plain mocks that never touch `fetch`). */
+/* #1951 — this suite is about ENGINE RESIDENCY: which model is loaded when,
+   and the invariant that Qwen and Coqui are never simultaneously resident. It
+   asserts exact `callOrder` sequences, so it must only record the calls that
+   change residency, i.e. `POST /unload`.
+
+   `global.fetch` is no longer hit solely by `/unload`: the designed self-heal
+   now also calls `POST /qwen/evict-voice` after restoring a manifest, to drop
+   the sidecar's warm prompt-CACHE entry for one voice. That is a different
+   kind of call — it frees no VRAM and unloads no model — and it carries
+   `{voiceId}`, not `{engine}`, so an unfiltered mock recorded it as a
+   meaningless `evict:undefined` in the middle of these residency sequences.
+   Filter on the URL so the sequences keep meaning what they say. The
+   prompt-cache evict has its own dedicated coverage in
+   `synthesise-chapter-designed-resolver.test.ts`. */
+function isEngineUnload(url: unknown): boolean {
+  return String(url).endsWith('/unload');
+}
+
+/** Tags every sidecar `/unload` call with the engine it targeted. Non-`/unload`
+    sidecar traffic (the per-voice prompt-cache evict) is answered 200 and
+    deliberately NOT recorded — see the note above. */
 function mockEvictFetch(callOrder: string[]): void {
-  vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+  vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+    if (!isEngineUnload(url)) return new Response(null, { status: 200 });
     const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
       engine?: string;
     };
@@ -333,7 +352,28 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass (fs-38 Wave 3
     // (a real regression caught by synthesise-chapter.test.ts's fake-timer
     // batching suite while implementing this round) by issuing a real
     // sidecar round-trip on every single one.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    /* #1951 — narrowed from `expect(fetchSpy).not.toHaveBeenCalled()`, which
+       is no longer the right expression of the intent above. That intent is
+       "no ENGINE round-trip": no `/unload`, defensive or otherwise, on a
+       chapter that never touches Coqui. It is specifically guarding against a
+       PER-CHAPTER cost on what is nearly every chapter in this project.
+
+       The designed self-heal now also issues `POST /qwen/evict-voice` to drop
+       the sidecar's warm prompt-cache entry for the voice it just re-derived,
+       so the manifest it restored is what the next synth reads. That is not
+       the cost this test exists to prevent: it is per-SELF-HEAL, not
+       per-chapter, and it only happens because `derive:qwen` above actually
+       ran. A chapter with no derive still makes no sidecar call at all.
+
+       So: assert no `/unload` reached the sidecar (the real invariant), and
+       pin that the only call made is the evict belonging to that one derive —
+       which also keeps this test failing if the evict ever becomes
+       unconditional. */
+    const unloadCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/unload'));
+    expect(unloadCalls).toHaveLength(0);
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:9000/qwen/evict-voice',
+    ]);
     expect(callOrder).toEqual(['derive:qwen']);
     expect(coquiProvider.calls).toHaveLength(0);
   });
@@ -602,7 +642,10 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
    condition, which under-covered the cross-chapter "prior chapter left
    Coqui resident, this chapter only has HEALTHY coqui clones" case). */
 function mockFailingCoquiUnloadFetch(callOrder: string[]) {
-  return vi.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+  return vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+    /* #1951 — same URL filter as mockEvictFetch: only `/unload` changes
+       residency, and only `/unload` should fail here. */
+    if (!isEngineUnload(url)) return new Response(null, { status: 200 });
     const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')) as {
       engine?: string;
     };

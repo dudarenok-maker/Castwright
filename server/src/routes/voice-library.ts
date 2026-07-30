@@ -63,10 +63,13 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
+/* #1951 — the clone's own manifest language, from the reference clip. */
+import { sidecarLanguageName, normaliseBookLanguage } from '../tts/language.js';
+import { isSupportedLanguage } from '../tts/language-registry.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
@@ -130,6 +133,11 @@ type CloneConsentDraft = {
   personName: string;
   relationship: VoiceConsentRecord['relationship'];
   permittedUse: 'personal';
+  /** #1943 — who is actually attesting, distinct from `personName` (whose
+      voice it is) for the two non-self relationships. Trimmed; blank/absent
+      is `undefined` here so the /clone handler's fallback-to-personName
+      logic has one shape to check rather than also handling empty strings. */
+  attestedBy?: string;
 };
 
 function validateConsentDraft(raw: unknown): CloneConsentDraft | null {
@@ -139,7 +147,13 @@ function validateConsentDraft(raw: unknown): CloneConsentDraft | null {
   const rel = c.relationship;
   const relOk = rel === 'self' || rel === 'family-with-permission' || rel === 'guardian-of-minor';
   if (!personName || !relOk || c.permittedUse !== 'personal') return null;
-  return { personName, relationship: rel as VoiceConsentRecord['relationship'], permittedUse: 'personal' };
+  const attestedByRaw = typeof c.attestedBy === 'string' ? c.attestedBy.trim() : '';
+  return {
+    personName,
+    relationship: rel as VoiceConsentRecord['relationship'],
+    permittedUse: 'personal',
+    ...(attestedByRaw ? { attestedBy: attestedByRaw } : {}),
+  };
 }
 
 async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -937,10 +951,29 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
           ? 'user'
           : candidate.master.transcriptSource;
 
+      /* #1951 — the reference clip's own language, as Whisper detected it at
+         ingest. Governs the clone's MANIFEST: the wizard's completion audition
+         and the language the Voice Library displays (routes/voices.ts reads the
+         manifest word back via `codeForSidecarName`). It does NOT govern book
+         synth — there the book's language wins and overrides this.
+
+         Gated on `isSupportedLanguage` because `sidecarLanguageName` throws for
+         anything the registry doesn't know, and a clip in an unsupported
+         language must NOT fail the clone: the voice is perfectly usable, we
+         just can't label it. Unknown/unsupported → send no `X-Language`, leave
+         `languageCode` unset, and the sidecar computes its "English" default
+         exactly as it always has. Never guess English explicitly. */
+      const detectedLanguage = candidate.master.languageCode;
+      const clipLanguage =
+        detectedLanguage && isSupportedLanguage(normaliseBookLanguage(detectedLanguage))
+          ? normaliseBookLanguage(detectedLanguage)
+          : undefined;
+
       const derived = await deriveEngineArtifact(voiceUuid, 'qwen', {
         masterPcm,
         sampleRate: candidate.master.sampleRate,
         refText,
+        ...(clipLanguage ? { language: sidecarLanguageName(clipLanguage) } : {}),
       });
 
       const dir = entryDir(voiceUuid);
@@ -1028,12 +1061,16 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       const now = new Date().toISOString();
       const name =
         typeof body.name === 'string' && body.name.trim() ? body.name.trim() : consentDraft.personName;
+      /* #1943 — the real attester (a guardian, a relative) is not
+         necessarily the person whose voice this is; a caller-supplied
+         `attestedBy` names them. Falls back to `personName` — today's
+         behaviour — when absent, so existing callers are unchanged. */
       const consent: VoiceConsentRecord = {
         personName: consentDraft.personName,
         relationship: consentDraft.relationship,
         permittedUse: 'personal',
         attestedAt: now,
-        attestedBy: consentDraft.personName,
+        attestedBy: consentDraft.attestedBy ?? consentDraft.personName,
       };
       /* Persist the text the clone was ACTUALLY distilled against — into
          `master.transcript`, not just `sampleTranscript` below. The Wave 3b2
@@ -1053,6 +1090,10 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         provenance: 'cloned',
         tags: [],
         pinned: false,
+        /* #1951 — omitted entirely when the clip's language is unknown or
+           unsupported, so the library shows no language rather than a wrong
+           one. */
+        ...(clipLanguage ? { languageCode: clipLanguage } : {}),
         consent,
         master,
         sampleTranscript: refText,
@@ -1281,6 +1322,63 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
       }
     }
 
+    /* #1953 — WARN, never block, when a DESIGNED voice's baked manifest
+       language differs from the book's language. This is deliberately a
+       sibling of the 409 block above, not a widening of it: the 409's own
+       comment explains why a designed voice "has always been free to route
+       anywhere" and a hard failure for it would be a regression — that
+       reasoning holds for a 409, not for a non-fatal advisory.
+
+       `clearMismatchedDesignedVoices` (verify-designed-voice-language.ts)
+       already catches this at RENDER time, but only for non-English books —
+       its callers gate it behind `isNonEnglish(bookLanguage)`. A designed
+       voice assigned to an ENGLISH book therefore sailed through with no
+       signal at all, right up until a full chapter rendered unintelligible
+       audio (measured on the dev box: avg_logprob -1.303 wrong-language vs.
+       -0.201 correct — a mismatch doesn't degrade the audio, it destroys
+       it). This warning is the earlier, softer signal for exactly that gap;
+       it does not move or replace the render-time gate.
+
+       A CLONED voice has no baked design language (its manifest, when one
+       exists, reflects the speaker's own voice, not a chosen design
+       language) — `entry.provenance === 'designed'` is the library-entry
+       equivalent of `clearMismatchedDesignedVoices`'s `hasClonedProvenance`
+       skip, and an imported entry never carries a Qwen design manifest
+       either, so both fall through this block with no warning.
+
+       Review round 2 — `sidecarLanguageName` deliberately THROWS for a book
+       language outside the registry (language.ts's own "fail-loud safety
+       net" comment), because the confirm-screen import gate is supposed to
+       block an unsupported language before it ever reaches this far. That
+       gate is client-side only; `routes/import.ts` persists an unchecked
+       `normaliseBookLanguage(body.language)` (see #1955), so a pre-existing
+       book with an unregistered language (e.g. `'pt'`) can already be on
+       disk. Assign is a route that works fine for such a book today — it
+       never used to touch the language registry — so letting the throw
+       escape here would be a NEW 500 on an existing, previously-working
+       route. With no registry entry there is no sidecar word to compare
+       the manifest against, so there is no mismatch to assert either way:
+       skip the warning, exactly like the pre-#1953 behaviour, never 500. */
+    let languageWarning: string | undefined;
+    if (entry.provenance === 'designed') {
+      const bookLanguage = bookStateLanguage(located.state);
+      let expectedSidecarLang: string | undefined;
+      try {
+        expectedSidecarLang = sidecarLanguageName(bookLanguage);
+      } catch {
+        expectedSidecarLang = undefined;
+      }
+      const manifest = await readJson<{ language?: string }>(
+        qwenVoiceSidecarPath(cloneStorageKey('qwen', voiceUuid)),
+      ).catch(() => null);
+      if (expectedSidecarLang && manifest?.language && manifest.language !== expectedSidecarLang) {
+        languageWarning =
+          `"${character.name ?? characterId}"'s voice was designed in ${manifest.language} but this ` +
+          `book is ${expectedSidecarLang} — the audio will be unintelligible. Re-design the voice in ` +
+          `${expectedSidecarLang} to fix it.`;
+      }
+    }
+
     /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
        anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
        a library voice swaps the base identity to qwen-<voiceUuid>, and
@@ -1331,7 +1429,9 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        disagree. Order mirrors the write: qwen is unconditional, coqui is
        conditional. */
     const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
-    res.status(200).json({ updated: 1, written });
+    res
+      .status(200)
+      .json({ updated: 1, written, ...(languageWarning ? { warning: languageWarning } : {}) });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });

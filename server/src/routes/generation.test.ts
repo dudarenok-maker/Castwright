@@ -12,7 +12,7 @@
    ticks for assertions. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
-import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1185,6 +1185,45 @@ describe('POST /api/books/:bookId/generation — fs-38 Wave 3c cloned-character 
 
     const narrator = capturedCast?.find((c) => c.id === 'narrator');
     expect(narrator?.ttsEngine).toBe('qwen');
+  });
+});
+
+/* Issue #1955 — POST /api/books now rejects an unsupported language at
+   import time, but that gate must not weaken (or replace) the render-time
+   backstop: `sidecarLanguageName` still throws for any book whose PERSISTED
+   language isn't in the registry (e.g. state.json pre-dating the gate, or
+   any other write path), and the generation route still catches that throw
+   and emits a chapter_failed tick rather than rendering wrong-language
+   audio. This test bypasses the route entirely and writes state.json
+   directly, simulating exactly the "gate was bypassed" case the
+   sidecarLanguageName comment calls out. */
+describe('POST /api/books/:bookId/generation — unsupported persisted language backstop unchanged (#1955)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let originalState: string;
+
+  beforeAll(() => {
+    originalState = readFileSync(statePath(), 'utf8');
+  });
+
+  afterEach(() => {
+    writeFileSync(statePath(), originalState);
+  });
+
+  it('emits chapter_failed via the sidecarLanguageName throw when state.language is unsupported', async () => {
+    const state = JSON.parse(originalState) as Record<string, unknown>;
+    state.language = 'pt';
+    writeFileSync(statePath(), JSON.stringify(state));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'qwen3-tts-0.6b', force: true, chapterIds: [1] });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const failed = ticks.find((t) => t.type === 'chapter_failed');
+    expect(failed).toBeTruthy();
+    expect(failed?.errorReason as string).toMatch(
+      /unsupported language reached the voice pipeline/i,
+    );
   });
 });
 

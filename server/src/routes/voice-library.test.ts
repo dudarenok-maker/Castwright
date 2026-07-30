@@ -1674,6 +1674,200 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
   });
 });
 
+describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953)', () => {
+  it('warns (200, not 409) when a designed voice baked in Russian is assigned on an ENGLISH book — the gap nothing covered before this fix', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-ru-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-ru-1'),
+      JSON.stringify({ language: 'Russian', instruct: 'x' }),
+    );
+    // No `language` field on state.json -> normalises to 'en' / sidecar "English".
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-en-mismatch', [
+      { id: 'char-ada', name: 'Ada' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-ru-1/assign')
+      .send({ bookId: 'book-en-mismatch', characterId: 'char-ada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Ada/);
+    expect(res.body.warning).toMatch(/Russian/);
+    expect(res.body.warning).toMatch(/English/);
+  });
+
+  it('also warns when a designed voice baked in English is assigned on a non-English (Russian) book', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-en-2', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-en-2'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    const bookDir = join(dir, 'books', 'Della Renwick', 'The Hollow Tide', 'Book Two');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'book-ru-mismatch',
+        manuscriptId: 'm_book-ru-mismatch',
+        title: 'Book Two',
+        author: 'Della Renwick',
+        series: 'The Hollow Tide',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        language: 'ru',
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'char-oduvan', name: 'Oduvan' }] }),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-en-2/assign')
+      .send({ bookId: 'book-ru-mismatch', characterId: 'char-oduvan' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Oduvan/);
+    expect(res.body.warning).toMatch(/English/);
+    expect(res.body.warning).toMatch(/Russian/);
+  });
+
+  it('does not warn when the designed voice language matches the book language', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-en-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-en-1'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-en-match', [
+      { id: 'char-ada', name: 'Ada' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-en-1/assign')
+      .send({ bookId: 'book-en-match', characterId: 'char-ada' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* Review round 2 — `sidecarLanguageName` throws for any book language
+     outside the registry (language.ts's fail-loud safety net), and the
+     confirm-screen gate that's supposed to keep an unsupported language from
+     reaching this far is client-side only: `routes/import.ts` persists an
+     unchecked language (see #1955), so a pre-existing book with e.g.
+     `language: 'pt'` can already be on disk. Assign must not 500 on a route
+     that worked fine for such a book before this warning existed — with no
+     registry entry there's no sidecar word to compare against, so the
+     correct behaviour is to skip the warning silently, not throw. */
+  it('does not 500 (and does not warn) when the book language is unregistered — skips the comparison instead of throwing', async () => {
+    await vl.writeEntry(makeEntry({ voiceUuid: 'designed-pt-1', provenance: 'designed' }));
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(
+      paths.qwenVoiceSidecarPath('qwen-designed-pt-1'),
+      JSON.stringify({ language: 'English', instruct: 'x' }),
+    );
+    const bookDir = join(dir, 'books', 'Della Renwick', 'The Hollow Tide', 'Book Three');
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'book-pt-unregistered',
+        manuscriptId: 'm_book-pt-unregistered',
+        title: 'Book Three',
+        author: 'Della Renwick',
+        series: 'The Hollow Tide',
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // Not in language-registry.ts's ENTRIES — mirrors a pre-existing book
+        // imported before #1955's import-time gate landed.
+        language: 'pt',
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'char-ines', name: 'Ines' }] }),
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/designed-pt-1/assign')
+      .send({ bookId: 'book-pt-unregistered', characterId: 'char-ines' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('never warns for a CLONED voice (no baked design language) — the existing 409 guard is untouched', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-lang-1',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-lang', [
+      { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-lang-1/assign')
+      .send({ bookId: 'book-clone-lang', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('still 409s a cloned voice routed to a non-clone-capable engine — unaffected by the new warning branch', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'clone-lang-409',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        consent: {
+          personName: 'Test',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedAt: '2026-01-01T00:00:00Z',
+          attestedBy: 'test',
+        },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-409', [
+      { id: 'char-marlow', name: 'Marlow' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-lang-409/assign')
+      .send({ bookId: 'book-clone-409', characterId: 'char-marlow' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.warning).toBeUndefined();
+  });
+});
+
 /* Fix wave 2 (review) — the guard's first cut computed the effective engine
    purely from the PERSISTED account default (getResolvedTtsModelKey()), which
    is not what actually renders: the Voices-page engine picker (and the
@@ -2440,6 +2634,139 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
   });
 
+  /* #1943 — a guardian-of-minor record must name the GUARDIAN as the
+     attester, not the child being cloned. Before the fix, attestedBy was
+     hardcoded to consentDraft.personName, so this persisted 'Ana' (the
+     child) instead of 'Dana' (the parent who actually attested). */
+  it('persists a caller-supplied attestedBy distinct from personName', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-guardian',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-guardian',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: 'Dana',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.personName).toBe('Ana');
+    expect(res.body.consent.attestedBy).toBe('Dana');
+  });
+
+  /* Existing callers that never send attestedBy must be unchanged — the
+     fallback keeps today's behaviour. */
+  it('falls back to personName when attestedBy is omitted', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-no-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-no-attester',
+        consent: { personName: 'Ana', relationship: 'guardian-of-minor', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Ana');
+  });
+
+  /* Pins the TRIM itself, which nothing else does: the blank and omitted
+     cases below both expect 'Ana', which is exactly what the pre-fix
+     hardcode produced, so dropping .trim() from the STORED value (while
+     keeping the blank check) would survive them and persist '  Dana  '.
+     The wizard trims client-side, so this is the non-UI caller's guard. */
+  it('trims a supplied attestedBy before persisting it', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-padded-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-padded-attester',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: '  Dana  ',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Dana');
+  });
+
+  /* A blank/whitespace attestedBy must not persist an empty attester —
+     falls back to personName the same as an omitted field. */
+  it('falls back to personName when attestedBy is blank/whitespace', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-blank-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-blank-attester',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: '   ',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Ana');
+  });
+
   /* #1836 — the wizard's transcript box is editable, so a correction must
      reach the derive as `ref_text` AND be persisted. Persisting to
      `master.transcript` (not just `sampleTranscript`) is load-bearing: the
@@ -2481,6 +2808,89 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.sampleTranscript).toBe('my own voice sample');
     expect(res.body.master.transcript).toBe('my own voice sample');
     expect(res.body.master.transcriptSource).toBe('user');
+  });
+
+  /* #1951 — the clone's OWN manifest language, from the reference clip that
+     Whisper classified at ingest. Governs the wizard's completion audition and
+     the language the Voice Library displays; it does NOT govern book synth
+     (there the book's language wins and overrides the manifest). Before this,
+     no X-Language was ever sent, so every clone's manifest read "English". */
+  it('promotes the clip language onto languageCode and sends the sidecar word to the derive', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-de',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'der alte leuchtturm',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+        languageCode: 'de',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-de',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.languageCode).toBe('de');
+    /* The sidecar takes the language WORD, not the BCP-47 code. */
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ language: 'German' }),
+    );
+  });
+
+  /* An unsupported clip language must NOT fail the clone — the voice is
+     perfectly usable, we just cannot label it. `sidecarLanguageName` throws for
+     anything the registry does not know, so the route gates on
+     `isSupportedLanguage` rather than catching. Unknown => no languageCode, no
+     X-Language, and the sidecar keeps its own default. Never guess English. */
+  it('leaves languageCode unset for an unsupported clip language without failing the clone', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-kl',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'unrecognised speech',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+        languageCode: 'kl',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-kl',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.provenance).toBe('cloned');
+    expect(res.body.languageCode).toBeUndefined();
+    const lastDerive = deriveMock.mock.calls[deriveMock.mock.calls.length - 1];
+    expect(lastDerive[2]).not.toHaveProperty('language');
+    /* #1951 review fix (M3) — and `master` KEEPS the raw `kl`. The two fields
+       are deliberately different things: `entry.languageCode` is the VALIDATED
+       language (gated on `isSupportedLanguage`, safe to render or hand to
+       `sidecarLanguageName`), `entry.master.languageCode` is the RAW Whisper
+       detection for the clip. Keeping the raw code is the only record of what
+       Whisper actually heard — the difference between "Greenlandic, which we
+       don't support" and "Whisper detected nothing". Nothing consumes it, so it
+       cannot leak into a synth call. If a future change strips it, this
+       assertion is the one that should stop it. */
+    expect(res.body.master.languageCode).toBe('kl');
   });
 
   it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {

@@ -672,10 +672,87 @@ describe('scope + variantTasks (fs-25)', () => {
     voiceStyle: 'a graceful, perceptive young woman, polished but warm',
   };
 
+  /* #1954 — CLONED on qwen. The slot carries a `name`, so the variant branch's
+     only pre-existing gate (`overrideTtsVoices?.qwen?.name` present) reads
+     "base is designed, go ahead" — which is exactly how a cloned character
+     reached the wrong-anchor mint. */
+  const charClonedOnQwen = {
+    id: 'lyra',
+    name: 'Lyra',
+    role: 'lead',
+    color: 'rose',
+    voiceId: 'v_lyra',
+    voiceUuid: 'v_lyra',
+    voiceStyle: 'a warm, low-voiced woman',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-lyra-lib-uuid', libraryUuid: 'lyra-lib-uuid', provenance: 'cloned' },
+    },
+  };
+
   beforeEach(() => {
     /* Write a cast file with both variant-test characters (plus the standard
        set so the other tests keep working when they run in isolation). */
-    writeBookOnDisk([...characters, charWithBase, charNoBase]);
+    writeBookOnDisk([...characters, charWithBase, charNoBase, charClonedOnQwen]);
+  });
+
+  /* #1954 — the variant branch gets the same clone gate the base branch has
+     had since GATE 2 fix-lane-1b, and reports through the same `clonedSkips`
+     channel the UI already renders ("already cloned: …"). */
+  it('#1954: scope:variants skips a CLONED character instead of minting a mis-anchored variant', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_lyra__angry',
+      url: '/voice-samples/qwen-v_lyra__angry.mp3',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [
+          { characterId: 'lyra', emotions: ['angry'] },
+          { characterId: 'marlow', emotions: ['angry'] },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'character_skipped' &&
+          e.characterId === 'lyra' &&
+          e.reason === 'already_cloned' &&
+          e.name === 'Lyra',
+      ),
+    ).toBe(true);
+    expect(events.some((e) => e.type === 'variant_designed' && e.characterId === 'lyra')).toBe(false);
+
+    /* One cloned character must not block the rest of the sweep — the same
+       "skip and report, don't refuse the whole run" call the base branch makes. */
+    expect(events.some((e) => e.type === 'variant_designed' && e.characterId === 'marlow')).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0].characterId).toBe('marlow');
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toMatchObject({ done: 1, total: 2, skipped: 1 });
+    expect(idle?.clonedSkips).toEqual([{ characterId: 'lyra', name: 'Lyra' }]);
+
+    /* THE defect, not a proxy for it: no variant slot was written onto the
+       clone. Pre-fix this held `{ name: 'qwen-v_lyra__angry' }` — a key the
+       render path (which resolves a cloned qwen slot to `qwen-<libraryUuid>`)
+       never looks up. */
+    const lyra = readCast().characters.find((c) => c.id === 'lyra');
+    expect(lyra?.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-lyra-lib-uuid',
+      libraryUuid: 'lyra-lib-uuid',
+      provenance: 'cloned',
+    });
+
+    spy.mockRestore();
   });
 
   it('scope:variants designs the requested emotion and persists the variant slot', async () => {

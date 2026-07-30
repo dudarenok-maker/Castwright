@@ -38,7 +38,7 @@ import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguage } from '../tts/detect-language.js';
-import { supportedLanguages } from '../tts/language-registry.js';
+import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/store.js';
 
@@ -245,6 +245,27 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         ? body.seriesPosition
         : null;
 
+    /* Issue #1955 — the confirm-screen dropdown only constrains the browser;
+       a direct API call can send any BCP-47 tag. Gate at the import
+       boundary (before any disk write) so an unsupported language is
+       rejected here instead of persisting onto state.json and only
+       surfacing later as an opaque chapter_failed at render time
+       (sidecarLanguageName's throw in generation.ts — that backstop stays
+       in place unchanged; this is an earlier, additional gate, not a
+       replacement for it). Checked before ensureWorkspace()/mkdir so a
+       rejected request writes nothing and leaves the staging entry intact
+       for a corrected retry. */
+    const language = normaliseBookLanguage(body.language);
+    if (!isSupportedLanguage(language)) {
+      return res.status(400).json({
+        error: 'unsupported_language',
+        message: `Unsupported language "${language}". Supported languages: ${supportedLanguages()
+          .map((l) => l.code)
+          .join(', ')}.`,
+        supportedLanguages: supportedLanguages(),
+      });
+    }
+
     ensureWorkspace();
     const bookDir = bookDirByDisplay(author, series, title);
     if (existsSync(bookDir)) {
@@ -317,7 +338,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       createdAt: now,
       updatedAt: now,
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      language: normaliseBookLanguage(body.language),
+      language,
     };
     await writeStateJsonAtomic(stateJsonPath(bookDir), state);
 

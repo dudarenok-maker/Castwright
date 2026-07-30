@@ -123,6 +123,17 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     cacheScope = voiceId;
   }
 
+  /* #1951 — is the voice this route resolved actually CLONED? Read from the
+     library ENTRY below, never from the client-supplied
+     `voice.overrideTtsVoices[…].provenance`, for the same reason the consent
+     gate does (see the comment just below): a designed voice resolves to the
+     identical `qwen-<uuid>` key shape, so provenance is the only real test and
+     the client is not trusted with it. Stays false for a non-clone engine, an
+     unresolvable key, or a designed/imported entry — and false is exactly
+     today's behaviour (`resolveWireLanguage` then sends no language for Qwen,
+     so the voice's own manifest language stands). */
+  let cloned = false;
+
   /* fs-38 Wave 3c, Task 2 — a cloned voice whose consent has been revoked
      must never be played again, from either branch, cache hit or not. This
      runs BEFORE the existsSync short-circuit below: a cache entry written
@@ -227,7 +238,8 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
          re-renders once — acceptable, and the stale file itself is inert
          (the gate above already refuses to serve any revoked voice
          regardless of cache scope). */
-      if (!isRawSample && entry?.provenance === 'cloned') {
+      cloned = entry?.provenance === 'cloned';
+      if (!isRawSample && cloned) {
         cacheScope = cloneStorageKey(engine, libraryUuid);
       }
     }
@@ -263,6 +275,14 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       voiceName,
       modelKey: effectiveModelKey,
       ...(typeof body.language === 'string' && body.language ? { language: body.language } : {}),
+      /* #1951 — without this a cloned Qwen voice auditions from its
+         permanently-"English" manifest while the chapter renders in the book's
+         language. `language` here is CLIENT-supplied and unvalidated, so this
+         is the call that makes `sidecarLanguageName` reachable from this route:
+         `resolveWireLanguage` catches its throw and degrades to the manifest
+         language (pinned by voice-sample-cloned-language.test.ts) — the route
+         must never 500 on an odd language tag. */
+      cloned,
     });
     /* Compute duration from raw PCM before encode — MP3 frame counting would
        force a probe step. PCM bytes/sec is exact for 16-bit mono. */

@@ -372,6 +372,34 @@ async function runDesignJob(
         continue;
       }
     } else {
+      /* #1954 — the variant branch gets the clone gate the base branch above
+         has had since GATE 2 fix-lane-1b. It was missing here, and that is
+         what made the wrong-anchor mint reachable: the only pre-existing
+         check is `overrideTtsVoices?.qwen?.name`, and a CLONED slot carries a
+         name (`qwen-<libraryUuid>`), so a cloned character read as "base is
+         designed, go ahead". The mint then anchored on
+         `qwenStorageKey(...)` — a designed-voice key that cannot name a
+         clone's artifact. See designQwenVoiceForCharacter (qwen-voice.ts) for
+         why the resolution is refusal rather than correct anchoring.
+
+         Same disposition as the base branch, and for the same reason: SKIP
+         and report, don't fail the run — refusing the whole sweep would let
+         one cloned character block designing everyone else's variants.
+         Reported through the existing `clonedSkips` channel, which the UI
+         already renders as "already cloned: <names>"
+         (src/store/cast-design-stream-middleware.ts). */
+      if (characterHasClonedSlot(character)) {
+        job.skipped += 1;
+        job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+        broadcast(job, {
+          type: 'character_skipped',
+          characterId,
+          name: character.name ?? characterId,
+          reason: 'already_cloned',
+        });
+        continue;
+      }
+
       /* Variant — skip when the base is missing (can't make a variant without
          a base) or the variant is already designed (idempotent). */
       const baseName = character.overrideTtsVoices?.qwen?.name;

@@ -259,6 +259,12 @@ test.describe('Voice library — create / assign / cross-book reuse / promote', 
 
     await page.getByLabel('person name').fill('Mum');
     await page.getByLabel('relationship').selectOption('family-with-permission');
+    /* #1943 — family-with-permission is a non-self relationship, so the
+       wizard now also requires naming the actual attester (distinct from
+       `personName`) before Continue enables. See
+       `clone-voice-consent-attester.spec.ts` for the dedicated attester
+       coverage (field visibility, gating, guardian-specific sentence). */
+    await page.getByLabel('attester name').fill('E2E Attester');
     await page.getByLabel('I attest').check();
     const continueBtn = page.getByRole('button', { name: 'Continue' });
     await expect(continueBtn).toBeEnabled();
