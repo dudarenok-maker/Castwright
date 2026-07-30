@@ -70,17 +70,26 @@ def make(devices, peak, reserve_cap=768, idle_evict_steps=None, resident=None):
 # than adding a test dependency.
 #
 # `run_case` is the mandatory anti-placebo control (T6): every ported body
-# ends `return _RAN`, and this assert proves the body ran to its LAST line.
-# This is the primary control, not `-W error::RuntimeWarning` — "coroutine
-# was never awaited" is raised from the coroutine's own `__del__`, and
-# CPython prints-and-ignores an exception raised inside a finalizer, so it
-# only fails a test if GC happens to land in that test's scope. The one
-# structural placebo risk in this file is a ported test written as a bare
-# `async def test_...(): ...` with no `asyncio.run` driving it: with no
-# pytest-asyncio installed, pytest just calls it, gets back an un-awaited
-# coroutine, and the test PASSES having executed zero lines of its body.
-# `run_case` closes that gap uniformly for every ported test below,
-# regardless of what that test's own assertions look like.
+# ends `return _RAN`, and this assert proves the body ran to its LAST line —
+# an early `return`, a swallowed branch, or a body that never reached its
+# assertions all fail here rather than passing quietly. Verified by mutation:
+# replacing any body's `return _RAN` with `return None` fails that test with
+# "async test body did not run to completion".
+#
+# It is the primary control, NOT `-W error::RuntimeWarning`: "coroutine was
+# never awaited" is raised from the coroutine's own `__del__`, and CPython
+# prints-and-ignores an exception raised inside a finalizer, so it only fails
+# a test if GC happens to land in that test's scope.
+#
+# What `run_case` does NOT need to defend against, contrary to T6's stated
+# rationale in plan 273: a ported test written as a bare
+# `async def test_...(): ...` with no `asyncio.run` driving it does NOT pass
+# vacuously here. Measured on this venv (pytest 9.1.1, no pytest-asyncio and
+# no active anyio plugin), pytest FAILS such a test outright with "async def
+# functions are not natively supported", so a missing driver is loud on its
+# own. That framing may have held for older pytest, which warned and passed;
+# it does not hold for the pinned toolchain. Do not weaken this control on
+# the strength of that — its real value is the last-line guarantee above.
 _RAN = object()
 
 
