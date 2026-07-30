@@ -140,6 +140,20 @@ production `/embed`: 20s audition vs human source **0.822**; in-book segments
 **0.564** and **0.706**; designed-voice control **0.158**. The by-ear
 confirmation (B-03, E-06) is still owed — a human must listen.
 
+**Resolved without on-box acceptance — B-06 (#1945, 2026-07-30).** B-06's own
+measurement was already conclusive: the clone-fidelity cosine scores
+clone-vs-source *faithfulness*, so degrading the source degrades the clone
+equally and the number does not fall (measured: clean 0.891, band-limited
+0.881, two speakers overlaid 0.773; a genuinely different speaker measured
+0.158). **Disposition:** `CLONE_FIDELITY_MIN = 0.3` is kept as a documented
+catastrophe-only backstop, not recalibrated or deleted — see
+`server/src/tts/clone-fidelity.ts`'s header comment. B-06's manual step (which
+could never pass as written) is retired in favour of an automated test,
+`server/src/routes/voice-library.clone-fidelity.test.ts`, which stubs the
+`/embed` boundary directly and asserts both sides of the threshold in CI. No
+further on-box run is owed for this item — it no longer needs real hardware
+to prove.
+
 **Still owed (~44), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
@@ -160,11 +174,6 @@ confirmation (B-03, E-06) is still owed — a human must listen.
   real guard"*. **Workaround that works today:** the per-character re-record
   (splice) path renders one character's lines without the full-chapter memory
   churn — that is how the central claim above was proven.
-- **B-06 — cannot pass as written, see #1945.** The clone-fidelity cosine scores
-  clone-vs-source *faithfulness*, so degrading the source degrades the clone
-  equally and the number does not fall (measured: clean 0.891, band-limited
-  0.881, two speakers overlaid 0.773). The advisory-warning path has therefore
-  **never fired on real hardware**.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.
