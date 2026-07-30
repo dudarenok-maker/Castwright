@@ -174,6 +174,24 @@ function firePost(path: string, body: Record<string, unknown>): { req: request.T
   return { req, done };
 }
 
+/** A deferred gate for a mocked async call under test (srv, #1960). Many
+    tests need to hold a mocked `runReview`/`warmOllamaModel` call open while
+    a second HTTP action (cancel, a conflicting POST, a GET /state read...)
+    fires, then release it once that action is done. The old approach was a
+    fixed wall-clock sleep guessing at "the request has registered and
+    reached the gated call" — under filesystem/CPU contention 20ms isn't
+    always enough, so the assertion after it fails for reasons unrelated to
+    the contract under test. `entered` resolves the instant `enter()` runs
+    (call it at the top of the mock body, before awaiting `gate`), giving a
+    real signal to await instead. `release(value)` resolves `gate`. */
+function makeGate<T>(): { entered: Promise<void>; enter: () => void; gate: Promise<T>; release: (v: T) => void } {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  let release!: (v: T) => void;
+  const gate = new Promise<T>((resolve) => { release = resolve; });
+  return { entered, enter, gate, release };
+}
+
 const SENTENCES = [
   { id: 1, chapterId: 1, characterId: 'narrator', text: 'The room was quiet.' },
   { id: 2, chapterId: 1, characterId: 'wren', text: '"Get down!"' },
@@ -497,6 +515,11 @@ describe('POST /api/books/:bookId/script-review', () => {
 
   it('carries chapterIndex/totalChapters on every phase event, and estRemainingMs only from the 2nd chapter onward', async () => {
     writeBook(SENTENCES); // 2 chapters
+    // Stays wall-clock deliberately: this delay IS the thing under test —
+    // estRemainingMs is derived from the chapter's actual measured wall-clock
+    // duration, so the mock must genuinely take real time to produce a
+    // meaningful (non-zero) estimate. There's no "entered" condition to gate
+    // on here; the elapsed time itself is the assertion.
     runReview.mockImplementation(async (): Promise<ScriptReviewOutput> => {
       await new Promise((r) => setTimeout(r, 20));
       return { ops: [] };
@@ -537,6 +560,9 @@ describe('POST /api/books/:bookId/script-review', () => {
 
   it('a failed chunk still contributes its wall-clock duration to the next chapter estimate', async () => {
     writeBook(SENTENCES);
+    // Stays wall-clock deliberately — same reasoning as the test above: the
+    // real elapsed time of the (failed) chunk is the thing this test asserts
+    // gets carried into the next chapter's estimate.
     runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
       await new Promise((r) => setTimeout(r, 20));
       if (chapterId === 1) throw new Error('flaky chapter');
@@ -799,23 +825,23 @@ describe('POST /api/books/:bookId/script-review', () => {
         model: 'qwen3.5:9b',
         fallbackModel: null,
       }));
-      let releaseWarm: ((v: { ok: false; status: number; error: string }) => void) | undefined;
+      const warmGate = makeGate<{ ok: false; status: number; error: string }>();
       warmOllamaModelMock.mockImplementation(
-        (_model: string, opts: { signal?: AbortSignal }) =>
-          new Promise((resolve) => {
-            releaseWarm = resolve;
-            // Mirrors warmOllamaModel's real contract: an aborted signal
-            // eventually resolves the pending call rather than hanging it.
-            opts.signal?.addEventListener('abort', () => resolve({ ok: false, status: 0, error: 'aborted' }));
-          }),
+        (_model: string, opts: { signal?: AbortSignal }) => {
+          warmGate.enter();
+          // Mirrors warmOllamaModel's real contract: an aborted signal
+          // eventually resolves the pending call rather than hanging it.
+          opts.signal?.addEventListener('abort', () => warmGate.release({ ok: false, status: 0, error: 'aborted' }));
+          return warmGate.gate;
+        },
       );
 
       const { done } = firePost(`/api/books/${bookId}/script-review`, {});
       done.catch(() => {});
-      await new Promise((r) => setTimeout(r, 20)); // let the request register and reach the gated warm call
+      await warmGate.entered; // let the request register and reach the gated warm call
 
       await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
-      releaseWarm?.({ ok: false, status: 0, error: 'aborted' });
+      warmGate.release({ ok: false, status: 0, error: 'aborted' });
       const res = await done;
 
       const events = parseSse(res.text);
@@ -1242,25 +1268,30 @@ describe('sticky job registry', () => {
     writeBook([
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
     ]);
-    let releaseFirst: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstCall = makeGate<void>();
     runReview.mockImplementation(async () => {
-      await gate;
+      firstCall.enter();
+      await firstCall.gate;
       return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
     });
 
     const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20)); // let the first request register the job
+    await firstCall.entered; // let the first request register the job
 
     // A joined SSE response only completes once the job finishes broadcasting
-    // to every subscriber — so it must not be awaited before releaseFirst()
+    // to every subscriber — so it must not be awaited before firstCall.release()
     // unblocks the gated analyzer call, or both requests deadlock waiting on
     // each other. Kick the join off, give it time to attach as a subscriber,
     // THEN release the gate and await both responses together.
+    //
+    // This 20ms sleep stays wall-clock: the second request doesn't invoke
+    // runReview (it joins the already-running job), so there's no mocked
+    // call to gate on — the wait is for the SSE subscriber-registration
+    // step itself, which has no test-visible signal.
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     await new Promise((r) => setTimeout(r, 20)); // let the second request join as a subscriber
 
-    releaseFirst?.();
+    firstCall.release();
     const [, secondRes] = await Promise.all([first.done, second.done]);
 
     expect(runReview).toHaveBeenCalledTimes(1); // joined the running job, didn't start a second analyzer call
@@ -1273,31 +1304,28 @@ describe('sticky job registry', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
     ]);
-    let releaseFirst: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    runReview.mockImplementation(async () => { await gate; return { ops: [] }; });
+    const firstCall = makeGate<void>();
+    runReview.mockImplementation(async () => { firstCall.enter(); await firstCall.gate; return { ops: [] }; });
 
     const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await firstCall.entered;
 
     const conflict = await request(app).post(`/api/books/${bookId}/script-review`).send({});
     expect(conflict.status).toBe(409);
 
-    releaseFirst?.();
+    firstCall.release();
     await first.done;
   });
 
   it('res.on("close") removes only the disconnecting subscriber; the job keeps running and completes', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
     // Gate only the FIRST (aborted) request's analyzer call. Once the earlier
     // job has actually finished and cleaned itself out of the job map, the
     // reconnect below starts a genuinely new job with its own analyzer call —
     // that one resolves immediately so the reconnect assertion doesn't need
     // a second manual release.
-    runReview.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveReview = resolve; }),
-    );
+    const firstCall = makeGate<{ ops: unknown[] }>();
+    runReview.mockImplementationOnce(() => { firstCall.enter(); return firstCall.gate; });
     runReview.mockResolvedValue({ ops: [] });
 
     const { req, done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
@@ -1307,14 +1335,20 @@ describe('sticky job registry', () => {
     // request before the server even accepts the connection, so no job (and
     // no runReview call) is ever created, which isn't the "disconnect mid-run"
     // scenario this test means to exercise.
-    await new Promise((r) => setTimeout(r, 20));
+    await firstCall.entered;
     req.abort(); // simulate client disconnect
+    // Stays wall-clock: waiting for the abort()'d socket's close event to
+    // actually be processed server-side (res.on('close') firing and
+    // unsubscribing) has no mocked call to gate on.
     await new Promise((r) => setTimeout(r, 20));
 
-    resolveReview?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    firstCall.release({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
 
     // A fresh connection should see the job either already finished or still
-    // running to completion — never aborted by the earlier disconnect.
+    // running to completion — never aborted by the earlier disconnect. Stays
+    // wall-clock: this waits for the ALREADY-RELEASED job to finish running
+    // and remove itself from the registry, which has no mocked-call signal
+    // (the mock already resolved above).
     await new Promise((r) => setTimeout(r, 50));
     const reconnect = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
     expect(reconnect.status).toBe(200);
@@ -1334,11 +1368,11 @@ describe('sticky job registry', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one line.' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two line.' },
     ]);
-    let releaseChapter1: (() => void) | undefined;
-    const gate1 = new Promise<void>((resolve) => { releaseChapter1 = resolve; });
+    const chapter1Call = makeGate<void>();
     runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
       if (chapterId === 1) {
-        await gate1;
+        chapter1Call.enter();
+        await chapter1Call.gate;
         return { ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one line', rationale: 'r' }] };
       }
       return { ops: [{ id: 2, op: 'strip_tag', newText: 'Chapter two line', rationale: 'r' }] };
@@ -1346,7 +1380,7 @@ describe('sticky job registry', () => {
 
     // Start chapter 1's review — gated, not yet resolved.
     const chapter1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20)); // let it register into the map
+    await chapter1Call.entered; // let it register into the map
 
     // Chapter 2 of the SAME book must NOT be treated as a conflict — before the
     // fix, the bare-bookId subset map would have (incorrectly) let this request
@@ -1364,10 +1398,15 @@ describe('sticky job registry', () => {
     // one. If Bug 1 were present, chapter 1's map entry would have been
     // orphaned by chapter 2's registration and this would start a SECOND
     // analyzer call for chapter 1 instead of joining.
+    // Stays wall-clock: the rejoin request either joins chapter 1's existing
+    // map entry or (in the buggy case) triggers a second runReview call —
+    // which of those happens is exactly what this test is checking, so there
+    // is no single mocked-call-entered condition to gate on here; the wait
+    // is for the rejoin POST's own network round trip to be processed.
     const rejoin = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     await new Promise((r) => setTimeout(r, 20));
 
-    releaseChapter1?.();
+    chapter1Call.release();
     const [, rejoinRes] = await Promise.all([chapter1.done, rejoin.done]);
 
     // Exactly one analyzer call for chapter 1 (the original), one for chapter 2.
@@ -1393,10 +1432,10 @@ describe('sticky job registry', () => {
     // regression intent is documented even though it can't observe the race
     // window directly.
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const call = makeGate<void>();
     runReview.mockImplementation(async (): Promise<ScriptReviewOutput> => {
-      await gate;
+      call.enter();
+      await call.gate;
       return { ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] };
     });
 
@@ -1404,9 +1443,9 @@ describe('sticky job registry', () => {
     // calls, as close to simultaneous as this test harness allows.
     const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered; // exactly one of the two requests invokes runReview
 
-    release?.();
+    call.release();
     const [firstRes, secondRes] = await Promise.all([first.done, second.done]);
 
     // Exactly one analyzer call — one of the two requests always registers
@@ -1427,21 +1466,19 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
     ]);
-    let releaseChapter1: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementationOnce(
-      () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter1 = resolve; }),
-    );
+    const chapter1 = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementationOnce(() => { chapter1.enter(); return chapter1.gate; });
     runReview.mockResolvedValue({ ops: [] });
 
     const { done } = firePost(`/api/books/${bookId}/script-review`, {});
     done.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20)); // let chapter 1's job register and reach the gated analyzer call
+    await chapter1.entered; // let chapter 1's job register and reach the gated analyzer call
 
     const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
     expect(cancelRes.status).toBe(200);
     expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
 
-    releaseChapter1?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    chapter1.release({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
     const res = await done;
 
     const events = parseSse(res.text);
@@ -1473,24 +1510,25 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
     ]);
-    let releaseCh1: ((v: ScriptReviewOutput) => void) | undefined;
-    let releaseCh2: ((v: ScriptReviewOutput) => void) | undefined;
+    const gateCh1 = makeGate<ScriptReviewOutput>();
+    const gateCh2 = makeGate<ScriptReviewOutput>();
     runReview.mockImplementation(async (_m, chapterId): Promise<ScriptReviewOutput> => {
-      if (chapterId === 1) return new Promise((resolve) => { releaseCh1 = resolve; });
-      return new Promise((resolve) => { releaseCh2 = resolve; });
+      if (chapterId === 1) { gateCh1.enter(); return gateCh1.gate; }
+      gateCh2.enter();
+      return gateCh2.gate;
     });
 
     const ch1 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     ch1.done.catch(() => {});
     const ch2 = firePost(`/api/books/${bookId}/script-review`, { chapterId: 2 });
     ch2.done.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20));
+    await Promise.all([gateCh1.entered, gateCh2.entered]);
 
     const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
     expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
 
-    releaseCh1?.({ ops: [] });
-    releaseCh2?.({ ops: [] });
+    gateCh1.release({ ops: [] });
+    gateCh2.release({ ops: [] });
     const [res1, res2] = await Promise.all([ch1.done, ch2.done]);
 
     expect(parseSse(res1.text).some((e) => e.kind === 'error' && e.code === 'cancelled')).toBe(true);
@@ -1503,19 +1541,17 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Chapter one.' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'Chapter two.' },
     ]);
-    let releaseChapter2: ((v: ScriptReviewOutput) => void) | undefined;
+    const chapter2 = makeGate<ScriptReviewOutput>();
     runReview
       .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter one fixed', rationale: 'r' }] })
-      .mockImplementationOnce(
-        () => new Promise<ScriptReviewOutput>((resolve) => { releaseChapter2 = resolve; }),
-      );
+      .mockImplementationOnce(() => { chapter2.enter(); return chapter2.gate; });
 
     const { done } = firePost(`/api/books/${bookId}/script-review`, {});
     done.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2's gated call start
+    await chapter2.entered; // let chapter 1 finish and chapter 2's gated call start
 
     await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
-    releaseChapter2?.({ ops: [] });
+    chapter2.release({ ops: [] });
     await done;
 
     const ledger = await readLedger(bookDir(), manuscriptId);
@@ -1533,15 +1569,13 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
      cancel-then-restart-immediately UX this route exists for. */
   it('cancel immediately removes the job from the registry, so a same-scope retry starts fresh instead of joining the doomed job', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementationOnce(
-      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
-    );
+    const firstCall = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementationOnce(() => { firstCall.enter(); return firstCall.gate; });
     runReview.mockResolvedValue({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
 
     const { done: firstDone } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     firstDone.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20)); // let the first job register and reach the gated call
+    await firstCall.entered; // let the first job register and reach the gated call
 
     const cancelRes = await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
     expect(cancelRes.body).toEqual({ ok: true, cancelled: true });
@@ -1549,14 +1583,19 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
     // Retry the SAME scope immediately — WITHOUT waiting for the first
     // (still-gated, not-yet-actually-rejected) job to settle. This is the
     // exact race the finding describes.
+    const secondCall = makeGate<void>();
+    runReview.mockImplementationOnce(() => {
+      secondCall.enter();
+      return Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    });
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await secondCall.entered;
 
     // A genuinely new analyzer call was made — the second request did NOT
     // join the doomed first job.
     expect(runReview).toHaveBeenCalledTimes(2);
 
-    releaseFirst?.({ ops: [] });
+    firstCall.release({ ops: [] });
     const secondRes = await second.done;
     expect(secondRes.status).toBe(200);
     expect(secondRes.text).toContain('"kind":"ops"');
@@ -1565,42 +1604,38 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
 
   it('cancel immediately clears the conflict lock, so a cross-scope retry does not 409 against the doomed job', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementationOnce(
-      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
-    );
+    const firstCall = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementationOnce(() => { firstCall.enter(); return firstCall.gate; });
     runReview.mockResolvedValue({ ops: [] });
 
     const { done: wholeBookDone } = firePost(`/api/books/${bookId}/script-review`, {});
     wholeBookDone.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20));
+    await firstCall.entered;
 
     await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
 
     const chapterRes = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
     expect(chapterRes.status).toBe(200); // not 409 — the cancelled whole-book job no longer holds the lock
 
-    releaseFirst?.({ ops: [] });
+    firstCall.release({ ops: [] });
     await wholeBookDone;
   });
 
   it('cancel immediately clears the job from GET /state instead of still reporting it as running', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let releaseFirst: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementationOnce(
-      () => new Promise<ScriptReviewOutput>((resolve) => { releaseFirst = resolve; }),
-    );
+    const firstCall = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementationOnce(() => { firstCall.enter(); return firstCall.gate; });
 
     const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
     done.catch(() => {});
-    await new Promise((r) => setTimeout(r, 20));
+    await firstCall.entered;
 
     await request(app).post(`/api/books/${bookId}/script-review/cancel`).send({});
 
     const state = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(state.body.kind).toBe('ledger');
 
-    releaseFirst?.({ ops: [] });
+    firstCall.release({ ops: [] });
     await done;
   });
 });
@@ -1608,16 +1643,19 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
 describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {
   it('attach joins a live job and replays its buffered events, without starting a second analyzer call', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let release: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+    const call = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementation(async () => { call.enter(); return call.gate; });
 
     const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered;
 
+    // Stays wall-clock: attach doesn't invoke runReview (it joins the
+    // existing job), so there's no mocked call to gate on here — the wait
+    // is for the attach POST's own subscriber-registration step.
     const attach = firePost(`/api/books/${bookId}/script-review/attach`, { chapterId: 1 });
     await new Promise((r) => setTimeout(r, 20));
 
-    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    call.release({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
     const [, attachRes] = await Promise.all([first.done, attach.done]);
 
     expect(runReview).toHaveBeenCalledTimes(1); // attach joined, did not start a second analyzer call
@@ -1627,9 +1665,11 @@ describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {
 
   it('attach 404s when no job matches the requested chapter, and leaves the actually-running chapter untouched', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    runReview.mockResolvedValue({ ops: [] });
+    const jobEntered = new Promise<void>((resolve) => {
+      runReview.mockImplementationOnce(async () => { resolve(); return { ops: [] }; });
+    });
     const running = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await jobEntered;
 
     const res = await request(app).post(`/api/books/${bookId}/script-review/attach`).send({ chapterId: 2 });
     expect(res.status).toBe(404);
@@ -1644,16 +1684,18 @@ describe('reattach-only endpoint (fs-58 follow-up #1481)', () => {
 
   it('attach to a whole-book job (no chapterId) joins it and replays events', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let release: ((v: ScriptReviewOutput) => void) | undefined;
-    runReview.mockImplementation(async () => new Promise<ScriptReviewOutput>((resolve) => { release = resolve; }));
+    const call = makeGate<ScriptReviewOutput>();
+    runReview.mockImplementation(async () => { call.enter(); return call.gate; });
 
     const first = firePost(`/api/books/${bookId}/script-review`, {});
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered;
 
+    // Stays wall-clock: attach doesn't invoke runReview (it joins the
+    // existing job) — see the same-shaped comment above.
     const attach = firePost(`/api/books/${bookId}/script-review/attach`, {});
     await new Promise((r) => setTimeout(r, 20));
 
-    release?.({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
+    call.release({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
     const [, attachRes] = await Promise.all([first.done, attach.done]);
 
     expect(attachRes.text).toContain('"kind":"ops"');
@@ -1667,12 +1709,10 @@ describe('ledger checkpointing', () => {
       { id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' },
       { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
     ]);
-    let resolveChapter2: (() => void) | undefined;
+    const chapter2 = makeGate<{ ops: unknown[] }>();
     runReview
       .mockResolvedValueOnce({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] })
-      .mockImplementationOnce(() => new Promise<{ ops: unknown[] }>((resolve) => {
-        resolveChapter2 = () => resolve({ ops: [] });
-      }));
+      .mockImplementationOnce(() => { chapter2.enter(); return chapter2.gate; });
 
     // Use firePost (not a bare `request(app)...send()`) so `.end()` actually
     // dispatches the request — per the established pattern/comment above (see
@@ -1681,15 +1721,20 @@ describe('ledger checkpointing', () => {
     // silent no-op and the server never even sees the POST.
     const { req, done } = firePost(`/api/books/${bookId}/script-review`, {});
     done.catch(() => {}); // aborting rejects the promise; only the server-side effect matters here
-    await new Promise((r) => setTimeout(r, 20)); // let chapter 1 finish and chapter 2 start before disconnecting
+    await chapter2.entered; // let chapter 1 finish and chapter 2 start before disconnecting
     req.abort(); // disconnect before chapter 2 resolves — job keeps running
+    // Stays wall-clock: waiting for the abort()'d socket's close event to be
+    // processed server-side has no mocked call to gate on.
     await new Promise((r) => setTimeout(r, 30));
 
     const ledgerMidRun = await readLedger(bookDir(), manuscriptId);
     expect(ledgerMidRun.entries['1'].ops).toHaveLength(1);
     expect(ledgerMidRun.entries['1'].manuscriptId).toBe(manuscriptId);
 
-    resolveChapter2?.();
+    chapter2.release({ ops: [] });
+    // Stays wall-clock: waiting for the (already-resolved) chapter 2 result
+    // to finish its async ledger write has no mocked-call signal — the mock
+    // already resolved above.
     await new Promise((r) => setTimeout(r, 30));
     const ledgerAfter = await readLedger(bookDir(), manuscriptId);
     // Chapter 2 produced zero ops, so no entry is created for it.
@@ -1761,8 +1806,8 @@ describe('GET /:bookId/script-review/state', () => {
 
   it('returns kind:"running" with the replay buffer while a job is in flight', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
-    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+    const call = makeGate<{ ops: unknown[] }>();
+    runReview.mockImplementation(() => { call.enter(); return call.gate; });
 
     // Use firePost, not a bare `request(app).post(...).send(...)` — per the
     // established pattern documented above (see the "res.on('close')"
@@ -1770,7 +1815,7 @@ describe('GET /:bookId/script-review/state', () => {
     // never actually sends until awaited/.end()'d, so the job would not yet
     // be registered when the GET below fires.
     const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered;
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
@@ -1780,17 +1825,17 @@ describe('GET /:bookId/script-review/state', () => {
     expect(res.body.running).toHaveLength(1);
     expect(res.body.running[0].chapterId).toBe(1);
 
-    resolveReview?.({ ops: [] });
+    call.release({ ops: [] });
     await done;
   });
 
   it('replay.lastPhase carries model/engine/activityState so a reattaching client learns them immediately', async () => {
     writeBook([{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello,' }]);
-    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
-    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+    const call = makeGate<{ ops: unknown[] }>();
+    runReview.mockImplementation(() => { call.enter(); return call.gate; });
 
     const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered;
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
@@ -1800,7 +1845,7 @@ describe('GET /:bookId/script-review/state', () => {
       engine: expect.stringMatching(/local|gemini/),
     });
 
-    resolveReview?.({ ops: [] });
+    call.release({ ops: [] });
     await done;
   });
 
@@ -1830,13 +1875,13 @@ describe('GET /:bookId/script-review/state', () => {
       ops: [{ id: 1, op: 'strip_tag', newText: 'Chapter three line', rationale: 'r' }],
     });
 
-    let resolveReview: ((v: { ops: unknown[] }) => void) | undefined;
-    runReview.mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+    const call = makeGate<{ ops: unknown[] }>();
+    runReview.mockImplementation(() => { call.enter(); return call.gate; });
 
     // Start a job for chapter 7 — a DIFFERENT chapter than the one with the
     // persisted ledger entry.
     const { done } = firePost(`/api/books/${bookId}/script-review`, { chapterId: 7 });
-    await new Promise((r) => setTimeout(r, 20));
+    await call.entered;
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
@@ -1847,7 +1892,7 @@ describe('GET /:bookId/script-review/state', () => {
     expect(res.body.entries['3']).toBeDefined();
     expect(res.body.entries['3'].ops).toHaveLength(1);
 
-    resolveReview?.({ ops: [] });
+    call.release({ ops: [] });
     await done;
   });
 
@@ -1866,17 +1911,18 @@ describe('GET /:bookId/script-review/state', () => {
       { id: 1, chapterId: 5, characterId: 'narrator', text: 'Chapter five line.' },
       { id: 2, chapterId: 8, characterId: 'narrator', text: 'Chapter eight line.' },
     ]);
-    let resolveChapter5: ((v: { ops: unknown[] }) => void) | undefined;
-    let resolveChapter8: ((v: { ops: unknown[] }) => void) | undefined;
+    const gateCh5 = makeGate<{ ops: unknown[] }>();
+    const gateCh8 = makeGate<{ ops: unknown[] }>();
     runReview.mockImplementation((_m, chapterId): Promise<{ ops: unknown[] }> => {
-      if (chapterId === 5) return new Promise((resolve) => { resolveChapter5 = resolve; });
-      return new Promise((resolve) => { resolveChapter8 = resolve; });
+      if (chapterId === 5) { gateCh5.enter(); return gateCh5.gate; }
+      gateCh8.enter();
+      return gateCh8.gate;
     });
 
     const first = firePost(`/api/books/${bookId}/script-review`, { chapterId: 5 });
-    await new Promise((r) => setTimeout(r, 20));
+    await gateCh5.entered;
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 8 });
-    await new Promise((r) => setTimeout(r, 20));
+    await gateCh8.entered;
 
     const res = await request(app).get(`/api/books/${bookId}/script-review/state`);
     expect(res.body.kind).toBe('running');
@@ -1884,8 +1930,8 @@ describe('GET /:bookId/script-review/state', () => {
     const chapterIds = res.body.running.map((r: { chapterId: number }) => r.chapterId).sort();
     expect(chapterIds).toEqual([5, 8]);
 
-    resolveChapter5?.({ ops: [] });
-    resolveChapter8?.({ ops: [] });
+    gateCh5.release({ ops: [] });
+    gateCh8.release({ ops: [] });
     await Promise.all([first.done, second.done]);
   });
 });
