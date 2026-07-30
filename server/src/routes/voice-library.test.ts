@@ -2504,6 +2504,42 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.consent.attestedBy).toBe('Ana');
   });
 
+  /* Pins the TRIM itself, which nothing else does: the blank and omitted
+     cases below both expect 'Ana', which is exactly what the pre-fix
+     hardcode produced, so dropping .trim() from the STORED value (while
+     keeping the blank check) would survive them and persist '  Dana  '.
+     The wizard trims client-side, so this is the non-UI caller's guard. */
+  it('trims a supplied attestedBy before persisting it', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-padded-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-padded-attester',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: '  Dana  ',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Dana');
+  });
+
   /* A blank/whitespace attestedBy must not persist an empty attester —
      falls back to personName the same as an omitted field. */
   it('falls back to personName when attestedBy is blank/whitespace', async () => {

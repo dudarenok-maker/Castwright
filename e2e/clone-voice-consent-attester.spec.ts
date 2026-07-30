@@ -16,16 +16,19 @@ import { waitForRouteReady } from './helpers';
  * across its steps, and a fresh page here wants a pristine fixture set.
  *
  * NOT asserted here: the final persisted `consent.attestedBy` on the saved
- * card. `src/lib/api.ts`'s `mockCloneVoice` — the in-memory mock backend
- * e2e runs against under `VITE_USE_MOCKS` — still hardcodes
- * `attestedBy: body.consent.personName`, mirroring the exact bug this issue
- * fixes on the real server route, but for the mock layer. That is out of
- * this change's scope (reported separately, not fixed here); no view
- * renders `consent.attestedBy` either, so there is nothing in the DOM this
- * spec could assert on regardless. What IS provable end-to-end, and is
- * covered below, is the wizard's own behaviour: the attester field's
- * conditional visibility, the Continue gate, the relationship-aware
- * attestation sentence, and that the whole guardian flow completes.
+ * card — and the reason is the DOM, not the mock. `src/lib/api.ts`'s
+ * `mockCloneVoice` (the in-memory backend e2e runs against under
+ * `VITE_USE_MOCKS`) now mirrors the real route's attester handling, pinned
+ * by `src/lib/api.voice-library.test.ts`. But no view renders
+ * `consent.attestedBy`, so there is nothing in the DOM for this spec to
+ * assert against however the mock behaves.
+ *
+ * So this spec proves the wizard's behaviour, NOT the persisted record:
+ * the attester field's conditional visibility, the Continue gate, the
+ * relationship-aware attestation sentence, and that the whole guardian
+ * flow completes. The record itself is covered at the route level in
+ * `server/src/routes/voice-library.test.ts`. Don't read a green run here
+ * as proof that what got stored was correct.
  */
 test.describe.configure({ mode: 'serial' });
 

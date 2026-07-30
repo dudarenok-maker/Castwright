@@ -10,9 +10,14 @@ export interface ConsentDraft { personName: string; relationship: Relationship; 
 /* #1943 — the attestation sentence's fixed "relaying permission" phrasing is
    wrong for guardian-of-minor: a guardian isn't relaying the child's
    permission, they're consenting on the child's behalf. */
+/* self and family-with-permission share ONE literal rather than repeating it:
+   two copies of the same sentence is how one arm silently drifts when the
+   other is edited, and family-with-permission is the arm where a relative —
+   not the subject — is attesting, so a drift there matters most. */
+const PERMISSION_SENTENCE = 'I attest I have this person’s permission to clone their voice.';
 const ATTEST_SENTENCE: Record<Relationship, string> = {
-  self: 'I attest I have this person’s permission to clone their voice.',
-  'family-with-permission': 'I attest I have this person’s permission to clone their voice.',
+  self: PERMISSION_SENTENCE,
+  'family-with-permission': PERMISSION_SENTENCE,
   'guardian-of-minor': 'I attest, as this child’s guardian, that I consent to cloning their voice.',
 };
 

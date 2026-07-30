@@ -119,11 +119,6 @@ describe('CloneVoiceWizard', () => {
     expect(await screen.findByTestId('clone-voice-wizard-fidelity-warning')).toBeInTheDocument();
   });
 
-  /* Finding 2 (#1842 review) — the post-save preview shares the `qwen-<uuid>`
-     scope with the My-voices card's Play button, which already auditions at
-     the session tier. Without threading modelKey here, a 1.7B session would
-     save a clone at this wizard's default (0.6B) and hear it differently one
-     click later on the card — the exact divergence #1842 exists to remove. */
   /* #1943 — the wizard must forward a guardian's attestedBy through to the
      API verbatim, not drop it on the way from the panel's onReady payload. */
   it('Save dispatches cloneVoice carrying a guardian consent.attestedBy distinct from personName', async () => {
@@ -142,6 +137,11 @@ describe('CloneVoiceWizard', () => {
     });
   });
 
+  /* Finding 2 (#1842 review) — the post-save preview shares the `qwen-<uuid>`
+     scope with the My-voices card's Play button, which already auditions at
+     the session tier. Without threading modelKey here, a 1.7B session would
+     save a clone at this wizard's default (0.6B) and hear it differently one
+     click later on the card — the exact divergence #1842 exists to remove. */
   it('post-save preview calls api.sampleLibraryVoice with the session Qwen tier', async () => {
     cloneVoiceApi.mockResolvedValue({
       voiceUuid: 'lib-clone-x', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,

@@ -116,6 +116,23 @@ describe('CloneCapturePanel', () => {
     );
   });
 
+  /* #1943 — the sentence is relationship-aware, so pin the arm nothing else
+     covers. 'self' is pinned by the aria-describedby test above (it renders
+     the default) and 'guardian-of-minor' by the wording test below; without
+     this, family-with-permission — the arm where a RELATIVE rather than the
+     subject is attesting — is the one nothing asserts. */
+  it('keeps the permission wording for family-with-permission', () => {
+    render(wrap(<CloneCapturePanel onReady={vi.fn()} />));
+    fireEvent.change(screen.getByLabelText(/relationship/i), {
+      target: { value: 'family-with-permission' },
+    });
+    const checkbox = screen.getByLabelText(/i attest/i);
+    const sentence = document.getElementById(checkbox.getAttribute('aria-describedby')!);
+    expect(sentence).toHaveTextContent(
+      'I attest I have this person’s permission to clone their voice.',
+    );
+  });
+
   /* #1943 — the real attester (e.g. a guardian) is not necessarily the
      person whose voice this is. The field only appears for the two
      relationships where that can differ; asking someone to type their own
