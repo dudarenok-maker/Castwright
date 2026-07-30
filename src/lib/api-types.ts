@@ -4135,13 +4135,21 @@ export interface components {
                 /** @enum {string} */
                 permittedUse: "personal";
                 /**
-                 * @description Optional name of the person actually attesting, when it
-                 *     differs from `personName` (whose voice this is) — e.g. the
-                 *     guardian attesting for a `guardian-of-minor` clone, or the
-                 *     relative attesting for `family-with-permission`. Persisted
-                 *     verbatim (trimmed). Blank/whitespace-only or omitted falls
-                 *     back to `personName` on the stored `VoiceConsentRecord`, so
-                 *     every stored record always has a non-empty `attestedBy`.
+                 * @description Name of the person actually attesting, when it differs from
+                 *     `personName` (whose voice this is) — e.g. the guardian
+                 *     attesting for a `guardian-of-minor` clone, or the relative
+                 *     attesting for `family-with-permission`. Persisted verbatim
+                 *     (trimmed).
+                 *
+                 *     Required (non-blank after trimming) whenever `relationship`
+                 *     is not `self` — omitting it is a 400, because falling back to
+                 *     `personName` there would persist a record asserting that,
+                 *     e.g., the minor attested to their own voice being cloned
+                 *     (#1959). Optional only for `relationship: self`, where
+                 *     `personName` *is* the attester: blank/whitespace-only or
+                 *     omitted there falls back to `personName` on the stored
+                 *     `VoiceConsentRecord`, so every stored record always has a
+                 *     non-empty `attestedBy`.
                  */
                 attestedBy?: string;
             };

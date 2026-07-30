@@ -94,7 +94,13 @@ function postClone(candidateId: string) {
     .post('/api/voice-library/clone')
     .send({
       candidateId,
-      consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      /* #1959 — family-with-permission now requires attestedBy up front. */
+      consent: {
+        personName: 'Mum',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedBy: 'Mum',
+      },
     });
 }
 
