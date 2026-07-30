@@ -2681,7 +2681,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | | |
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
 | C-16 | Broken / Repairable card chip | | |
-| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | |
+| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **F** (run 2) | **See DEF-F / [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972).** Fresh designed voice `qwen-EFTYRmyFHpQrHr5iUfMwg` (retained clip present, 518,444 B) assigned to `maerin`; only the `.pt` deleted; chapter re-recorded twice, the second time after a sidecar restart so the prompt cache was cold. **The chapter completed but the `.pt` never reappeared** — and the sidecar log for that window names `qwen-fDtxqBAQEy9Os1LA5yVUo`, **the Narrator's** designed voice, on four synths whose durations match maerin's four segments one-for-one (4.24/4.32/1.28/1.44 s). `characterSnapshots.maerin.resolvedVoiceName` nonetheless recorded the assigned voice. The sidecar itself refuses cleanly when probed directly (409 `voice_not_designed`), so the substitution is Node-side, and nothing was logged. Steps 6–8 (manifest compare, persona box, re-design) were not reached — the self-heal they test never ran |
 | C-18 | §2.3 stale `.pt` deliberately left alone | | |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
 | C-20 | Pause during a repair derive → no failure/toast | | |
@@ -2748,18 +2748,25 @@ Run 1 — 2026-07-29. "not reached" tests are counted as neither P/F/B/N/A.
 | E (3c) | 9 | 1 | 0 | 0 | 1 | 7 |
 | **All** | **60** | **17** | **0** | **8** | **2** | **33** |
 
-Cumulative after Run 2 — 2026-07-31. Only Section E moved: E-01 and E-02 ran
-for the first time, and E-09 went `N/A` → **P** because run 2 finally produced
-XTTS artifacts for it to erase.
+Cumulative after Run 2 — 2026-07-31. Section E moved (E-01 and E-02 ran for the
+first time; E-09 went `N/A` → **P** because run 2 finally produced XTTS
+artifacts for it to erase), and **C-17 ⭐ ran and FAILED** — the first `F` this
+sheet has recorded.
 
 | Section | Total | P | F | B | N/A | not reached |
 |---|---|---|---|---|---|---|
 | A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
 | B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
-| C (3b2) | 21 | 3 | 0 | 1 | 0 | 17 |
+| C (3b2) | 21 | 3 | **1** | 1 | 0 | **16** |
 | D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
 | E (3c) | 9 | **4** | 0 | 0 | **0** | **5** |
-| **All** | **60** | **20** | **0** | **8** | **1** | **31** |
+| **All** | **60** | **20** | **1** | **8** | **1** | **30** |
+
+**The zero-failures streak is over, and that is the point of running these.**
+C-17 is a ⭐ test guarding a documented invariant (268 Invariant 8 / the
+plan-149 persona guard), and it failed in a way no automated suite was
+positioned to see — the chapter *completed*, every on-disk artifact claimed the
+right voice, and only the sidecar's own synth log disagreed.
 
 Run 2 also discharged the **core** criterion of register row **A24** (a cloned
 voice renders a non-English book in the book's language) — not one of the 60,
@@ -2905,6 +2912,38 @@ directly through the production `/synthesize` + `/embed` path, the clone scores
 against a ~0.03 different-speaker floor. The audio is fine; the reference is stale.
 **Amplifier:** `SEG_SPK_AUTO_REPAIR=1` is a shipped default, so each affected
 line burns a re-render every pass and still ends up flagged.
+
+**DEF-F · HIGH · #1972 · open · C-17 fails on this**
+**What:** a **designed** voice whose `.pt` is missing does not self-heal from
+its retained clip, and the chapter then renders that character's lines **in the
+narrator's voice** while the snapshot records the *assigned* voice. Nothing is
+logged.
+**Test ID:** C-17 ⭐.
+**Repro:** 1. Design a voice so `qwen-<uuid>__master.wav` is written. 2. Assign
+it to a character with dialogue in a rendered chapter. 3. Delete **only** the
+`.pt`. 4. Restart the sidecar so the prompt cache is cold. 5. Re-record that
+character.
+**Expected:** one derive, `.pt` back on disk, manifest `instruct`
+byte-identical.
+**Actual:** chapter completes; `.pt` never returns; four sidecar synths on
+`qwen-fDtxqBAQEy9Os1LA5yVUo` (the **Narrator's** voice) whose durations match
+maerin's four segments exactly (4.24/4.32/1.28/1.44 s); yet
+`characterSnapshots.maerin.resolvedVoiceName` = `qwen-EFTYRmyFHpQrHr5iUfMwg`.
+**Not the sidecar.** Probed directly with the missing voice it returns a clean
+`409 voice_not_designed` — it refuses rather than substituting. The
+substitution is Node-side.
+**Unlogged.** No `[clone-voice-resolver]` self-heal warning and no
+`[synthesise-chapter] … falling back to the narrator voice` line in
+`server.err.log` for that window. That message exists and fired earlier the
+same session for a different cause, so the path works — this fallback simply
+does not announce itself. `synthesise-chapter.ts:274-277` records the same
+symptom occurring before ("*manifested as Oduvan and Ro speaking in the
+narrator's voice*").
+**Possible narrower repro:** `maerin` carries `modelKey: qwen3-tts-1.7b`, which
+overrode the `qwen3-tts-0.6b` requested in the splice body, and the voice was
+minted at 0.6B — so no `__1.7b.pt` ever existed. Whether the self-heal declines
+for a tier variant or ran and failed silently is not visible from outside.
+Check that first.
 
 ---
 

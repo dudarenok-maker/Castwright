@@ -94,7 +94,7 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **21 of 60 run (2026-07-29, 2026-07-31) · ~39 still owed · first FAILURE**
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
@@ -179,7 +179,20 @@ place on this box (run sheet §7.3).
 [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969) is why
 A24 below is not fully discharged.
 
-**Still owed (~40), and why:**
+**C-17 ⭐ ran and FAILED — the sheet's first `F`, and the best argument yet for
+this register.** A **designed** voice whose `.pt` is missing did not self-heal
+from its retained clip, and the chapter then rendered that character's lines
+**in the narrator's voice** — while `characterSnapshots.<id>.resolvedVoiceName`
+recorded the assigned voice and nothing was logged. The chapter *completed*;
+every on-disk artifact claimed the right voice; only the sidecar's own synth log
+disagreed, naming `qwen-fDtxqBAQEy9Os1LA5yVUo` on four synths whose durations
+match the character's four segments exactly. The sidecar itself refuses cleanly
+when probed (409 `voice_not_designed`), so the substitution is Node-side. Filed
+as [**#1972**](https://github.com/dudarenok-maker/Castwright/issues/1972); this
+is the failure mode 268 Invariant 8 and the plan-149 persona guard exist to
+prevent, and no automated suite was positioned to see it.
+
+**Still owed (~39), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
