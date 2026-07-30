@@ -83,6 +83,101 @@ describe('fs-25 — EmotionVariantDesigner', () => {
     await waitFor(() => expect(screen.getByTestId('variant-play-angry')).toBeTruthy());
   });
 
+  /* #1954 — a cloned voice cannot carry emotion variants: the server refuses
+     with 409 `clone_protected`, so the UI must never offer the action. Derived
+     from the character itself (not a prop) so no render site can forget it —
+     the whole defect was a gate present on one branch and absent on another. */
+  describe('#1954 — cloned voices', () => {
+    const clonedOnQwen = {
+      id: 'lyra',
+      name: 'Lyra',
+      attributes: [],
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-lyra-lib-uuid', libraryUuid: 'lyra-lib-uuid', provenance: 'cloned' },
+      },
+    };
+
+    it('replaces the designer with an actionable hint for a qwen-cloned character', () => {
+      const store = makeStore([clonedOnQwen]);
+      render(
+        <Provider store={store}>
+          <EmotionVariantDesigner
+            bookId="b1"
+            character={clonedOnQwen as never}
+            sampleVoiceId="v1"
+            modelKey="qwen3-tts-0.6b"
+            baseDesigned
+            variants={undefined}
+          />
+        </Provider>,
+      );
+
+      const hint = screen.getByTestId('variant-cloned-hint');
+      expect(hint.textContent).toMatch(/cloned voice/i);
+      expect(hint.textContent).toMatch(/designed voice/i);
+      /* No controls at all — not merely disabled ones. `baseDesigned` is true
+         here (a cloned slot carries a name), which is exactly why the old
+         `!baseDesigned`-only gate let this through. */
+      expect(screen.queryByTestId('variant-designer')).toBeNull();
+      expect(screen.queryByLabelText('Design the Angry variant')).toBeNull();
+    });
+
+    it('also gates a character cloned on COQUI (matches the server-side whole-character test)', () => {
+      const clonedOnCoqui = {
+        id: 'zara',
+        name: 'Zara',
+        attributes: [],
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-v_zara' },
+          coqui: { name: 'xtts-zara-uuid', libraryUuid: 'zara-uuid', provenance: 'cloned' },
+        },
+      };
+      const store = makeStore([clonedOnCoqui]);
+      render(
+        <Provider store={store}>
+          <EmotionVariantDesigner
+            bookId="b1"
+            character={clonedOnCoqui as never}
+            sampleVoiceId="v1"
+            modelKey="qwen3-tts-0.6b"
+            baseDesigned
+            variants={undefined}
+          />
+        </Provider>,
+      );
+      expect(screen.getByTestId('variant-cloned-hint')).toBeTruthy();
+      expect(screen.queryByTestId('variant-designer')).toBeNull();
+    });
+
+    it('does not gate a plain DESIGNED voice-library assignment', () => {
+      /* Guard against over-refusing: `provenance: 'designed'` is not a clone,
+         and its variant flow is untouched by this fix. */
+      const designedFromLibrary = {
+        id: 'wren',
+        name: 'Wren',
+        attributes: [],
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-wren', libraryUuid: 'wren-lib', provenance: 'designed' },
+        },
+      };
+      const store = makeStore([designedFromLibrary]);
+      render(
+        <Provider store={store}>
+          <EmotionVariantDesigner
+            bookId="b1"
+            character={designedFromLibrary as never}
+            sampleVoiceId="v1"
+            modelKey="qwen3-tts-0.6b"
+            baseDesigned
+            variants={undefined}
+          />
+        </Provider>,
+      );
+      expect(screen.queryByTestId('variant-cloned-hint')).toBeNull();
+      expect(screen.getByTestId('variant-designer')).toBeTruthy();
+    });
+  });
+
   it('shows "Designed" (not a Design button) for an already-designed variant', () => {
     const store = makeStore([baseChar]);
     render(

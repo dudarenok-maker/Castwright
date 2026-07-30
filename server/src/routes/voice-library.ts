@@ -52,7 +52,6 @@ import {
   type TtsModelKey,
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { sidecarLanguageName } from '../tts/language.js';
 import { encodePcmToAudio, decodeAudioToPcm } from '../tts/mp3.js';
 import {
   buildSampleText,
