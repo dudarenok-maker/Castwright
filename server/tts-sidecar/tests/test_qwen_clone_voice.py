@@ -87,7 +87,7 @@ def test_clone_voice_rejects_missing_body_and_headers(fake_qwen_runtime) -> None
 
 
 def test_clone_voice_cache_entry_survives_a_load_voice_prompt_round_trip(
-    fake_qwen_runtime, monkeypatch
+    fake_qwen_runtime,
 ) -> None:
     """Regression: clone_voice's post-lock cache warm (main.py ~5290) must
     store the SAME `(prompt, language)` 2-tuple shape as design_voice's and
@@ -100,34 +100,18 @@ def test_clone_voice_cache_entry_survives_a_load_voice_prompt_round_trip(
     only because that wipes the in-memory cache, proving the on-disk .pt
     was always fine and the poisoned cache entry was the sole fault.
 
-    The shared fixture's create_voice_clone_prompt fake returns a 2-key
-    dict (fine for the other clone tests in this file), and a 2-key dict
-    happens to unpack into 2 values WITHOUT raising -- which would make a
-    naive version of this test pass even with the bug present. Real
-    qwen_tts create_voice_clone_prompt returns a LIST of
-    VoiceClonePromptItem, normally length 1 (main.py:5908-5911) -- a
-    length-1 list is exactly what reproduces the real
-    ValueError. Patch just this test's create_voice_clone_prompt to return
-    that real shape so the repro is faithful.
+    The shared fixture's create_voice_clone_prompt fake used to return a
+    2-key dict, and a 2-key dict happens to unpack into 2 values WITHOUT
+    raising -- which let a naive version of this test pass even with the bug
+    present. It's now faithful to the real shape: qwen_tts
+    create_voice_clone_prompt returns a LIST of VoiceClonePromptItem,
+    normally length 1 (main.py:5908-5911) -- a length-1 list is exactly what
+    reproduces the real ValueError (#1951; no per-test monkeypatch needed
+    any more).
 
     This exercises the real write via the HTTP route (same as clone_voice's
     other tests above), then calls the real read path directly — no
     stubbing of _prompt_cache itself, which is the unit under test."""
-    from test_qwen3 import _FakeQwenModel  # noqa: E402  (shared fixture's fake model class)
-
-    class _RealShapedPromptItem:
-        def __init__(self, ref_text: str) -> None:
-            self.ref_text = ref_text
-            self.ref_code = None
-
-    def _real_shaped_create_voice_clone_prompt(self, ref_audio, ref_text, **_kwargs):
-        self.prompt_calls.append((ref_audio, ref_text))
-        return [_RealShapedPromptItem(ref_text)]
-
-    monkeypatch.setattr(
-        _FakeQwenModel, "create_voice_clone_prompt", _real_shaped_create_voice_clone_prompt
-    )
-
     engine = fake_qwen_runtime["engine"]
     client = TestClient(main.app)
     resp = client.post(

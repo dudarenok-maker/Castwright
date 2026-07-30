@@ -1214,3 +1214,166 @@ def test_route_ignores_over_cap_instruct_when_live_instruct_off(
         },
     )
     assert resp.status_code == 200
+
+
+# ── #1951 / plan 275: per-item `language` override on the batch path ────────
+#
+# THE PRIMARY REGRESSION SURFACE. Qwen chapter sentences do NOT go through
+# /synthesize — they go through /synthesize-batch (QWEN_BATCH_SIZE defaults to
+# 32; the only Qwen /synthesize in a chapter is the title beat). A cloned voice
+# whose manifest says "English" must render a German book in German, so Node
+# stamps a per-ITEM `language` on the cloned items only. Per-item, not
+# per-batch: a batch may MIX a cloned character's line with a designed
+# narrator's, and those need DIFFERENT languages.
+#
+# The sidecar's rule is one line and never learns what a clone is: if the
+# caller gave me a language, use it; otherwise fall back to the manifest's.
+
+
+def test_batch_per_item_language_overrides_manifest_and_omitted_falls_back(
+    qwen_batch_runtime,
+) -> None:
+    """0.6B batch: item 0 carries `language: "German"`, item 1 carries none.
+    Both voices' manifests say "English" (that is what `_design(..., "English")`
+    writes). generate_voice_clone must receive `language=["German", "English"]`
+    — the override applied per item, the omitted item keeping its manifest
+    language.
+
+    Pre-fix this fails with `["English", "English"]`: the batch loop reads the
+    manifest language unconditionally and never looks at `item["language"]`."""
+    engine = qwen_batch_runtime["engine"]
+    for v in ("cloned", "designed"):
+        _design(engine, v)
+    engine._base.clone_calls.clear()
+
+    res = engine.synthesize_batch(
+        "0.6b",
+        [
+            {"voice": "cloned", "text": "Der alte Leuchtturm.", "language": "German"},
+            {"voice": "designed", "text": "The old lighthouse."},
+        ],
+    )
+
+    assert len(engine._base.clone_calls) == 1
+    assert engine._base.clone_calls[0]["language"] == ["German", "English"]
+    assert len(res.pcms) == 2
+
+
+def test_batch_17b_per_item_language_overrides_manifest(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """Same contract on the 1.7B wrapper path — a SEPARATE loop from 0.6B's, so
+    fixing only the 0.6B one would leave every Quality-tier render in English.
+    `_setup_17b_engine`'s stubbed `_load_voice_prompt_17b` reports "English" as
+    the manifest language for both voices."""
+    engine = qwen_batch_runtime["engine"]
+    _markers, fake17, _off = _setup_17b_engine(engine, monkeypatch, ("cloned", "designed"))
+
+    engine.synthesize_batch(
+        "1.7b",
+        [
+            {"voice": "cloned", "text": "Der alte Leuchtturm.", "language": "German"},
+            {"voice": "designed", "text": "The old lighthouse."},
+        ],
+    )
+
+    assert len(fake17.clone_calls) == 1
+    assert fake17.clone_calls[0]["language"] == ["German", "English"]
+
+
+def test_batch_17b_live_instruct_per_item_language_overrides_manifest(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """The 1.7B liveInstruct bypass hands the SAME `langs` list to
+    `_icl_instruct_synth_batch` — a third consumer built from the same loop.
+    Assert the override reaches it too, or a prosody-tier chapter silently keeps
+    rendering English."""
+    engine = qwen_batch_runtime["engine"]
+    _setup_17b_engine(engine, monkeypatch, ("cloned", "designed"))
+
+    seen: dict[str, Any] = {}
+    real = engine._icl_instruct_synth_batch
+
+    def _spy(prompt_lists, texts, instructs, langs):
+        seen["langs"] = list(langs)
+        return real(prompt_lists, texts, instructs, langs)
+
+    monkeypatch.setattr(engine, "_icl_instruct_synth_batch", _spy)
+    engine.synthesize_batch(
+        "1.7b",
+        [
+            {"voice": "cloned", "text": "Der alte Leuchtturm.", "language": "German"},
+            {"voice": "designed", "text": "The old lighthouse."},
+        ],
+        live_instruct=True,
+    )
+
+    assert seen["langs"] == ["German", "English"]
+
+
+def test_route_does_not_strip_or_default_the_per_item_language(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """HONEST LABEL: this one passes pre-fix by construction and is a GUARD, not
+    a red/green regression test. The route hands the parsed item dicts to
+    `synthesize_batch` verbatim, so `language` already rides through untouched —
+    no route change is needed to TRANSMIT it (only to validate it, covered by
+    the 400 test below).
+
+    It is kept because the validation being added next is exactly the kind of
+    change that grows into "rebuild a sanitised item dict", which would silently
+    drop the key and re-ship the English-book bug. It also pins the other half
+    of the fallback contract: an item that omits `language` must arrive with the
+    key still ABSENT — never defaulted to a string, which would override the
+    manifest language for every designed voice in the batch."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    seen: dict[str, Any] = {}
+
+    def _spy(model, items, live_instruct=False):
+        seen["items"] = items
+        return main.SynthBatchResult(pcms=[b"\x00\x00", b"\x00\x00"], sample_rate=24000)
+
+    monkeypatch.setattr(engine, "synthesize_batch", _spy)
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "items": [
+                {"voice": "a", "text": "Der alte Leuchtturm.", "language": "German"},
+                {"voice": "a", "text": "The old lighthouse."},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert seen["items"][0]["language"] == "German"
+    assert "language" not in seen["items"][1]
+
+
+def test_route_rejects_a_non_string_per_item_language(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """A present-but-malformed `language` is a caller bug, not a reason to
+    silently render the wrong language — 400 it, mirroring the route's existing
+    per-item `voice`/`text` validation. Absent stays valid (the fallback)."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+    monkeypatch.setattr(
+        engine,
+        "synthesize_batch",
+        lambda *a, **k: main.SynthBatchResult(pcms=[b"\x00\x00"], sample_rate=24000),
+    )
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "items": [{"voice": "a", "text": "Hi.", "language": 42}],
+        },
+    )
+    assert resp.status_code == 400
+    assert "language" in resp.json()["detail"]
