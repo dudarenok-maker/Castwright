@@ -127,8 +127,10 @@ this box is dual-GPU).
 >
 > **Fixtures:** built from public-domain LibriVox recordings (two distinct
 > narrators) and left at `C:\fixtures\fs38\` — F-1…F-9 plus `F8b-twospeaker`.
-> F-8 was regenerated at `volume=+6dB` rather than the sheet's `-8dB`, which
-> landed at −41.7 dBFS, only 3.3 dB above the −45 dBFS fatal-silence floor.
+> F-8 was regenerated at `volume=+6dB` rather than the sheet's then-published
+> `-8dB`, which landed at −41.7 dBFS, only 3.3 dB above the −45 dBFS
+> fatal-silence floor. The fixture table now specifies `+6dB`, so a fresh run
+> follows the corrected recipe directly.
 >
 > **Baseline before the run:** `C:\AudiobookWorkspace\voice-library\` did not
 > exist and `voices\xtts\` did not exist — independent confirmation that no clone
@@ -911,8 +913,14 @@ the real path. The mock path (`src/mocks/`) is only reachable with
   values — proof it is being computed, not stubbed. Two *identical* values to
   full float precision across different clones is the mock-constant smell:
   investigate before passing.
-- F-8's cosine is **materially lower** than F-1's — but not below `CLONE_FIDELITY_MIN`
-  (#1945: a same-source comparison, so it stays well above the catastrophe-only backstop).
+- F-8's cosine lands **close to** F-1's — record the delta, do not expect a drop.
+  #1945 measured F-1 at 0.8914 and 0.8813 (two clones of the *same* fixture) and
+  band-limited F-8 at 0.881 — a ~0.01 gap, i.e. **inside** the spread between two
+  clones of one fixture. The cosine scores a clone against its own source, so
+  degrading the source degrades the clone equally and the number barely moves.
+  A materially *lower* value here is the surprise worth investigating, not the
+  expected result. (Nothing realistic approaches `CLONE_FIDELITY_MIN`, which is a
+  catastrophe-only backstop — see the retired B-06 below.)
 - `cloneFidelityUnavailable` is **absent** when `/embed` is reachable.
 
 **Record:** F-1 cosine run 1 = ______ run 2 = ______ · F-8 cosine = ______

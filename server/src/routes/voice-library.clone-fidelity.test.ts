@@ -99,6 +99,22 @@ function postClone(candidateId: string) {
 }
 
 describe('POST /api/voice-library/clone — clone-fidelity advisory (#1945)', () => {
+  /* ── CLONE_FIDELITY_MIN pin ──────────────────────────────────────────────
+     #1945 weighed three options and chose "keep 0.3 as a catastrophe-only
+     backstop" over recalibrating upward (~0.6) — rejected because, with about
+     four datapoints and short-clip embeddings measured at 0.56-0.71, a higher
+     threshold risks false-warning on legitimate clones.
+
+     Without this pin that decision is enforced NOWHERE: the cases below inject
+     0.9 and 0.0, so they only fail if the constant moves above 0.9 or below 0.
+     A change to 0.6 — the exact option that was rejected — would keep the whole
+     suite green and land silently. Same idiom as render-integrity's CUTOFFS pin
+     in score.test.ts. If you are deliberately recalibrating, update #1945's
+     disposition and this pin together. */
+  it('pins CLONE_FIDELITY_MIN at its deliberated value', () => {
+    expect(CLONE_FIDELITY_MIN).toBe(0.3);
+  });
+
   it('persists NO warning when the embed boundary scores the clone above CLONE_FIDELITY_MIN', async () => {
     // Two near-aligned (not identical) unit vectors -> cosine 0.9, comfortably
     // above the current 0.3 threshold but not an unreachable 1.0 ceiling, so
