@@ -2230,6 +2230,18 @@ paths:
                       into local state MUST reconcile against this rather than
                       assuming the engine they asked for was written — otherwise the
                       UI shows an assignment the server declined to make.
+                  warning:
+                    type: string
+                    nullable: true
+                    description: |
+                      Non-fatal advisory (#1953) — set when a DESIGNED voice's baked
+                      manifest language differs from the book's language. The
+                      assignment still succeeds; this is a warning, never a 409 (see
+                      the cloned-voice wrong-engine 409 below, which is a distinct,
+                      unrelated guard). Applies on an English book as well as a
+                      non-English one. Absent for a cloned/imported entry (which has
+                      no baked design language) and for a matching-language designed
+                      voice.
         '404':
           description: No library entry, book, or character matching the request
         '409':

@@ -8000,6 +8000,17 @@ export interface operations {
                          *     UI shows an assignment the server declined to make.
                          */
                         written: ("qwen" | "coqui")[];
+                        /**
+                         * @description Non-fatal advisory (#1953) — set when a DESIGNED voice's baked
+                         *     manifest language differs from the book's language. The
+                         *     assignment still succeeds; this is a warning, never a 409 (see
+                         *     the cloned-voice wrong-engine 409 below, which is a distinct,
+                         *     unrelated guard). Applies on an English book as well as a
+                         *     non-English one. Absent for a cloned/imported entry (which has
+                         *     no baked design language) and for a matching-language designed
+                         *     voice.
+                         */
+                        warning?: string | null;
                     };
                 };
             };

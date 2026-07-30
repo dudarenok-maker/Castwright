@@ -19,7 +19,7 @@ const assignLibraryVoiceMock =
     (
       voiceUuid: string,
       args: { bookId: string; characterId: string; modelKey?: string },
-    ) => Promise<{ updated: number; written: ('qwen' | 'coqui')[] }>
+    ) => Promise<{ updated: number; written: ('qwen' | 'coqui')[]; warning?: string }>
   >();
 /* assignVoice's thunk re-fetches the library on success — default matches
    every existing test's expectation of an empty catalog; overridden per-test
@@ -879,5 +879,29 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
        the undefined coqui slot would catch that too. */
     expect(coquiCharAfter?.overrideTtsVoices?.coqui).toBeUndefined();
     expect(coquiCharAfter?.overrideTtsVoices?.qwen?.libraryUuid).toBe('lib1');
+  });
+
+  /* #1953 — the server assigns successfully (200) but flags a designed
+     voice's baked language mismatch as a non-fatal `warning`. Mirrors
+     profile-drawer.test.tsx's equivalent test for this panel's own assign
+     path. */
+  it('#1953 surfaces the server\'s language-mismatch warning after a successful assign', async () => {
+    assignLibraryVoiceMock.mockResolvedValue({
+      updated: 1,
+      written: ['qwen'],
+      warning:
+        '"Marlow"\'s voice was designed in Russian but this book is English — the audio will be unintelligible. Re-design the voice in English to fix it.',
+    });
+    listVoiceLibraryMock.mockResolvedValue({ voices: [entry] });
+    render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
+      myVoices: [entry],
+    });
+
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-lib1'));
+    fireEvent.click(screen.getByTestId('my-voices-panel-assign-target-lib1-marlow'));
+
+    expect(
+      await screen.findByTestId('voice-library-my-voices-error'),
+    ).toHaveTextContent('designed in Russian but this book is English');
   });
 });
