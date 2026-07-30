@@ -160,12 +160,36 @@ to prove.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E, all 9 — BLOCKED by #1944.** Coqui/XTTS cannot load in a sidecar
-  that has already served ECAPA `/embed`, and cloning always calls `/embed` for
-  the fidelity check. A fresh sidecar returns a clean 409; a used one a bare
-  500. Note `/health` reports `coqui_package_installed: true` regardless, which
-  is how this row was previously scoped as unblocked — treat that field with
-  suspicion when planning.
+- **Section E, all 9 — UNBLOCKED 2026-07-30 (#1944 fixed, PR #1962).** Still
+  owed as tests, but the blocker is gone: Coqui/XTTS could not load in a
+  sidecar that had already served ECAPA `/embed`, and cloning always calls
+  `/embed` for the fidelity check. **Acceptance run on the dev box**, both
+  halves on `cuda:1` on a dedicated port so the live sidecar was untouched,
+  and with `COQUI_PIN_IMPORT_ORDER=0` throughout so the `sys.modules` disarm —
+  not the boot-order pin — was the thing under test:
+
+  | Tree | `/embed` | `POST /load {coqui}` |
+  |---|---|---|
+  | `main` @ `0edde146` (before) | 200 | **500** — `ImportError: Lazy import of LazyModule(… speechbrain.integrations.k2_fsa …) failed` |
+  | `fix/sidecar-speechbrain-lazy-proxies` @ `d6af415d` (after) | 200 | **200** — `{"status":"ready"}`, `Coqui ready — 58 speakers in manifest` |
+
+  The after-run's log records the pin explicitly skipped and names all 7
+  evicted proxies, so the disarm is what carried it. `coqui_import_ok` went
+  `null → true` on the real import.
+
+  **What this does NOT discharge:** Section E's nine tests themselves — they
+  are now runnable and remain owed. Nor the pin's own default-on path, which
+  was deliberately disabled for this run; it is covered by unit tests only,
+  and since PR #1962 it is additionally gated on the XTTS weights being
+  present, so Qwen-only and Kokoro-only installs never exercise it at all.
+
+  **Superseded advice:** the old note here said to treat
+  `coqui_package_installed: true` with suspicion when planning, because that
+  `find_spec` probe never imports and is how this row was once mis-scoped as
+  unblocked. Still true of that field — but `/health` now also carries a
+  sticky `coqui_import_ok` reflecting a real import attempt, which is the one
+  to read. Note #1963: `models-status`'s `importable` is still the old
+  find_spec value.
 - **C-02, D-02 and any full-book work — BLOCKED by the side-11 host-memory
   leak.** Two full-chapter render attempts died: one at the QA gate (ASR could
   not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar

@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 105 knobs across 12 groups in total. High-risk groups (marked
+attribution — 112 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -162,6 +162,7 @@ sidecar — not instant, but your books/cast/voices are untouched.
 | Preload Qwen at startup | Eager-load Qwen Base at boot (~1.2GB VRAM) | `false` | boolean | restart · sidecar | high |
 | Preload Qwen 1.7B-Base at startup | Eager-load 1.7B-Base for anchored emotion variants (~3.4GB) | `false` | boolean | restart · sidecar | high |
 | Qwen degeneracy guard | Catches near-silent Qwen renders and reloads/retries instead of shipping them — leave on unless isolating a false-positive | `true` | boolean | restart · sidecar | medium |
+| Pin Coqui import order at startup | Eagerly imports Coqui's TTS.api at boot so a prior ECAPA speaker-embed can't leave Coqui unloadable until a restart (#1944) | `true` | boolean | restart · sidecar | medium |
 
 **Qwen codec device** ships off by default, so it changes nothing on its
 own — leave it on `cpu` and every book renders exactly as it does today.

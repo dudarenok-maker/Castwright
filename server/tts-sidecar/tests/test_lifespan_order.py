@@ -48,6 +48,7 @@ EXPECTED_STARTUP = [
     "_start_spk_idle_watchdog",
     "_start_device_probe",
     "_start_memory_watchdog",
+    "_pin_coqui_import_order",
     "_preload_default_engines",
     "_startup_cuda_env_shadow_check",
 ]

@@ -2677,10 +2677,16 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
 | E-09 | Total erasure of the three Coqui artifact paths on delete | **N/A this run** | The three `voices\xtts\` paths never existed — no XTTS derive ever ran (see E-01). C-11 confirmed the sweep is issued; it was a no-op here |
 
-**Section E status: BLOCKED, not failed — see #1944.** Coqui/XTTS will not load in
-a sidecar that has already served ECAPA `/embed`, and cloning always calls
-`/embed`. A fresh sidecar returns a clean 409 `voice_not_designed`; a used one a
-bare 500. E-01 was attempted: the Coqui splice reported `splice_complete` but
+**Section E status: was BLOCKED — UNBLOCKED 2026-07-30 by #1944 (PR #1962).
+Not yet run.** Coqui/XTTS would not load in a sidecar that had already served
+ECAPA `/embed`, and cloning always calls `/embed`. A fresh sidecar returned a
+clean 409 `voice_not_designed`; a used one a bare 500. Fixed and accepted
+on-box: with `COQUI_PIN_IMPORT_ORDER=0` (so the `sys.modules` disarm was the
+thing under test), `/embed` → `POST /load {coqui}` returned **500 on `main`
+@ `0edde146`** and **200 `{"status":"ready"}` on the fix @ `d6af415d`**, the
+latter logging 7 evicted speechbrain lazy proxies and `Coqui ready — 58
+speakers in manifest`. **A re-run of Section E is now possible and still
+owed** — the nine tests below have not been executed. E-01 was attempted: the Coqui splice reported `splice_complete` but
 wrote no `voices\xtts\` artifacts and left `voiceEngine: qwen`, because the
 character's own `ttsEngine: 'qwen'` overrides the requested `modelKey`. **No
 substitution occurred** — the resulting audio still measured as the cloned
@@ -2749,8 +2755,20 @@ retired in favour of automated coverage —
 `clone-fidelity.ts`'s header comment for the full rationale.
 
 **DEF-D · MAJOR · #1944 — Coqui/XTTS unloadable after ECAPA, and `/health` lies
-about it.** Blocks all of Section E. `coqui_package_installed: true` comes from
-a spec probe that never imports.
+about it.** Blocked all of Section E. `coqui_package_installed: true` comes from
+a spec probe that never imports. **RESOLVED 2026-07-30, PR #1962.** Root cause:
+speechbrain 1.1.0 leaves lazy-proxy modules in `sys.modules` whose `__getattr__`
+raises `ImportError` rather than `AttributeError`, and CPython's
+`inspect.getmodule()` walks every `sys.modules` entry doing
+`hasattr(m, '__file__')` on a cache miss — which `TTS.api`'s import chain
+reaches via `torch.library.custom_op`. Fixed by unconditionally evicting those
+proxies after the ECAPA import (never probing them — probing half-loads
+`transformers` and breaks the import a second way). `/health` gained a sticky
+`coqui_import_ok` reflecting a real import attempt; `coqui_package_installed`
+remains the old find_spec value and should not be trusted alone. Accepted
+on-box: 500 before, 200 after (see the Section E status note above).
+`models-status`'s `importable` field still carries the find_spec value —
+tracked as #1963.
 
 **Not defects (recorded so they are not re-filed).** (1) `ASR_DEVICE` and
 `ASR_COMPUTE_TYPE` must agree — setting the device to `cpu` while

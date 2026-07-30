@@ -190,6 +190,57 @@ def load_stubs(monkeypatch) -> _LoadFixture:
     return fixture
 
 
+# ── Diagnostic message on import failure (#1944) ─────────────────────
+#
+# CoquiEngine._ensure_loaded used to blame "PyTorch isn't installed" for ANY
+# ImportError out of `from TTS.api import TTS` — including the speechbrain
+# lazy-proxy collision #1944 fixes, where torch is installed and working
+# fine (Qwen renders on GPU in the same process) and the real cause is a
+# poisoned sys.modules entry left by a prior ECAPA import. The fix probes
+# torch FIRST so each failure message stays honest about which dependency
+# actually failed.
+
+def test_coqui_import_failure_does_not_blame_torch_when_torch_imports_fine(monkeypatch):
+    """torch importable + `TTS.api` failing → the raised message must NOT
+    recommend installing torch, and must surface the underlying error."""
+    # Restore the sticky global afterwards (#1962 review finding 6): driving
+    # the failure branch sets `_COQUI_IMPORT_OK = False` process-wide, and
+    # leaking that would let a later test read a verdict this one wrote.
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", None)
+    fake_torch = types.ModuleType("torch")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    # Force `from TTS.api import TTS` to fail — the standard
+    # sys.modules[name] = None halt-on-reimport mechanism, same shape as the
+    # real speechbrain-collision ImportError bubbling out of TTS.api's own
+    # import chain.
+    monkeypatch.delitem(sys.modules, "TTS", raising=False)
+    monkeypatch.setitem(sys.modules, "TTS.api", None)
+
+    engine = main.CoquiEngine()
+    with pytest.raises(RuntimeError) as exc_info:
+        engine._ensure_loaded("xtts_v2")
+
+    message = str(exc_info.value)
+    assert "PyTorch isn't installed" not in message
+    assert "pip install torch" not in message
+    assert "coqui-tts" in message
+
+
+def test_coqui_import_failure_still_blames_torch_when_torch_is_actually_missing(monkeypatch):
+    """The opposite case must keep working: when torch genuinely fails to
+    import, the message must still point at installing torch (and must not
+    even attempt the TTS.api import)."""
+    monkeypatch.setattr(main, "_COQUI_IMPORT_OK", None)  # see finding 6 above
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.setitem(sys.modules, "torch", None)
+
+    engine = main.CoquiEngine()
+    with pytest.raises(RuntimeError) as exc_info:
+        engine._ensure_loaded("xtts_v2")
+
+    assert "PyTorch missing from this venv" in str(exc_info.value)
+
+
 # ── DeepSpeed wiring ──────────────────────────────────────────────────
 
 def test_deepspeed_init_called_before_to_device_when_enabled(monkeypatch, load_stubs):
