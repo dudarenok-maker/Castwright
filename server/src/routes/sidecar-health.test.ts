@@ -1327,6 +1327,77 @@ describe('GET /api/sidecar/health — coqui install-state trusts the wire (fs-38
   });
 });
 
+describe('GET /api/sidecar/health — coquiImportOk forwarding onto SidecarHealthResult (#1963)', () => {
+  /* #1963 — voice-engine-registry's livePackageImportable and
+     models-inventory's packageInstalled both need the sticky real-import
+     signal on SidecarHealthResult, not just this route's own
+     deriveCoquiInstallState enum. These pin the PRODUCER
+     (probeSidecarHealth's construction of the field), so the consumer-side
+     tests in voice-engine-registry.test.ts and models-status.route.test.ts
+     are wired to a real health-result shape rather than a hand-built stub. */
+  it('coqui_import_ok: false forwards as coquiImportOk: false', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: false,
+          coqui_package_installed: true,
+          coqui_import_ok: false,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiImportOk).toBe(false);
+  });
+
+  it('coqui_import_ok: true forwards as coquiImportOk: true', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: true,
+          coqui_package_installed: true,
+          coqui_import_ok: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiImportOk).toBe(true);
+  });
+
+  it('coqui_import_ok: null forwards as coquiImportOk: null (most common wire value — no real attempt yet)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['coqui'],
+          model_loaded: false,
+          coqui_package_installed: true,
+          coqui_import_ok: null,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiImportOk).toBeNull();
+  });
+
+  it('coqui_import_ok ABSENT (an older sidecar predating this field) normalises to null, not undefined', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['coqui'], model_loaded: false, coqui_package_installed: true }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiImportOk).toBeNull();
+  });
+});
+
 describe('GET /api/sidecar/health — coqui_version oracle (fs-38 Wave 3c Task 19)', () => {
   it('forwards coqui_version as coquiVersion and feeds getLastKnownCoquiVersion() on a reachable poll', async () => {
     fetchMock.mockResolvedValue(

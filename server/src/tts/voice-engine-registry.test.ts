@@ -24,6 +24,36 @@ describe('VOICE_ENGINES registry', () => {
     expect(kokoro.liveLoaded({} as never)).toBe(false);
     expect(kokoro.livePackageImportable({} as never)).toBeUndefined();
   });
+
+  describe('coqui livePackageImportable prefers coquiImportOk over coquiPackageInstalled (#1963)', () => {
+    const coqui = VOICE_ENGINES.find((e) => e.id === 'coqui')!;
+
+    it('coquiImportOk: false wins even when coquiPackageInstalled (find_spec) says true', () => {
+      // Same on-box shape as #1944: find_spec claims "installed" for a
+      // package that cannot actually import (the speechbrain lazy-proxy
+      // collision) — the honesty fix must report false here, not true.
+      expect(
+        coqui.livePackageImportable({ coquiImportOk: false, coquiPackageInstalled: true } as never),
+      ).toBe(false);
+    });
+
+    it('coquiImportOk: true wins', () => {
+      expect(
+        coqui.livePackageImportable({ coquiImportOk: true, coquiPackageInstalled: false } as never),
+      ).toBe(true);
+    });
+
+    it('coquiImportOk: null falls back to coquiPackageInstalled — today\'s behaviour, unchanged', () => {
+      expect(
+        coqui.livePackageImportable({ coquiImportOk: null, coquiPackageInstalled: true } as never),
+      ).toBe(true);
+    });
+
+    it('coquiImportOk absent (older sidecar) falls back to coquiPackageInstalled — same as null', () => {
+      expect(coqui.livePackageImportable({ coquiPackageInstalled: true } as never)).toBe(true);
+      expect(coqui.livePackageImportable({} as never)).toBeUndefined();
+    });
+  });
 });
 
 describe('VOICE_ENGINES capability fields', () => {

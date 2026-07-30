@@ -322,6 +322,14 @@ export interface SidecarHealthResult {
   coquiPackageInstalled?: boolean;
   kokoroPackageInstalled?: boolean;
   whisperPackageInstalled?: boolean;
+  /* #1963 — the sticky real-import-attempt signal (see `coqui_import_ok` on
+     SidecarHealthBody above), forwarded so Node-side consumers other than
+     this route's own deriveCoquiInstallState (voice-engine-registry's
+     livePackageImportable, models-inventory's packageInstalled) can also
+     prefer it over the find_spec-only `coquiPackageInstalled` above. `null`
+     covers BOTH "no real import attempted yet" and "an older sidecar that
+     doesn't send the field" — callers must treat those two the same. */
+  coquiImportOk?: boolean | null;
   /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version,
      forwarded verbatim from the sidecar body's coqui_version. '' (not null)
      when unknown, matching getLastKnownCoquiVersion()'s own empty-string
@@ -410,6 +418,10 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
       coquiPackageInstalled: typeof body.coqui_package_installed === 'boolean' ? body.coqui_package_installed : undefined,
+      /* #1963 — normalise absent (older sidecar) to null so every consumer
+         sees the same "no real import attempt to trust" value regardless of
+         which shape the wire omission took. */
+      coquiImportOk: typeof body.coqui_import_ok === 'boolean' ? body.coqui_import_ok : null,
       kokoroPackageInstalled: typeof body.kokoro_package_installed === 'boolean' ? body.kokoro_package_installed : undefined,
       whisperPackageInstalled: typeof body.whisper_package_installed === 'boolean' ? body.whisper_package_installed : undefined,
       coquiVersion: coquiVersion ?? '',

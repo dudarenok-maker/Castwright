@@ -255,7 +255,13 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = coquiPresent;
     const loaded = sidecar.modelLoaded === true;
-    const packageInstalled = pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot));
+    /* #1963 — prefer the sticky real-import-attempt signal over the
+       find_spec-only pkgInstalled() fallback below, same preference/fallback
+       shape as voice-engine-registry's livePackageImportable: non-null
+       coquiImportOk wins, null/absent (older sidecar) leaves today's
+       behaviour unchanged. */
+    const packageInstalled =
+      sidecar.coquiImportOk ?? pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot));
     items.push({
       id: 'coqui',
       kind: 'tts',

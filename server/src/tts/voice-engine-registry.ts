@@ -72,7 +72,13 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     defaultModelKey: 'coqui-xtts-v2',
     packageInstalledOnDisk: (root) => coquiPackageInstalled(root),
     weightsPresentOnDisk: () => coquiWeightsPresent(),
-    livePackageImportable: (h) => h.coquiPackageInstalled,
+    /* #1963 — prefer the sticky real-import-attempt signal (coquiImportOk)
+       over the find_spec-only coquiPackageInstalled, which can say
+       "installed" for a package that cannot actually load (the speechbrain
+       lazy-proxy collision, #1944). `??` falls back to coquiPackageInstalled
+       whenever coquiImportOk is null OR absent (an older sidecar) — the
+       null/absent case is deliberately unchanged from today's behaviour. */
+    livePackageImportable: (h) => h.coquiImportOk ?? h.coquiPackageInstalled,
     liveLoaded: (h) => h.modelLoaded === true,
     expressive: true,
     genVramFloorMb: 4096,
