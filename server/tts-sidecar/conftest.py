@@ -8,6 +8,14 @@ import os
 
 os.environ.setdefault("PRELOAD_COQUI", "0")
 
+# COQUI_PIN_IMPORT_ORDER (main.py's `_pin_coqui_import_order`, #1944) defaults
+# ON in production — unlike PRELOAD_COQUI, it unconditionally does a real
+# `import TTS.api` at startup regardless of whether Coqui is ever used, which
+# would slow down every test that spins up the real FastAPI lifespan via
+# TestClient. Default it OFF suite-wide, same rationale as PRELOAD_COQUI
+# above; the dedicated pin tests opt back in explicitly.
+os.environ.setdefault("COQUI_PIN_IMPORT_ORDER", "0")
+
 # The Qwen output-degeneracy guard (main.py `_QWEN_DEGEN_GUARD_ENABLED`) inspects
 # real synth-output length; the suite's minimal fakes emit non-realistic audio
 # (fixed tiny buffers / marker-length arrays) that would read as degenerate and

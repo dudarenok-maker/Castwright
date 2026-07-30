@@ -667,6 +667,7 @@ async def _lifespan(_app: FastAPI):
     await _start_spk_idle_watchdog()
     await _start_device_probe()
     await _start_memory_watchdog()
+    await _pin_coqui_import_order()
     await _preload_default_engines()
     await _startup_cuda_env_shadow_check()
     try:
@@ -1216,6 +1217,24 @@ class Engine:
         raise NotImplementedError
 
 
+# (#1944) Sticky, once-a-real-attempt-has-happened import status for the Coqui
+# import chain. `None` until either the eager startup pin
+# (`_pin_coqui_import_order`, gated by COQUI_PIN_IMPORT_ORDER) or a real
+# `CoquiEngine._ensure_loaded` cold-load has attempted `from TTS.api import
+# TTS`; `True`/`False` after that, reflecting the most recent real attempt.
+# Exists because `_coqui_package_installed()` is a `find_spec`-only probe that
+# never imports — it can report "installed" for a package that genuinely
+# cannot load (the speechbrain lazy-proxy collision this issue fixes), which
+# is exactly what let /health advertise an engine Section E's acceptance run
+# then found unloadable. `/health`'s `coqui_import_ok` field surfaces this.
+_COQUI_IMPORT_OK: Optional[bool] = None
+
+
+def _record_coqui_import_result(ok: bool) -> None:
+    global _COQUI_IMPORT_OK
+    _COQUI_IMPORT_OK = ok
+
+
 class CoquiEngine(Engine):
     """Coqui XTTS v2 via the `TTS` package. The model is loaded once on first
     call. XTTS speaks ~24 kHz; we down/up nothing — emit at native rate and
@@ -1477,16 +1496,14 @@ class CoquiEngine(Engine):
             # Surface the *actual* import error so the Node-side log/UI carries
             # a useful diagnostic (torch missing vs TTS missing vs a third-party
             # incompatibility) instead of a one-size-fits-all message.
-            try:
-                from TTS.api import TTS  # type: ignore
-            except ImportError as e:
-                raise RuntimeError(
-                    f"Failed to import coqui-tts ({e}). "
-                    "Most common cause: PyTorch isn't installed in this venv — "
-                    "coqui-tts excludes it from its deps so you can pick CPU vs CUDA. "
-                    "Run `.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
-                    "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
-                ) from e
+            #
+            # Probe torch FIRST (#1944). The old order tried `TTS.api` first and
+            # blamed a missing PyTorch on ANY ImportError out of that import —
+            # including the speechbrain lazy-proxy collision this issue fixes,
+            # where torch is installed and working fine (Qwen renders on GPU in
+            # the same process) and the real cause is a poisoned `sys.modules`
+            # entry from a prior ECAPA load. Checking torch up front lets each
+            # branch's message stay honest about which dependency actually failed.
             try:
                 import torch  # type: ignore
             except ImportError as e:
@@ -1494,6 +1511,21 @@ class CoquiEngine(Engine):
                     f"PyTorch missing from this venv ({e}). Install with: "
                     "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
                     "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
+                ) from e
+            try:
+                from TTS.api import TTS  # type: ignore
+                _record_coqui_import_result(True)
+            except ImportError as e:
+                _record_coqui_import_result(False)
+                raise RuntimeError(
+                    f"Failed to import coqui-tts ({e}). PyTorch IS installed and "
+                    "importable in this venv, so this is not a missing-PyTorch "
+                    "problem. This shape usually means a prior speechbrain (ECAPA) "
+                    "import left a lazy-proxy module in sys.modules that something "
+                    "in TTS.api's own import chain then tripped over (#1944) — "
+                    "restart the sidecar, or check the log for the 'Disarmed N "
+                    "speechbrain lazy-proxy module(s)' line that should have "
+                    "prevented this."
                 ) from e
 
             _apply_torch_perf_flags(torch)
@@ -6216,6 +6248,45 @@ class WhisperEngine:
 ASR = WhisperEngine()
 
 
+def _disarm_speechbrain_lazy_modules() -> list[str]:
+    """(#1944) speechbrain 1.1.0 leaves several lazy-proxy modules in
+    `sys.modules` after an ECAPA import — deprecated-path redirects and
+    optional-integration shims (`speechbrain.utils.importutils.LazyModule` /
+    its `DeprecatedModuleRedirect` subclass) whose `__getattr__` raises
+    `ImportError` (not `AttributeError`) when the backing optional dep (e.g.
+    `k2`) is missing. CPython's `inspect.getmodule()` walks every entry in
+    `sys.modules` on a cache miss and does `hasattr(module, '__file__')` on
+    each one; `hasattr` only swallows `AttributeError`, so the proxy's
+    `ImportError` escapes and detonates whatever unrelated code triggered the
+    walk — observed as `import TTS.api` failing only in a process that has
+    already served an ECAPA `/embed`.
+
+    Unconditional eviction ONLY — never probe a proxy (no `ensure_module`, no
+    `importlib.import_module` of its target, no touching `__file__`).
+    Probing forces a half-import of the backing package (e.g. `transformers`),
+    which breaks the subsequent `TTS.api` import a SECOND, more confusing way
+    (a duplicate `wait_tensor` kernel-registration `RuntimeError`) — measured
+    during this issue's investigation, see #1944's implementation brief.
+
+    Returns the names evicted. Never raises: if a future speechbrain
+    renames/drops `LazyModule`, this no-ops rather than breaking ECAPA
+    loading, which currently works."""
+    try:
+        from speechbrain.utils.importutils import LazyModule
+    except Exception:
+        return []
+    try:
+        evicted = [
+            name for name, module in list(sys.modules.items())
+            if isinstance(module, LazyModule)
+        ]
+        for name in evicted:
+            del sys.modules[name]
+        return evicted
+    except Exception:
+        return []
+
+
 class SpeakerEngine:
     """ECAPA-TDNN speaker embedding (srv-36). Defaults to CPU (zero VRAM); the
     optional cuda path (srv-47, SPK_DEVICE=cuda) is VRAM-semaphore-gated on the
@@ -6239,6 +6310,17 @@ class SpeakerEngine:
     def _load_on(self, device: str):
         """Synchronous ECAPA load on a concrete device. Run via to_thread."""
         from speechbrain.inference.speaker import EncoderClassifier
+        # (#1944) Disarm speechbrain's lazy-proxy modules immediately after
+        # this import plants them — see _disarm_speechbrain_lazy_modules's
+        # doc comment for why eviction is unconditional. Without this, a
+        # later `import TTS.api` in the SAME process can die on an unrelated
+        # proxy's ImportError.
+        evicted = _disarm_speechbrain_lazy_modules()
+        if evicted:
+            log.info(
+                "Disarmed %d speechbrain lazy-proxy module(s) after ECAPA import (#1944): %s",
+                len(evicted), ", ".join(sorted(evicted)),
+            )
         return EncoderClassifier.from_hparams(
             source="speechbrain/spkrec-ecapa-voxceleb",
             run_opts={"device": device},
@@ -7355,6 +7437,64 @@ async def _stop_memory_watchdog() -> None:
         _mem_watchdog_task = None
 
 
+def _import_tts_api_for_pin() -> None:
+    """Synchronous half of `_pin_coqui_import_order`, run via `to_thread` so
+    the event loop isn't blocked for the ~seconds a cold `TTS.api` import
+    takes. A bare `import` statement — its only job is the ordering side
+    effect of pulling `TTS.api` (and therefore `transformers`/`torch`) into
+    `sys.modules` before anything else (namely `SpeakerEngine._load_on`'s
+    ECAPA import) gets a chance to."""
+    import TTS.api  # noqa: F401
+
+
+async def _pin_coqui_import_order() -> None:
+    """(#1944) Belt-and-braces defense in depth alongside
+    `_disarm_speechbrain_lazy_modules`: synchronously import `TTS.api` during
+    startup, before ECAPA (or anything else) can import speechbrain and plant
+    its lazy-proxy modules in `sys.modules`. Measured on-box: importing
+    `TTS.api` first avoids the collision entirely; a narrow pre-import of a
+    single torch submodule does NOT (`TTS.api`'s own import reaches other
+    inspect/`custom_op` paths) — only the full ordering works. See #1944's
+    implementation brief for the measured evidence; do not reintroduce the
+    narrow-pre-import candidate.
+
+    Behind COQUI_PIN_IMPORT_ORDER (registry key tts.coqui.pinImportOrder),
+    default ON — this costs real startup latency, which is why
+    `CoquiEngine._ensure_loaded`'s normal lazy-import design exists in the
+    first place (so the process can start, and /health respond, before the
+    heavy ML deps load). Turning it off leaves
+    `_disarm_speechbrain_lazy_modules` (called from `SpeakerEngine._load_on`)
+    as the remaining protection.
+
+    The Python default here MUST match the registry knob's default (a known
+    past bug class in this repo — see `_QWEN_DEGEN_GUARD_ENABLED` /
+    `PRELOAD_KOKORO` for the same caution) — both are True.
+
+    Never aborts boot: skipped (with a log line) when the knob is off or the
+    coqui package isn't installed; an unexpected import failure is caught and
+    logged as a warning rather than propagated."""
+    if not _parse_bool(os.environ.get("COQUI_PIN_IMPORT_ORDER"), True):
+        log.info(
+            "COQUI_PIN_IMPORT_ORDER=0 -- skipping the eager TTS.api import-order "
+            "pin; the speechbrain lazy-proxy disarm is the remaining protection."
+        )
+        return
+    if not _coqui_package_installed():
+        log.info("Coqui package not installed -- skipping the TTS.api import-order pin.")
+        return
+    try:
+        await asyncio.to_thread(_import_tts_api_for_pin)
+        _record_coqui_import_result(True)
+        log.info("Pinned TTS.api import order at startup (COQUI_PIN_IMPORT_ORDER=1).")
+    except Exception as e:
+        _record_coqui_import_result(False)
+        log.warning(
+            "Eager TTS.api import-order pin failed (%s); startup continues -- "
+            "the speechbrain disarm and the per-request lazy import remain.",
+            e,
+        )
+
+
 async def _preload_default_engines() -> None:
     """Engine preload at startup.
 
@@ -7986,6 +8126,13 @@ def health() -> dict[str, Any]:
         "qwen_base17_weights_present": _qwen_base17_weights_present(),
         "qwen_install_state": qwen_install_state,
         "coqui_package_installed": _coqui_package_installed(),
+        # (#1944) Sticky, real-import-attempt truth — distinct from
+        # coqui_package_installed's find_spec-only probe above, which can say
+        # "installed" for a package that genuinely cannot load. None until a
+        # real `from TTS.api import TTS` has been attempted (the eager startup
+        # pin or a real cold-load); True/False after that. See
+        # _COQUI_IMPORT_OK's doc comment.
+        "coqui_import_ok": _COQUI_IMPORT_OK,
         "coqui_weights_present": _coqui_weights_present(),
         "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),

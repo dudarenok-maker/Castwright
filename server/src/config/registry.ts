@@ -660,6 +660,16 @@ export const KNOBS: ConfigKnob[] = [
     default: false, // ← PRELOAD_QWEN_BASE17 default in tts-sidecar/main.py (_parse_bool default=False)
     apply: 'restart-sidecar', risk: 'high',
   },
+  {
+    key: 'tts.coqui.pinImportOrder',
+    env: 'COQUI_PIN_IMPORT_ORDER',
+    group: 'tts-engine',
+    label: 'Pin Coqui import order at startup',
+    help: 'When true (default), the sidecar synchronously imports TTS.api at startup, before an ECAPA (#1944) speaker-embed can plant speechbrain\'s lazy-proxy modules in sys.modules and make a later Coqui load fail with a misleading ImportError. Costs real startup latency (a few seconds) — that is the tradeoff for closing the collision at its source. Turning this off leaves the sidecar\'s unconditional sys.modules eviction (which runs on every ECAPA load, always on) as the remaining protection. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: true, // ← COQUI_PIN_IMPORT_ORDER default in tts-sidecar/main.py (_pin_coqui_import_order, _parse_bool default=True)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
 
   // ── gpu-lifecycle ─────────────────────────────────────────────────────────
   {
