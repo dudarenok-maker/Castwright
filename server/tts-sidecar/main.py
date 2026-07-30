@@ -5762,19 +5762,34 @@ class QwenEngine(Engine):
 
         `base_attr` is the model member name (``'_base'`` / ``'_base17'``),
         `ensure_loaded` its `_ensure_*_loaded` method, `model_name` the HF id used
-        in the recycle log. Follows synthesize()'s lock discipline exactly:
-        re-ensure the model UNDER `_synth_lock` so a concurrent `/unload` can't null
-        it mid-forward, and drop the degenerate model under the same lock before the
-        reclaim+reload. Returns `(audio, sr, gen_ms, audio_ms)` for the caller's
-        perf log + result assembly."""
+        in the recycle log. Re-ensures the model BEFORE `_synth_lock` is taken
+        (plan 273 T8) — `ensure_loaded` can run a full cold load (unbounded: a
+        real weights pull), and `/unload` also takes `_synth_lock`, so doing that
+        pull INSIDE the lock would hold a Stop off for its whole duration. Each
+        attempt still gets its own re-ensure; only the LOCK's span moved. The
+        degeneracy-guard's own retry-reload below (drop under the lock, then
+        reclaim + `ensure_loaded()` OUTSIDE it) was already compliant and is
+        untouched. Returns `(audio, sr, gen_ms, audio_ms)` for the caller's perf
+        log + result assembly."""
         for attempt in range(1, _QWEN_DEGEN_SYNTH_ATTEMPTS + 1):
             gen_start = time.perf_counter()
+            # Re-ensure BEFORE the lock: an idle-evict/unload can free the
+            # model in the gap since the last check (the caller's own
+            # pre-ensure, or the previous attempt's forward), so one ensured
+            # earlier can be gone by now. No-op on the warm path.
+            ensure_loaded()
             with self._synth_lock:
-                # Re-ensure under the lock: a concurrent /unload (analyzer/XTTS
-                # evict) holds `_synth_lock` to null the model, so one ensured
-                # before the lock can be gone in the gap. No-op on the warm path.
-                ensure_loaded()
-                wavs, sr = getattr(self, base_attr).generate_voice_clone(
+                model = getattr(self, base_attr)
+                if model is None:
+                    # An explicit unload() (or, in principle, an idle-evict)
+                    # can still win the narrow gap between the re-ensure
+                    # above and this acquire — the only window left once the
+                    # cold load itself is out of the lock. Loud and typed.
+                    raise RuntimeError(
+                        f"Qwen {base_attr} model was unloaded before this "
+                        "render started — reload it and retry."
+                    )
+                wavs, sr = model.generate_voice_clone(
                     text=[text], language=[lang], voice_clone_prompt=prompt
                 )
             gen_ms = (time.perf_counter() - gen_start) * 1000.0
