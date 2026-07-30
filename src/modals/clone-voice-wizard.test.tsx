@@ -15,25 +15,46 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-// Fake phase-1 panel: a single button that fires onReady with a fixed candidate.
+// Fake phase-1 panel: buttons that fire onReady with a fixed candidate — one
+// family-with-permission consent (no attester, #1836's existing coverage),
+// one guardian-of-minor consent WITH attestedBy (#1943's new coverage).
 vi.mock('../components/voices/clone-capture-panel', () => ({
   CloneCapturePanel: ({
     onReady,
   }: {
     onReady: (r: { candidateId: string; transcript: string; consent: unknown }) => void;
   }) => (
-    <button
-      data-testid="fake-continue"
-      onClick={() =>
-        onReady({
-          candidateId: 'cand-1',
-          transcript: 'the corrected transcript',
-          consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
-        })
-      }
-    >
-      continue
-    </button>
+    <>
+      <button
+        data-testid="fake-continue"
+        onClick={() =>
+          onReady({
+            candidateId: 'cand-1',
+            transcript: 'the corrected transcript',
+            consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+          })
+        }
+      >
+        continue
+      </button>
+      <button
+        data-testid="fake-continue-guardian"
+        onClick={() =>
+          onReady({
+            candidateId: 'cand-1',
+            transcript: 'the corrected transcript',
+            consent: {
+              personName: 'Ana',
+              relationship: 'guardian-of-minor',
+              permittedUse: 'personal',
+              attestedBy: 'Dana',
+            },
+          })
+        }
+      >
+        continue as guardian
+      </button>
+    </>
   ),
 }));
 
@@ -96,6 +117,24 @@ describe('CloneVoiceWizard', () => {
       consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
     });
     expect(await screen.findByTestId('clone-voice-wizard-fidelity-warning')).toBeInTheDocument();
+  });
+
+  /* #1943 — the wizard must forward a guardian's attestedBy through to the
+     API verbatim, not drop it on the way from the panel's onReady payload. */
+  it('Save dispatches cloneVoice carrying a guardian consent.attestedBy distinct from personName', async () => {
+    cloneVoiceApi.mockResolvedValue({
+      voiceUuid: 'lib-clone-y', name: 'Ana', provenance: 'cloned', tags: [], pinned: false,
+      engines: { qwen: { status: 'ready', baseModel: 'q' } },
+      createdAt: 'a', updatedAt: 'b',
+    });
+    renderWizard();
+    fireEvent.click(screen.getByTestId('fake-continue-guardian'));
+    fireEvent.change(screen.getByTestId('clone-voice-wizard-name'), { target: { value: 'Ana' } });
+    fireEvent.click(screen.getByTestId('clone-voice-wizard-save'));
+    await waitFor(() => expect(cloneVoiceApi).toHaveBeenCalledTimes(1));
+    expect(cloneVoiceApi.mock.calls[0][0]).toMatchObject({
+      consent: { personName: 'Ana', relationship: 'guardian-of-minor', attestedBy: 'Dana', permittedUse: 'personal' },
+    });
   });
 
   /* Finding 2 (#1842 review) — the post-save preview shares the `qwen-<uuid>`

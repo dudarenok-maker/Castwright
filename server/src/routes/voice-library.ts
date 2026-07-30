@@ -133,6 +133,11 @@ type CloneConsentDraft = {
   personName: string;
   relationship: VoiceConsentRecord['relationship'];
   permittedUse: 'personal';
+  /** #1943 — who is actually attesting, distinct from `personName` (whose
+      voice it is) for the two non-self relationships. Trimmed; blank/absent
+      is `undefined` here so the /clone handler's fallback-to-personName
+      logic has one shape to check rather than also handling empty strings. */
+  attestedBy?: string;
 };
 
 function validateConsentDraft(raw: unknown): CloneConsentDraft | null {
@@ -142,7 +147,13 @@ function validateConsentDraft(raw: unknown): CloneConsentDraft | null {
   const rel = c.relationship;
   const relOk = rel === 'self' || rel === 'family-with-permission' || rel === 'guardian-of-minor';
   if (!personName || !relOk || c.permittedUse !== 'personal') return null;
-  return { personName, relationship: rel as VoiceConsentRecord['relationship'], permittedUse: 'personal' };
+  const attestedByRaw = typeof c.attestedBy === 'string' ? c.attestedBy.trim() : '';
+  return {
+    personName,
+    relationship: rel as VoiceConsentRecord['relationship'],
+    permittedUse: 'personal',
+    ...(attestedByRaw ? { attestedBy: attestedByRaw } : {}),
+  };
 }
 
 async function withSingleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -1050,12 +1061,16 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       const now = new Date().toISOString();
       const name =
         typeof body.name === 'string' && body.name.trim() ? body.name.trim() : consentDraft.personName;
+      /* #1943 — the real attester (a guardian, a relative) is not
+         necessarily the person whose voice this is; a caller-supplied
+         `attestedBy` names them. Falls back to `personName` — today's
+         behaviour — when absent, so existing callers are unchanged. */
       const consent: VoiceConsentRecord = {
         personName: consentDraft.personName,
         relationship: consentDraft.relationship,
         permittedUse: 'personal',
         attestedAt: now,
-        attestedBy: consentDraft.personName,
+        attestedBy: consentDraft.attestedBy ?? consentDraft.personName,
       };
       /* Persist the text the clone was ACTUALLY distilled against — into
          `master.transcript`, not just `sampleTranscript` below. The Wave 3b2

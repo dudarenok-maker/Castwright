@@ -127,8 +127,10 @@ this box is dual-GPU).
 >
 > **Fixtures:** built from public-domain LibriVox recordings (two distinct
 > narrators) and left at `C:\fixtures\fs38\` — F-1…F-9 plus `F8b-twospeaker`.
-> F-8 was regenerated at `volume=+6dB` rather than the sheet's `-8dB`, which
-> landed at −41.7 dBFS, only 3.3 dB above the −45 dBFS fatal-silence floor.
+> F-8 was regenerated at `volume=+6dB` rather than the sheet's then-published
+> `-8dB`, which landed at −41.7 dBFS, only 3.3 dB above the −45 dBFS
+> fatal-silence floor. The fixture table now specifies `+6dB`, so a fresh run
+> follows the corrected recipe directly.
 >
 > **Baseline before the run:** `C:\AudiobookWorkspace\voice-library\` did not
 > exist and `voices\xtts\` did not exist — independent confirmation that no clone
@@ -416,7 +418,7 @@ Prepare these **before** starting. Put them somewhere stable, e.g.
 | F-5 | **Clipped / too-loud clip** | ≥8 s with >0.5 % of samples at/above −0.1 dBFS | `ffmpeg -i F-1 -af "volume=25dB" -t 10 clipped-10s.wav` | A-05 | |
 | F-6 | **Over-cap clip (>60 s)** | ~90 s | `ffmpeg -i F-1 -filter_complex "aloop=loop=8:size=2e9" -t 90 long-90s.wav` | A-06 | |
 | F-7 | **Browser-recorder capture (webm/opus)** | Produced live by the in-app recorder — `VoiceRecorder` builds the Blob as `type: 'audio/webm'` (`src/components/voices/voice-recorder.tsx:19`) | Nothing to pre-make; produced during A-07. Keep a copy if you can, for re-use. | A-07, B-02 | |
-| F-8 | **Low-fidelity clip** | A clip that will score a *low* ECAPA cosine against its own clone — e.g. F-1 heavily noised or band-limited: `ffmpeg -i F-1 -af "highpass=f=800,lowpass=f=2000,volume=-8dB" lowfi.wav` | Advisory warning fires below `CLONE_FIDELITY_MIN = 0.3` (`server/src/tts/clone-fidelity.ts:16`). ⚠️ Not guaranteed to trip on the first try — iterate the filter until the persisted `cloneCosine` is < 0.30. | B-06 | |
+| F-8 | **Degraded-source clip** | A clip that noticeably degrades vs. F-1, for the B-04 relative-cosine sanity check — e.g. F-1 band-limited: `ffmpeg -i F-1 -af "highpass=f=800,lowpass=f=2000,volume=+6dB" lowfi.wav`. **Use `+6dB`, not `-8dB`**: the sheet originally specified `-8dB`, which lands at −41.7 dBFS RMS, only 3.3 dB above the −45 dBFS fatal-silence floor in `clone-quality.ts:10` — it risks rejection as silent rather than testing anything; this run used `+6dB` instead. Does **not** drive the clone-fidelity advisory warning (#1945): that cosine compares the clone against its OWN, equally-degraded source, so it barely moves — see B-06. | B-04 | |
 | F-9 | **A second, different speaker's clean clip** | ≥8 s | Any second voice. | D-01 (two books, two voices), C-03 | |
 
 ### 4.1 The book to render
@@ -901,7 +903,7 @@ the real path. The mock path (`src/mocks/`) is only reachable with
    (Get-Content "$WS\voice-library\$U\voice.json" -Raw | ConvertFrom-Json).sampleMeta.qualityChecks
    ```
 2. Clone the **same** fixture a second time under a different name and read its cosine.
-3. Clone the **low-fidelity** fixture F-8 and read its cosine (this doubles as B-06 setup).
+3. Clone the **degraded-source** fixture F-8 and read its cosine. This is a *relative* sanity check only — it does **not** set up B-06 (#1945: degrading the source can't trip the clone-fidelity advisory, since the cosine compares the clone against that same degraded source).
 4. Confirm the sidecar actually served `/embed` — check `logs\tts.log` around the clone timestamp.
 
 **Expected**
@@ -911,7 +913,14 @@ the real path. The mock path (`src/mocks/`) is only reachable with
   values — proof it is being computed, not stubbed. Two *identical* values to
   full float precision across different clones is the mock-constant smell:
   investigate before passing.
-- F-8's cosine is **materially lower** than F-1's.
+- F-8's cosine lands **close to** F-1's — record the delta, do not expect a drop.
+  #1945 measured F-1 at 0.8914 and 0.8813 (two clones of the *same* fixture) and
+  band-limited F-8 at 0.881 — a ~0.01 gap, i.e. **inside** the spread between two
+  clones of one fixture. The cosine scores a clone against its own source, so
+  degrading the source degrades the clone equally and the number barely moves.
+  A materially *lower* value here is the surprise worth investigating, not the
+  expected result. (Nothing realistic approaches `CLONE_FIDELITY_MIN`, which is a
+  catastrophe-only backstop — see the retired B-06 below.)
 - `cloneFidelityUnavailable` is **absent** when `/embed` is reachable.
 
 **Record:** F-1 cosine run 1 = ______ run 2 = ______ · F-8 cosine = ______
@@ -951,26 +960,41 @@ still works. Practical options, in order of preference:
 
 ---
 
-#### B-06 — A low-fidelity clip surfaces the advisory warning but still saves
+#### B-06 — Clone-fidelity advisory warning fires below the threshold, non-blocking (N/A — covered by automated test)
 
-**Proves:** the advisory-not-blocking design — `CLONE_FIDELITY_MIN = 0.3`
-(`clone-fidelity.ts:16`).
+**Formerly:** run the wizard against a deliberately degraded fixture (F-8),
+iterating its filter until the persisted `cloneCosine` dropped below
+`CLONE_FIDELITY_MIN = 0.3`.
 
-**Preconditions:** fixture F-8, iterated until its cosine lands **below 0.30**
-(see B-04 step 3).
+**Retired 2026-07-30 (#1945):** that instruction cannot work. The advisory
+cosines the clone's audition preview against its OWN master clip, so
+degrading the source degrades both sides of the comparison together — the
+on-box run-1 measurements (see the results table below) show the cosine
+essentially unmoved by a band-limited source (clean 0.891/0.881 vs.
+band-limited **0.881**, not lower). **Disposition:** `CLONE_FIDELITY_MIN`
+stays at `0.3` as a documented catastrophe-only backstop — it fires when a
+clone comes out sounding like a *different speaker* (a designed-voice control
+measured **0.158**), not on source-quality degradation, which is already
+gated separately by `clone-quality.ts`. See `clone-fidelity.ts`'s header
+comment for the full rationale.
 
-**Steps**
-1. Run the wizard to Save with F-8.
-2. Read `sampleMeta.qualityChecks` on the persisted entry.
+**Automated coverage (replaces this manual step):**
+`server/src/routes/voice-library.clone-fidelity.test.ts`. It drives the real
+`POST /api/voice-library/clone` route and stubs the `/embed` boundary
+(`embedSegment`, `tts/embed-client.ts`) directly, rather than trying to
+synthesise audio that scores low:
+- vectors scoring **above** `CLONE_FIDELITY_MIN` persist **no**
+  `cloneFidelityWarning`;
+- vectors scoring **below** it persist **both** `cloneCosine` and
+  `cloneFidelityWarning`, and the clone still **saves** (200, `ready`) —
+  proving the warning is non-blocking.
 
-**Expected**
-- The clone **saves** (200) — the warning never blocks.
-- The completion screen shows the advisory line, beginning
-  `This clone sounds only loosely like the sample (similarity 0.NN).`
-- `voice.json` carries both `cloneCosine` (< 0.30) and `cloneFidelityWarning`.
-- The card still appears in My voices and is assignable.
+Both assertions compare against the live `CLONE_FIDELITY_MIN` constant, not a
+hardcoded number, so the test fails if the threshold is ever moved past
+either injected cosine.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☐ P ☐ F ☐ B ☒ N/A  **Notes:** superseded by automated coverage —
+see `server/src/routes/voice-library.clone-fidelity.test.ts` (#1945).
 
 ---
 
@@ -2595,7 +2619,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | B-03 | Audition **sounds like the person** | **B** | requires a human listener. Objective half done: `/embed` cosine audition-vs-source **0.822**, designed-voice control **0.158**. A/B kit left at `C:\fixtures\fs38\_EARCHECK\` |
 | B-04 | ECAPA cosine is a real number, not a mock constant | **P** | Three distinct finite values in [-1,1]: F-1 **0.8914416029109107**, F-1 again **0.8812903511976901** (similar, not byte-identical → computed, not stubbed), two-speaker mix **0.7727**. `cloneFidelityUnavailable` absent. A 4th clone post-fix scored 0.8916 on an independent speaker |
 | B-05 | Fidelity-unavailable is advisory, not fatal | **B** | no way to fail `/embed` independently of the clone path — the sheet's own caveat |
-| B-06 | Low-fidelity clip warns but still saves | **B — not reachable as written** | See **#1945**. The cosine scores clone-vs-source *faithfulness*, so degrading the source degrades the clone equally: clean 0.891, band-limited **0.881** (not lower), two speakers 0.773. Nothing realistic nears `CLONE_FIDELITY_MIN = 0.3`; **the advisory-warning path has never fired on hardware** |
+| B-06 | Clone-fidelity advisory warning | **N/A — retired, automated** | Originally found **B — not reachable as written**: See **#1945**. The cosine scores clone-vs-source *faithfulness*, so degrading the source degrades the clone equally: clean 0.891, band-limited **0.881** (not lower), two speakers 0.773. Nothing realistic nears `CLONE_FIDELITY_MIN = 0.3`; **the advisory-warning path has never fired on hardware**. Resolved 2026-07-30: threshold kept as a catastrophe-only backstop (fires on a wrong-speaker clone — 0.158 datapoint); manual step replaced by `server/src/routes/voice-library.clone-fidelity.test.ts`. See DEF-C below |
 | B-07 | Assign to a character | **P** | 200 `{updated:1, written:["qwen","coqui"]}`; qwen slot `{name:qwen-$U, libraryUuid:$U, provenance:cloned}`; **`variants` map dropped** (had a `whisper` variant); `voiceUuid` unchanged; **coqui slot also written** `{name:xtts-$U,…}` per Task 24; all 13 characters diffed — only the target changed |
 | B-08 | Cast sample plays in the cloned voice | | |
 | B-09 | Chapter renders, consistent across lines | | |
@@ -2669,11 +2693,15 @@ Run 1 — 2026-07-29. "not reached" tests are counted as neither P/F/B/N/A.
 | Section | Total | P | F | B | N/A | not reached |
 |---|---|---|---|---|---|---|
 | A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
-| B (3b1) | 13 | 3 | 0 | 4 | 0 | 6 |
+| B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
 | C (3b2) | 21 | 3 | 0 | 1 | 0 | 17 |
 | D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
 | E (3c) | 9 | 1 | 0 | 0 | 1 | 7 |
-| **All** | **60** | **17** | **0** | **9** | **1** | **33** |
+| **All** | **60** | **17** | **0** | **8** | **2** | **33** |
+
+*(B-06's B → N/A reclassification landed 2026-07-30 alongside #1945's
+resolution — see the B-06 row and DEF-C below. The historical "not reachable
+as written" finding is preserved in the row's Notes.)*
 
 **Zero failures** — but that is not an acceptance signal: 33 tests were never
 reached and 9 are blocked, including all of the highest-risk ⭐ set except C-10.
@@ -2708,9 +2736,17 @@ voice being cloned. The wizard has no attester field, and
 `voice-library.test.ts:2435` asserts the incorrect behaviour. Needs a product
 decision, so filed rather than fixed in-run.
 
-**DEF-C · MINOR · #1945 — the clone-fidelity advisory has never fired.** B-06's
-fixture recipe cannot lower a metric that scores clone-vs-source faithfulness.
-See the B-06 row above for the three measurements.
+**DEF-C · MINOR · #1945 — the clone-fidelity advisory has never fired ·
+resolved 2026-07-30, doc/test-only.** B-06's fixture recipe asked an operator
+to trip a threshold that cannot move by degrading the source — both sides of
+the clone-vs-source cosine degrade together. **Disposition:**
+`CLONE_FIDELITY_MIN = 0.3` is kept as a documented catastrophe-only backstop
+(it fires on a wrong-speaker clone — the 0.158 datapoint below; see the B-06
+row above for the three measurements), not recalibrated or deleted. B-06 is
+retired in favour of automated coverage —
+`server/src/routes/voice-library.clone-fidelity.test.ts`, which stubs the
+`/embed` boundary directly and asserts both sides of the threshold. See
+`clone-fidelity.ts`'s header comment for the full rationale.
 
 **DEF-D · MAJOR · #1944 — Coqui/XTTS unloadable after ECAPA, and `/health` lies
 about it.** Blocks all of Section E. `coqui_package_installed: true` comes from

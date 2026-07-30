@@ -12,6 +12,7 @@ import {
   mockPromoteLibraryRedesign,
   mockAssignLibraryVoice,
   mockRevokeVoiceLibraryEntry,
+  mockCloneVoice,
   _mockAssignGuardError,
   _mockAssignWrittenSlots,
   _resetMockVoiceLibrary,
@@ -250,6 +251,46 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       for (const entry of designed) {
         expect(_mockAssignWrittenSlots(entry)).toEqual(['qwen']);
       }
+    });
+  });
+
+  /* #1943 — the mock must mirror the real route's attester handling. It used
+     to hardcode `attestedBy: personName`, so mock mode (every `npm run dev`
+     and every e2e run) kept reproducing the exact bug the real path fixed:
+     a guardian-of-minor record claiming the child attested for themselves. */
+  describe('clone consent attester', () => {
+    const consent = {
+      personName: 'Ana',
+      relationship: 'guardian-of-minor' as const,
+      permittedUse: 'personal' as const,
+    };
+
+    it('persists a supplied attestedBy distinct from personName', async () => {
+      const entry = await mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: { ...consent, attestedBy: 'Dana' },
+      });
+      expect(entry.consent?.personName).toBe('Ana');
+      expect(entry.consent?.attestedBy).toBe('Dana');
+    });
+
+    it('trims a supplied attestedBy', async () => {
+      const entry = await mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: { ...consent, attestedBy: '  Dana  ' },
+      });
+      expect(entry.consent?.attestedBy).toBe('Dana');
+    });
+
+    it('falls back to personName when attestedBy is omitted or blank', async () => {
+      const omitted = await mockCloneVoice({ candidateId: 'cand-1', consent });
+      expect(omitted.consent?.attestedBy).toBe('Ana');
+
+      const blank = await mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: { ...consent, attestedBy: '   ' },
+      });
+      expect(blank.consent?.attestedBy).toBe('Ana');
     });
   });
 });

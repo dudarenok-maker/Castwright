@@ -171,6 +171,12 @@ bug survived. Proving the fix needs a box with no venv and the patience for a
 
 ## Known limitations
 
+- **The parity matching must stay line-ending agnostic.** `openapi.yaml` is
+  pinned to LF in `.gitattributes` (#1952 / cross-OS Windows runner),
+  but the test defensively tolerates both LF and CRLF via regex anchors
+  (`\r?\n`) in `schemaBlock()` and the next-sibling scan. This prevents a
+  future `.gitattributes` edit from silently breaking the Windows leg of
+  `verify.yml`.
 - **The route-coverage assertion is a literal, not derived from the routers.**
   It catches a path being removed from `openapi.yaml`, but a brand-new route
   mounted without a description would still pass. Deriving the expected set by
