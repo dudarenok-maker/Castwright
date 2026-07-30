@@ -4111,6 +4111,16 @@ export interface components {
                 relationship: "self" | "family-with-permission" | "guardian-of-minor";
                 /** @enum {string} */
                 permittedUse: "personal";
+                /**
+                 * @description Optional name of the person actually attesting, when it
+                 *     differs from `personName` (whose voice this is) — e.g. the
+                 *     guardian attesting for a `guardian-of-minor` clone, or the
+                 *     relative attesting for `family-with-permission`. Persisted
+                 *     verbatim (trimmed). Blank/whitespace-only or omitted falls
+                 *     back to `personName` on the stored `VoiceConsentRecord`, so
+                 *     every stored record always has a non-empty `attestedBy`.
+                 */
+                attestedBy?: string;
             };
         };
         VoiceSourceAttestation: {

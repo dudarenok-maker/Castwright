@@ -10086,7 +10086,16 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     provenance: 'cloned',
     tags: [],
     pinned: false,
-    consent: { ...body.consent, attestedAt: now, attestedBy: body.consent.personName },
+    /* #1943 — mirror the real route here too: the attester is not necessarily
+       the person being cloned, and hardcoding personName made the mock
+       reproduce the very bug the real path just fixed (a guardian-of-minor
+       record claiming the child attested for themselves). Same trim +
+       blank-falls-back-to-personName normalisation as validateConsentDraft. */
+    consent: {
+      ...body.consent,
+      attestedAt: now,
+      attestedBy: body.consent.attestedBy?.trim() || body.consent.personName,
+    },
     master: {
       clipFile: 'master.wav',
       sampleRate: 24_000,

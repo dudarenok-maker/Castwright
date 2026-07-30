@@ -2440,6 +2440,139 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(await readCandidate('cand-1')).toBeNull(); // candidate consumed
   });
 
+  /* #1943 — a guardian-of-minor record must name the GUARDIAN as the
+     attester, not the child being cloned. Before the fix, attestedBy was
+     hardcoded to consentDraft.personName, so this persisted 'Ana' (the
+     child) instead of 'Dana' (the parent who actually attested). */
+  it('persists a caller-supplied attestedBy distinct from personName', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-guardian',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-guardian',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: 'Dana',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.personName).toBe('Ana');
+    expect(res.body.consent.attestedBy).toBe('Dana');
+  });
+
+  /* Existing callers that never send attestedBy must be unchanged — the
+     fallback keeps today's behaviour. */
+  it('falls back to personName when attestedBy is omitted', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-no-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-no-attester',
+        consent: { personName: 'Ana', relationship: 'guardian-of-minor', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Ana');
+  });
+
+  /* Pins the TRIM itself, which nothing else does: the blank and omitted
+     cases below both expect 'Ana', which is exactly what the pre-fix
+     hardcode produced, so dropping .trim() from the STORED value (while
+     keeping the blank check) would survive them and persist '  Dana  '.
+     The wizard trims client-side, so this is the non-UI caller's guard. */
+  it('trims a supplied attestedBy before persisting it', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-padded-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-padded-attester',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: '  Dana  ',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Dana');
+  });
+
+  /* A blank/whitespace attestedBy must not persist an empty attester —
+     falls back to personName the same as an omitted field. */
+  it('falls back to personName when attestedBy is blank/whitespace', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-blank-attester',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'my own voice sample',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-blank-attester',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          attestedBy: '   ',
+          permittedUse: 'personal',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consent.attestedBy).toBe('Ana');
+  });
+
   /* #1836 — the wizard's transcript box is editable, so a correction must
      reach the derive as `ref_text` AND be persisted. Persisting to
      `master.transcript` (not just `sampleTranscript`) is load-bearing: the

@@ -22,6 +22,11 @@ src/lib/api-types.ts text eol=lf
 # on a clean tree (the generator emits LF, the checkout is CRLF). Pin to LF.
 .env.example text eol=lf
 
+# openapi.yaml is read as text at runtime by the parity test and is the input to
+# `npm run openapi:types`. With core.autocrlf=true on Windows, it materialises as
+# CRLF and breaks line-anchored matching in schemaBlock() (#1952). Pin to LF.
+openapi.yaml text eol=lf
+
 # Binary files we never want autocrlf to touch.
 *.png binary
 *.jpg binary

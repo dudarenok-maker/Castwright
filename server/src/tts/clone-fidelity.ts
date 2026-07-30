@@ -12,7 +12,22 @@ import { cosineToCentroid } from '../audio/render-integrity/score.js';
 
 /* Starting value — calibrated on-box against the golden fixture (srv-36
    centroid distributions cluster clean same-speaker cosines well above this).
-   Deliberately conservative so only a clearly-off clone warns. */
+   Deliberately conservative so only a clearly-off clone warns.
+
+   What this compares (#1945): the clone's audition preview against its OWN
+   master clip — the SAME source on both sides. That makes it a detector for
+   a clone that reproduces the WRONG SPEAKER, not for a poor-quality source;
+   source quality is already gated separately, before this check ever runs,
+   by clone-quality.ts. Degrading the source clip therefore can't lower this
+   cosine — both sides of the comparison degrade together. On-box numbers
+   (#1945): clean clone vs. its own source measured 0.891/0.881; a
+   band-limited source (F-8) measured 0.881 — not lower; two speakers
+   overlaid measured 0.773; a different designed voice entirely measured
+   0.158. So 0.3 is a coherent catastrophe-only backstop: it fires when a
+   clone comes out sounding like a different speaker, and stays silent
+   otherwise. See server/src/routes/voice-library.clone-fidelity.test.ts for
+   the automated coverage that replaced the (impossible) manual B-06 step of
+   trying to trip this by degrading the source. */
 export const CLONE_FIDELITY_MIN = 0.3;
 
 export interface CloneFidelity {
