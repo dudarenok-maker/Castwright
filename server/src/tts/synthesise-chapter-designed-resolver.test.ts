@@ -93,6 +93,9 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
     const writeSidecarManifest = vi.fn(async () => {});
     const readEntry = vi.fn(async () => null);
     const writeEntry = vi.fn(async () => {});
+    /* #1951 — the restore is followed by a sidecar prompt-cache evict. Supplied
+       here so this wiring test exercises the same dep set production wires. */
+    const evictSidecarVoice = vi.fn(async () => ({ ok: true }));
 
     const result = await synthesiseChapter({
       sentences: [sentence(1, 'orin')],
@@ -105,6 +108,7 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
         readDesignedMasterPcm,
         deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
         writeSidecarManifest,
+        evictSidecarVoice,
         readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
         writeEntry,
       },
@@ -129,6 +133,69 @@ describe('synthesiseChapter — designed-voice orphan self-heal pre-pass (fs-38 
     expect(writeSidecarManifest).toHaveBeenCalledTimes(1);
     expect(provider.calls.length).toBeGreaterThan(0); // the chapter synthesises normally
     expect(result.segments.length).toBeGreaterThan(0);
+  });
+
+  /* #1951 — the self-heal's cache/disk divergence. The re-derive routes through
+     the sidecar's `clone_voice`, which warms `_prompt_cache[voiceId] =
+     (prompt, "English")` AND truncate-rewrites the manifest. The restore above
+     then puts the designed `"language"` back on DISK — but nothing invalidates
+     the warm cache, and a designed voice DOES read the manifest language. So
+     the next synth speaks English while disk says otherwise, and a sidecar
+     RESTART silently changes the audio. `/qwen/evict-voice`'s own docstring
+     names the cause: "the cache has no on-disk mtime check". */
+  it('evicts the sidecar prompt cache AFTER restoring the manifest, so disk and cache cannot diverge', async () => {
+    const provider = makeProvider();
+    const order: string[] = [];
+    const writeSidecarManifest = vi.fn(async () => {
+      order.push('write');
+    });
+    const evictSidecarVoice = vi.fn(async () => {
+      order.push('evict');
+      return { ok: true };
+    });
+
+    await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: designedCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      designedResolverDepsOverride: {
+        ptExists: vi.fn(async () => false),
+        readDesignedMasterPcm: vi.fn(async (uuid: string) =>
+          uuid === 'lib-designed'
+            ? {
+                pcm: Buffer.alloc(1000),
+                sampleRate: 24000,
+                refText: 'A retained calibration clip.',
+                /* The designed-only fields clone_voice would truncate — the
+                   `language` here is precisely what the evict makes effective. */
+                manifest: {
+                  refText: 'A retained calibration clip.',
+                  language: 'German',
+                  instruct: 'a warm baritone',
+                },
+              }
+            : null,
+        ),
+        deriveEngineArtifact: vi.fn(async () => ({
+          previewPcm: Buffer.alloc(10),
+          sampleRate: 24000,
+          baseModel: 'qwen3-tts-0.6b',
+        })) as unknown as ResolveDesignedVoiceDeps['deriveEngineArtifact'],
+        writeSidecarManifest,
+        evictSidecarVoice,
+        readEntry: vi.fn(async () => null) as unknown as ResolveDesignedVoiceDeps['readEntry'],
+        writeEntry: vi.fn(async () => {}),
+      },
+    });
+
+    expect(evictSidecarVoice).toHaveBeenCalledTimes(1);
+    expect(evictSidecarVoice).toHaveBeenCalledWith('lib-designed');
+    /* Ordering is load-bearing, not incidental: evicting BEFORE the restore
+       would let any synth racing between the two calls re-warm the cache with
+       the derive's own "English". */
+    expect(order).toEqual(['write', 'evict']);
   });
 
   it('.pt present -> no re-derive attempted (no needless GPU work), chapter renders normally', async () => {

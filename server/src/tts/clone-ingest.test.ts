@@ -51,4 +51,28 @@ describe('ingestCloneSample', () => {
     await expect(ingestCloneSample(Buffer.from('not audio'), { captureMethod: 'upload', candidateId: 'c3' }))
       .rejects.toMatchObject({ status: 400 });
   });
+  /* #1951 — the detected language was previously discarded here, so
+     `deriveEngineArtifact` had nothing to put in `X-Language` and every cloned
+     voice's manifest read "English". It must be BOTH returned to the caller and
+     PERSISTED on the candidate, because `POST /clone` is a separate request and
+     the candidate is the only state that survives between the two. */
+  it('retains the Whisper-detected language on the result AND on the persisted candidate', async () => {
+    transcribeSegment.mockResolvedValue({ text: 'der alte leuchtturm', language: 'de', words: null, avgLogprob: null, noSpeechProb: null, compressionRatio: null });
+    const { ingestCloneSample } = await import('./clone-ingest.js');
+    const { readCandidate } = await import('../workspace/clone-candidate.js');
+    const res = await ingestCloneSample(await wav(6), { captureMethod: 'upload', candidateId: 'c4' });
+    expect(res.detectedLanguage).toBe('de');
+    expect((await readCandidate('c4'))?.master.languageCode).toBe('de');
+  });
+
+  /* Whisper can legitimately classify nothing. "Unknown" must stay
+     distinguishable from a real detection — never silently become English. */
+  it('leaves the language unset when Whisper reports none', async () => {
+    transcribeSegment.mockResolvedValue({ text: 'hm', language: null, words: null, avgLogprob: null, noSpeechProb: null, compressionRatio: null });
+    const { ingestCloneSample } = await import('./clone-ingest.js');
+    const { readCandidate } = await import('../workspace/clone-candidate.js');
+    const res = await ingestCloneSample(await wav(6), { captureMethod: 'upload', candidateId: 'c5' });
+    expect(res.detectedLanguage).toBeNull();
+    expect((await readCandidate('c5'))?.master.languageCode).toBeUndefined();
+  });
 });

@@ -2483,6 +2483,79 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.master.transcriptSource).toBe('user');
   });
 
+  /* #1951 — the clone's OWN manifest language, from the reference clip that
+     Whisper classified at ingest. Governs the wizard's completion audition and
+     the language the Voice Library displays; it does NOT govern book synth
+     (there the book's language wins and overrides the manifest). Before this,
+     no X-Language was ever sent, so every clone's manifest read "English". */
+  it('promotes the clip language onto languageCode and sends the sidecar word to the derive', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-de',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'der alte leuchtturm',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+        languageCode: 'de',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-de',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.languageCode).toBe('de');
+    /* The sidecar takes the language WORD, not the BCP-47 code. */
+    expect(deriveMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'qwen',
+      expect.objectContaining({ language: 'German' }),
+    );
+  });
+
+  /* An unsupported clip language must NOT fail the clone — the voice is
+     perfectly usable, we just cannot label it. `sidecarLanguageName` throws for
+     anything the registry does not know, so the route gates on
+     `isSupportedLanguage` rather than catching. Unknown => no languageCode, no
+     X-Language, and the sidecar keeps its own default. Never guess English. */
+  it('leaves languageCode unset for an unsupported clip language without failing the clone', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    await writeCandidate(
+      'cand-kl',
+      {
+        sampleRate: 24000,
+        durationSeconds: 12,
+        transcript: 'unrecognised speech',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+        languageCode: 'kl',
+      },
+      Buffer.from('RIFF'),
+    );
+    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-kl',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.provenance).toBe('cloned');
+    expect(res.body.languageCode).toBeUndefined();
+    const lastDerive = deriveMock.mock.calls[deriveMock.mock.calls.length - 1];
+    expect(lastDerive[2]).not.toHaveProperty('language');
+  });
+
   it('keeps transcriptSource=whisper when the transcript comes back unedited', async () => {
     const { writeCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(

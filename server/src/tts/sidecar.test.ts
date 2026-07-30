@@ -262,7 +262,17 @@ describe('fs-59 W4b — coquiLanguageCode zh→zh-cn map (Coqui-only seam)', () 
     expect(body.language).toBe('ja');
   });
 
-  it('does NOT leak zh-cn onto a non-Coqui engine — Qwen sees plain zh unchanged', async () => {
+  /* #1951 / plan 275 — REWRITTEN, not incidentally broken. This case used to
+     read "Qwen sees plain zh unchanged" and assert `body.language === 'zh'`,
+     which was a true statement of the OLD contract: Qwen was sent the raw
+     BCP-47 code, and ignored it.
+
+     Under the new contract Qwen is sent the sidecar language WORD, and only
+     for a CLONED voice; a designed voice is sent no language at all. Both arms
+     are asserted below, and the fs-59 W4b invariant this case exists to
+     protect — the Coqui-only `zh` → `zh-cn` map must never leak off Coqui — is
+     still asserted on each: neither arm may ever put `zh-cn` on the wire. */
+  it('never leaks zh-cn onto Qwen: a designed voice sends no language at all', async () => {
     const bodies: unknown[] = [];
     stubFetch(capturingFetch(bodies));
     await makeQwenProvider().synthesize({
@@ -272,7 +282,154 @@ describe('fs-59 W4b — coquiLanguageCode zh→zh-cn map (Coqui-only seam)', () 
       language: 'zh',
     });
     const body = bodies[0] as Record<string, unknown>;
-    expect(body.language).toBe('zh');
+    expect(body).not.toHaveProperty('language');
+    expect(JSON.stringify(body)).not.toContain('zh-cn');
+  });
+
+  it('never leaks zh-cn onto Qwen: a cloned voice sends the sidecar WORD, not the code', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeQwenProvider().synthesize({
+      text: 'hi',
+      voiceName: 'qwen-v1',
+      modelKey: 'qwen3-tts-0.6b',
+      language: 'zh',
+      cloned: true,
+    });
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body.language).toBe('Chinese');
+    expect(JSON.stringify(body)).not.toContain('zh-cn');
+  });
+});
+
+/* #1951 / plan 275 — a cloned Qwen voice must render the BOOK's language, not
+   the "English" its manifest permanently claims. Node decides clone-ness
+   (`hasClonedProvenance`) and signals it to the sidecar purely by WHETHER it
+   sends a `language`. */
+describe('#1951 — per-request language for cloned Qwen voices', () => {
+  function makeQwenProvider() {
+    return new SidecarTtsProvider({ url: 'http://localhost:9000/', engine: 'qwen' });
+  }
+
+  function capturingFetch(bodies: unknown[]) {
+    return async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      const pcm = Buffer.alloc(4, 0);
+      return new Response(pcm, {
+        status: 200,
+        headers: { 'content-type': 'audio/L16;codec=pcm;rate=24000', 'x-sample-rate': '24000' },
+      });
+    };
+  }
+
+  function batchFrame(count: number) {
+    const lengths = Array.from({ length: count }, () => 4);
+    const header = JSON.stringify({ sampleRate: 24000, lengths });
+    return Buffer.concat([Buffer.from(`${header}\n`, 'utf8'), Buffer.alloc(4 * count, 0)]);
+  }
+
+  it('sends the sidecar language WORD for a cloned qwen voice', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeQwenProvider().synthesize({
+      text: 'Der alte Leuchtturm.',
+      voiceName: 'qwen-abc',
+      modelKey: 'qwen3-tts-0.6b',
+      language: 'de',
+      cloned: true,
+    });
+    expect((bodies[0] as Record<string, unknown>).language).toBe('German');
+  });
+
+  it('sends NO language for a designed qwen voice (byte-identical to today)', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeQwenProvider().synthesize({
+      text: 'The old lighthouse.',
+      voiceName: 'qwen-abc',
+      modelKey: 'qwen3-tts-0.6b',
+      language: 'de',
+    });
+    expect(bodies[0]).not.toHaveProperty('language');
+  });
+
+  /* Invariant 6 / the live 500 risk. routes/voice-sample.ts passes a
+     CLIENT-supplied, unvalidated `language` and no `cloned` flag. If the flag
+     were not required, an unregistered code from that route would reach
+     `sidecarLanguageName`, which THROWS by design — turning a working audition
+     into a 500. The regression is closed structurally (no `cloned` → no
+     mapping attempt), not by a try/catch, so this asserts the structural
+     property with a language code the registry does not know. */
+  it('a voice-sample-shaped call (language, no cloned flag) never reaches sidecarLanguageName', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await expect(
+      makeQwenProvider().synthesize({
+        text: 'hi',
+        voiceName: 'qwen-abc',
+        modelKey: 'qwen3-tts-0.6b',
+        language: 'kl-GL',
+      }),
+    ).resolves.toBeDefined();
+    expect(bodies[0]).not.toHaveProperty('language');
+  });
+
+  /* Principle 3 — an unmappable language degrades to TODAY's behaviour: the
+     field is omitted, so the sidecar falls back to the manifest word. Never a
+     throw (that would fail a chapter that renders fine today) and never an
+     English default (that would ship cross-language garbage silently). The
+     fail-loud guarantee for a book render lives upstream in generation.ts. */
+  it('omits the field rather than throwing when the language has no sidecar word', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await expect(
+      makeQwenProvider().synthesize({
+        text: 'hi',
+        voiceName: 'qwen-abc',
+        modelKey: 'qwen3-tts-0.6b',
+        language: 'kl-GL',
+        cloned: true,
+      }),
+    ).resolves.toBeDefined();
+    expect(bodies[0]).not.toHaveProperty('language');
+  });
+
+  it('leaves Coqui untouched — a cloned coqui voice still gets a BCP-47 code', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(capturingFetch(bodies));
+    await makeProvider().synthesize({
+      text: 'hi',
+      voiceName: 'xtts-abc',
+      modelKey: 'coqui-xtts-v2',
+      language: 'zh',
+      cloned: true,
+    });
+    expect((bodies[0] as Record<string, unknown>).language).toBe('zh-cn');
+  });
+
+  /* THE PRIMARY SURFACE. Chapter sentences batch (QWEN_BATCH_SIZE=32); only
+     the title beat uses /synthesize. A batch may MIX a cloned character's line
+     with a designed narrator's, so the field is PER ITEM. */
+  it('stamps language per ITEM on the batch body — cloned item only', async () => {
+    const bodies: unknown[] = [];
+    stubFetch(async (_url: unknown, init: unknown) => {
+      bodies.push(JSON.parse((init as { body: string }).body));
+      return new Response(batchFrame(2), { status: 200 });
+    });
+    await makeQwenProvider().synthesizeBatch({
+      modelKey: 'qwen3-tts-0.6b',
+      /* Batch-level: a batch is always one chapter of one book, so there is
+         exactly one book language. Per-ITEM `cloned` is what varies, and it is
+         what decides whether that language reaches the wire for a given item. */
+      language: 'de',
+      items: [
+        { text: 'Der alte Leuchtturm.', voiceName: 'qwen-cloned', cloned: true },
+        { text: 'The old lighthouse.', voiceName: 'qwen-designed' },
+      ],
+    });
+    const items = (bodies[0] as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0].language).toBe('German');
+    expect(items[1]).not.toHaveProperty('language');
   });
 });
 

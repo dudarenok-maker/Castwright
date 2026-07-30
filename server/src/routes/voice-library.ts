@@ -67,6 +67,9 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
+/* #1951 — the clone's own manifest language, from the reference clip. */
+import { sidecarLanguageName, normaliseBookLanguage } from '../tts/language.js';
+import { isSupportedLanguage } from '../tts/language-registry.js';
 import { readCandidate, candidateMasterPath, removeCandidate } from '../workspace/clone-candidate.js';
 import { deriveEngineArtifact } from '../tts/derive-engine-artifact.js';
 import { assessCloneFidelity } from '../tts/clone-fidelity.js';
@@ -937,10 +940,29 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
           ? 'user'
           : candidate.master.transcriptSource;
 
+      /* #1951 — the reference clip's own language, as Whisper detected it at
+         ingest. Governs the clone's MANIFEST: the wizard's completion audition
+         and the language the Voice Library displays (routes/voices.ts reads the
+         manifest word back via `codeForSidecarName`). It does NOT govern book
+         synth — there the book's language wins and overrides this.
+
+         Gated on `isSupportedLanguage` because `sidecarLanguageName` throws for
+         anything the registry doesn't know, and a clip in an unsupported
+         language must NOT fail the clone: the voice is perfectly usable, we
+         just can't label it. Unknown/unsupported → send no `X-Language`, leave
+         `languageCode` unset, and the sidecar computes its "English" default
+         exactly as it always has. Never guess English explicitly. */
+      const detectedLanguage = candidate.master.languageCode;
+      const clipLanguage =
+        detectedLanguage && isSupportedLanguage(normaliseBookLanguage(detectedLanguage))
+          ? normaliseBookLanguage(detectedLanguage)
+          : undefined;
+
       const derived = await deriveEngineArtifact(voiceUuid, 'qwen', {
         masterPcm,
         sampleRate: candidate.master.sampleRate,
         refText,
+        ...(clipLanguage ? { language: sidecarLanguageName(clipLanguage) } : {}),
       });
 
       const dir = entryDir(voiceUuid);
@@ -1053,6 +1075,10 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
         provenance: 'cloned',
         tags: [],
         pinned: false,
+        /* #1951 — omitted entirely when the clip's language is unknown or
+           unsupported, so the library shows no language rather than a wrong
+           one. */
+        ...(clipLanguage ? { languageCode: clipLanguage } : {}),
         consent,
         master,
         sampleTranscript: refText,

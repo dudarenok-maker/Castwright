@@ -55,6 +55,16 @@ export interface VoiceMaster {
   transcript: string;
   transcriptSource: 'whisper' | 'user';
   captureMethod: 'upload' | 'record';
+  /** #1951 — BCP-47-ish language Whisper detected in THIS clip, when it
+      reported one. Persisted on the master because ingest and `POST /clone`
+      are separate requests and the candidate's `master` is the only thing that
+      survives between them. `/clone` promotes it to the entry's own
+      `languageCode` and sends the sidecar word as `X-Language` so the clone's
+      manifest stops claiming "English".
+
+      Absent on every pre-#1951 candidate/entry, and on a clip Whisper could
+      not classify — treat missing as "unknown", never as English. */
+  languageCode?: string;
 }
 
 export interface VoiceLibraryEntry {

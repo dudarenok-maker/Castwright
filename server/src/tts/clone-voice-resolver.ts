@@ -694,6 +694,26 @@ export interface ResolveDesignedVoiceDeps {
       never touching `qwen-<uuid>.json` — there is nothing on this file for
       a coqui derive to truncate or restore. */
   writeSidecarManifest(uuid: string, manifest: Record<string, unknown>): Promise<void>;
+  /** QWEN ARM ONLY. #1951 — drop the sidecar's warm in-memory prompt-cache
+      entry for this voice, so the manifest `writeSidecarManifest` just restored
+      is what the NEXT synth actually reads.
+
+      Without it the two disagree: the re-derive routes through the sidecar's
+      `clone_voice`, which warms `_prompt_cache[voiceId] = (prompt, "English")`
+      and truncate-rewrites the manifest; the restore above then puts
+      `"language": "German"` back on DISK, but nothing invalidates the cache.
+      Designed voices DO read the manifest language, so the next synth speaks
+      English while disk says German — and a sidecar restart silently changes
+      the audio. `/qwen/evict-voice`'s docstring names the cause outright: "the
+      cache has no on-disk mtime check".
+
+      Injected rather than imported, per this module's header — every sidecar
+      interaction arrives through `deps`. Safe to call unconditionally: the
+      route is idempotent (main.py:8769, 8784) and returns `{ok:true}` for a
+      voice that was never cached. Best-effort at the call site, exactly like
+      the manifest write it follows — a failed evict must not turn a successful
+      re-derive into a reported self-heal failure. */
+  evictSidecarVoice(uuid: string): Promise<unknown>;
   /** Review I-2 — read the voice-library entry. The qwen arm reads it only
       indirectly, via `updateEntry` below, at its final success stamp. The
       coqui arm ALSO reads it directly, up front, per request, for two
@@ -1005,10 +1025,16 @@ export async function resolveDesignedVoicesForChapter(
       };
       try {
         await deps.writeSidecarManifest(libraryUuid, restoredManifest);
+        /* #1951 — AFTER the restore, never before: evicting first would let
+           the derive's own "English" cache entry be re-warmed by any synth
+           racing between the two calls. Ordering is asserted in the tests. */
+        await deps.evictSidecarVoice(libraryUuid);
       } catch (manifestErr) {
         console.warn(
           `[clone-voice-resolver] designed self-heal for "${characterName}" (${libraryUuid}) re-derived ` +
-            `successfully but failed to restore its sidecar manifest:`,
+            `successfully but failed to restore its sidecar manifest (or evict the sidecar's stale ` +
+            `prompt-cache entry for it — the restored manifest may not take effect until the sidecar ` +
+            `restarts):`,
           manifestErr,
         );
       }

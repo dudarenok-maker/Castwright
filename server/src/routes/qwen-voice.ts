@@ -449,9 +449,17 @@ qwenVoiceRouter.post(
       });
     }
     /* fs-2 — design the voice in the BOOK's language. The sidecar bakes this
-       into the cached voice manifest, so every later /synthesize of this
-       voice speaks the right language (synth itself carries no language).
-       A Russian book therefore yields Russian-speaking designed voices. */
+       into the cached voice manifest, and for a DESIGNED voice that manifest
+       language is what every later synth speaks. A Russian book therefore
+       yields Russian-speaking designed voices.
+
+       #1951 corrected the parenthetical that used to sit here ("synth itself
+       carries no language"): synth now CAN carry one. Node sends a per-request
+       language for a CLONED voice only, where it overrides the manifest — a
+       clone's manifest permanently says "English", so without it a clone reads
+       every book in English. Designed voices are unaffected: no language is
+       sent for them, so the baked manifest word still wins, exactly as before.
+       See tts/sidecar.ts `resolveWireLanguage`. */
     const designLanguage = sidecarLanguageName(bookStateLanguage(located.state));
 
     const cast = await readJson<CastFile>(castJsonPath(bookDir));

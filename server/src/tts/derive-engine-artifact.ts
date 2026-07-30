@@ -31,6 +31,20 @@ export interface DeriveArtifactInput {
       see below. */
   refText?: string;
   auditionText?: string;
+  /** #1951 — the sidecar language WORD ("German") for the reference clip,
+      sent as `X-Language`. The sidecar bakes it into the voice manifest
+      (`main.py:8578` qwen, `:8868` xtts); omitted, it computes
+      `lang = DEFAULT_LANGUAGE`, which is why every cloned voice's manifest has
+      always read "English".
+
+      This governs the clone's OWN language — the wizard's completion audition
+      and the label the Voice Library displays (`routes/voices.ts:412-421` reads
+      the manifest word back through `codeForSidecarName`). It does NOT govern
+      book synth: for that the BOOK's language wins and overrides this at the
+      synth call (see tts/sidecar.ts `resolveWireLanguage`). The two are
+      coherent, not contradictory — manifest language = the reference clip's,
+      request language = the book's. */
+  language?: string;
 }
 
 export interface DeriveArtifactResult {
@@ -70,6 +84,12 @@ export async function deriveEngineArtifact(
   }
   if (input.auditionText) {
     headers['X-Audition-Text'] = Buffer.from(input.auditionText, 'utf8').toString('base64');
+  }
+  /* #1951 — both engine branches: qwen reads it at main.py:8578, xtts at
+     :8868. Plain ASCII language words, so no base64 wrapper (unlike the
+     free-text headers above). */
+  if (input.language) {
+    headers['X-Language'] = input.language;
   }
 
   let upstream: Awaited<ReturnType<typeof fetch>>;

@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # Cloned Qwen voices honour the book's language (fs-38 follow-up)
 
-> Status: draft
+> Status: active
 > Key files: `server/src/tts/sidecar.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/index.ts`, `server/tts-sidecar/main.py` (`synthesize`, `synthesize_batch`, `/synthesize-batch` route), `server/src/tts/clone-ingest.ts`, `server/src/routes/voice-library.ts`, `server/src/tts/clone-voice-resolver.ts`
 > URL surface: indirect — every chapter render using a cloned Qwen voice; the clone wizard's completion audition
 > OpenAPI ops: none (one new optional field on an internal sidecar wire)
