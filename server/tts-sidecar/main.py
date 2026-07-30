@@ -6241,7 +6241,15 @@ class WhisperEngine:
 
         `device` (#1730 gap 2) threads an admitted card straight into the cold
         load, so nothing reads the shared `self._device` across the unlocked
-        route→load gap; `None` is the pre-admission path."""
+        route→load gap; `None` is the pre-admission path.
+
+        Plan 273 T7: the re-ensure below runs BEFORE `_infer_lock` is
+        acquired, not inside it. `_ensure_loaded` constructs `WhisperModel(...)`,
+        which downloads HF weights on first use — an unbounded network pull,
+        not the "~1s" warm-cache figure — and `unload()` also takes
+        `_infer_lock`, so a cold load performed INSIDE this lock would hold
+        `unload()` off for that whole pull. Mirrors `CoquiEngine.synthesize`'s
+        re-ensure-after-the-claim placement."""
         self._ensure_loaded(device=device)
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
         with self._in_flight.claim():
@@ -6250,13 +6258,26 @@ class WhisperEngine:
             # own decrement runs (#1917) — see CoquiEngine.synthesize for why
             # the ordering matters.
             try:
+                # Re-ensure AFTER the claim, BEFORE the lock (plan 273 T7): an
+                # idle-evict/unload can free the model in the gap between the
+                # pre-claim ensure above and here, so one ensured before the
+                # claim can be gone by now. No-op on the warm path. Kept OUT
+                # of `_infer_lock` — see the docstring above for why a cold
+                # load must never run while that lock is held.
+                self._ensure_loaded(device=device)
                 with self._infer_lock:
-                    # Re-ensure under the lock: an idle-evict holds
-                    # `_infer_lock` to null the model, so one ensured before
-                    # the lock can be gone in the gap. No-op on the warm path.
-                    self._ensure_loaded(device=device)
                     model = self._model
-                    assert model is not None
+                    if model is None:
+                        # An explicit unload() (or, in principle, an
+                        # idle-evict) can still win the narrow gap between
+                        # the re-ensure above and this acquire — the only
+                        # window left once the cold load itself is out of
+                        # the lock. Loud and typed, not a bare `assert`
+                        # (`-O` strips those) and not a `None` deref.
+                        raise RuntimeError(
+                            "Whisper ASR model was unloaded before this "
+                            "transcribe started — reload it and retry."
+                        )
                     self._last_used = time.monotonic()
                     segments, info = model.transcribe(
                         audio,
