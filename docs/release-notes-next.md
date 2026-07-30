@@ -49,6 +49,7 @@ which gates have yet to run.
 ## ðŸ“ Script review & manuscript
 
 - Detect emotions can now be scoped to the current chapter â€” the header button runs the emotion + reaction passes on just the chapter you're viewing, with whole-book still available from its âŒ„ menu. (fs-35, #592)
+- **`POST /api/books` now rejects an unsupported book language at the import boundary** (#1955). The confirm-screen language dropdown only constrained the browser — `normaliseBookLanguage` lower-cased whatever BCP-47 tag it was handed with no support check, so a direct API call could persist e.g. `'pt'` onto `state.json` even though the language registry has exactly seven entries (en/ru/es/fr/de/zh/ja). Pre-fix, an unsupported language surfaced only at render time as an opaque `chapter_failed` (`sidecarLanguageName`'s existing throw in `generation.ts`), several expensive steps — analysis, casting — after the user chose it. The route now checks `isSupportedLanguage()` before any disk write and returns 400 `unsupported_language` naming the supported set; nothing is persisted and the staging entry survives for a corrected retry. The render-time throw is unchanged and still the backstop for any other write path.
 
 ---
 
