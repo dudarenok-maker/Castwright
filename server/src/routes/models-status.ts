@@ -7,7 +7,12 @@ import { Router } from 'express';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Request, Response } from '../http.js';
-import { buildModelsStatus, type ModelsStatus, type RuntimeProcessState } from '../tts/models-status.js';
+import {
+  buildModelsStatus,
+  type EngineProbeResult,
+  type ModelsStatus,
+  type RuntimeProcessState,
+} from '../tts/models-status.js';
 import { VOICE_ENGINES, type VoiceEngineId } from '../tts/voice-engine-registry.js';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { probePython312Cached } from './setup-diagnosis.js';
@@ -59,15 +64,17 @@ export async function computeModelsStatus(repoRoot: string): Promise<ModelsStatu
     : { status: 'unreachable' };
   const reachable = health.status === 'reachable';
 
-  const engines = {} as Record<VoiceEngineId, {
-    packageOnDisk: boolean; weightsOnDisk: boolean; loaded: boolean; importable: boolean | undefined;
-  }>;
+  const engines = {} as Record<VoiceEngineId, EngineProbeResult>;
   for (const e of VOICE_ENGINES) {
     engines[e.id] = {
       packageOnDisk: e.packageInstalledOnDisk(repoRoot),
       weightsOnDisk: e.weightsPresentOnDisk(repoRoot),
       loaded: reachable ? e.liveLoaded(health) : false,
-      importable: reachable ? e.livePackageImportable(health) : undefined,
+      /* #1965 — the real-import result and the find_spec probe are forwarded
+         separately; buildModelsStatus decides which one governs. Sidecar down →
+         both unknown (undefined), which can never read as broken. */
+      importOk: reachable ? e.liveImportOk(health) : undefined,
+      specPresent: reachable ? e.liveSpecPresent(health) : undefined,
     };
   }
 

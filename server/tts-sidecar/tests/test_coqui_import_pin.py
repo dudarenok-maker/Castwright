@@ -33,9 +33,10 @@ def _reset_import_ok(monkeypatch) -> None:
 def _coqui_install_present(monkeypatch) -> None:
     """Stand in for an install that ACTUALLY USES Coqui — package importable
     AND the XTTS v2 weights on disk. The weights are the real gate (#1962
-    review finding 2): coqui-tts ships as an ordinary dependency so the
-    package is always present, while the ~2 GB `model.pth` only exists if
-    someone deliberately installed Coqui."""
+    review finding 2): the ~2 GB `model.pth` only exists if someone
+    deliberately installed Coqui from the Model Manager (#1965 — coqui-tts is
+    opt-in, not an ordinary always-present dependency; the package check still
+    runs, the weights check just narrows it further)."""
     monkeypatch.setattr(main, "_coqui_package_installed", lambda: True)
     monkeypatch.setattr(main, "_coqui_weights_present", lambda: True)
 
@@ -104,11 +105,10 @@ def test_pin_skips_cleanly_when_coqui_not_installed(monkeypatch) -> None:
 
 def test_pin_skips_when_coqui_weights_are_absent(monkeypatch, caplog) -> None:
     """The gate that keeps Qwen-only / Kokoro-only installs from paying for
-    this (#1962 review finding 2). `coqui-tts` ships as an ordinary
-    dependency, so `_coqui_package_installed()` is true on EVERY install —
-    package-presence alone would tax everyone. The ~2 GB XTTS `model.pth`
-    only exists if someone deliberately installed Coqui, so the weights are
-    the real "this install uses Coqui" signal.
+    this (#1962 review finding 2). The ~2 GB XTTS `model.pth` only exists if
+    someone deliberately installed Coqui, so the weights are the durable
+    "this install uses Coqui" signal — stricter than package-presence, which
+    can linger after the weights are purged (#1965).
 
     Measured cost of getting this wrong: the pin holds the listening socket
     closed for 14.6 s versus 2.9 s without it (uvicorn binds only after

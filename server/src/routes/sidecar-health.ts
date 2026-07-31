@@ -121,6 +121,21 @@ interface SidecarHealthBody {
   coqui_weights_present?: boolean;
   kokoro_package_installed?: boolean;
   whisper_package_installed?: boolean;
+  /* #1965 — the same sticky, real-import-attempt truth as `coqui_import_ok`
+     above, for the three engines that only had the find_spec probe. Unlike
+     coqui these have NO eager startup pin (Coqui's costs a measured +11.7 s of
+     unreachable boot and nobody wants that per engine), so `null` — no real
+     import attempted yet in this sidecar process — is the COMMON value, not an
+     edge case: it stays null for ever on an install that never renders on that
+     engine. Absent on an older sidecar predating these fields → reads exactly
+     like null. Callers fall back to `*_package_installed`; null is never
+     "broken".
+     `qwen_import_ok` means strictly "`from qwen_tts import Qwen3TTSModel`
+     returned" — NOT "the Qwen engine loaded", which continues on into
+     `from_pretrained` and a `.to(device)` retry loop. */
+  kokoro_import_ok?: boolean | null;
+  qwen_import_ok?: boolean | null;
+  whisper_import_ok?: boolean | null;
   /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version
      (importlib.metadata, no `import TTS`), the clone-voice resolver's
      currentArtifactVersion('coqui') oracle. null when the sidecar couldn't
@@ -158,6 +173,13 @@ interface SidecarHealthBody {
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
   vram_total_mb?: number | null;
+  /* #1976 / #1993 review (m8) — the multi-GPU-safe complement to
+     `vram_reserved_mb`/`vram_total_mb` above, which are CURRENT-DEVICE-ONLY
+     (see `_cuda_vram_mb_per_device`'s docstring in main.py: measured
+     reporting `50` while nvidia-smi showed 3587 MiB reserved on cuda:0,
+     because torch's current device wasn't 0). `{}` / absent on an older
+     sidecar or a CUDA-unavailable box. */
+  vram_reserved_mb_by_device?: Record<string, { reserved_mb: number; total_mb: number }>;
 }
 
 /* side-14 — per-engine device ground-truth. Sidecar values are normalised
@@ -330,6 +352,14 @@ export interface SidecarHealthResult {
      covers BOTH "no real import attempted yet" and "an older sidecar that
      doesn't send the field" — callers must treat those two the same. */
   coquiImportOk?: boolean | null;
+  /* #1965 — the kokoro/qwen/whisper counterparts of coquiImportOk. Same
+     tri-state and the same "null and absent mean the same thing" rule, except
+     null is the COMMON value here (no startup pin — see the wire fields above).
+     Read alongside the matching `*PackageInstalled` find_spec flag, never
+     instead of it: undefined/null falls back to that probe. */
+  kokoroImportOk?: boolean | null;
+  qwenImportOk?: boolean | null;
+  whisperImportOk?: boolean | null;
   /* fs-38 Wave 3c Task 19 — the currently-installed coqui-tts version,
      forwarded verbatim from the sidecar body's coqui_version. '' (not null)
      when unknown, matching getLastKnownCoquiVersion()'s own empty-string
@@ -347,6 +377,11 @@ export interface SidecarHealthResult {
   committedMb?: number | null;
   vramReservedMb?: number | null;
   vramTotalMb?: number | null;
+  /* #1993 review (m8) — per-card breakdown forwarded verbatim from the
+     sidecar body's vram_reserved_mb_by_device (see SidecarHealthBody's own
+     doc above for why the scalar fields above can't be trusted on a
+     multi-GPU box). undefined on an older sidecar. */
+  vramReservedMbByDevice?: Record<string, { reserved_mb: number; total_mb: number }>;
   /* side-14 — per-engine device map + probe state, forwarded from the sidecar. */
   devices?: SidecarDeviceMap | null;
   devicesState?: SidecarDevicesState | null;
@@ -424,6 +459,12 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       coquiImportOk: typeof body.coqui_import_ok === 'boolean' ? body.coqui_import_ok : null,
       kokoroPackageInstalled: typeof body.kokoro_package_installed === 'boolean' ? body.kokoro_package_installed : undefined,
       whisperPackageInstalled: typeof body.whisper_package_installed === 'boolean' ? body.whisper_package_installed : undefined,
+      /* #1965 — same absent → null normalisation as coquiImportOk above, for
+         the same reason: every consumer sees ONE "no real import attempt to
+         trust" value regardless of which shape the wire omission took. */
+      kokoroImportOk: typeof body.kokoro_import_ok === 'boolean' ? body.kokoro_import_ok : null,
+      qwenImportOk: typeof body.qwen_import_ok === 'boolean' ? body.qwen_import_ok : null,
+      whisperImportOk: typeof body.whisper_import_ok === 'boolean' ? body.whisper_import_ok : null,
       coquiVersion: coquiVersion ?? '',
       asrEnabled: asrEnabled(),
       asrLoaded: body.asr_loaded === true,
@@ -437,6 +478,10 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
+      vramReservedMbByDevice:
+        body.vram_reserved_mb_by_device && typeof body.vram_reserved_mb_by_device === 'object'
+          ? body.vram_reserved_mb_by_device
+          : undefined,
       devices,
       devicesState: normaliseDevicesState(body.devices_state),
     };
