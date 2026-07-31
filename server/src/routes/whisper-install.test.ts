@@ -16,6 +16,7 @@ import {
   type WhisperInstallJobStatus,
 } from '../tts/whisper-install-bootstrap.js';
 import type { WhisperInstallState } from '../tts/whisper-install-detect.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 
 function makeApp() {
   const app = express();
@@ -101,6 +102,29 @@ describe('POST /api/whisper/install + poll', () => {
     setWhisperInstallBootstrap(new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready' }));
     const res = await request(makeApp()).get('/api/whisper/install/nope');
     expect(res.status).toBe(404);
+  });
+
+  it('spawns the installer with --model resolved from the LIVE qa.asr.model override (PR #2008 review, Major 1)', async () => {
+    /* Before the fix, no installArgs were passed at all, so install-whisper.mjs
+       fell back to `process.env.ASR_MODEL || 'base'` — the in-app installer
+       could never fetch a model configured only via Advanced Configuration. */
+    _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+    let capturedArgs: readonly string[] = [];
+    setWhisperInstallBootstrap(
+      new WhisperInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: (_cmd, args) => {
+          capturedArgs = args;
+          return fakeChild(0) as never;
+        },
+      }),
+    );
+    const app = makeApp();
+    const start = await request(app).post('/api/whisper/install');
+    await poll(app, start.body.id, (s) => s === 'installed' || s === 'error');
+    _resetUserSettingsCache();
+    expect(capturedArgs.slice(-2)).toEqual(['--model', 'small']);
   });
 });
 

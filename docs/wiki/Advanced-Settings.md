@@ -211,9 +211,9 @@ app-pinnable, so it just reports what the daemon is currently doing.
   <img alt="Per-sentence QA gates" src="images/advanced-settings/07-per-sentence-qa-gates.png">
 </picture>
 
-Group risk is **low** overall, but 3 knobs in this group are individually
-**medium** risk (Voice-QA device, Content-QA device, Auto-fix voice
-mismatches) — the table's risk column shows each correctly.
+Group risk is **low** overall, but 4 knobs in this group are individually
+**medium** risk (Voice-QA device, Content-QA device, Content-QA model, Auto-fix
+voice mismatches) — the table's risk column shows each correctly.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
