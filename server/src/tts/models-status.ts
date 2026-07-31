@@ -23,6 +23,42 @@ export interface EngineStatus {
   /** Live: package present on disk but fails to IMPORT in the sidecar. Sidecar-up-only;
       false when the sidecar is down (never a first-run "fine" guarantee). */
   packageBroken: boolean;
+  /** #1999 — same two live signals as packageBroken (importOk/specPresent), classified
+      via classifyPackageFault into WHICH fault applies, not just whether one does.
+      packageBroken stays for any consumer that only needs the boolean; a consumer that
+      has to NAME the fault (Setup checker, Admin console) reads this instead, so the
+      two surfaces can't disagree about which of "missing" or "broken" it is. */
+  packageFault: PackageFault;
+}
+
+/** #1999 — the shared missing-vs-broken classification, in the one precedence order
+    both the Admin console (diagnostics.ts) and the Setup checker (setup-diagnosis.ts,
+    via setup-readiness.ts) must agree on:
+
+    1. `importOk === true` wins outright — a real import that RETURNED is proof the
+       package is usable, overriding a find_spec that says otherwise (a stale/wrong
+       probe).
+    2. `specPresent === false` wins over `importOk === false` — when a load is
+       attempted against a genuinely absent package, the sidecar records BOTH (the
+       ImportError sets importOk = false and find_spec still says false), and they
+       are one fault, not two. "Missing" is the stronger, more actionable claim:
+       telling the operator to repair something never installed sends them to the
+       wrong remedy.
+    3. `importOk === false` is left for the case it alone describes: the package IS
+       on the path (or presence is unknown) and importing it still raised.
+
+    Unknown on both axes (sidecar down / older sidecar / engine never loaded) is
+    never a fault — see the fail-open rule at voice-engine-registry.ts:26-29. */
+export type PackageFault = 'ok' | 'missing' | 'broken';
+
+export function classifyPackageFault(
+  importOk: boolean | undefined,
+  specPresent: boolean | undefined,
+): PackageFault {
+  if (importOk === true) return 'ok';
+  if (specPresent === false) return 'missing';
+  if (importOk === false) return 'broken';
+  return 'ok';
 }
 
 export interface ModelsStatus {
@@ -85,7 +121,7 @@ export function buildModelsStatus(input: BuildModelsStatusInput): ModelsStatus {
     const packageBroken =
       p.packageOnDisk &&
       (p.importOk === false || (p.importOk === undefined && p.specPresent === false));
-    engines[entry.id] = { state, packageBroken };
+    engines[entry.id] = { state, packageBroken, packageFault: classifyPackageFault(p.importOk, p.specPresent) };
   }
   return {
     runtime: input.runtime,

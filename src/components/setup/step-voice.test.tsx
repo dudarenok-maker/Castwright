@@ -57,9 +57,9 @@ function modelsStatus(overrides: Partial<ModelsStatus> = {}): ModelsStatus {
   return {
     runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
     engines: {
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'not-installed', packageBroken: false },
-      coqui: { state: 'not-installed', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {
@@ -138,9 +138,9 @@ describe('StepVoice', () => {
     vi.spyOn(api, 'getModelsStatus').mockResolvedValue(
       modelsStatus({
         engines: {
-          kokoro: { state: 'weights-missing', packageBroken: false },
-          qwen: { state: 'not-installed', packageBroken: false },
-          coqui: { state: 'not-installed', packageBroken: false },
+          kokoro: { state: 'weights-missing', packageBroken: false, packageFault: 'ok' },
+          qwen: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
+          coqui: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
         },
       }),
     );
@@ -167,9 +167,9 @@ describe('StepVoice', () => {
     vi.spyOn(api, 'getModelsStatus').mockResolvedValue(
       modelsStatus({
         engines: {
-          kokoro: { state: 'ready', packageBroken: false },
-          qwen: { state: 'not-installed', packageBroken: false },
-          coqui: { state: 'ready', packageBroken: true },
+          kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+          qwen: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
+          coqui: { state: 'ready', packageBroken: true, packageFault: 'broken' },
         },
       }),
     );

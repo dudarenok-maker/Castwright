@@ -7,6 +7,7 @@
    diagnoseTts(), whose result it feeds (spec Design §1). */
 import { findPython312 } from '../tts/python-discovery.js';
 import type { BlockerDiagnosis, BlockerCause } from './setup-readiness.js';
+import type { PackageFault } from '../tts/models-status.js';
 
 const PYTHON_PROBE_TTL_MS = 10_000;
 let pythonProbeCache: { found: boolean; expiresAt: number } | null = null;
@@ -134,15 +135,39 @@ export interface TtsDiagnosisInput {
   /** First engine reporting 'weights-missing' on disk, or null. Only acted
       on when anyEngineUsable is false — see above. */
   weightsMissingEngine: 'kokoro' | 'qwen' | 'coqui' | null;
-  /** From the sidecar's live /health payload — only meaningful once sidecar is reachable. */
-  kokoroPackageConfirmedBroken: boolean;
-  qwenPackageConfirmedBroken: boolean;
+  /** From the sidecar's live /health payload (via classifyPackageFault) — only
+      meaningful once sidecar is reachable. #1999 — carries the same missing-vs-
+      broken classification the Admin console's diagnostics row now reads, so
+      this surface no longer collapses the two faults into one boolean. */
+  kokoroPackageFault: PackageFault;
+  qwenPackageFault: PackageFault;
 }
 
 const ENGINE_INSTALL_ACTION: Record<'kokoro' | 'qwen' | 'coqui', BlockerDiagnosis['action']> = {
   kokoro: { kind: 'kokoro-install', label: 'Install Kokoro' },
   qwen: { kind: 'qwen-install', label: 'Install Qwen3-TTS' },
   coqui: { kind: 'coqui-install', label: 'Install Coqui XTTS v2' },
+};
+
+/* #2010 (n2) — the "broken" remediation ("Repair X in Model Manager") needs a
+   clickable action for the same reason the "missing" one got one above: an
+   instruction with nothing to click is a dead end. Model Manager's own Repair
+   control (kokoro-install.tsx et al.) hits this exact same install-job
+   endpoint regardless of which fault produced the row — reinstalling the
+   package IS the repair — so only the button's label needs to differ from
+   ENGINE_INSTALL_ACTION. */
+const ENGINE_REPAIR_ACTION: Record<'kokoro' | 'qwen' | 'coqui', BlockerDiagnosis['action']> = {
+  kokoro: { kind: 'kokoro-install', label: 'Repair Kokoro' },
+  qwen: { kind: 'qwen-install', label: 'Repair Qwen3-TTS' },
+  coqui: { kind: 'coqui-install', label: 'Repair Coqui XTTS v2' },
+};
+
+/** #1999 — display names matching the Admin console's diagnostics row
+    (diagnostics.ts's STANDARD_TTS), so the two surfaces name the same fault
+    the same way. */
+const PACKAGE_FAULT_ENGINE_NAME: Record<'kokoro' | 'qwen', string> = {
+  kokoro: 'Kokoro',
+  qwen: 'Qwen',
 };
 
 export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput): BlockerDiagnosis {
@@ -180,13 +205,47 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
       'Try again shortly.',
     );
   }
-  if (!input.anyEngineUsable && (input.kokoroPackageConfirmedBroken || input.qwenPackageConfirmedBroken)) {
-    return diagnosis(
-      'fail',
-      'package-broken',
-      'A voice engine package is not importable in the voice engine runtime.',
-      'Repair in Model Manager.',
-    );
+  if (!input.anyEngineUsable) {
+    /* #1999 / #2010 (Major 1) — a "broken" fault (a real import that was
+       attempted and raised) is preferred over a "missing" one (nothing on
+       disk, so nothing has even been attempted) REGARDLESS of which engine
+       has which: a broken package is the fault the user cannot infer on
+       their own, while a missing one is self-evident from Model Manager's
+       own inventory. Naming Kokoro for a plain "not installed" while Qwen
+       silently fails to import — the #1944 shape this whole lane exists
+       for — hid the real breakage entirely. Kokoro is still checked first
+       when both engines share the SAME fault, matching the pre-split
+       `kokoroPackageConfirmedBroken || qwenPackageConfirmedBroken` order. */
+    const engine: 'kokoro' | 'qwen' | null =
+      input.kokoroPackageFault === 'broken'
+        ? 'kokoro'
+        : input.qwenPackageFault === 'broken'
+          ? 'qwen'
+          : input.kokoroPackageFault === 'missing'
+            ? 'kokoro'
+            : input.qwenPackageFault === 'missing'
+              ? 'qwen'
+              : null;
+    if (engine) {
+      const fault = engine === 'kokoro' ? input.kokoroPackageFault : input.qwenPackageFault;
+      const name = PACKAGE_FAULT_ENGINE_NAME[engine];
+      if (fault === 'missing') {
+        return diagnosis(
+          'fail',
+          'package-broken',
+          `The ${name} package is missing from the voice engine runtime.`,
+          `Install ${name} in Model Manager.`,
+          ENGINE_INSTALL_ACTION[engine],
+        );
+      }
+      return diagnosis(
+        'fail',
+        'package-broken',
+        `The ${name} package is present but will not import in the voice engine runtime.`,
+        `Repair ${name} in Model Manager.`,
+        ENGINE_REPAIR_ACTION[engine],
+      );
+    }
   }
   return diagnosis('pass', 'pass', 'A voice engine is ready.', '');
 }

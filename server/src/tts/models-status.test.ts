@@ -1,5 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { buildModelsStatus, type EngineProbeResult } from './models-status.js';
+import { buildModelsStatus, classifyPackageFault, type EngineProbeResult } from './models-status.js';
+
+/* #1999 — classifyPackageFault is the single shared precedence order the
+   Admin console (diagnostics.ts) and the Setup checker (setup-diagnosis.ts,
+   via setup-readiness.ts) both call, replacing an inline copy in the former
+   and a collapsed boolean in the latter. */
+describe('classifyPackageFault', () => {
+  it('importOk true wins outright, even over a stale find_spec false', () => {
+    expect(classifyPackageFault(true, false)).toBe('ok');
+  });
+
+  it('specPresent false wins over importOk false — one fault, "missing"', () => {
+    expect(classifyPackageFault(false, false)).toBe('missing');
+  });
+
+  it('specPresent false alone (importOk never attempted) is "missing"', () => {
+    expect(classifyPackageFault(undefined, false)).toBe('missing');
+  });
+
+  it('importOk false alone (spec present or unknown) is "broken"', () => {
+    expect(classifyPackageFault(false, true)).toBe('broken');
+    expect(classifyPackageFault(false, undefined)).toBe('broken');
+  });
+
+  it('importOk undefined (the COMMON value — nothing tried to import yet) with specPresent true or unknown reads "ok"', () => {
+    expect(classifyPackageFault(undefined, true)).toBe('ok');
+    expect(classifyPackageFault(undefined, undefined)).toBe('ok');
+  });
+});
 
 /* #1965 note on the six cases in the first describe below: their assertions and
    expected values are UNCHANGED by the importable → importOk/specPresent split.
@@ -39,6 +67,22 @@ describe('buildModelsStatus', () => {
       },
     });
     expect(s.engines.kokoro.packageBroken).toBe(true);
+  });
+
+  it('#1999 — wires packageFault through from classifyPackageFault, distinguishing missing from broken', () => {
+    const s = buildModelsStatus({
+      ...base,
+      engines: {
+        // specPresent false → missing, regardless of packageOnDisk's disk heuristic.
+        kokoro: { packageOnDisk: true, weightsOnDisk: true, loaded: false, importOk: undefined, specPresent: false },
+        // importOk false with spec present → broken.
+        qwen: { packageOnDisk: true, weightsOnDisk: true, loaded: false, importOk: false, specPresent: true },
+        coqui: { packageOnDisk: false, weightsOnDisk: false, loaded: false, importOk: undefined, specPresent: undefined },
+      },
+    });
+    expect(s.engines.kokoro.packageFault).toBe('missing');
+    expect(s.engines.qwen.packageFault).toBe('broken');
+    expect(s.engines.coqui.packageFault).toBe('ok');
   });
 
   it('preserves package-missing (weights present, package absent) — not collapsed to not-installed', () => {

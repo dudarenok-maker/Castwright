@@ -896,7 +896,9 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 *Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
 
-### A27 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986) · **no GPU needed, sidecar venv only**
+---
+
+### A27 · A missing Kokoro/Qwen package surfaces as Install, a present-but-unimportable one as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986; missing-variant copy corrected and Setup-checker coverage added by [#1999](https://github.com/dudarenok-maker/Castwright/issues/1999), PR #2010) · **no GPU needed, sidecar venv only**
 
 The whole point of `*_import_ok` is a package that `find_spec` finds and a real
 `import` cannot load — the #1944 speechbrain shape. **That state cannot be
@@ -922,25 +924,63 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   load control) so the import chokepoint actually runs. It must fail *and* be
   recorded: re-poll `/health` and observe `kokoro_import_ok: false` while
   `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
-- **Observe the two user-facing surfaces.** Model Manager's Kokoro card must
-  offer **Repair** (not "install", and not a silent healthy row —
+- **Observe the two user-facing surfaces.** Model Manager's
+  Kokoro card must offer **Repair** (not "install", and not a silent healthy row —
   `installState: 'package-missing'` off a `true` find_spec is the tell), and the
   Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
-  `src/views/admin.tsx:232` — this row is the *only* surface that shows this
-  string; the Setup checker's copy comes from a different endpoint and is not
-  under test here) must read
+  `src/views/admin.tsx:232` — this row is the *only* surface that shows this exact
+  string; the Setup checker's copy comes from a different endpoint, checked
+  separately below) must read
   `reachable · Kokoro package will not import — repair in Model Manager`.
 - **Then check the *missing* variant, and check it AFTER a load attempt.** On a
   venv with no `kokoro_onnx` at all, force a Kokoro load and re-poll: both live
   signals are now known and both are `false` — the attempt records
   `kokoro_import_ok: false` (the ImportError) while `kokoro_package_installed`
   is `false` too — yet they describe one fault, not two. The Voice engine row
-  must read `reachable · Kokoro package missing — repair in Model Manager` and
-  must **not** say "will not import". This is the exact cell PR #1986's review
-  found inverted: "will not import" here sends the operator to repair a package
-  that was simply never installed. (A *successful* import still outranks a
-  `false` find_spec — if `kokoro_import_ok` is `true` the row is `ok` whatever
-  the probe says, since a real import that returned is the stronger evidence.)
+  must read `reachable · Kokoro package missing — install in Model Manager` and
+  must **not** say "will not import" or "repair". (#1999/PR #2010 corrected this
+  row's own verb from "repair" to "install" — a stale expectation here would
+  fail a runner against *correct* behaviour, which is exactly what this update
+  fixes.) This is also the exact cell PR #1986's original review found inverted:
+  "will not import" here sends the operator to repair a package that was simply
+  never installed. (A *successful* import still outranks a `false` find_spec —
+  if `kokoro_import_ok` is `true` the row is `ok` whatever the probe says, since
+  a real import that returned is the stronger evidence.)
+- **Check Model Manager too, in this same missing state** (#2010 m1 — the
+  reviewer's own repro cell). The Kokoro row must offer **Install**, not
+  Repair, and its badge must agree with its toggle: the badge must read as
+  not-yet-installed (e.g. "Not installed") and must **not** read "Needs
+  repair" next to an "Install" button. Before the m1 fix the row's badge read
+  the disk-only inventory state while the toggle read the live packageFault
+  probe, so this exact cell showed "Needs repair" beside "Install" — a runner
+  following only the bullets above would have no criterion telling them
+  whether that mismatch was expected. It is not: badge and toggle must always
+  name the same fault.
+- **Now check the Setup checker surface too** (`GET /api/setup/readiness`,
+  `server/src/routes/setup-diagnosis.ts`'s `diagnoseTts` — out of scope for this
+  row before #1999/PR #2010, in scope now, since it is the surface that PR
+  actually changed and the one whose trigger cannot be manufactured in CI). With
+  only Kokoro broken (the "will not import" state above) and Qwen untouched, its
+  `blockers.tts` must read *"The Kokoro package is present but will not import in
+  the voice engine runtime."* with remediation *"Repair Kokoro in Model
+  Manager."* — naming the engine in both. With only Kokoro missing (the "install"
+  state above), it must read *"The Kokoro package is missing from the voice
+  engine runtime."* with remediation *"Install Kokoro in Model Manager."*, and
+  the response's `blockers.tts.action.kind` must be `kokoro-install` — not
+  absent, which would leave the instruction with nothing to click.
+- **Then the mixed-fault case — the one a runner is most likely to hit and
+  least likely to interpret correctly.** Break `qwen_tts/__init__.py` too (its
+  own repeat of the steps below) so Kokoro is *missing* (no `kokoro_onnx` at
+  all) and Qwen is *broken* (present, import raises) at the same time. The
+  Setup checker must name **Qwen**, not Kokoro: *"The Qwen package is present
+  but will not import…"* / *"Repair Qwen in Model Manager."* — a live-confirmed
+  broken package is the fault the user cannot infer on their own, and outranks
+  a merely-missing one regardless of which engine has which. (Pre-#2010 review
+  this precedence was inverted — Kokoro's plain "not installed" was named
+  instead, and Qwen's real breakage went unmentioned entirely. The Admin
+  console's Voice engine row is unaffected by this precedence question — it
+  already names *both* engines when both are at fault, as its own STANDARD_TTS
+  loop; only the Setup checker's single-blocker copy has to choose one.)
 - **Confirm Coqui stays out of the diagnostics row.** On a box with Coqui
   deliberately not installed, the Voice engine row must remain `ok` — Coqui is
   opt-in and its absence is not a fault.

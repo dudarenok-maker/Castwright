@@ -117,8 +117,8 @@ const TTS_READY: TtsDiagnosisInput = {
   noEngineAtAll: false,
   anyEngineUsable: true,
   weightsMissingEngine: null,
-  kokoroPackageConfirmedBroken: false,
-  qwenPackageConfirmedBroken: false,
+  kokoroPackageFault: 'ok',
+  qwenPackageFault: 'ok',
 };
 
 describe('diagnoseTts', () => {
@@ -161,13 +161,112 @@ describe('diagnoseTts', () => {
   });
 
   it('passes when one engine is live-confirmed-broken but another is usable (round-3 plan review finding 1)', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: true, kokoroPackageConfirmedBroken: true });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: true, kokoroPackageFault: 'broken' });
     expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
   });
 
   it('reports package-broken when the only ready engine is the broken one', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageConfirmedBroken: true });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
     expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
+  });
+
+  /* #1999 — the Setup checker used to render the SAME generic "not importable"
+     copy for a missing package as for a present-but-broken one. It now names
+     which fault applies, with a verb that matches: "missing" points at
+     installing, "will not import" keeps pointing at repair. */
+  describe('#1999 — missing vs. broken get different copy', () => {
+    it('names a MISSING package and points at installing it, not repairing it', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing' });
+      expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
+      expect(r.message).toMatch(/Kokoro package is missing/i);
+      expect(r.message).not.toMatch(/will not import/i);
+      expect(r.remediation).toMatch(/Install Kokoro/i);
+      expect(r.remediation).not.toMatch(/Repair/i);
+    });
+
+    /* #2010 (Minor 5) — the missing branch used to return no `action`, so the
+       user read "Install Kokoro in Model Manager." with nothing to click. The
+       sibling no-engine-installed branch already passes
+       ENGINE_INSTALL_ACTION.kokoro; this branch now does too. */
+    it('a MISSING package carries the matching kokoro-install action, not just text', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing' });
+      expect(r.action).toMatchObject({ kind: 'kokoro-install' });
+    });
+
+    it('a MISSING qwen package carries the matching qwen-install action', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'missing' });
+      expect(r.action).toMatchObject({ kind: 'qwen-install' });
+    });
+
+    /* #2010 (Minor 6) — the broken branch's remediation used to say the bare
+       "Repair in Model Manager.", leaving the engine unnamed even though the
+       message right above it already names it — and even though the sibling
+       "missing" branch (previous test) does name it. Both now name the
+       engine. */
+    it('names a package that will not import and points at repair, naming the engine in both message and remediation', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
+      expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
+      expect(r.message).toMatch(/Kokoro package is present but will not import/i);
+      expect(r.remediation).toMatch(/Repair Kokoro in Model Manager/i);
+    });
+
+    /* #2010 (n2) — the broken branch used to return no `action` either (the
+       same dead end Minor 5 fixed for the missing branch above): the user
+       read "Repair Kokoro in Model Manager." with nothing to click. Model
+       Manager's own Repair control (kokoro-install.tsx et al.) hits the exact
+       same install-job endpoint regardless of which fault produced the row —
+       reinstalling the package IS the repair — so this carries the SAME
+       action kind as the missing branch, just relabeled "Repair". Mutation
+       check: dropping ENGINE_REPAIR_ACTION[engine] from the broken return in
+       setup-diagnosis.ts makes this fail (r.action undefined). */
+    it('a BROKEN package carries a matching kokoro-install action labelled Repair, not just text', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
+      expect(r.action).toMatchObject({ kind: 'kokoro-install', label: 'Repair Kokoro' });
+    });
+
+    it('a BROKEN qwen package carries the matching qwen-install action labelled Repair', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'broken' });
+      expect(r.action).toMatchObject({ kind: 'qwen-install', label: 'Repair Qwen3-TTS' });
+    });
+
+    it('names qwen when kokoro is fine but qwen is missing', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'missing' });
+      expect(r.message).toMatch(/Qwen package is missing/i);
+      expect(r.remediation).toMatch(/Install Qwen/i);
+    });
+
+    it('kokoro fault takes precedence over qwen when both share the SAME fault', () => {
+      const r = diagnoseTts(SIDECAR_PASS, {
+        ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing', qwenPackageFault: 'missing',
+      });
+      expect(r.message).toMatch(/Kokoro/i);
+    });
+
+    /* #2010 (Major 1) — THE regression independent review found: a "broken"
+       fault (a real import attempted and confirmed to fail — the #1944 shape
+       this whole lane exists for) must outrank a "missing" one (nothing on
+       disk, nothing even attempted) regardless of which engine has which.
+       Before this fix the kokoro-first ternary named Kokoro for a plain "not
+       installed" while Qwen was silently failing to import — the real
+       breakage went unmentioned, and the Admin console's diagnostics row
+       (which names both) disagreed with the Setup checker on this exact
+       input. Mutation check: reverting the fix to the flat
+       `kokoroPackageFault !== 'ok' ? 'kokoro' : ...` ternary makes this fail
+       (it would assert /Qwen/ but get "Kokoro"). */
+    it('a BROKEN qwen outranks a MISSING kokoro — the real breakage is named, not the self-evident one', () => {
+      const r = diagnoseTts(SIDECAR_PASS, {
+        ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing', qwenPackageFault: 'broken',
+      });
+      expect(r.message).toMatch(/Qwen package is present but will not import/i);
+      expect(r.remediation).toMatch(/Repair Qwen in Model Manager/i);
+    });
+
+    it('a BROKEN kokoro still outranks a MISSING qwen (kokoro-first tiebreak preserved for equal faults, but broken always wins regardless of order)', () => {
+      const r = diagnoseTts(SIDECAR_PASS, {
+        ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken', qwenPackageFault: 'missing',
+      });
+      expect(r.message).toMatch(/Kokoro package is present but will not import/i);
+    });
   });
 
   it('reports cannot-confirm-engine (not pass) when sidecar is transient and disk checks found nothing', () => {
@@ -177,14 +276,21 @@ describe('diagnoseTts', () => {
   });
 
   it('reports package-broken only once the sidecar is confirmed pass', () => {
-    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageConfirmedBroken: true });
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
     expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
-    expect(r.action).toBeUndefined();
+    /* #2010 (n2) — this row now carries a Repair action (see the dedicated
+       tests above); it is no longer action-less. */
+    expect(r.action).toMatchObject({ kind: 'kokoro-install' });
   });
 
   it('never returns package-broken while the sidecar is not pass, even if the flag is somehow set', () => {
-    const r = diagnoseTts(SIDECAR_TRANSIENT, { ...TTS_READY, kokoroPackageConfirmedBroken: true });
+    const r = diagnoseTts(SIDECAR_TRANSIENT, { ...TTS_READY, kokoroPackageFault: 'broken' });
     expect(r.cause).not.toBe('package-broken');
+  });
+
+  it('importOk === null (collapsed to packageFault "ok" upstream) never reads as broken', () => {
+    const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'ok', qwenPackageFault: 'ok' });
+    expect(r).toMatchObject({ status: 'pass', cause: 'pass' });
   });
 });
 
