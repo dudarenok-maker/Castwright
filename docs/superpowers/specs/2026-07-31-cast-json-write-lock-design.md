@@ -252,20 +252,48 @@ rather than line numbers so both survive the shift.
   runtime rather than failing a check.
 - **Partial atomicity for series propagation**, per §3.2.
 
-## 10. Incidental findings, filed not fixed
+## 10. Folded in: the lock helpers never clean up their key map (#2001)
 
-The `finally` cleanup in all three existing lock helpers never fires:
+The `finally` cleanup in all three existing promise-chain mutexes is dead code.
 `chains.get(key) === gate` compares against `gate`, but what was stored is
-`prior.then(() => gate, …)` — a different promise object. Same bug in
-`file-lock.ts`, `tts/design-lock.ts`, and `chapters-restructure.ts`. Each Map
-therefore grows one entry per distinct key for the process lifetime.
+`prior.then(() => gate, …)` — a different object, so the identity check can never
+hold and `delete` never runs. Each Map grows one entry per distinct key for the
+process lifetime, while the comment above each one asserts the opposite
+(`design-lock.ts`: *"Tidy up when we're the chain tail, so the map doesn't grow
+unbounded"*).
 
-Bounded by book count and so genuinely minor, but it makes the "best-effort
-cleanup, so the map doesn't grow unboundedly" comment false in all three places.
-Filed as **#2001** rather than folded in: it is in code this branch touches, but
-it is a behaviour question (is the cleanup worth keeping at all, given a
-promise-chain mutex needs the tail entry to remain until it settles?) rather than
-an obvious one-answer fix.
+Three copies: `workspace/file-lock.ts`, `tts/design-lock.ts`, and
+`routes/chapters-restructure.ts` — the last additionally allocating a *third*
+promise inside the comparison itself (`bookWriteLock.get(bookId) === prev.then(() => next)`).
 
-The sweep itself is tracked as **#2000**; #1981 remains the filed defect this
-work closes.
+**This is fixed here, not deferred.** The sweep is about to make `withKeyLock`
+the mutex behind every cast.json write in the product; shipping that on top of a
+helper whose cleanup has never worked, and whose comment says it has, is not a
+defensible place to draw a scope line.
+
+The fix is to hold a reference to the promise actually stored and compare against
+that:
+
+```ts
+const mine = prior.then(() => gate, () => gate);
+chains.set(key, mine);
+…
+} finally {
+  release();
+  if (chains.get(key) === mine) chains.delete(key);
+}
+```
+
+Tail-detection is then correct: if a later waiter has replaced the entry, `mine`
+is no longer the tail and the entry is left for that waiter to chain onto; if it
+has not, `mine` has already settled and a fresh caller starting from
+`Promise.resolve()` behaves identically. One answer, no interface change, and it
+takes a test that asserts the map returns to baseline after a lock settles.
+
+Applied identically to all three helpers, with the three comments corrected to
+match. #2001 is closed by this PR.
+
+## 11. Ticketing
+
+`Closes #1981` (the filed defect), `Closes #2000` (the sweep), `Closes #2001`
+(§10). One PR, per the delivery decision.
