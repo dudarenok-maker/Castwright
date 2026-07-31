@@ -13,6 +13,8 @@
 ## Global Constraints
 
 - **Worktree:** `C:\Claude\Projects\wt-1967-xtts-torchcodec`, branch `docs/docs-1967-xtts-torchcodec`. Verify with `git branch --show-current` before the first commit. Hooks are active (`.husky/_` exists).
+- **The sidecar venv does NOT exist in this worktree — Task 0 is not optional.** `server/tts-sidecar/.venv` lives only in the primary checkout. Every `pytest` command below depends on Task 0 having junctioned it. **The failure mode is silent:** `run-tests.ps1:18-27` prints `SKIP: sidecar pytest -- venv not found` and **exits 0**, so `npm run test:sidecar` and the `test:sidecar` leg of `verify:fast:branch` both report success having executed nothing. Never read a green `test:sidecar` as evidence without confirming the venv resolved.
+- **Sidecar module-level imports of `torch`/`torchaudio` are forbidden in new sidecar modules.** `tests/test_xtts_clone_voice.py:256` installs a *fake* `torch` into `sys.modules`; any module imported under it that touches real `torchaudio` dies with `ModuleNotFoundError: No module named 'torch.hub'`. Import both inside the function.
 - **Never `--no-verify`.** If a hook fails, triage related vs. pre-existing; surface pre-existing failures rather than fixing them here.
 - **No hard-wrapping in markdown.** Write prose paragraphs as one line; only break at genuine block boundaries.
 - **`server/tts-sidecar/xtts_audio_io.py` sits in the directory `tests/test_audio_io_invariant.py:39` scans**, and that scan's `_strip_comments` (`:22-24`) drops only `#` lines, **not docstrings**. Its regex is `torchaudio\s*\.\s*(?:load|save|info)\s*\(`. Never write that call form in a docstring or a non-`#` line in that file — say "torchaudio's loader" instead. `torchaudio.functional.resample(` is safe.
@@ -35,6 +37,45 @@
 | `server/src/tts/clone-voice-resolver.test.ts` | **Modify** four literals; **add** three message tests. |
 | `server/src/tts/synthesise-chapter-derive-vram-partition.test.ts` | **Modify** two literals (`:503`, `:832`). |
 | Docs (Task 5) | The re-derived live sites, acceptance surfaces, release notes. |
+
+---
+
+### Task 0: Make the worktree able to run Python tests
+
+**Files:** none — environment only.
+
+**Interfaces:** Produces a resolvable `server/tts-sidecar/.venv` for every later task's pytest command.
+
+- [ ] **Step 1: Confirm the venv really is missing**
+
+```
+ls -d /c/Claude/Projects/wt-1967-xtts-torchcodec/server/tts-sidecar/.venv
+```
+
+Expected: `No such file or directory`. If it exists, skip to Step 3.
+
+- [ ] **Step 2: Junction it from the primary checkout**
+
+```powershell
+$link = 'C:\Claude\Projects\wt-1967-xtts-torchcodec\server\tts-sidecar\.venv'
+$target = 'C:\Claude\Projects\Audiobook-Generator\server\tts-sidecar\.venv'
+New-Item -ItemType Junction -Path $link -Target $target
+(Get-Item $link -Force).Target
+```
+
+Junction rather than bootstrap: a fresh bootstrap re-downloads ~2.5 GB of torch and has timed out here before. Use `.Target`, **not** `.LinkTarget` — the latter reads empty on Windows PowerShell 5.1 even for a real junction, so a check written against it passes vacuously.
+
+- [ ] **Step 3: Prove pytest actually runs**
+
+```
+cd /c/Claude/Projects/wt-1967-xtts-torchcodec/server/tts-sidecar && .venv/Scripts/python.exe -m pytest tests/test_audio_io_invariant.py -v
+```
+
+Expected: **3 passed** — a real count, not a SKIP banner. If you see `SKIP: sidecar pytest -- venv not found`, the junction did not take.
+
+- [ ] **Step 4: Note the teardown hazard**
+
+This junction must be deleted with `[System.IO.Directory]::Delete($link, $false)` before the worktree is removed, or `git worktree remove` can follow it and delete the **real** venv in the primary checkout. Record it in the PR body.
 
 ---
 
@@ -220,6 +261,55 @@ def test_raises_on_signature_drift(fake_xtts):
     with pytest.raises(RuntimeError, match="signature"):
         with patched_xtts_load_audio():
             pass
+
+
+def test_patched_derive_survives_poison_where_unpatched_dies(poisoned, ref_wav, fake_xtts):
+    """THE regression gate: poison and the derive-shaped call path, together.
+
+    Every other test here exercises one or the other. The fake `load_audio`
+    below calls torchaudio's loader for real, exactly as the shipped XTTS one
+    does, and `derive()` reaches it through the module global exactly as
+    get_conditioning_latents does -- so under poison it must die, and must stop
+    dying once our context manager is active. Without this test the suite
+    passes in full with the fix entirely absent, which is the #1967 shape.
+    """
+    import torchaudio
+
+    def upstream_load_audio(audiopath, sampling_rate):
+        audio, _lsr = torchaudio.load(audiopath)
+        return audio
+
+    fake_xtts(upstream_load_audio)
+
+    def derive():
+        return sys.modules["TTS.tts.models.xtts"].load_audio(str(ref_wav), 22050)
+
+    with pytest.raises((ImportError, OSError, RuntimeError)):
+        derive()
+
+    with patched_xtts_load_audio():
+        audio = derive()
+    assert audio.shape[0] == 1
+
+
+def test_installed_xtts_loader_still_has_the_shape_we_patch():
+    """Spec §9 fidelity tier — the patch must stay NECESSARY and correctly shaped.
+
+    Skips where coqui-tts was never opted into. This is a different assertion
+    from the tensor-equivalence test above: that one checks our decoder is
+    right, this one checks upstream still needs replacing.
+    """
+    import inspect as _inspect
+
+    xtts = pytest.importorskip("TTS.tts.models.xtts")
+    fn = getattr(xtts, "load_audio", None)
+    assert fn is not None, "upstream removed load_audio — patched_xtts_load_audio will raise"
+    assert tuple(_inspect.signature(fn).parameters)[:2] == ("audiopath", "sampling_rate")
+    src = _inspect.getsource(fn)
+    assert "torchaudio" in src and ".load(" in src, (
+        "upstream stopped routing the reference decode through torchaudio's loader — "
+        "the #1967 patch may no longer be necessary; re-evaluate before deleting it"
+    )
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -256,13 +346,20 @@ import inspect
 import logging
 import os
 import wave
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
-import torch
-import torchaudio
+
+if TYPE_CHECKING:  # pragma: no cover
+    import torch
 
 logger = logging.getLogger(__name__)
+
+# torch / torchaudio are imported INSIDE the function on purpose. The clone
+# tests install a fake `torch` into sys.modules (tests/test_xtts_clone_voice.py),
+# and a module-level `import torchaudio` executed under that fake dies with
+# "No module named 'torch.hub'; 'torch' is not a package" -- reddening ~30
+# unrelated tests with an error that points nowhere near the cause.
 
 # The parameter names XTTS's loader has had since 0.22; the patch refuses to
 # apply against anything else rather than guessing (see _drift_message).
@@ -277,6 +374,9 @@ def wave_load_audio(audiopath: Any, sampling_rate: int) -> torch.Tensor:
     which normalises int16 by 1/32768 and resamples with the same
     torchaudio.functional call used below.
     """
+    import torch  # noqa: PLC0415
+    import torchaudio  # noqa: PLC0415
+
     path = os.fspath(audiopath)
     with wave.open(path, "rb") as w:
         if w.getsampwidth() != 2:
@@ -352,7 +452,9 @@ def patched_xtts_load_audio() -> Iterator[None]:
 cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest tests/test_xtts_audio_io.py -v
 ```
 
-Expected: all pass. `test_matches_torchaudio_when_torchcodec_works` may SKIP on a static-FFmpeg box — that is correct behaviour, not a failure.
+Expected: **11 passed** (or 10 passed + 1 skipped). `test_matches_torchaudio_when_torchcodec_works` skips on a static-FFmpeg box and `test_installed_xtts_loader_still_has_the_shape_we_patch` skips where coqui-tts was never installed — both correct, not failures.
+
+> **Read the skips.** On this dev box the venv is currently **hot-patched** (PyAV's FFmpeg DLLs were copied into `site-packages/torchcodec/`), so torchcodec loads and the equivalence test really runs. The poison tests are unaffected either way — the meta-path finder blocks the *import*, before any DLL is touched.
 
 - [ ] **Step 5: Confirm the new file does not redden the existing guardrail**
 
@@ -385,45 +487,79 @@ git commit -m "fix(side): decode XTTS clone reference audio without torchcodec"
 
 Append to `server/tts-sidecar/tests/test_xtts_clone_voice.py`. The existing fixtures build a fake `tts_model`; this test asserts the patch is live *at the moment* `get_conditioning_latents` runs — the only placement that matters.
 
-```python
-def test_derive_runs_with_the_patched_loader_installed(tmp_path):
-    """#1967 — the reference decode must be ours DURING the derive call.
+This file's real helpers, confirmed by reading it: `_make_engine(monkeypatch, tmp_path, **kwargs) -> (CoquiEngine, Path, _FakeTTS)` at `:260`, forwarding `**kwargs` to `_install_fake_coqui_runtime(monkeypatch, tts_instance=None, coqui_version=…)` at `:237`; `_ref_audio(n=4800)` at `:267`; `_FakeXttsModel` at `:125`. **There is no callback parameter.** Observe the derive by subclassing `_FakeXttsModel` — the pattern `_DistinctLatentsXttsModel` (`:847`) already uses — and pass it via `tts_instance=`.
 
-    Asserting only that clone_voice succeeds would pass with no patch at all
-    on a box with shared FFmpeg. Assert the module attribute from inside the
-    fake get_conditioning_latents instead.
+```python
+class _LoaderSpyXttsModel(_FakeXttsModel):
+    """Records the live TTS.tts.models.xtts.load_audio at derive time.
+
+    Subclassed rather than hooked into the shared fake: ~30 tests use
+    _FakeXttsModel and none of them want this.
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.loader_during_derive = None
+
+    def get_conditioning_latents(self, *a, **kw):
+        import sys
+
+        self.loader_during_derive = sys.modules["TTS.tts.models.xtts"].load_audio
+        return super().get_conditioning_latents(*a, **kw)
+
+
+def test_derive_runs_with_the_patched_loader_installed(monkeypatch, tmp_path):
+    """#1967 — the reference decode must be OURS during the derive call.
+
+    Asserting only that clone_voice succeeds would pass with no patch at all on
+    a box with shared FFmpeg. Assert the module attribute from inside the fake
+    get_conditioning_latents instead.
     """
     import sys
     import types
 
     import xtts_audio_io
 
-    seen = {}
-
-    xtts_mod = types.ModuleType("TTS.tts.models.xtts")
-
+    # patched_xtts_load_audio does `import TTS.tts.models.xtts`, which walks the
+    # package chain. _install_fake_coqui_runtime registers a NON-package `TTS`,
+    # so installing only the leaf raises "cannot import name 'tts' from 'TTS'" —
+    # seed both intermediates too.
     def _original(audiopath, sampling_rate):
         return None
 
+    xtts_mod = types.ModuleType("TTS.tts.models.xtts")
     xtts_mod.load_audio = _original
-    sys.modules["TTS.tts.models.xtts"] = xtts_mod
-    try:
-        engine = _engine_with_fake_coqui(
-            tmp_path,
-            on_get_conditioning_latents=lambda: seen.update(
-                loader=sys.modules["TTS.tts.models.xtts"].load_audio
-            ),
-        )
-        engine.clone_voice("voice-1", _ref_audio(), 24000, "hello")
-    finally:
-        del sys.modules["TTS.tts.models.xtts"]
+    for name, mod in (
+        ("TTS.tts", types.ModuleType("TTS.tts")),
+        ("TTS.tts.models", types.ModuleType("TTS.tts.models")),
+        ("TTS.tts.models.xtts", xtts_mod),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
 
-    assert seen["loader"] is xtts_audio_io.wave_load_audio
-    # ...and restored afterwards.
-    assert xtts_mod.load_audio is _original
+    spy = _LoaderSpyXttsModel()
+    engine, _voices_dir, _tts = _make_engine(
+        monkeypatch, tmp_path, tts_instance=_FakeTTS(synthesizer=_FakeSynthesizer(spy))
+    )
+    engine.clone_voice("voice-1", _ref_audio(), 24000, "hello")
+
+    assert spy.loader_during_derive is xtts_audio_io.wave_load_audio
+    assert xtts_mod.load_audio is _original  # restored afterwards
 ```
 
-> **Adapt to the file's existing fixtures.** `_engine_with_fake_coqui` and `_ref_audio` are placeholders for whatever this file already uses (see `_install_fake_coqui_runtime` around `:237`). Reuse them; do not build a parallel fixture set. The `on_get_conditioning_latents` hook may need adding to the existing fake `tts_model` — a one-line callback invoked at the top of its `get_conditioning_latents`.
+> **Match the file's real constructors.** `_FakeTTS` / `_FakeSynthesizer` above are the *shapes* `_install_fake_coqui_runtime` builds — read `:125-265` and use the exact call signatures found there rather than these approximations. Everything else (`_make_engine`, `_ref_audio`, `_FakeXttsModel`, the `tts_instance=` kwarg, the `(monkeypatch, tmp_path)` signature) is verified to exist as written.
+
+**Also close the spec §16 lock row mechanically.** Spec §16 claims the `_synth_lock` invariant is "asserted by the mechanism test"; without this it is only Step 5's human read. Add to `_LoaderSpyXttsModel.get_conditioning_latents`, with `engine_ref` a one-element list the test fills after `_make_engine` returns:
+
+```python
+        # The lock must ALREADY be held when the derive runs, or the module-global
+        # swap is racing every concurrent synth.
+        acquired = engine_ref[0]._synth_lock.acquire(blocking=False)
+        self.lock_was_held = not acquired
+        if acquired:
+            engine_ref[0]._synth_lock.release()
+```
+
+and `assert spy.lock_was_held` at the end of the test.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -431,7 +567,7 @@ def test_derive_runs_with_the_patched_loader_installed(tmp_path):
 cd server/tts-sidecar && .venv/Scripts/python.exe -m pytest tests/test_xtts_clone_voice.py -k patched_loader -v
 ```
 
-Expected: FAIL — `seen["loader"]` is `_original`, not `wave_load_audio`.
+Expected: FAIL on the assertion — `spy.loader_during_derive` is `_original`, not `wave_load_audio`. **If it fails with `ImportError: cannot import name 'tts' from 'TTS'` instead, the three `sys.modules` entries above did not all take** — that is a broken test, not a red-phase pass, and it would stay red after the fix.
 
 - [ ] **Step 3: Wrap the derive call**
 
@@ -521,8 +657,27 @@ describe('COQUI_VERIFY_CODE', () => {
   it('needs no model weights, so it can run before the prefetch', () => {
     expect(COQUI_VERIFY_CODE).not.toContain('xtts_v2');
   });
+
+  it('uses a non-silent buffer, so XTTS\'s range guard does not log "Error with" at the user', () => {
+    expect(COQUI_VERIFY_CODE).not.toContain('np.zeros');
+  });
+
+  it('is actually wired into the installer, not merely exported', () => {
+    // Without this, COQUI_VERIFY_CODE could be exported and never invoked and
+    // every other assertion here would still pass.
+    const src = readFileSync(
+      new URL('../../tts-sidecar/scripts/install-coqui.mjs', import.meta.url),
+      'utf8',
+    );
+    const verifyAt = src.indexOf('COQUI_VERIFY_CODE]');
+    const prefetchAt = src.indexOf('Pre-fetching XTTS v2');
+    expect(verifyAt, 'verification step must be invoked').toBeGreaterThan(-1);
+    expect(verifyAt, 'must run BEFORE the 1.8 GB prefetch').toBeLessThan(prefetchAt);
+  });
 });
 ```
+
+Add `import { readFileSync } from 'node:fs';` at the top of the test file if it is not already there.
 
 Add `COQUI_VERIFY_CODE` to the existing import from `install-coqui.mjs` at the top of the file.
 
@@ -555,7 +710,11 @@ export const COQUI_VERIFY_CODE = [
   'import TTS.tts.models.xtts as _x',
   'd = tempfile.mkdtemp()',
   'p = os.path.join(d, "verify.wav")',
-  'pcm = (np.zeros(2400, dtype="<i2"))',
+  // A real waveform, NOT np.zeros: XTTS's own range guard logs "Error with
+  // <path>. Max=0.00 min=0.00" for an all-zero buffer (`not torch.any(audio < 0)`),
+  // and run() uses stdio:'inherit', so the user would see a line starting
+  // "Error with" immediately before "verify ok" in the installer output.
+  'pcm = (np.sin(np.linspace(0, 6.28 * 220, 2400)) * 16000).astype("<i2")',
   'w = wave.open(p, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)',
   'w.writeframes(pcm.tobytes()); w.close()',
   'with patched_xtts_load_audio():',
@@ -587,7 +746,7 @@ Then in the main flow, between the pip loop and the prefetch (`install-coqui.mjs
 cd server && npx vitest run src/tts/install-coqui-steps.test.ts
 ```
 
-Expected: all nine `it` blocks pass — the six pre-existing ones unchanged.
+Expected: all eleven `it` blocks pass — the six pre-existing ones unchanged.
 
 - [ ] **Step 5: Commit**
 
@@ -608,13 +767,19 @@ git commit -m "fix(side): fail the Coqui install when the XTTS audio patch canno
 - Consumes: nothing from earlier tasks.
 - Produces: `BrokenClonedVoice` entries with `reason: 'derive-failed'` now carry `engine`.
 
-- [ ] **Step 1: Re-derive the affected test literals**
+- [ ] **Step 1: Re-derive BOTH the producers and the affected test literals**
 
 ```
-cd /c/Claude/Projects/wt-1967-xtts-torchcodec && rg -n "reason: 'derive-failed'" server/src --glob '*.test.ts'
+cd /c/Claude/Projects/wt-1967-xtts-torchcodec
+rg -n "derive-failed" server/src/tts/clone-voice-resolver.ts
+rg -n "reason: 'derive-failed'" server/src --glob '*.test.ts'
 ```
 
-Expected at time of writing: six hits across two files — `clone-voice-resolver.test.ts:660,:992,:1052,:1331` and `synthesise-chapter-derive-vram-partition.test.ts:503,:832`. **Use the command's output, not this list** — earlier revisions of the spec named four and missed a whole file.
+**Producers — there are four, not three.** Three are `broken.push` sites in the catch path (`:531`, `:566`, `:570`). The fourth is the **classifier** path at `:446-458`, fed by `classifyClonedVoice`'s `if (slot?.status === 'failed') return { state: 'broken', reason: 'derive-failed' }` (`:227`), whose engine spread is gated to `engine-unavailable | wrong-engine` only (`:454-457`) — so it emits an **untagged** `derive-failed`.
+
+That fourth one is the dominant real-world path, and missing it re-ships the bug: a permanent derive failure persists `status: 'failed'` at `:557`, so **every run after the first** classifies from that stamp rather than the catch block, and an untagged entry resolves through `b.engine ?? 'qwen'` (`:89`) to "Re-run the clone for **Qwen**" on a Coqui book — #1967's exact symptom, in the new clause.
+
+**Test literals:** at time of writing six hits across two files — `clone-voice-resolver.test.ts:660`, `:992`, `:1052`, `:1331` and `synthesise-chapter-derive-vram-partition.test.ts:503`, `:832`. Use the command's output, not this list.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -627,8 +792,7 @@ describe('#1967 — derive-failed remedy copy', () => {
       { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
     ]);
     expect(e.message).not.toContain('Re-enable');
-    expect(e.message).toContain('Coqui');
-    expect(e.message).toContain('re-run the clone');
+    expect(e.message).toContain('Re-run the clone for Coqui');
   });
 
   it('a mixed [revoked, derive-failed] list still never says "Re-enable Qwen"', () => {
@@ -637,8 +801,19 @@ describe('#1967 — derive-failed remedy copy', () => {
       { name: 'Reeve', reason: 'derive-failed', engine: 'coqui' },
     ]);
     expect(e.message).not.toContain('Re-enable Qwen');
-    expect(e.message).toContain('restore the missing voice(s)');
-    expect(e.message).toContain('re-run the clone');
+    expect(e.message).toContain('Restore the missing voice(s)');
+    expect(e.message).toContain('Re-run the clone for Coqui');
+  });
+
+  it('an UNTAGGED derive-failed (the persisted-failed-slot path) never names Qwen', () => {
+    // clone-voice-resolver.ts:446-458 emits derive-failed with no engine unless
+    // Step 4(c) widens the spread gate. Without that widening this test prints
+    // "Re-run the clone for Qwen" — #1967's exact symptom, on every run after
+    // the first.
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Qwen');
   });
 
   it('the first remedy reads correctly in sentence-initial position', () => {
@@ -655,7 +830,7 @@ describe('#1967 — derive-failed remedy copy', () => {
 cd server && npx vitest run src/tts/clone-voice-resolver.test.ts -t "#1967"
 ```
 
-Expected: FAIL — messages contain "Re-enable Qwen"; the third fails on a lowercase clause once change 1 lands, and currently passes for the wrong reason (capital "Re-enable"). Note that in the report.
+Expected: the first three FAIL — messages contain "Re-enable Qwen" and no "Re-run the clone" clause exists yet. The fourth (`/\.\s+[A-Z]/`) **passes today for the wrong reason** — the capital comes from the existing "Re-enable" — and its job is to stay green once change 1 replaces that clause with "Restore…". Say so in the report rather than counting it as a red-to-green.
 
 - [ ] **Step 4: Make the three changes**
 
@@ -670,10 +845,10 @@ function engineLabelFor(broken: BrokenClonedVoice[], reason: BrokenClonedVoice['
 }
 ```
 
-**(b) Rework the remedy branches** (`:136-152`). Replace the `hasOtherReason` computation and its `if` block with:
+**(b) Rework the remedy branches.** **Scope precisely: replace `:138-151` only** — that is the `hasOtherReason` declaration through the end of its `if` block. **Do not re-declare `hasWrongEngine`**, which already exists at `:137`, immediately above the replaced region; a literal paste including it yields `TS2451: Cannot redeclare block-scoped variable`. Vitest would not catch that — only `npm run typecheck`, a whole task later.
 
 ```ts
-    const hasWrongEngine = broken.some((b) => b.reason === 'wrong-engine');
+    // `hasWrongEngine` is already declared at :137 — do not repeat it.
     const hasDeriveFailed = broken.some((b) => b.reason === 'derive-failed');
     const hasEngineUnavailable = broken.some((b) => b.reason === 'engine-unavailable');
     /* #1967 — `derive-failed` gets its own clause below, so it must NOT also
@@ -700,13 +875,27 @@ function engineLabelFor(broken: BrokenClonedVoice[], reason: BrokenClonedVoice['
     }
 ```
 
-> Both new clauses are capitalised because `:166-169` renders `. ${remedies.join('; ')}.` — whichever fires first is sentence-initial. `reassign the character(s)` stays lowercase; it is never first, because `fromList` returns early on an empty `broken` list.
+> Both new clauses are capitalised because `:166-169` renders `. ${remedies.join('; ')}.` — whichever fires first is sentence-initial. `reassign the character(s)` is never first (`fromList` returns early on an empty `broken` list), so it stays lowercase. **Pre-existing and deliberately not fixed here:** a pure `wrong-engine` list makes `switch the book to …` (`:163`) first, lowercase after a full stop. It is outside this issue's scope and touching it would widen the diff and the test set; note it in the PR body as found-in-passing.
 
-**(c) Tag `derive-failed` entries with their engine** at `:531`, `:566`, `:570` — each becomes `broken.push({ name: characterName, reason: 'derive-failed', engine })`, using whichever engine variable is in scope at that site (the same one the surrounding resolver already uses). Without this, clause (b) has no engine to name.
+**(c) Tag `derive-failed` entries with their engine — at all FOUR producers.** Without this, clause (b) has no engine to name and falls through to `'qwen'`.
+
+Three are `broken.push` sites in the catch path — `:531`, `:566`, `:570` — each becoming `broken.push({ name: characterName, reason: 'derive-failed', engine })`. `engine` is confirmed in scope at all three (same `for` iteration; already used at `:456`, `:471`, `:504`).
+
+The fourth is the **classifier** path at `:446-458`, whose engine spread is gated to two reasons. Widen the gate:
+
+```ts
+        ...(classification.reason === 'engine-unavailable' ||
+        classification.reason === 'wrong-engine' ||
+        classification.reason === 'derive-failed'
+          ? { engine }
+          : {}),
+```
+
+and update the comment above it — it currently explains that only those two reasons name an engine, which stops being true. This is the site that matters most in production: a permanent derive failure persists `status: 'failed'` (`:557`), so every run after the first comes through here, not the catch block.
 
 - [ ] **Step 5: Update the six existing literals**
 
-Add `engine: 'coqui'` (or whichever engine the fixture drives) to each `toEqual` literal found in Step 1. **Do not loosen them to `objectContaining`** — the exactness is what caught this.
+Add the engine **each fixture actually drives** to every `toEqual` literal from Step 1 — it is not uniformly coqui. At time of writing: `clone-voice-resolver.test.ts:660`, `:992`, `:1052` drive `engine: 'qwen'` (set at `:632` and `:1038-1039`); `:1331` drives coqui (`:1324`); both `synthesise-chapter-derive-vram-partition.test.ts` sites drive coqui. Read each fixture, don't assume. **Do not loosen them to `objectContaining`** — the exactness is what caught this.
 
 - [ ] **Step 6: Run the full server suite for both files**
 
@@ -734,8 +923,10 @@ git commit -m "fix(server): stop derive-failed copy naming an unrelated engine"
 - [ ] **Step 1: Re-derive the site list**
 
 ```
-cd /c/Claude/Projects/wt-1967-xtts-torchcodec && rg -n "torchaudio\.load|audio I/O via soundfile|never actually called|manifest speakers" --glob '!**/{node_modules,.venv,dist}/**' .
+cd /c/Claude/Projects/wt-1967-xtts-torchcodec && rg -n "torchaudio\.load|audio I/O via soundfile|never actually called|manifest speakers|Re-enable (Qwen|Coqui)|coqui-tts.*>=0\.24" --glob '!**/{node_modules,.venv,dist}/**' .
 ```
+
+The `Re-enable` terms catch copy sites Task 4 may have invalidated — e.g. `docs/features/271-fs38-wave3c-xtts.md:144` — which the narrower pattern in the first draft of this plan missed entirely.
 
 Triage each hit as **live** (correct it) or **historical** (leave it: `docs/wiki/Release-Notes-v1.9.0.md`, the June `sidecar-torch-cve-bump` / `amd-gpu-sidecar-support` / `pinokio-installer` specs and plans). Spec §2 lists the sites known at writing time; four revisions produced four short counts, so trust the command.
 
@@ -745,7 +936,11 @@ The corrected text, verbatim:
 
 > The sidecar does its audio I/O with the stdlib `wave` module and NumPy — Kokoro is ONNX, Qwen and the XTTS clone path read and write PCM directly. It never calls `torchaudio.load`. `torchcodec` is installed only to satisfy `coqui-tts`'s import-time presence check and is never invoked. (The audio pipeline's ffmpeg work — assembly, loudnorm, peaks — runs in the Node server, not in the sidecar runtime.)
 
-Adapt phrasing to each site's format (table cell, code comment, docstring) but not its content. Two mechanical notes: `README.md:77-79` is a **fenced quote of `nvidia-cuda.txt:12-14`** — edit both or the quote drifts; and `requirements/nvidia-cuda.txt:14`'s "Coqui uses manifest speakers, not `speaker_wav`" needs its own correction (true of inference, false of cloning). Also fix `README.md:15`'s `coqui-tts | >=0.24.0` row, which describes a constraint in no file — it is unpinned and verified at install (Task 3).
+Adapt phrasing to each site's format (table cell, code comment, docstring) but not its content. Three notes:
+
+- `README.md:76-78` sits inside a **PowerShell fenced block** and carries its own differently-worded version of the claim; `nvidia-cuda.txt:13-14` is the other. They are *not* quotes of each other (the spec said otherwise — that was an unchecked claim), but both need editing and their line numbers are adjacent to what the spec cites, so locate by text rather than line.
+- `requirements/nvidia-cuda.txt:14`'s "Coqui uses manifest speakers, not `speaker_wav`" needs its own correction — true of inference, false of cloning.
+- `README.md:15`'s `coqui-tts | >=0.24.0` row describes a constraint in no file; it is unpinned and verified at install (Task 3).
 
 - [ ] **Step 3: Correct the two guardrail docstrings and the diverged design doc**
 
@@ -756,6 +951,12 @@ Adapt phrasing to each site's format (table cell, code comment, docstring) but n
 - [ ] **Step 4: Update the run sheet's embedded remedy strings**
 
 `docs/testing/fs38-wave3-onbox-acceptance.md:1341` and `:1755-1785` embed the expected `derive-failed` copy verbatim as C-13's acceptance criteria. Task 4 invalidated them — update to the new text.
+
+- [ ] **Step 4b: Update plan 271 and the Pinokio record**
+
+`docs/features/271-fs38-wave3c-xtts.md` is the regression plan this bug belongs to — Wave 3c shipped the clone path that carries it. Add a post-ship note there describing #1967, the fix, and the divergence in §3; correct its `Re-enable Coqui` copy site (`:144`) if Task 4 changed it. This is the "changed behaviour cited in an existing plan → update that plan in the same diff" case from CLAUDE.md's before-shipping step 1, so **no new `docs/features/` file and no `INDEX.md` entry are needed** — say so explicitly in the PR body rather than silently omitting.
+
+Spec §11 also owes a Pinokio *documentation* outcome, not just the acceptance item: whichever way the `import torchcodec` check lands there, record it in the Pinokio design spec's stale rationale (`docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`, which says torchcodec "was dropped").
 
 - [ ] **Step 5: Record the acceptance debt on all three surfaces**
 
@@ -818,8 +1019,12 @@ Dispatch the `code-review` gate at Premium tier — multi-scope PR, so `high` ef
 
 ## Self-Review
 
-**Spec coverage.** §6 loader → Task 1. §6 lock invariant → Task 2 Steps 3+5. §7 install verification (placement, fail-hard, outside `coquiPipInstallSteps`) → Task 3. §8 no Setup change → nothing to do, correctly absent. §9 poison test + import ordering → Task 1 Step 1 (the poison fixture needs no real `TTS`, so the ordering hazard does not arise — the fixture blocks torchcodec only, and the fake-`TTS` mechanism tests never import the real package). §9 fidelity tier → Task 1 `test_matches_torchaudio_when_torchcodec_works`. §10 three copy changes + six literals + three new tests → Task 4. §11 sweep + installers + guardrail docstrings → Task 5. §12 three acceptance surfaces → Task 5 Step 5. §13 four surfaces → Tasks 1–2, 3, 4, 5. §15 out-of-scope chore → Task 6 Step 4.
+This plan was itself reviewed and found *not buildable* in its first draft; the notes below record what that pass changed, because two of the defects were the kind that ship silently.
 
-**Placeholder scan.** One deliberate adaptation point: Task 2 Step 1's `_engine_with_fake_coqui` / `_ref_audio` are named as placeholders for the file's existing fixtures, with the reason and a pointer to `:237`. Inventing fixture names for a 2131-line file this plan cannot see in full would be worse than flagging it.
+**Spec coverage.** §6 loader → Task 1. §6 lock invariant → Task 2 Step 3 (placement), Step 5 (human read) **and** the optional `_synth_lock.acquire(blocking=False)` assertion, which is what spec §16's risk row actually claims. §7 install verification → Task 3. §8 no Setup change → correctly absent. §9 poison tier → Task 1, including `test_patched_derive_survives_poison_where_unpatched_dies`, which is the only test where poison and the derive path meet; without it the whole suite passes with Task 2 unimplemented. §9 fidelity tier → `test_installed_xtts_loader_still_has_the_shape_we_patch` (signature + still-necessary), which is a *different* assertion from the tensor-equivalence test — the first draft conflated them and silently dropped the tier. §10 → Task 4, now covering **four** `derive-failed` producers. §11 → Task 5. §12 → Task 5 Step 5. §13 → Tasks 1–2, 3, 4, 5. §15 chore → Task 6 Step 4.
 
-**Type consistency.** `wave_load_audio` / `patched_xtts_load_audio` are spelled identically in Tasks 1, 2, and 3's snippet. `COQUI_VERIFY_CODE` matches between the export and the test import. `engineLabelFor`'s signature is unchanged; only its return-tail is removed.
+**Placeholder scan.** One adaptation point remains, narrowed: Task 2 Step 1's `_FakeTTS` / `_FakeSynthesizer` constructor shapes must be read from `:125-265`. Everything the first draft called a placeholder is now resolved — `_ref_audio` already existed at `:267` (calling it a placeholder would have sent the implementer inventing one), and `_make_engine` at `:260` is the real helper, with subclassing rather than a callback as the way in.
+
+**Type consistency.** `wave_load_audio` / `patched_xtts_load_audio` are spelled identically in Tasks 1, 2, and 3's snippet. `COQUI_VERIFY_CODE` matches between export, invocation, and both tests. `engineLabelFor`'s signature is unchanged; only its `|| 'Qwen'` tail is removed. Task 4(b) replaces `:138-151` **only**, leaving `hasWrongEngine` at `:137` intact.
+
+**Known red-phase traps, called out where they occur:** Task 2's test fails with `ImportError` rather than an assertion if the three `sys.modules` entries don't all take (Step 2); Task 4's fourth new test passes today for the wrong reason (Step 3). Both are flagged inline so an implementer doesn't read them as normal red-to-green.
