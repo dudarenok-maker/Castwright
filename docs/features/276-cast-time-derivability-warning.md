@@ -136,6 +136,22 @@ Three things follow, all required:
 2. **`slotStatus` is defined as the post-`withComputedStaleness` value** — see
    Decision 3's input contract. Server-side callers apply the same transform before
    calling, so both sides see identical input by construction.
+
+   **[R4] "By construction" was false as written, and the plan's own primary flow
+   broke it.** The transform was applied on `GET /` **only**. But
+   `patchEntry.fulfilled` (`src/store/voice-library-slice.ts:237-240`)
+   **replaces** the slice's entry with the PATCH response, so after any edit the
+   client held the **raw persisted** status. A version-stale-but-`ready` slot then
+   read `'ready'` instead of `'stale'`, rules 5/6 stopped firing, and the result
+   is a false negative of exactly the class that killed rev 2 — arriving by a
+   *third* route. Decision 6's "Add transcript" CTA is a PATCH, so the fix flow
+   itself was the trigger: the gate could clear for the wrong reason.
+   **Every route that hands an entry to the client applies the transform**, the
+   retry route's no-op path included — a `ready`-but-version-stale slot is both
+   the case that no-ops there and the case the transform rewrites, so it is the
+   one shape where returning raw changes the answer. Found by checking the
+   invariant against *every* entry-returning route rather than only the one this
+   decision names.
 3. **The contract test routes its client side through `withComputedStaleness`**, or
    it is blind to exactly this class. Rev 3 fed both sides raw entries and would
    have missed it.
