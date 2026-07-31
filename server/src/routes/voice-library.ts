@@ -533,6 +533,7 @@ interface PatchBody {
   pinned?: unknown;
   persona?: unknown;
   provenance?: unknown;
+  transcript?: unknown;
 }
 
 voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
@@ -565,6 +566,29 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
     if (body.persona !== undefined && typeof body.persona !== 'string') {
       return res.status(400).json({ error: '`persona` must be a string.' });
     }
+    /* Plan 276 Decision 6 — a clone's reference transcript becomes editable
+       after the fact (the "Add transcript" cast-time-gate CTA). Only a
+       cloned entry that actually carries a master clip has a transcript to
+       edit at all — a designed/imported voice, or a cloned entry whose
+       master is somehow absent, has nothing for this to mean. */
+    if (body.transcript !== undefined) {
+      if (existing.provenance !== 'cloned' || !existing.master) {
+        return res
+          .status(400)
+          .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
+      }
+      if (typeof body.transcript !== 'string') {
+        return res.status(400).json({ error: '`transcript` must be a string.' });
+      }
+      /* #1836's cap, reused rather than duplicated — see MAX_CLONE_TRANSCRIPT_CHARS's
+         own doc comment for why 2000 characters bounds the wire even for a
+         multi-byte-heavy correction. */
+      if (body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+        return res
+          .status(400)
+          .json({ error: `Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).` });
+      }
+    }
 
     /* fs-38 Wave 3c, Task 14 — mutate/write through the shared, per-uuid-
        locked `updateEntry`, spreading over a FRESH `fresh` (read under the
@@ -574,18 +598,67 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        two reads) — but writing `existing`'s `engines` back would silently
        clobber a concurrent engine-slot write (e.g. an in-flight xtts
        derive) that landed in the window between this handler's first read
-       and its write. */
-    const written = await updateEntry(voiceUuid, (fresh) =>
-      fresh
-        ? {
-            ...fresh,
-            ...(body.name !== undefined ? { name: body.name as string } : {}),
-            ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
-            ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
-            ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
-          }
-        : null,
-    );
+       and its write. The transcript edit below applies that SAME reasoning
+       to `master`/`engines`: it mutates off `fresh`, never `existing`. */
+    const written = await updateEntry(voiceUuid, (fresh) => {
+      if (!fresh) return null;
+      let next: VoiceLibraryEntry = {
+        ...fresh,
+        ...(body.name !== undefined ? { name: body.name as string } : {}),
+        ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
+        ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
+        ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
+      };
+      if (body.transcript !== undefined && fresh.master) {
+        const transcript = body.transcript as string;
+        /* Plan 276 Decision 6 [R3] — three invalidations a transcript edit
+           must carry, none of which is "re-derive the qwen .pt":
+
+           1. `entry.sampleTranscript` is a SECOND persisted copy of the
+              same text, written from `refText` at clone time (see the
+              /clone handler above, ~:1115). Leaving it stale makes the two
+              disagree and the UI read the wrong one.
+           2. `master.languageCode` / `entry.languageCode` are Whisper
+              stamps promoted from the ORIGINAL clip at clone time. A
+              user-edited transcript may be in a different language, so a
+              stamp that used to describe the clip now contradicts the
+              text. Cleared rather than guessed — re-detecting would need a
+              real Whisper call inside this handler for no clear benefit,
+              and `entry.languageCode` specifically feeds
+              `sidecarLanguageName` (tts/language.ts), which THROWS on an
+              unregistered code, so inventing a value here is strictly more
+              dangerous than the "no language" state a clip in an
+              unsupported language already reaches via the /clone handler's
+              own `clipLanguage` branch (workspace/voice-library.ts's
+              `VoiceMaster.languageCode` doc comment). Clearing lands in
+              that same, already-supported state.
+           3. The qwen `.pt` distilled against the OLD ref text is
+              DELIBERATELY left alone — it is acoustic, not lexical. A
+              corrected transcript changes what a FUTURE derive scores/
+              distills against, not the sound already baked into today's
+              artifact. Do not "fix" this by invalidating it. */
+        next = {
+          ...next,
+          sampleTranscript: transcript,
+          master: { ...fresh.master, transcript, transcriptSource: 'user', languageCode: undefined },
+          languageCode: undefined,
+        };
+        /* Decision 6's third clause — a non-empty corrected transcript
+           removes the CAUSE of a qwen `no-transcript`-flavoured derive
+           failure, so the terminal `failed` stamp comes off (same
+           slot-deletion mechanism as the retry route below). `''` clears
+           the text but supplies no fix, so it must NOT clear the stamp —
+           only qwen's derive needs a transcript at all (Coqui's clone is
+           purely acoustic, tts/derive-engine-artifact.ts), so only the
+           qwen slot is a candidate here. */
+        if (transcript.trim() && next.engines.qwen?.status === 'failed') {
+          const restEngines = { ...next.engines };
+          delete restEngines.qwen;
+          next = { ...next, engines: restEngines };
+        }
+      }
+      return next;
+    });
     if (!written) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }
