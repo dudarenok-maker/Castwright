@@ -500,7 +500,7 @@ would silently degrade.
 > **Superseded by §14.2.** This section records why the two *lock-based*
 > mitigations were rejected, which is still the reasoning that rules them out.
 > The conclusion — that `analysis.ts` ships unprotected — no longer holds: §14's
-> revision counter closes it without either mitigation, by checking the merge
+> §14's staleness check closes it without either mitigation, by checking the merge
 > base at each write instead of trying to keep it valid across the run. #2015 is
 > closed by this PR.
 
@@ -868,7 +868,7 @@ the code.
   moved is detected rather than written blind.
 - ~~**Cross-book concurrent series designs can double-mint a `voiceUuid`.**~~
   **Closed by §15** — the mint decision moves under a `series:<author>/<series>`
-  key. This is the one item the revision counter provably could not reach, since
+  key. This is the one item §14 provably could not reach, since
   the staleness is in a decision taken before any file is read.
 - ~~**Three cross-book check-then-act consultations survive.**~~ **Closed by
   §14** — each records the revision of every book it consulted and asserts it at
@@ -908,7 +908,7 @@ the code.
   the diff looks locked and is not. Only review catches this, which is why rule 2
   is stated in the code and not only here.
 
-## 14. The cast.json revision counter — closing check-then-act
+## 14. Staleness detection — closing check-then-act
 
 §7 and §12 between them named six places where a decision is derived from a
 cast.json snapshot and the write that depends on it lands in a *different* lock
@@ -936,134 +936,142 @@ It covers all six and is simpler — but it converts `voices.ts`'s clone-consent
 veto from a global refusal into a per-book one, and it leaves no reusable
 staleness primitive for the next writer. The counter is the deliberate choice.
 
-### 14.1 The shape
+### 14.1 The shape — a content fingerprint, not a revision field
 
-`cast.json` gains a top-level `rev: number`. Absent means `0` — a read-path
-default, so no migration script and no compatibility break.
+**Decision: capture a fingerprint of the consulted cast at read time; assert it
+under the write's lock.** No schema change.
 
-Three helpers, in `workspace/cast-io.ts`. **All three assume the caller holds the
-cast lock for the book in question.**
+An earlier draft used a `rev: number` field on cast.json with optimistic
+increment. It was rejected after an independent review, and the reasons are
+recorded because the counter is the more obvious design and will be re-proposed:
+
+- **The capture window.** A revision must be *captured* by an operation separate
+  from the snapshot read, so anything that yields between them is a hole. At
+  `analysis.ts` the snapshot is read above the `fresh` block's `rm` (deliberately
+  — it must outlive the delete) while the revision had to be captured *below* it,
+  and `await pruneStaleReuseLinks(...)` plus `await loadAnalysisCache(...)` sit
+  in between. A concurrent writer landing there bumps the revision before
+  capture, the check then passes, and the stale snapshot is replayed — the exact
+  failure the mechanism exists to detect. **A fingerprint is derived from the
+  bytes you already read, so there is no window to get wrong.**
+- **Partial adoption.** The counter is *"worse than none"* if one writer skips
+  the increment: every other writer's check then passes against a file that did
+  change. That fragility is what forced universal adoption across all 35 sites
+  and a brace-depth guard test to police it. A fingerprint needs no adoption at
+  all — any write changes the bytes, whoever made it.
+- **ABA on delete.** `1 -> delete -> recreate as 1` is invisible to a counter (an
+  absent file reads as `0`). With content comparison, identical bytes genuinely
+  *are* unchanged, and a delete-then-different-recreate is detected.
+- **The `fresh` run.** The counter needed a bespoke rule ("capture after the
+  `rm`"). A fingerprint handles it with no special case: the absent file does not
+  match the snapshot, so the rebuild path runs — and §14.4's rule 2 keeps the
+  retained prior as the base.
+
+Three helpers, in `workspace/cast-io.ts`. All assume the caller holds the cast
+lock for the book in question.
 
 ```ts
-readCastForUpdate<T extends object>(bookDir): Promise<{ cast: T & Rev; rev: number }>
-writeCastChecked<T extends object>(bookDir, next: T, expectedRev: number): Promise<void>
-assertCastRev(bookDir, expectedRev): Promise<void>
+readCastForUpdate<T extends object>(bookDir): Promise<{ cast: T; fingerprint: string | null }>
+writeCastChecked<T extends object>(bookDir, next: T, expected: string | null): Promise<void>
+assertCastUnchanged(bookDir, expected: string | null): Promise<void>
 ```
 
-`writeCastChecked` re-reads, compares, throws `CastRevConflictError` if it moved,
-and on success writes `rev: expectedRev + 1`.
+`fingerprint` is a sha256 of the file's raw bytes, or `null` when the file is
+absent — an honest encoding of "there was nothing here", distinct from any
+content. `writeCastChecked` re-reads, compares, throws `CastStaleError` on
+mismatch, and writes.
 
-**`assertCastRev` is the export the first draft of this section was missing, and
-without it §14 could not do what it claimed.** Four of the six sites consult a
-*different* book than they write — `cast-link-prior` reads the target and writes
-the source; `voice-override-linked` and `cast-series-patch` derive their whole
-write-list from a source book they never write; `cast-add-from-roster` reads the
-target to decide a source write. `writeCastChecked` asserts only the book it
-writes, so those four need a way to assert a revision on a book they merely read.
-The caller holds that book's lock via `withCastLocks` while asserting.
+**`assertCastUnchanged` is what lets the mechanism reach four of its six
+targets.** Those consult a *different* book than they write — `cast-link-prior`
+reads the target and writes the source; `voice-override-linked` and
+`cast-series-patch` derive their whole write-list from a source they never write;
+`cast-add-from-roster` reads the target to decide a source write.
+`writeCastChecked` asserts only the book it writes. The caller holds the
+consulted book's lock via `withCastLocks` while asserting.
 
-**The helpers are generic (`T extends object`), not typed to a shared
-`CastJson`.** `CastFile`/`CastJson` is re-declared as a module-private interface
-in sixteen modules with five different element types, and TypeScript gives
-interfaces no implicit index signature — so a concrete `CastJson` parameter with
-`[k: string]: unknown` would fail to accept any of them. Every converted site
-would be a compile error, and neither Vitest nor pre-commit checks types, so it
-would surface only at the final `npm run typecheck`.
+**The helpers are generic (`T extends object`).** `CastFile`/`CastJson` is
+re-declared as a module-private interface in sixteen modules with five different
+element types, and TypeScript gives interfaces no implicit index signature — a
+concrete parameter type would fail to accept any of them, and neither Vitest nor
+pre-commit checks types, so every converted site would be a compile error
+surfacing only at the final `npm run typecheck`.
 
-**The helper owns the increment, and that matters beyond bookkeeping.** At least
-**20 of the 35** current writers construct a fresh payload (`{ characters:
-nextCharacters }`) rather than passing back the object they read — a shape that
-drops every other top-level field, `rev` included.
-
-**What the comparison does and does not do.** At the ~30 same-scope sites the
-caller reads and writes inside one `withCastLock` on one key, and
-`file-lock.ts:12` awaits `prior` before `fn()`, so no other locked writer can
-interleave: `actual` can never differ from `expectedRev` and **the comparison is
-inert there**. It is load-bearing only at the cross-scope sites in the table
-above. Universal adoption is required for the **increment** — one writer that
-skips it makes every other writer's check pass against a file that did change —
-not because the check does work everywhere. Saying so plainly is the point: a
-reviewer reading a converted site should not believe the check is doing something
-it is not.
+**Where the check does work, and where it does not.** At the ~30 same-scope sites
+the caller reads and writes inside one `withCastLock` on one key, so nothing can
+interleave and the comparison is **inert**. It is load-bearing only at the
+cross-scope sites in the table above. Those sites — and only those — use these
+helpers; the other 30 keep `readJson`/`writeJsonAtomic` under their lock. This is
+a deliberate reversal of the counter design's universal-adoption rule, which
+existed solely to protect the counter's own fragility and cost an extra full read
+per write at 30 sites that gained nothing from it.
 
 ### 14.2 What a conflict means, per caller shape
 
-This is the "refusal semantics" question #2006 was filed to answer. One rule,
-three shapes:
-
 - **Can recompute → recompute** (`analysis.ts`, §14.4).
-- **Can refuse → 409** `{ code: 'cast-changed' }` for the HTTP gates. The caller
-  retries against fresh state.
+- **Can refuse → 409** `{ code: 'cast-changed' }` for the HTTP gates.
 - **Can neither → report and skip.** The detached SSE jobs log, skip that book,
-  and surface it in the job's completion payload. §6 established these cannot
-  409; a conflict does not change that, but it makes the skip deliberate and
-  reported rather than a silent overwrite.
+  and surface it in the job's completion payload.
 
-**No retry loop anywhere.** Every conflict is detected inside the same lock
-acquisition that performs the write — read the rev, decide, write with that rev —
-so `writeCastChecked` cannot fail a second time and there is nothing to retry.
-An earlier draft left "a conflict must never fail the run" unbounded, which is
-either a livelock against a steady writer or an unstated terminal failure.
+**No retry loop.** Every conflict is detected inside the same lock acquisition
+that performs the write, so `writeCastChecked` cannot fail twice.
+
+**At the three clone-consent gates the fingerprint is an optimisation, not the
+mechanism.** On mismatch those gates re-run the clone-consent predicate against
+the fresh read and refuse only if a cloned slot has actually appeared — an
+unrelated edit must not abort a whole-workspace override. So the predicate
+re-check under the write's lock is what decides; the fingerprint only skips it in
+the common case. Said plainly because an earlier draft justified the entire
+mechanism on the claim that a simpler "re-validate under the lock" design would
+weaken these gates, and then specified exactly that re-validation as its own
+conflict path.
 
 ### 14.3 What this does not do
 
 - It does not make a multi-book propagation atomic. A conflict on book 7 of 12
-  still leaves 6 written. What changes is that the operation **knows** and says
-  so. Cross-book atomicity needs the workspace-scoped lock §3.2 rejected.
-- **It does not survive a delete (ABA).** `analysis.ts`'s "Start fresh" and
-  `book-state.ts`'s reparse `rm` cast.json, and an absent file reads as `rev: 0`,
-  so `1 → delete → recreate as 1` is indistinguishable from "unchanged". §14.4
-  handles the one caller that spans a delete; for everyone else this is a stated
-  property, not a defect the counter can fix.
+  still leaves 6 written — reported, not prevented (§3.2).
 - **It does not reach `PUT /:bookId/state`'s cast slice.** That route writes the
-  client's entire characters array; the server reads `rev` inside its own lock
-  immediately before writing, so the check passes trivially and a stale client
-  snapshot still overwrites a concurrent server-side edit. Closing that needs an
-  `If-Match`-style rev on the wire, which is out of scope here. The cast lock
-  still protects the clone-consent guards inside `preserveDesignedVoices`, which
-  is what Task 7's test targets.
+  client's entire characters array; the server reads immediately before writing,
+  so the check passes trivially and a stale client snapshot still overwrites a
+  concurrent server-side edit. Closing it needs an `If-Match`-style token on the
+  wire, which is out of scope. The cast lock still protects the clone-consent
+  guards inside `preserveDesignedVoices`.
 
-### 14.4 `analysis.ts` — and the trap the first draft walked into
+### 14.4 `analysis.ts` — and the trap two drafts walked into
 
-The first draft of this section said: on conflict, re-read the cast and re-run
-the merge against **that** as the base. **That would have re-broken the
-2026-07-14 Coalfall voice-strip incident, deterministically, on every "Start
-fresh" run.** The mechanism, because it must not be repeated:
+The first draft said: on conflict, re-read and re-run the merge against **that**
+as the base. **That re-breaks the 2026-07-14 Coalfall voice-strip,
+deterministically, on every "Start fresh" run.** `priorCastForMerge` is read
+*above* the `fresh` block's `rm` — deliberately, and the comment there says so.
+The `rm` removes cast.json; the rebuild re-reads an **absent** file, so its base
+is `[]`; and `mergeAnalysisResultWithExistingCast` short-circuits on an empty
+base (`if (!existing.length) return fresh;`). Every bespoke designed voice
+dropped, cast.json written voiceless — the incident that read placement exists to
+prevent.
 
-`priorCastForMerge` is read *above* the `fresh` block's `rm` — deliberately, and
-the comment there says so: *"Read happens before the fresh block below rm's
-cast.json, so the value survives that deletion."* A rev captured at the same
-point is `N`; the `rm` then resets the on-disk revision to `0`; the run's first
-interim write sees `actual = 0 ≠ N` and takes the rebuild path; the rebuild
-re-reads an **absent** cast, so its base is `[]`; and
-`mergeAnalysisResultWithExistingCast` short-circuits on an empty base
-(`if (!existing.length) return fresh;`). Every bespoke designed voice is dropped
-and cast.json is written voiceless — which is precisely the incident the read
-placement exists to prevent.
+The second draft fixed that with "capture the revision after the `rm`", which
+introduced the capture window described in §14.1. The fingerprint removes both
+failure modes rather than trading one for the other.
 
-Three rules follow, and they are requirements, not guidance:
+Three requirements:
 
-1. **Capture the revision *after* the `fresh` block's `rm`**, not alongside the
-   `priorCastForMerge` read. The snapshot must outlive the delete; the revision
-   must not.
+1. **The fingerprint is captured from the same read as `priorCastForMerge`** —
+   same bytes, same instant. Nothing may sit between them.
 2. **The rebuild may never replace a non-empty prior with an empty base.** When
    the re-read is empty — deleted, or a fresh run mid-flight — the retained
    `priorCastForMerge` *is* the base. The rebuild overlays concurrent edits onto
    the prior; it never substitutes for it.
-3. **Re-apply the load-point healers on the rebuild path.** Not just
-   `seedReuseGuardsFromPriorCast` and `applyRewriteToPriorCast`, but
-   `dropReuseContinuityKeepDesignedVoice`, `pruneStaleReuseLinks` and
-   `dedupePriorCastByName` — whose own comment says they run "at the single load
-   point, so all cast.json write sites see one prior row per name". A rebuild
-   that skips them reintroduces duplicate-by-name rows the load point exists to
-   collapse.
+3. **Re-apply the load-point healers on the rebuild path** —
+   `dropReuseContinuityKeepDesignedVoice`, `pruneStaleReuseLinks`,
+   `dedupePriorCastByName`, `seedReuseGuardsFromPriorCast`,
+   `applyRewriteToPriorCast`. Their comment says they run "at the single load
+   point, so all cast.json write sites see one prior row per name"; a rebuild
+   that skips them reintroduces the duplicate-by-name rows they collapse.
 
-Read-check-write happens in one lock acquisition, so there is no retry and no
-livelock (§14.2).
+Read-check-write happens in one lock acquisition, so there is no retry.
 
 ## 15. The series lock — closing the cross-book double-mint
 
-The one residual the revision counter provably cannot reach.
+The one residual §14 provably cannot reach.
 
 `ensureCharacterVoiceUuid` mints a `voiceUuid` for a linked cast identity, then
 propagates it across the series. Two bulk designs on **two different books of one
@@ -1071,7 +1079,7 @@ series** each read their *own* book, each see no `voiceUuid`, each mint, and eac
 propagate. Every design gate keys on `bookDir` — `withDesignLock`, `isDesignBusy`,
 `cast-design.ts`'s `inFlightByBook` — while the propagation is series-wide.
 
-A counter does not help: the propagation re-reads every book under its own lock,
+§14 does not help: the propagation re-reads every book under its own lock,
 so each write is against a current revision and is therefore "valid". The
 staleness is in the *mint decision*, taken before either book is read. No file's
 revision encodes it.

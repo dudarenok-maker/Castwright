@@ -55,12 +55,13 @@ Read it before Task 1. Section references below (§3.1, §5, §10.2 …) point a
 - **Every lock is mutation-verified**: revert the lock at that site, re-run,
   paste the failing output into the task's commit message. A test that was never
   seen red proves nothing.
-- **Every cast.json write goes through `writeCastChecked` (Task 3), never a raw
-  `writeJsonAtomic(castJsonPath(…))`.** The revision counter is only sound if
-  adoption is universal: one writer that does not increment `rev` makes every
-  other writer's check pass against a file that did change, which is worse than
-  no counter — it reads as a guarantee while providing nothing. The Task 13 guard
-  enforces this.
+- **Tasks 14–16 use `cast-io.ts`'s helpers; the other 30 sites do not.** Those
+  30 read and write inside one cast lock where nothing can interleave, so a
+  staleness check there is inert and costs an extra full read per write. An
+  earlier draft required universal adoption — that was a property of the
+  *revision-counter* design, which is unsound unless every writer increments. The
+  content fingerprint has no such requirement: any write changes the bytes,
+  whoever made it. Do not widen the helpers' use.
 - **`analysis.ts`'s 5 writes and the three clone-consent gates are IN scope** —
   Tasks 14 and 15. Earlier drafts deferred them to #2015/#2006; those issues are
   now closed by this PR. Do not skip them on the strength of a stale comment.
@@ -74,7 +75,7 @@ Read it before Task 1. Section references below (§3.1, §5, §10.2 …) point a
 | File | Responsibility |
 |---|---|
 | `server/src/workspace/cast-lock.ts` | **New.** Four named lock wrappers (`withCastLock`, `withCastLocks`, `withLibraryVoiceLock`, `withSeriesLock`) + the lock-order rule in its header. Sole owner of key derivation. |
-| `server/src/workspace/cast-io.ts` | **New.** `readCastForUpdate` / `writeCastChecked` — the revision counter. Sole owner of the `rev` increment. |
+| `server/src/workspace/cast-io.ts` | **New.** `readCastForUpdate` / `writeCastChecked` / `assertCastUnchanged` — content-fingerprint staleness detection. Used by Tasks 14–16 only. |
 | `server/src/workspace/cast-lock.test.ts` | **New.** Primitive unit tests: sorted acquisition (observed within one call), the AB/BA deadlock test, dedupe, release-on-throw, non-overlapping FIFO waiters, empty-list refusal. |
 | `server/src/workspace/cast-lock.race.test.ts` | **New.** The outcome harness — two overlapping RMWs, both mutations must survive. The reference for every later site test. |
 | `server/src/workspace/file-lock.ts` | Modify — #2001 map-cleanup fix. |
@@ -367,7 +368,7 @@ Expected: FAIL — `Cannot find module './cast-lock.js'`.
  *      never both held; their relative position is declared, not exercised.
  *
  * WHAT THIS DOES NOT COVER: it protects one read-modify-write. A validate-then-
- * write whose halves sit in different lock scopes needs the revision counter in
+ * write whose halves sit in different lock scopes needs the staleness helpers in
  * cast-io.ts, not this file — see that module and design §14.
  *
  * Key derivation lives here and ONLY here. A site that derived the key slightly
@@ -460,10 +461,10 @@ git commit -m "feat(server): add the per-book cast.json write lock"
 
 ---
 
-### Task 3: `cast-io.ts` — the revision counter
+### Task 3: `cast-io.ts` — staleness detection for the cross-scope sites
 
-Every later task's write goes through this. It must land before any site is
-converted, or those sites get written twice.
+Used by Tasks 14–16 only. The other 30 sites keep `readJson`/`writeJsonAtomic`
+under their lock — see "Where it is used" below, and do not widen it.
 
 **Files:**
 - Create: `server/src/workspace/cast-io.ts`
@@ -472,11 +473,10 @@ converted, or those sites get written twice.
 **Interfaces:**
 - Consumes: `readJson`, `writeJsonAtomic` from `./state-io.js`; `castJsonPath`.
 - Produces:
-  - `readCastForUpdate<T extends object>(bookDir): Promise<{ cast: T & Rev; rev: number }>`
-  - `writeCastChecked<T extends object>(bookDir, next: T, expectedRev: number): Promise<void>`
-  - `assertCastRev(bookDir, expectedRev): Promise<void>` — for books you consult
-    but do not write
-  - `class CastRevConflictError extends Error` with `bookDir`, `expected`, `actual`
+  - `readCastForUpdate<T extends object>(bookDir): Promise<{ cast: T; fingerprint: string | null }>`
+  - `writeCastChecked<T extends object>(bookDir, next: T, expected: string | null): Promise<void>`
+  - `assertCastUnchanged(bookDir, expected: string | null): Promise<void>`
+  - `class CastStaleError extends Error` with `bookDir`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -485,13 +485,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeJsonAtomic, readJson } from './state-io.js';
+import { writeJsonAtomic } from './state-io.js';
 import { castJsonPath } from './paths.js';
 import {
   readCastForUpdate,
   writeCastChecked,
-  assertCastRev,
-  CastRevConflictError,
+  assertCastUnchanged,
+  CastStaleError,
 } from './cast-io.js';
 
 let dir: string;
@@ -501,53 +501,44 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-it('treats a cast.json with no rev as rev 0', async () => {
-  /* Migration is a read-path default: an existing workspace has no rev field
-     and must not need a migration script. */
-  const { rev } = await readCastForUpdate(dir);
-  expect(rev).toBe(0);
+it('fingerprints an absent cast as null, distinctly from any content', async () => {
+  await rm(castJsonPath(dir), { force: true });
+  const { fingerprint } = await readCastForUpdate(dir);
+  expect(fingerprint).toBeNull();
 });
 
-it('stamps rev+1 on write', async () => {
-  const { cast, rev } = await readCastForUpdate(dir);
-  await writeCastChecked(dir, cast, rev);
-  expect((await readJson<{ rev?: number }>(castJsonPath(dir)))?.rev).toBe(1);
+it('accepts a write when the file has not changed', async () => {
+  const { cast, fingerprint } = await readCastForUpdate<{ characters: unknown[] }>(dir);
+  await expect(writeCastChecked(dir, cast, fingerprint)).resolves.toBeUndefined();
 });
 
-it('preserves rev across a writer that builds a fresh payload', async () => {
-  /* At least 20 of the 35 writers construct `{ characters: … }` and drop every
-     other top-level field. If the helper did not own the increment, those
-     writers would silently reset the counter and every later rev check would
-     pass against a stale read. */
-  const { rev } = await readCastForUpdate(dir);
-  await writeCastChecked(dir, { characters: [{ id: 'bob' }] }, rev);
-  const after = await readJson<{ rev?: number; characters: unknown[] }>(castJsonPath(dir));
-  expect(after?.rev).toBe(1);
-  expect(after?.characters).toHaveLength(1);
+it('rejects a write when the bytes changed under it', async () => {
+  const { cast, fingerprint } = await readCastForUpdate<{ characters: unknown[] }>(dir);
+  await writeJsonAtomic(castJsonPath(dir), { characters: [{ id: 'bob' }] });
+  await expect(writeCastChecked(dir, cast, fingerprint)).rejects.toBeInstanceOf(CastStaleError);
 });
 
-it('throws CastRevConflictError when the revision moved since the read', async () => {
-  const first = await readCastForUpdate(dir);
-  /* Someone else writes in between. */
-  await writeCastChecked(dir, first.cast, first.rev);
-  await expect(writeCastChecked(dir, first.cast, first.rev)).rejects.toBeInstanceOf(
-    CastRevConflictError,
-  );
+it('detects a delete even when the file is recreated identically (ABA)', async () => {
+  /* The property a revision counter cannot have: 1 -> delete -> recreate as 1
+     reads as "unchanged" to a counter. Here, identical bytes genuinely ARE
+     unchanged, and a delete-then-DIFFERENT-recreate is caught. */
+  const { fingerprint } = await readCastForUpdate(dir);
+  await rm(castJsonPath(dir), { force: true });
+  await writeJsonAtomic(castJsonPath(dir), { characters: [{ id: 'zed' }] });
+  await expect(assertCastUnchanged(dir, fingerprint)).rejects.toBeInstanceOf(CastStaleError);
 });
 
-it('asserts a revision on a consulted book without writing it', async () => {
-  const { rev } = await readCastForUpdate(dir);
-  await expect(assertCastRev(dir, rev)).resolves.toBeUndefined();
-  await writeCastChecked(dir, { characters: [] }, rev);
-  await expect(assertCastRev(dir, rev)).rejects.toBeInstanceOf(CastRevConflictError);
+it('detects a write made by a caller that never used these helpers', async () => {
+  /* The other property a counter cannot have: soundness does not depend on
+     universal adoption. A raw writeJsonAtomic still changes the bytes. */
+  const { fingerprint } = await readCastForUpdate(dir);
+  await writeJsonAtomic(castJsonPath(dir), { characters: [{ id: 'alice' }, { id: 'new' }] });
+  await expect(assertCastUnchanged(dir, fingerprint)).rejects.toBeInstanceOf(CastStaleError);
 });
 
-it('reports both revisions on conflict', async () => {
-  const first = await readCastForUpdate(dir);
-  await writeCastChecked(dir, first.cast, first.rev);
-  await writeCastChecked(dir, first.cast, 1);
-  const err = await writeCastChecked(dir, first.cast, first.rev).catch((e) => e);
-  expect(err).toMatchObject({ expected: 0, actual: 2 });
+it('asserts a consulted book without writing it', async () => {
+  const { fingerprint } = await readCastForUpdate(dir);
+  await expect(assertCastUnchanged(dir, fingerprint)).resolves.toBeUndefined();
 });
 ```
 
@@ -559,95 +550,77 @@ Expected: FAIL — `Cannot find module './cast-io.js'`.
 - [ ] **Step 3: Write the implementation**
 
 ```ts
-/* cast.json optimistic concurrency.
+/* Staleness detection for cast.json.
  *
- * The per-book lock (cast-lock.ts) makes one read-modify-write atomic. It
- * cannot help when the DECISION is read in one lock scope and the write lands
- * in another — analysis.ts's merge base, the clone-consent 409 gates,
- * cast-link-prior's target read. Those need staleness to be DETECTABLE, which
- * is what `rev` provides.
+ * The per-book lock (cast-lock.ts) makes one read-modify-write atomic. It cannot
+ * help when the DECISION is read in one lock scope and the write lands in
+ * another — analysis.ts's merge base, the clone-consent gates, the cross-book
+ * consultations. Those need staleness to be DETECTABLE.
  *
- * SOUNDNESS DEPENDS ON UNIVERSAL ADOPTION. If one writer does not increment
- * `rev`, every other writer's check passes against a file that did change, and
- * the counter is worse than none — it reads as a guarantee while providing
- * nothing. That is why every cast.json write goes through `writeCastChecked`,
- * and why the guard test (cast-lock.guard.test.ts) fails the build on a raw
- * writeJsonAtomic(castJsonPath(…)).
+ * A content fingerprint rather than a `rev` field on cast.json, deliberately
+ * (design §14.1):
+ *   - it is derived from the bytes you already read, so there is no separate
+ *     capture step and no window between snapshot and capture to get wrong;
+ *   - soundness does not depend on every writer participating — any write
+ *     changes the bytes, whoever made it. A counter is "worse than none" if one
+ *     writer skips the increment;
+ *   - delete-then-recreate is handled honestly: identical bytes ARE unchanged.
  *
- * Both helpers assume the caller already holds the cast lock for `bookDir`.
- * They are the read/write half; cast-lock.ts is the mutual-exclusion half.
+ * USED BY THE CROSS-SCOPE SITES ONLY (Tasks 14-16). The ~30 same-scope writers
+ * read and write inside one cast lock, where nothing can interleave and this
+ * comparison is inert — they keep readJson/writeJsonAtomic. Do not widen this.
+ *
+ * All three assume the caller holds the cast lock for `bookDir`.
  */
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { castJsonPath } from './paths.js';
 
-/** Anything with an optional revision. Deliberately NOT a concrete CastJson:
- *  `CastFile` is re-declared as a module-private interface in sixteen modules
- *  with five different element types, and TypeScript gives interfaces no
- *  implicit index signature — so a concrete parameter type would fail to accept
- *  any of them and every converted site would be a compile error, surfacing only
- *  at the final `npm run typecheck`. */
-type Rev = { rev?: number };
-
-export class CastRevConflictError extends Error {
-  constructor(
-    readonly bookDir: string,
-    readonly expected: number,
-    readonly actual: number,
-  ) {
-    super(
-      `cast.json for ${bookDir} changed under us (expected rev ${expected}, found ${actual}).`,
-    );
-    this.name = 'CastRevConflictError';
+export class CastStaleError extends Error {
+  constructor(readonly bookDir: string) {
+    super(`cast.json for ${bookDir} changed under us since it was read.`);
+    this.name = 'CastStaleError';
   }
 }
 
-async function currentRev(bookDir: string): Promise<number> {
-  const cast = await readJson<Rev>(castJsonPath(bookDir));
-  return typeof cast?.rev === 'number' ? cast.rev : 0;
+/** sha256 of the raw bytes, or null when the file is absent. `null` is a real
+ *  value, not a failure: "there was nothing here" is distinct from any content,
+ *  which is what makes delete-then-recreate detectable. */
+async function fingerprintOf(bookDir: string): Promise<string | null> {
+  try {
+    const raw = await readFile(castJsonPath(bookDir));
+    return createHash('sha256').update(raw).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
-/** Read the cast and the revision it was at. `rev` is absent on every cast.json
- *  written before this change, so it defaults to 0 — a read-path default, so no
- *  migration script and no compatibility break. `cast` is non-null: an absent
- *  file reads as `{ characters: [] }`. */
 export async function readCastForUpdate<T extends object>(
   bookDir: string,
-): Promise<{ cast: T & Rev; rev: number }> {
-  const cast = (await readJson<T & Rev>(castJsonPath(bookDir))) ?? ({ characters: [] } as T & Rev);
-  return { cast, rev: typeof cast.rev === 'number' ? cast.rev : 0 };
+): Promise<{ cast: T; fingerprint: string | null }> {
+  /* Fingerprint FIRST, then parse, so the hash describes bytes we have actually
+     taken. Reading them in the other order would reintroduce the very window
+     this design exists to remove. */
+  const fingerprint = await fingerprintOf(bookDir);
+  const cast = (await readJson<T>(castJsonPath(bookDir))) ?? ({ characters: [] } as unknown as T);
+  return { cast, fingerprint };
 }
 
-/** Write `next`, asserting the on-disk revision is still `expectedRev`. Stamps
- *  `expectedRev + 1`.
- *
- *  The caller MUST hold the cast lock. Under that lock the comparison is INERT —
- *  no other locked writer can interleave — and it exists for the cross-scope
- *  callers in design §14 whose decision was read in a different lock scope.
- *  Universal adoption is required for the INCREMENT, not the check: one writer
- *  that skips it makes every other writer's check pass against a file that did
- *  change. */
+export async function assertCastUnchanged(
+  bookDir: string,
+  expected: string | null,
+): Promise<void> {
+  if ((await fingerprintOf(bookDir)) !== expected) throw new CastStaleError(bookDir);
+}
+
 export async function writeCastChecked<T extends object>(
   bookDir: string,
   next: T,
-  expectedRev: number,
+  expected: string | null,
 ): Promise<void> {
-  const actual = await currentRev(bookDir);
-  if (actual !== expectedRev) throw new CastRevConflictError(bookDir, expectedRev, actual);
-  await writeJsonAtomic(castJsonPath(bookDir), { ...next, rev: expectedRev + 1 });
-}
-
-/** Assert a revision on a book you CONSULTED but do not write.
- *
- *  Four sites decide from one book and write another — cast-link-prior reads the
- *  target and writes the source; voice-override-linked and cast-series-patch
- *  derive their whole write-list from a source they never write;
- *  cast-add-from-roster reads the target to decide a source write.
- *  `writeCastChecked` asserts only the book it writes, so without this the
- *  counter cannot reach any of them. Hold the consulted book's lock (via
- *  `withCastLocks`) while asserting. */
-export async function assertCastRev(bookDir: string, expectedRev: number): Promise<void> {
-  const actual = await currentRev(bookDir);
-  if (actual !== expectedRev) throw new CastRevConflictError(bookDir, expectedRev, actual);
+  await assertCastUnchanged(bookDir, expected);
+  await writeJsonAtomic(castJsonPath(bookDir), next);
 }
 ```
 
@@ -660,8 +633,10 @@ Expected: PASS (6 tests).
 
 ```bash
 git add server/src/workspace/cast-io.ts server/src/workspace/cast-io.test.ts
-git commit -m "feat(server): add the cast.json revision counter"
+git commit -m "feat(server): add cast.json staleness detection for cross-scope writers"
 ```
+
+---
 
 ### Task 4: #2001 — the lock helpers' map cleanup has never run
 
@@ -1003,29 +978,25 @@ Exemplar — `cast-aliases.ts`, which every other site in this task mirrors:
 
 ```ts
 return withCastLock(bookDir, async () => {
-  /* readCastForUpdate / writeCastChecked, never readJson / writeJsonAtomic —
-     the counter is only sound if every writer increments it (Task 3), and the
-     Task 13 guard fails the build on a raw write even inside a lock. */
-  const { cast, rev } = await readCastForUpdate<CastFile>(bookDir);
-  if (!cast.characters?.length) {
+  /* Plain readJson/writeJsonAtomic, INSIDE the lock. cast-io.ts's staleness
+     helpers are for the cross-scope sites only (Tasks 14-16) — here the read and
+     the write are in one lock scope, so nothing can interleave and a staleness
+     check would be inert. */
+  const cast = await readJson<CastFile>(castJsonPath(bookDir));
+  if (!cast?.characters?.length) {
     return res.status(409).json({ error: 'Book has no cast on disk yet. …' });
   }
   // … findIndex, 404s, build nextCharacters …
-  await writeCastChecked(bookDir, { ...cast, characters: nextCharacters }, rev);
+  await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
   return res.status(200).json({ /* … */ });
 });
 ```
 
-**Two shape changes every site in this task inherits:**
-
-- `readCastForUpdate` returns `{ cast, rev }` and `cast` is **non-null** with a
-  `characters: []` default. `if (!cast?.characters?.length)` still reads fine,
-  but `if (cast && …)` guards elsewhere become dead — check each one rather than
-  copying the old shape through.
-- Spread the object you read (`{ ...cast, characters }`), not a bare
-  `{ characters }`. At least 20 of the 35 writers currently build a fresh payload
-  that drops every other top-level field; `writeCastChecked` re-adds `rev`, but
-  anything *else* on the document is still yours to preserve.
+**One shape change worth making while you are here:** spread the object you read
+(`{ ...cast, characters }`) rather than writing a bare `{ characters }`. At least
+20 of the 35 writers currently construct a fresh payload that silently drops
+every other top-level field. Nothing depends on that today, but it is a trap
+lying in wait for the next person who adds one.
 
 Per-site notes:
 
@@ -1149,9 +1120,9 @@ given exactly. Replace the tail of the handler with:
    stall every cast write for this book. Global order: no other lock is held
    here (cast is last — see cast-lock.ts rule 4). */
 await withCastLock(located.bookDir, async () => {
-  const { cast: fresh, rev } = await readCastForUpdate<CastFile>(located.bookDir);
-  const freshChar = fresh.characters?.find((c) => c.id === characterId);
-  if (!freshChar) return; // deleted mid-promotion — artifacts already moved
+  const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
+  const freshChar = fresh?.characters?.find((c) => c.id === characterId);
+  if (!fresh || !freshChar) return; // deleted mid-promotion — artifacts already moved
   const freshSlot = freshChar.overrideTtsVoices?.qwen;
   /* KEEP this guard — it is the current behaviour (qwen-voice.ts:788) and it
      encloses the write. Without it every promote-voice writes cast.json and
@@ -1162,7 +1133,7 @@ await withCastLock(located.bookDir, async () => {
       .map((v) => v?.name)
       .filter((n): n is string => !!n);
     delete freshSlot.variants;
-    await writeCastChecked(located.bookDir, fresh, rev);
+    await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
   }
 });
 /* Teardown stays outside: filesystem work, and holding the lock across it
@@ -1439,10 +1410,12 @@ explicit allowlist with a reason per entry:
 const ALLOWED_UNLOCKED = new Map<string, { writes: number; rms: number; why: string }>();
 ```
 
-The guard must also fail on a raw `writeJsonAtomic(castJsonPath(…))` even when
-that call *is* inside a lock scope — after Task 3 the only sanctioned writer is
-`writeCastChecked`, and a locked-but-unchecked write silently breaks the
-counter for everyone else.
+The guard checks **lockedness only**. It must NOT also require
+`writeCastChecked`: that rule belonged to the revision-counter design, whose
+soundness depended on universal adoption, and it would fail on `cast-io.ts`
+itself — the sanctioned helper writes `writeJsonAtomic(castJsonPath(...))` inside
+no lock scope, because its callers hold the lock. Exclude `workspace/cast-io.ts`
+from the walk by name, with that reason in a comment.
 
 Document the known blind spots in the file header: it sees one syntactic form, so
 `const p = castJsonPath(dir); await writeJsonAtomic(p, …)` slips through, as
@@ -1495,12 +1468,20 @@ The second one is the important one.
 
 ```ts
 it('does not discard a cast edit made during an analysis run', async () => {
+  /* Assert on ALIASES, not on `name`. mergeAnalysisResultWithExistingCast
+     overlays the base's VOICE-DESIGN fields onto the freshly-analysed roster and
+     UNIONS aliases (see its docstring) — `name` comes from the fresh analysis,
+     which re-derives it from the manuscript. A name assertion cannot go green on
+     a correct implementation, and "fixing" it would mean weakening the test or
+     changing merge semantics. */
   const run = startAnalysis(bookId);
   await waitForFirstInterimWrite();
-  await request(app).post('/api/cast/aliases').send({ bookId, /* rename alice */ });
+  await request(app).post('/api/cast/aliases')
+    .send({ bookId, characterId: 'alice', alias: 'The Coalfall Widow' });
   await run;
   const cast = await readJson<CastJson>(castJsonPath(bookDir));
-  expect(cast?.characters?.find((c) => c.id === 'alice')?.name).toBe('Alice Renamed');
+  expect(cast?.characters?.find((c) => c.id === 'alice')?.aliases)
+    .toContain('The Coalfall Widow');
 });
 
 it('keeps bespoke designed voices across a Start-fresh re-analysis', async () => {
@@ -1525,17 +1506,19 @@ Run: `cd server && npx vitest run src/routes/analysis.test.ts -t "cast edit made
 Run: `cd server && npx vitest run src/routes/analysis.test.ts -t "Start-fresh"`
 
 The second must be verified red against a **deliberately wrong** implementation:
-capture the rev next to the `priorCastForMerge` read, rebuild by re-reading. If
+rebuild by plain re-read (base = whatever is on disk). If
 it passes there, the test is not pinning what it claims and the whole task is
 unguarded.
 
-- [ ] **Step 3: Capture the rev after the `rm`; never rebuild to an empty base**
+- [ ] **Step 3: Fingerprint with the snapshot; never rebuild to an empty base**
 
 Three requirements, from spec §14.4:
 
-1. **Capture the revision *after* the `fresh` block's `rm`.** The
-   `priorCastForMerge` snapshot must outlive the delete — that placement is
-   deliberate and its comment says so — but the revision must not.
+1. **Capture the fingerprint from the same read as `priorCastForMerge`** — same
+   bytes, same instant, nothing between them. This is where the revision-counter
+   design failed: a counter needs a separate capture step, and the yields between
+   the snapshot read and any post-`rm` capture point (`pruneStaleReuseLinks`,
+   `loadAnalysisCache`) were a hole a concurrent writer could land in.
 2. **The rebuild may never replace a non-empty prior with an empty base.** When
    the re-read is empty, the retained `priorCastForMerge` *is* the base. The
    rebuild overlays concurrent edits onto the prior; it never substitutes.
@@ -1551,17 +1534,17 @@ acquisition, so `writeCastChecked` cannot conflict and there is no retry loop:
 
 ```ts
 await withCastLock(bookDir, async () => {
-  const { cast: onDisk, rev } = await readCastForUpdate<CastFile>(bookDir);
+  const { cast: onDisk, fingerprint } = await readCastForUpdate<CastFile>(bookDir);
   const base =
-    rev === capturedRev
+    fingerprint === capturedFingerprint
       ? priorCastForMerge
       : rebuildBase(priorCastForMerge, onDisk.characters ?? []);
   await writeCastChecked(
     bookDir,
     { ...onDisk, characters: mergeAnalysisResultWithExistingCast(base, freshRows) },
-    rev,
+    fingerprint,
   );
-  capturedRev = rev + 1;
+  capturedFingerprint = await fingerprintAfterWrite(bookDir);
 });
 ```
 
@@ -1574,8 +1557,9 @@ is normal. Log the rebuild at info so it is observable.
 
 - [ ] **Step 4: Run, mutation-verify, commit**
 
-Mutation-verify by moving the rev capture back above the `rm` and confirming the
-Start-fresh test goes red. Paste that output into the commit message.
+Mutation-verify by replacing the rebuild path with a plain re-read (base =
+whatever is on disk) and confirming the Start-fresh test goes red. Paste that
+output into the commit message.
 
 ```bash
 git add server/src/routes/analysis.ts server/src/routes/analysis.test.ts
@@ -1607,9 +1591,9 @@ gives one rule in three shapes — this task applies it.
   refusal path, so it does not walk the full set then; only the pass path yields
   a complete rev map.
 
-  At write time, per book: if the rev is unchanged, write. If it moved,
+  At write time, per book: if the fingerprint is unchanged, write. If it moved,
   **re-run the clone-consent predicate on the fresh read** — if the book is still
-  clean, adopt the new rev and continue; only a *newly planted cloned slot* is a
+  clean, adopt the new fingerprint and continue; only a *newly planted cloned slot* is a
   genuine refusal. Aborting on any change would turn a whole-workspace override
   from an operation that always completes into one that fails at the
   concurrent-edit rate, and its failure state — the new voice in some books, the
@@ -1618,12 +1602,12 @@ gives one rule in three shapes — this task applies it.
   On a genuine refusal: `409 { code: 'cast-changed', written: [...] }` naming the
   books already written. **Partial application is reported, not prevented** —
   cross-book atomicity needs the workspace-wide lock §3.2 rejected (§14.3).
-- **`single-design.ts`** — records the rev at its `characterHasClonedSlot` gate;
+- **`single-design.ts`** — records the fingerprint at its `characterHasClonedSlot` gate;
   `runSingleDesign` passes it through to the write. It has already flushed SSE
   headers, so a conflict cannot 409: log it, skip the write, and surface it in
   `endJob({ type: 'error', code: 'cast-changed' })`.
 - **`qwen-voice.ts`** — same, through `persistEmotionVariant`. Add an optional
-  `expectedRev` parameter: the JSON route passes it and maps a conflict to a 409;
+  `expectedFingerprint` parameter: the JSON route passes it and maps a conflict to a 409;
   the SSE bulk caller passes it and reports via `endJob`. **Do not** make the
   helper decide which — it has two callers with two response channels, and that
   is exactly why §6 rejected a blanket 409.
@@ -1633,9 +1617,9 @@ here.** It is the function that actually performs both writes (`:801` fast path,
 `:828` walk), and it has five callers — `applyOverrideToCastFiles`,
 `applyTierToCastFiles` (from `cast-tier.ts`), `persistEmotionVariant` and
 `ensureCharacterVoiceUuid` — three of which have no rev to supply. Add
-`expectedRevs?: Map<string, number>` there, defaulting to "no assertion" when a
-book is absent from the map, so Task 10 lands the signature and this task only
-populates it.
+`expectedFingerprints?: Map<string, string | null>` there, defaulting to "no
+assertion" when a book is absent from the map, so Task 10 lands the signature and
+this task only populates it.
 
 - [ ] **Step 4: Run, mutation-verify each gate separately, commit**
 
@@ -1672,8 +1656,8 @@ same way.
 
 - [ ] **Step 3: Record and assert the consulted revision**
 
-Each records the rev of every book it *reads to decide*, not only the ones it
-writes. The consulted book is asserted with **`assertCastRev`** (Task 3) while
+Each records the fingerprint of every book it *reads to decide*, not only the ones it
+writes. The consulted book is asserted with **`assertCastUnchanged`** (Task 3) while
 its lock is held via `withCastLocks`; the written book is asserted by
 `writeCastChecked` as usual. `writeCastChecked` alone cannot do this — it asserts
 only the book it writes, which is not the book these sites consulted.
@@ -1709,7 +1693,7 @@ git commit -m "fix(server): revision-check the cross-book cast consultations"
 - Modify: `server/src/routes/qwen-voice.ts` (`ensureCharacterVoiceUuid`)
 - Modify: `server/src/routes/qwen-voice.test.ts`
 
-The one residual the revision counter provably cannot reach. Two bulk designs on
+The one residual §14's staleness check provably cannot reach. Two bulk designs on
 two books of one series each read their **own** book, each see no `voiceUuid`,
 each mint. The propagation then re-reads every book under its own lock, so every
 write is against a current revision and is therefore "valid" — the staleness is
@@ -1757,7 +1741,7 @@ barrier rather than weakening the assertion.
  *  isDesignBusy, cast-design's inFlightByBook) while a linked-cast propagation
  *  is series-wide, so two books of one series can each decide "no voiceUuid
  *  yet" and each mint. That decision precedes any file read, so the cast.json
- *  revision counter cannot see it. */
+ *  staleness check cannot see it — there is no file whose content encodes it. */
 export function withSeriesLock<T>(
   author: string,
   series: string,
@@ -1829,8 +1813,8 @@ This is substantial cross-cutting work introducing a codebase-wide invariant, so
 it needs a durable `docs/features/` plan, not just the issue bodies. Scan the
 worktrees for the next free plan number first (concurrent sessions claim them).
 Record: the invariant and its four rules, the four lock classes and their order,
-all 35 locked sites, the revision counter and what it does *not* reach (the ABA
-on delete, the client full-document PUT), and a manual acceptance walkthrough.
+all 35 locked sites, the staleness check and what it does *not* reach (the
+client full-document PUT), and a manual acceptance walkthrough.
 
 **Pick the walkthrough carefully.** "Two browser tabs editing one book's cast,
 both edits surviving" describes `PUT /:bookId/state`, which writes the client's
