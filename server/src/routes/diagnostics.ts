@@ -23,6 +23,7 @@ import {
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT } from '../workspace/paths.js';
 import { readinessSeverity } from '../tts/engine-presence.js';
+import { VOICE_ENGINES, type VoiceEngineId } from '../tts/voice-engine-registry.js';
 import type { EngineId } from '../tts/engine-health.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -149,12 +150,54 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
       if (sidecar.kokoroLoaded) resident.push('kokoro');
       if (sidecar.qwenLoaded) resident.push('qwen');
 
-      // Check standard TTS engines for sidecar-confirmed package-missing state.
-      const STANDARD_TTS: { engine: EngineId; pkg: boolean | undefined; name: string }[] = [
-        { engine: 'kokoro', pkg: sidecar.kokoroPackageInstalled, name: 'Kokoro' },
-        { engine: 'qwen', pkg: sidecar.qwenPackageInstalled, name: 'Qwen' },
+      /* Check the standard TTS engines for a sidecar-confirmed unusable
+         package. #1965 — this reads the voice-engine registry's live accessors
+         rather than `sidecar.<engine>PackageInstalled` directly, so it inherits
+         the real-import signal (`*_import_ok`) exactly like models-status does.
+         Before that it bypassed the registry entirely, and so was the one
+         surface a registry-level fix could never reach.
+
+         Coqui is deliberately NOT in this list. It is opt-in — see
+         requirements/nvidia-cuda.txt:4 and amd-rocm.txt:7, "install it from the
+         Model Manager" — so including it would fire this row on every install
+         that quite deliberately never installed Coqui. */
+      const STANDARD_TTS: { engine: EngineId & VoiceEngineId; name: string }[] = [
+        { engine: 'kokoro', name: 'Kokoro' },
+        { engine: 'qwen', name: 'Qwen' },
       ];
-      const broken = STANDARD_TTS.filter((e) => e.pkg === false);
+      /* Two distinct faults, and the copy must not conflate them (the old
+         string said "not importable" for what the filter actually detected,
+         which was a MISSING package):
+           - find_spec says false → the package is simply not installed.
+           - find_spec unknown/true but a real import raised → present but
+             broken (#1944).
+         Unknown on both axes is never a fault — see the fail-open rule at
+         voice-engine-registry.ts:26-29.
+
+         Order matters, and it is not the order the signals' strength suggests:
+           1. importOk === true wins outright. A real import that RETURNED is
+              proof the package is usable, so it overrides a find_spec that
+              says otherwise (a stale or wrong probe).
+           2. specPresent === false then wins over importOk === false. When a
+              load is attempted against an engine whose package is genuinely
+              absent, the sidecar records BOTH — the ImportError sets
+              importOk = false and find_spec still says false — and they are
+              one fault, not two. "Missing" is the stronger and more
+              actionable claim: "will not import — repair in Model Manager"
+              sends the operator to repair something that was never installed.
+           3. importOk === false is left for the case it alone describes: the
+              package IS on the path and importing it still raised. */
+      const broken = STANDARD_TTS.flatMap((e) => {
+        const entry = VOICE_ENGINES.find((v) => v.id === e.engine);
+        if (!entry) return [];
+        const importOk = entry.liveImportOk(sidecar);
+        if (importOk === true) return [];
+        if (entry.liveSpecPresent(sidecar) === false) {
+          return [{ ...e, phrase: `${e.name} package missing` }];
+        }
+        if (importOk === false) return [{ ...e, phrase: `${e.name} package will not import` }];
+        return [];
+      });
       if (broken.length > 0) {
         const sev: CheckStatus = broken
           .map((e) =>
@@ -167,7 +210,7 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
           id: 'sidecar',
           label: 'Voice engine',
           status: sev,
-          detail: `reachable · ${broken.map((e) => e.name).join(', ')} package not importable — repair in Model Manager`,
+          detail: `reachable · ${broken.map((e) => e.phrase).join(', ')} — repair in Model Manager`,
           value: resident.join(', ') || null,
         };
       }
