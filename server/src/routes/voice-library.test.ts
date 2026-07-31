@@ -15,6 +15,15 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { SidecarDesignError } from '../tts/design-voice-core.js';
+import { castJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
+
+/* #1981 — minimal local shape for the cast.json read in the race test below.
+   `CastJson` in ./voice-library.ts is not exported (route-file-local); this
+   mirrors only the fields that test actually asserts on. */
+interface CastJson {
+  characters?: Array<{ id: string; overrideTtsVoices?: { qwen?: { libraryUuid?: string } } }>;
+}
 
 /* Task 10 — the sample route calls selectTtsProvider(). Stub it the same way
    routes/voice-sample.test.ts does, so the encoder boundary (real ffmpeg) is
@@ -1282,6 +1291,40 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     });
     expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
     expect(res.body.written).toEqual(['qwen']);
+  });
+
+  /* #1981 — the filed defect: two /assign calls for DIFFERENT characters in
+     the SAME book race on that book's cast.json. Unlocked, both requests'
+     `readJson` resolve before either `writeJsonAtomic` lands, so the later
+     write replays a `characters` snapshot taken before the earlier write
+     happened and silently drops it — one of the two assertions below fails
+     with `undefined`. This test does NOT call `vi.resetModules()` between
+     the two requests (only the file's own `beforeEach` does, once, before
+     the test body runs) so the race is free to happen within one test. */
+  it('keeps both assignments when two /assign calls for one book overlap', async () => {
+    const uuidA = 'race-a';
+    const uuidB = 'race-b';
+    await vl.writeEntry(makeEntry({ voiceUuid: uuidA }));
+    await vl.writeEntry(makeEntry({ voiceUuid: uuidB }));
+    const bookId = 'book-race';
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      { id: 'alice', name: 'Alice' },
+      { id: 'bob', name: 'Bob' },
+    ]);
+
+    /* Two different characters, one book. Unlocked, the later write replays a
+       snapshot taken before the earlier one landed and drops it. */
+    await Promise.all([
+      request(app).post(`/api/voice-library/${uuidA}/assign`)
+        .send({ bookId, characterId: 'alice' }),
+      request(app).post(`/api/voice-library/${uuidB}/assign`)
+        .send({ bookId, characterId: 'bob' }),
+    ]);
+
+    const cast = await readJson<CastJson>(castJsonPath(bookDir));
+    const byId = Object.fromEntries((cast?.characters ?? []).map((c) => [c.id, c]));
+    expect(byId.alice.overrideTtsVoices?.qwen?.libraryUuid).toBe(uuidA);
+    expect(byId.bob.overrideTtsVoices?.qwen?.libraryUuid).toBe(uuidB);
   });
 });
 
