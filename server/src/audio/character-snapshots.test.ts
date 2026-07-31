@@ -1,13 +1,32 @@
 /* Unit coverage for the extracted snapshot builder shared by generation +
    splice. The drift detector depends on this shape, so we pin: only speaking
    characters appear, attributes are sorted, the resolved voice name is the
-   real picker output, and a fallback engine is threaded through. The per-
-   character render tier (`modelKey`) is pinned separately below — it feeds the
-   srv-36 audition centroid, so it MUST match what routeFor synthesised under. */
+   voice ACTUALLY sent to the provider (not re-derived from the cast record —
+   #1972), and a fallback engine is threaded through. The per-character render
+   tier (`modelKey`) is pinned separately below — it feeds the srv-36 audition
+   centroid, so it MUST match what routeFor synthesised under. */
 
 import { describe, it, expect } from 'vitest';
 import { buildCharacterSnapshots } from './character-snapshots.js';
-import type { CastCharacter } from '../tts/synthesise-chapter.js';
+import {
+  synthesiseChapter,
+  toVoiceLike,
+  buildHintFromCast,
+  type CastCharacter,
+} from '../tts/synthesise-chapter.js';
+import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from '../tts/index.js';
+
+function makeProvider(): TtsProvider & { calls: SynthesizeInput[] } {
+  const calls: SynthesizeInput[] = [];
+  return {
+    calls,
+    async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+      calls.push(input);
+      return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+    },
+  };
+}
 
 const cast: CastCharacter[] = [
   { id: 'castor', name: 'Castor', gender: 'female', ageRange: 'adult', attributes: ['warm', 'bright'] },
@@ -17,21 +36,27 @@ const cast: CastCharacter[] = [
 
 describe('buildCharacterSnapshots', () => {
   it('includes only characters that actually spoke', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor', 'narrator']), 'kokoro', new Map(), 'kokoro-v1');
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor', 'narrator']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(Object.keys(snaps).sort()).toEqual(['castor', 'narrator']);
     expect(snaps['silent-guy']).toBeUndefined();
   });
 
   it('sorts attributes for stable drift comparison', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1');
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(snaps.castor.attributes).toEqual(['bright', 'warm']);
   });
 
-  it('records the per-character engine + a resolved voice name', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1');
+  it('records the per-character engine + the voice name actually sent to the provider', () => {
+    const snaps = buildCharacterSnapshots(
+      cast,
+      new Set(['castor']),
+      'kokoro',
+      new Map(),
+      'kokoro-v1',
+      new Map([['castor', 'kokoro-castor-voice']]),
+    );
     expect(snaps.castor.voiceEngine).toBe('kokoro');
-    expect(typeof snaps.castor.resolvedVoiceName).toBe('string');
-    expect(snaps.castor.resolvedVoiceName!.length).toBeGreaterThan(0);
+    expect(snaps.castor.resolvedVoiceName).toBe('kokoro-castor-voice');
   });
 
   it('threads renderedFallbackEngine through for characters that fell back', () => {
@@ -41,35 +66,52 @@ describe('buildCharacterSnapshots', () => {
       'qwen',
       new Map([['castor', 'kokoro']]),
       'qwen3-tts-1.7b',
+      new Map(),
     );
     expect(snaps.castor.renderedFallbackEngine).toBe('kokoro');
   });
 
   it('omits attributes when the character has none', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['narrator']), 'kokoro', new Map(), 'kokoro-v1');
+    const snaps = buildCharacterSnapshots(cast, new Set(['narrator']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(snaps.narrator.attributes).toBeUndefined();
   });
 
-  it('legacy Qwen voice without voiceUuid resolves to qwen-<voiceId> — no drift from srv-43 (srv-43 regression guard)', () => {
-    /* An UNCHANGED legacy character: designed before srv-43, so it carries
-       overrideTtsVoices.qwen.name but NO voiceUuid. The snapshot's
-       resolvedVoiceName must still be qwen-<voiceId> via the legacy fallback
-       path — not '' (undesigned) and not a uuid-based key. This asserts that
-       the srv-43 changes introduce no snapshot drift for voices that were never
-       re-designed after the upgrade. */
+  it('#1972 — resolvedVoiceName follows the voice ACTUALLY sent, not a re-derivation from the cast record', () => {
+    /* The exact #1972 symptom: the cast's assigned voice and the voice this
+       run actually rendered under can differ (a substitution upstream, an
+       analysis-source disagreement in the splice path, etc). The snapshot
+       must report what happened, not what was intended. */
     const legacy: CastCharacter[] = [
       {
         id: 'char-wren',
         name: 'Wren',
         gender: 'female',
         voiceId: 'wren',
-        // no voiceUuid — pre-srv-43 voice
         overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
         ttsEngine: 'qwen',
       },
     ];
-    const snaps = buildCharacterSnapshots(legacy, new Set(['char-wren']), 'qwen', new Map(), 'qwen3-tts-1.7b');
-    expect(snaps['char-wren'].resolvedVoiceName).toBe('qwen-wren');
+    const assignedVoice = pickVoiceForEngine('qwen', toVoiceLike(legacy[0]), buildHintFromCast(legacy[0]));
+    const actuallyRenderedVoice = 'qwen-some-other-voice-entirely';
+    expect(actuallyRenderedVoice).not.toBe(assignedVoice); // sanity: the two genuinely differ
+
+    const snaps = buildCharacterSnapshots(
+      legacy,
+      new Set(['char-wren']),
+      'qwen',
+      new Map(),
+      'qwen3-tts-1.7b',
+      new Map([['char-wren', actuallyRenderedVoice]]),
+    );
+    expect(snaps['char-wren'].resolvedVoiceName).toBe(actuallyRenderedVoice);
+    expect(snaps['char-wren'].resolvedVoiceName).not.toBe(assignedVoice);
+  });
+
+  it('#1972 — omits resolvedVoiceName rather than asserting a voice that was never sent, when this run never actually synthesised the character', () => {
+    // e.g. a remix (gain-only) pass: the character spoke (has segments) but
+    // nothing was synthesised this run, so voiceNameByChar carries no entry.
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1', new Map());
+    expect(snaps.castor.resolvedVoiceName).toBeUndefined();
   });
 });
 
@@ -82,17 +124,17 @@ describe('buildCharacterSnapshots — per-character render tier (srv-36 audition
 
   it('stamps a Qwen character with an explicit 1.7B tier as 1.7B, even when the run default is 0.6B', () => {
     // The elevate-only rule: a per-character 1.7B pin wins over a lower run default.
-    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'qwen', new Map(), 'qwen3-tts-0.6b');
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'qwen', new Map(), 'qwen3-tts-0.6b', new Map());
     expect(snaps.hero.modelKey).toBe('qwen3-tts-1.7b');
   });
 
   it('stamps an un-pinned Qwen character with the run default tier', () => {
-    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'qwen', new Map(), 'qwen3-tts-1.7b');
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'qwen', new Map(), 'qwen3-tts-1.7b', new Map());
     expect(snaps.extra.modelKey).toBe('qwen3-tts-1.7b');
   });
 
   it('stamps a Kokoro character with its canonical key regardless of run default', () => {
-    const snaps = buildCharacterSnapshots(qwenCast, new Set(['reader']), 'qwen', new Map(), 'qwen3-tts-1.7b');
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['reader']), 'qwen', new Map(), 'qwen3-tts-1.7b', new Map());
     expect(snaps.reader.modelKey).toBe('kokoro-v1');
   });
 
@@ -100,7 +142,7 @@ describe('buildCharacterSnapshots — per-character render tier (srv-36 audition
     // The mixed-engine edge case the chapter-level modelKey missed: run default
     // is a Kokoro key, but a per-character Qwen 1.7B override renders on 1.7B.
     // The audition MUST see 1.7B here, or it co-resides the 0.6B base (8GB OOM).
-    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'kokoro', new Map(), 'kokoro-v1');
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['hero']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(snaps.hero.modelKey).toBe('qwen3-tts-1.7b');
   });
 
@@ -111,8 +153,50 @@ describe('buildCharacterSnapshots — per-character render tier (srv-36 audition
     // per-character ttsModelKey — returned it VERBATIM, stamping a `qwen`-engine
     // snapshot with `kokoro-v1`. The render-integrity keep-flags then missed the
     // in-use 0.6B tier and reconcile evicted it out from under the render.
-    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'kokoro', new Map(), 'kokoro-v1');
+    const snaps = buildCharacterSnapshots(qwenCast, new Set(['extra']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(snaps.extra.voiceEngine).toBe('qwen');
     expect(snaps.extra.modelKey).toBe('qwen3-tts-0.6b');
+  });
+});
+
+/* #1972 — end-to-end wiring check: drive the REAL `synthesiseChapter` with a
+   fake provider (no live sidecar), then feed its OWN segments through the SAME
+   voiceNameByChar-building step `finalize-chapter-write.ts` uses, into the
+   REAL `buildCharacterSnapshots`. Pins the whole chain the fix depends on —
+   provider.calls[i].voiceName -> ChapterSegment.voiceName ->
+   voiceNameByChar -> CharacterSnapshot.resolvedVoiceName — end to end, not
+   just at each function's own boundary. */
+describe('buildCharacterSnapshots + synthesiseChapter — #1972 end-to-end voice provenance', () => {
+  it('resolvedVoiceName equals the voice actually sent to the provider', async () => {
+    const provider = makeProvider();
+    const castMember: CastCharacter = { id: 'oduvan', name: 'Oduvan', gender: 'male' };
+
+    const result = await synthesiseChapter({
+      sentences: [{ id: 1, chapterId: 1, characterId: 'oduvan', text: 'A short line.' }],
+      cast: [castMember],
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    const sentVoice = provider.calls[0].voiceName;
+    expect(result.segments[0].voiceName).toBe(sentVoice);
+
+    // Same voiceNameByChar-building loop finalize-chapter-write.ts runs.
+    const voiceNameByChar = new Map<string, string>();
+    for (const s of result.segments) {
+      if (s.voiceName) voiceNameByChar.set(s.characterId, s.voiceName);
+    }
+    const speakingIds = new Set(result.segments.map((s) => s.characterId));
+    const snaps = buildCharacterSnapshots(
+      [castMember],
+      speakingIds,
+      'kokoro',
+      new Map(),
+      'kokoro-v1',
+      voiceNameByChar,
+    );
+    expect(snaps.oduvan.resolvedVoiceName).toBe(sentVoice);
   });
 });

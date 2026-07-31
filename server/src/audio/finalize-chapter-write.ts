@@ -268,10 +268,22 @@ export async function finalizeChapterAudioWrite(
 
   const speakingIds = new Set(segments.map((s) => s.characterId));
   const fallbackByChar = new Map<string, string>();
+  /* #1972 — the voice ACTUALLY sent to the provider per character, read back
+     from this render's own segments rather than re-derived from the cast
+     record. See buildCharacterSnapshots' voiceNameByChar doc for why. */
+  const voiceNameByChar = new Map<string, string>();
   for (const s of segments) {
     if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
+    if (s.voiceName) voiceNameByChar.set(s.characterId, s.voiceName);
   }
-  const characterSnapshots = buildCharacterSnapshots(cast, speakingIds, defaultEngine, fallbackByChar, modelKey);
+  const characterSnapshots = buildCharacterSnapshots(
+    cast,
+    speakingIds,
+    defaultEngine,
+    fallbackByChar,
+    modelKey,
+    voiceNameByChar,
+  );
 
   /* Drift stamp from the ACTUAL render, not the request default (false-drift
      fix, 2026-06-07). The breakdown counts the speaking characters per engine
