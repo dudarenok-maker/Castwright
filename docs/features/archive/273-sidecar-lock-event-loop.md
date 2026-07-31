@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-07-31
 owner: null
 ---
 
@@ -38,6 +38,19 @@ sources, all five eviction steps), and **fix the relocated residual on Qwen
 and Whisper in this same branch** (repo-owner decision, §6 D1 — overriding
 rev 2's recommendation to file it). There is therefore **no follow-up issue to
 file** for the Qwen/Whisper half.
+
+> **Post-ship correction (2026-07-31, independent review of PR #1968):** this
+> was wrong. T8 fixed only `_guarded_base_synth` — the single-utterance
+> `synthesize` path (title beat, audition, clone). Three more `QwenEngine`
+> sites have the identical in-lock-cold-load shape and were missed entirely:
+> `design_voice`'s audition forward (`main.py:5336-5337`) and **both**
+> `synthesize_batch` paths (`main.py:6028-6030`, `:6096-6099`).
+> `synthesize_batch` is the actual per-chapter render path — the hotter half
+> of Qwen, not a corner case — so this plan fixed the colder path and left the
+> hotter one untouched. A follow-up issue was filed after all:
+> [#1975](https://github.com/dudarenok-maker/Castwright/issues/1975) (Refs
+> #1919). Every other "no follow-up issue" / "`:5666` is the only line T8
+> moves" claim in this document should be read against this correction.
 
 **Revision 3** applies that decision. The design work it needs — how the fix
 interacts with Qwen's degeneracy-guard reload loop — is resolved in §1.3
@@ -219,7 +232,12 @@ rule.** The four questions asked, answered:
    pre-ensures outside the lock — `:5743` (`_ensure_base17_loaded` inside
    `_base17_activity()`) and `:5770` (`_ensure_base_loaded`) — so `:5666` is a
    no-op on the warm path, exactly like Whisper's `:6106` and pre-Wave-3c
-   Coqui. **`:5666` is the only violation, and it is the only line T8 moves.**
+   Coqui. **`:5666` is the only violation _in `_guarded_base_synth`_, and it
+   is the only line T8 moves — it is NOT the only violation in `QwenEngine`.**
+   `design_voice`'s audition forward (`:5336-5337`) and both
+   `synthesize_batch` paths (`:6028-6030`, `:6096-6099`) have the identical
+   shape and were missed by this analysis; see the executive summary's
+   post-ship correction and issue #1975.
 3. **Does each retry get its own load?** Yes — one drop (`:5690`) + one
    reclaim + one `ensure_loaded()` (`:5692`) per retry, all outside the lock,
    bounded by `_QWEN_DEGEN_SYNTH_ATTEMPTS`. Unchanged by T8.
@@ -227,9 +245,14 @@ rule.** The four questions asked, answered:
    `_cold_load_lock` (inside `_ensure_base_loaded` `:4408` /
    `_ensure_base17_loaded` `:4435`). Everywhere else `_cold_load_lock` is
    taken standalone, so no inversion exists today — but the edge is real.
-   Moving `:5666` out **deletes the `_synth_lock` → `_cold_load_lock` edge
-   entirely**, strictly simplifying the lock graph. This is a benefit of the
-   fix, not a risk of it.
+   Moving `:5666` out removes **one instance** of the `_synth_lock` →
+   `_cold_load_lock` edge — **it does not delete the edge entirely**, as this
+   revision claimed. The same edge survives at the three sites #1975 tracks
+   (`design_voice`'s audition forward and both `synthesize_batch` paths),
+   each of which still takes `_synth_lock` and then calls into an
+   `_ensure_*_loaded` that can reach `_cold_load_lock` while holding it.
+   Simplifying the lock graph for `_guarded_base_synth` alone is still a
+   benefit; it is a partial one, not a total one.
 
 **So the same single rule applies to both engines, with no per-engine
 mechanism and no special-casing.** Rev 2's recommendation to defer Qwen was
@@ -729,6 +752,12 @@ skipped.
   mutation-run results and the incidental `assert`→`RuntimeError` fix (§1.3.1)
   under "Also fixed, found in passing".
 
+  **Post-ship correction:** that last claim was wrong — T7/T8 fixed the
+  relocated defect only on `synthesize`/`transcribe`, not on `QwenEngine`'s
+  two `synthesize_batch` paths or `design_voice`'s audition forward. A
+  follow-up issue for those three sites was filed after independent review:
+  [#1975](https://github.com/dudarenok-maker/Castwright/issues/1975).
+
 ---
 
 **Task count: 10.
@@ -811,6 +840,13 @@ moved**, not a redesign, and the same single rule covers both engines with no
 per-engine mechanism. The design work is resolved in §1.3.2, not left to the
 implementer.
 
+**Post-ship correction:** "fix Qwen" turned out to mean "fix
+`_guarded_base_synth`" only — the design pass never traced `design_voice`'s
+own audition forward or `synthesize_batch`'s two paths, which share the exact
+same shape and are the actual per-chapter render path. Those three sites were
+**not** fixed by T7/T8 and needed the follow-up issue this decision said
+would not be needed: [#1975](https://github.com/dudarenok-maker/Castwright/issues/1975).
+
 **D2 — `PlacementController.admit()`: DECIDED — convert to async (T4), do NOT
 delete.**
 Pre-existing dead code is a *finding*, not a licence to delete (CLAUDE.md,
@@ -827,7 +863,8 @@ notes that T1's test now pins the behaviour so it cannot silently regress. T1
 stays **first** and must be green on `main` before any production change —
 that ordering is what distinguishes "already fixed" from "the refactor fixed
 it". Because T7/T8 fix the relocated defect here, **no follow-up issue is
-filed.**
+filed.** (Post-ship: that last sentence is false for the residual — see D1's
+correction and #1975.)
 
 **Settled earlier, also not open:** delete the dead `lock_held` parameter? —
 no, keep it and correct the docs (§1.4). Is #1919 worth fixing at all? — void;
@@ -953,7 +990,8 @@ Re-run `npm run check:onbox-register` after editing.
    **producer-side** mutation. Whisper's tests use `sys.modules` fake
    injection — **no real weights download**.
 4. **Old T8 ("file the relocated issue") deleted.** No follow-up issue is
-   owed.
+   owed. (Post-ship: wrong for three sites this analysis missed — see D1's
+   correction and #1975.)
 5. **Renumbered:** old T7 → T9, old T9 → T10. Count 9 → **10**.
 6. **New risk row added to §4** — the silent-reload→loud-raise behaviour
    change on the default engine, with the three bounds that make it
@@ -964,3 +1002,55 @@ Re-run `npm run check:onbox-register` after editing.
    `server/tts-sidecar/`; docs are the only thing outside it.
 9. **Incidental fix declared** — the bare `assert` at `:6108` becomes a loud
    raise (`-O` strips asserts), in code T7 already touches.
+
+## Ship notes
+
+Shipped 2026-07-31 on `fix/sidecar-plan-273-lock-event-loop`, closing #1919
+(fixed) and #1925 (closed as superseded — its symptom was already removed by
+the fs-38 Wave 3c merge, `6a2e4e17`/PR #1936, before this branch existed; T1
+pins that fix with the regression test the issue itself was missing).
+
+Commits, in task order: `0245e4b7` (T1), `6ae80fc8` (T2), `c601b165` (T3),
+`091383a1` (T4), `2225e266` (T5), `9f56c0e4` + `d5665d88` (T6), `0419e0e6`
+(T7), `55bcfb8d` (T8), `2470cae6` (T9), `89799cdf` (T10).
+
+Behaviour delta vs. the plan: **not none, contrary to what this section
+originally said.** The production CODE landed exactly as designed (T1–T8) —
+nothing below changes runtime behaviour. But the plan's own claims and its
+paperwork (T9, T10) turned out to be incomplete, found by independent review
+and corrected in a same-branch follow-up round:
+
+1. **The "no follow-up issue for the Qwen/Whisper residual" claim was false**
+   (§1.3.2, D1, D3, T10 all made it). T7/T8 fixed only `_guarded_base_synth`
+   (the single-utterance `synthesize` path) and `WhisperEngine.transcribe`.
+   Three more `QwenEngine` sites have the identical in-lock-cold-load shape
+   and were never traced: `design_voice`'s audition forward
+   (`main.py:5336-5337`) and **both** `synthesize_batch` paths
+   (`main.py:6028-6030`, `:6096-6099`) — `synthesize_batch` is the actual
+   per-chapter render path, so this is the hotter half of Qwen, not a corner
+   case. Filed as [#1975](https://github.com/dudarenok-maker/Castwright/issues/1975).
+2. **T9 (`2470cae6`) itself missed a site its own list should have caught**:
+   `main.py:1315-1318`'s "unlike QwenEngine/WhisperEngine whose
+   `_ensure_loaded` is lock-free" contrast went stale the moment T7/T8
+   landed, and directly contradicted the comment T9 itself wrote at
+   `:2016-2021` ("Sibling engines … re-ensure at the same outside-the-lock
+   spot. Do NOT 'fix' this into looking asymmetric."). Corrected in this
+   round.
+3. **Two stale line references introduced earlier in the branch went
+   uncorrected until this round**: T2's comment at `main.py:3542-3544` cited
+   the idle-watchdog `asyncio.to_thread` offload sites as `:6455`/`:6458`/
+   `:6516` (actually `SpeakerEngine.__init__` and a CUDA-demote branch); the
+   real sites are `:6703`/`:6706`/`:6764`/`:6840`. T1's docstring and
+   mutation recipe in `test_coqui_publish_race.py` cited `CoquiEngine.
+   synthesize`'s two re-ensures at `:1934`/`:1980`; the actual current lines
+   are `:1978` (pre-lock ensure) and `:2029` (in-claim re-ensure).
+
+The one deliberate, called-out behaviour change on the default engine (§4's
+new risk row) still shipped as designed and is unaffected by the above: a
+`/unload` or automatic evict landing in the narrow re-ensure→forward gap now
+raises a loud `RuntimeError` instead of being silently absorbed, on both
+`QwenEngine` (the `synthesize` path only — see point 1) and `WhisperEngine`.
+
+On-box acceptance row A25 recorded in
+`docs/testing/onbox-acceptance-register.md` (Group A) — does not block this
+merge; run sheet at `docs/testing/sidecar-evict-latency-onbox-acceptance.md`.

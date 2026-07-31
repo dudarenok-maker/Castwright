@@ -135,8 +135,10 @@ type CloneConsentDraft = {
   permittedUse: 'personal';
   /** #1943 — who is actually attesting, distinct from `personName` (whose
       voice it is) for the two non-self relationships. Trimmed; blank/absent
-      is `undefined` here so the /clone handler's fallback-to-personName
-      logic has one shape to check rather than also handling empty strings. */
+      is `undefined` here so the /clone handler has one shape to check rather
+      than also handling empty strings. #1959 — absent here means "reject"
+      for a non-self relationship and "fall back to personName" for `self`;
+      this type only tracks what was supplied, not which rule applies. */
   attestedBy?: string;
 };
 
@@ -917,10 +919,23 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
       .status(400)
       .json({ error: `Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).` });
   }
-  if (!validateConsentDraft(body.consent)) {
+  const consentDraft = validateConsentDraft(body.consent);
+  if (!consentDraft) {
     return res
       .status(422)
       .json({ error: 'A complete consent record (person, relationship, permitted use) is required.' });
+  }
+  /* #1959 — a non-self relationship must never fall back to personName: for
+     `guardian-of-minor` that would persist a record asserting the minor
+     attested to their own voice being cloned, the exact defect #1943 exists
+     to fix. `personName` IS the attester only for `self`, so that is the
+     one relationship allowed to omit `attestedBy`. Checked here, before any
+     candidate/GPU work, so an incomplete caller never reaches a
+     partially-completed clone. */
+  if (consentDraft.relationship !== 'self' && !consentDraft.attestedBy) {
+    return res.status(400).json({
+      error: '`consent.attestedBy` is required when `consent.relationship` is not "self".',
+    });
   }
 
   try {

@@ -282,15 +282,22 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       expect(entry.consent?.attestedBy).toBe('Dana');
     });
 
-    it('falls back to personName when attestedBy is omitted or blank', async () => {
-      const omitted = await mockCloneVoice({ candidateId: 'cand-1', consent });
-      expect(omitted.consent?.attestedBy).toBe('Ana');
+    /* #1959 — non-self relationships require attestedBy; only 'self' can fall
+       back to personName. This test (previously testing the fallback on
+       guardian-of-minor) is superseded by the clone-voice.test.ts suite. */
+    it('requires attestedBy for guardian-of-minor (omitted is rejected)', async () => {
+      await expect(
+        mockCloneVoice({ candidateId: 'cand-1', consent }),
+      ).rejects.toThrow(/attestedBy/);
+    });
 
-      const blank = await mockCloneVoice({
-        candidateId: 'cand-1',
-        consent: { ...consent, attestedBy: '   ' },
-      });
-      expect(blank.consent?.attestedBy).toBe('Ana');
+    it('requires attestedBy for guardian-of-minor (blank is rejected)', async () => {
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: { ...consent, attestedBy: '   ' },
+        }),
+      ).rejects.toThrow(/attestedBy/);
     });
   });
 });

@@ -10085,6 +10085,19 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
      non-string, where the real route 200s. */
   const supplied = typeof body.transcript === 'string' ? body.transcript.trim() : '';
   const transcript = supplied || MOCK_WHISPER_TRANSCRIPT;
+  /* #1959 — mirror the real route's gate: a non-self relationship must have
+     a non-blank attestedBy. For `guardian-of-minor` that means the attester's
+     name, never falling back to the child's personName (which would persist a
+     record claiming the minor attested for themselves). Only `self` is allowed
+     to omit attestedBy and fall back to personName. Checked before any entry
+     construction, so an incomplete caller never gets a persisted entry. */
+  const attestedByTrimmed =
+    typeof body.consent.attestedBy === 'string' ? body.consent.attestedBy.trim() : '';
+  if (body.consent.relationship !== 'self' && !attestedByTrimmed) {
+    throw new Error(
+      `Voice clone failed (400): {"error":"\`consent.attestedBy\` is required when \`consent.relationship\` is not \\"self\\"."}`,
+    );
+  }
   const entry: VoiceLibraryEntry = {
     voiceUuid: `lib-clone-${Math.random().toString(36).slice(2, 10)}`,
     name: body.name?.trim() || body.consent.personName,
@@ -10099,7 +10112,7 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
     consent: {
       ...body.consent,
       attestedAt: now,
-      attestedBy: body.consent.attestedBy?.trim() || body.consent.personName,
+      attestedBy: attestedByTrimmed || body.consent.personName,
     },
     master: {
       clipFile: 'master.wav',

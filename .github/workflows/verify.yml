@@ -153,7 +153,11 @@ jobs:
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true
           match '^scripts/' && scripts=true
-          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$)' && hooks=true
+          # RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs:
+          # release-notes-gate.test.mjs asserts the #1956 mojibake gate against
+          # those real committed files at runtime, so a notes-only diff — the
+          # shape that would reintroduce the corruption — must still run this leg.
+          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$)' && hooks=true
           match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
           # openapi.yaml is a frontend input too (it generates
           # src/lib/api-types.ts, and api.clone-voice.test.ts pins the
