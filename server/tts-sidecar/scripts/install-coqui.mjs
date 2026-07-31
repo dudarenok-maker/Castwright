@@ -119,6 +119,36 @@ export function coquiPipInstallSteps(constraints) {
   ];
 }
 
+/**
+ * #1967 — verify the clone path can actually decode reference audio before we
+ * spend 1.8 GB on weights. coqui-tts is NOT pinned (base.txt carries no
+ * coqui-tts line), so an upstream release that renames or re-signatures XTTS's
+ * reference loader would otherwise install cleanly and fail at first derive,
+ * on every new install, with nobody able to reproduce it locally. Exported as
+ * a string so it is unit-testable; kept OUT of coquiPipInstallSteps because
+ * that array is asserted by exact equality.
+ */
+export const COQUI_VERIFY_CODE = [
+  'import os, sys, tempfile, wave',
+  'import numpy as np',
+  'from xtts_audio_io import patched_xtts_load_audio',
+  'import TTS.tts.models.xtts as _x',
+  'd = tempfile.mkdtemp()',
+  'p = os.path.join(d, "verify.wav")',
+  // A real waveform, NOT np.zeros: XTTS's own range guard logs "Error with
+  // <path>. Max=0.00 min=0.00" for an all-zero buffer (`not torch.any(audio < 0)`),
+  // and run() uses stdio:'inherit', so the user would see a line starting
+  // "Error with" immediately before "verify ok" in the installer output.
+  'pcm = (np.sin(np.linspace(0, 6.28 * 220, 2400)) * 16000).astype("<i2")',
+  'w = wave.open(p, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)',
+  'w.writeframes(pcm.tobytes()); w.close()',
+  'with patched_xtts_load_audio():',
+  '    a = _x.load_audio(p, 22050)',
+  'assert a.shape[0] == 1, a.shape',
+  'os.remove(p); os.rmdir(d)',
+  'print("[install-coqui] clone-path verify ok")',
+].join('\n');
+
 function main() {
   const python = findVenvPython();
   if (!python) {
@@ -154,6 +184,15 @@ function main() {
       step(failMsg);
       process.exit(1);
     }
+  }
+
+  step('Verifying the clone path can decode reference audio (#1967)...');
+  if (run(python, ['-c', COQUI_VERIFY_CODE], env) !== 0) {
+    step('FAIL: the XTTS reference-audio patch could not be applied.');
+    step("      This coqui-tts release has moved or reshaped XTTS's reference loader,");
+    step('      so cloned-voice derives would fail. Report the version above on');
+    step('      https://github.com/dudarenok-maker/Castwright/issues/1967');
+    process.exit(1);
   }
 
   step('Pre-fetching XTTS v2 into the default TTS cache (~1.8 GB; expect 2-5 min on a fast link)...');
