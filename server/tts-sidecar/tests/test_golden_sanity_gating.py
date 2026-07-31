@@ -13,12 +13,22 @@ test FUNCTIONS with a stubbed engine, so the gate's own pass/skip/fail
 behaviour is pinned on every ordinary run, with no model, no GPU and no
 weights. Mirrors why `test_golden_compare.py` covers `compare.py` in the fast
 tier.
+
+The `test_kokoro_golden_content_*` section (ops-45 / #1911) applies the same
+treatment to the new content-drift gate: `test_golden_regression.py`'s
+`test_kokoro_golden_content_matches_baseline` is driven with a stubbed Kokoro
++ stubbed Whisper + a tmp_path baseline/fixture pair, so the gating logic
+(GOLDEN_ASR=0 first, GOLDEN_BLESS second, ASR failure -> FAIL never SKIP,
+wrong ASR_MODEL -> FAIL, the baseline transcript is actually consulted) is
+pinned with no model, no GPU, and no weights.
 """
 from __future__ import annotations
 
+import json
 import struct
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -29,6 +39,7 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 from tests.golden import test_cross_engine_sanity as sanity  # noqa: E402
+from tests.golden import test_golden_regression as golden  # noqa: E402
 from tests.golden.prereq import engine_absent_reason, synthesise_or_skip  # noqa: E402
 
 # The real upstream failure text, from `Xtts.inference` (xtts.py:516) — the
@@ -99,6 +110,22 @@ def _expect_pass(fn) -> None:
         fn()
     except pytest.skip.Exception as skipped:
         pytest.fail(f"the gate reported SKIP on a healthy engine: {skipped}")
+
+
+def _expect_skip_containing(fn, needle: str) -> None:
+    """Call `fn` and require it to SKIP, with `needle` in the skip reason.
+
+    #1911 s5a: the `GOLDEN_ASR=0` case can pass vacuously. On a box with no
+    Kokoro weights, `_make_kokoro()` has its OWN skip path (missing weights),
+    which does not mention GOLDEN_ASR — so a case that only asserts "it
+    skipped" stays green even if the GOLDEN_ASR=0 check regresses to run
+    AFTER `_make_kokoro()`. Asserting the reason string closes that hole."""
+    try:
+        fn()
+    except pytest.skip.Exception as skipped:
+        assert needle in str(skipped), f"skipped for the wrong reason: {skipped}"
+        return
+    pytest.fail(f"expected the gate to SKIP (reason containing {needle!r}), but it did not")
 
 
 # ── the classifier ────────────────────────────────────────────────────────
@@ -223,3 +250,243 @@ def test_designed_sanity_still_skips_when_the_env_flag_is_absent(monkeypatch) ->
     monkeypatch.delenv("GOLDEN_XTTS_DESIGNED", raising=False)
     with pytest.raises(pytest.skip.Exception):
         sanity.test_xtts_designed_sanity()
+
+
+# ── content-drift gate (ops-45 / #1911) ────────────────────────────────────
+
+
+class _StubKokoroEngine:
+    """Minimal stand-in for `KokoroEngine` as `_make_kokoro()` uses it
+    (#1911 s5c). `_StubCoquiEngine` above is Coqui-shaped: no `_model_path` /
+    `_voices_path` file-presence check, no `FALLBACK_VOICE`. `_make_kokoro`
+    checks both paths on disk BEFORE the ASR path this file exists to gate,
+    so a Coqui-shaped stub would skip before ever reaching it (compounding
+    the s5a vacuous-pass hole)."""
+
+    FALLBACK_VOICE = "af_heart"
+
+    def __init__(self, model_path: Path, voices_path: Path) -> None:
+        self._model_path = str(model_path)
+        self._voices_path = str(voices_path)
+        self.calls: list[str] = []
+
+    def synthesize(self, model: str, voice: str, text: str) -> main.SynthResult:
+        self.calls.append(text)
+        return _ok_result()
+
+
+class _StubWhisperEngine:
+    """Stand-in for `WhisperEngine` as `_make_whisper()` /
+    `test_kokoro_golden_content_matches_baseline` use it. `next_text`
+    controls what `.transcribe()` "hears"; `always_raise` reproduces M3 (a
+    `faster_whisper` import failure surfacing as a RuntimeError) without a
+    real model. `model_name` / `device` let a case mismatch the pinned
+    ASR_MODEL / ASR_DEVICE (#1911 s2e) to prove that gate fires."""
+
+    def __init__(
+        self,
+        *,
+        next_text: str = "",
+        always_raise: Optional[BaseException] = None,
+        model_name: str = "base",
+        device: str = "cpu",
+    ) -> None:
+        self._model_name = model_name
+        self._device = device
+        self.next_text = next_text
+        self.always_raise = always_raise
+        self.calls = 0
+
+    def transcribe(self, pcm: bytes, sample_rate: int, language: Optional[str] = None, **_: object) -> dict:
+        self.calls += 1
+        if self.always_raise is not None:
+            raise self.always_raise
+        return {
+            "text": self.next_text,
+            "language": language,
+            "avg_logprob": -0.1,
+            "no_speech_prob": 0.01,
+            "compression_ratio": 1.2,
+            "words": None,
+        }
+
+
+def _write_kokoro_stub_fixture_and_baseline(
+    tmp_path: Path, *, recorded_transcript: Optional[str] = "hello world"
+) -> tuple[Path, Path]:
+    """One fixture line ("stub-line") + one matching baseline entry, written
+    to `tmp_path` so `golden.FIXTURE_PATH` / `golden.BASELINE_PATH` can be
+    monkeypatched onto them. `recorded_transcript=None` reproduces the
+    unblessed-content case (no `transcript` key yet)."""
+    fixture_path = tmp_path / "fixture.json"
+    baseline_path = tmp_path / "kokoro-baseline.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "model": "v1",
+                "lines": [{"id": "stub-line", "voice": "af_heart", "text": "hello world"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = {"voice": "af_heart", "sample_rate": 24000, "sample_count": 24000, "duration_sec": 1.0}
+    if recorded_transcript is not None:
+        entry["transcript"] = recorded_transcript
+        entry["text_edits"] = 0
+    baseline_path.write_text(
+        json.dumps({"tolerance": 0.05, "entries": {"stub-line": entry}}), encoding="utf-8"
+    )
+    return fixture_path, baseline_path
+
+
+def _patch_kokoro_stub(monkeypatch, tmp_path: Path) -> _StubKokoroEngine:
+    model_path = tmp_path / "kokoro-v1.0.onnx"
+    voices_path = tmp_path / "voices-v1.0.bin"
+    model_path.write_bytes(b"")
+    voices_path.write_bytes(b"")
+    stub = _StubKokoroEngine(model_path, voices_path)
+    monkeypatch.setattr(main, "KokoroEngine", lambda: stub)
+    # `_make_whisper()` sets these OUTRIGHT via a raw `os.environ[...] = `
+    # (by design -- #1911 s2e), which monkeypatch cannot see or auto-revert.
+    # Priming both keys through monkeypatch.setenv first means its teardown
+    # restores whatever this process's ambient value was, undoing that raw
+    # write so this test can't leak ASR_MODEL/ASR_DEVICE into a sibling test
+    # later in the same fast-tier pytest session.
+    monkeypatch.setenv("ASR_MODEL", "base")
+    monkeypatch.setenv("ASR_DEVICE", "cpu")
+    return stub
+
+
+def test_content_gate_golden_asr_0_skips_before_touching_kokoro(monkeypatch, tmp_path) -> None:
+    """`GOLDEN_ASR=0` must be checked FIRST (#1911 s2f step 1) — before
+    `_make_kokoro()` is ever reached. `main.KokoroEngine` is monkeypatched to
+    something that raises if constructed at all, so a check-order regression
+    fails loudly here instead of silently skipping for the WRONG reason
+    (`_make_kokoro`'s own weights-missing path, which never mentions
+    GOLDEN_ASR — see `_expect_skip_containing`)."""
+    monkeypatch.setenv("GOLDEN_ASR", "0")
+    monkeypatch.setattr(
+        main,
+        "KokoroEngine",
+        lambda: pytest.fail("GOLDEN_ASR=0 must short-circuit before constructing KokoroEngine"),
+    )
+
+    _expect_skip_containing(golden.test_kokoro_golden_content_matches_baseline, "GOLDEN_ASR")
+
+
+def test_content_gate_golden_bless_skips(monkeypatch) -> None:
+    """Content is (re)recorded inside the lengths test's `_bless()` call, not
+    here (#1911 s2f step 2) — running on a first bless (no `transcript` yet)
+    would fail for the wrong reason."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.setenv("GOLDEN_BLESS", "1")
+
+    with pytest.raises(pytest.skip.Exception):
+        golden.test_kokoro_golden_content_matches_baseline()
+
+
+def test_content_gate_asr_failure_fails_never_skips(monkeypatch, tmp_path) -> None:
+    """M3 shape, permanent fast-tier coverage (#1911 s5b/s6): ANY exception
+    from `WhisperEngine.transcribe()` must FAIL the test, never skip it —
+    this path must not route through `prereq.engine_absent_reason` /
+    `synthesise_or_skip`, which would turn a missing `faster_whisper` into a
+    green SKIP (the exact placebo #1911 exists to prevent)."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(tmp_path)
+    monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    _patch_kokoro_stub(monkeypatch, tmp_path)
+    whisper = _StubWhisperEngine(
+        always_raise=RuntimeError(
+            "Failed to import faster-whisper (No module named 'faster_whisper')."
+        )
+    )
+    monkeypatch.setattr(main, "WhisperEngine", lambda: whisper)
+
+    _expect_raise(
+        golden.test_kokoro_golden_content_matches_baseline,
+        pytest.fail.Exception,
+        "ASR transcription failed",
+    )
+    assert whisper.calls == 1
+
+
+def test_content_gate_wrong_asr_model_fails(monkeypatch, tmp_path) -> None:
+    """`_model_name != 'base'` must FAIL (#1911 s5 table) — the recorded
+    transcript baseline does not apply to a different model."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(tmp_path)
+    monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    _patch_kokoro_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "WhisperEngine", lambda: _StubWhisperEngine(model_name="tiny"))
+
+    _expect_raise(
+        golden.test_kokoro_golden_content_matches_baseline,
+        AssertionError,
+        "ASR_MODEL resolved to",
+    )
+
+
+def test_content_gate_passes_when_fresh_transcript_matches_the_recorded_baseline(
+    monkeypatch, tmp_path
+) -> None:
+    """Control for the M4 pair below: a fresh transcript identical to the
+    recorded baseline passes cleanly."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
+        tmp_path, recorded_transcript="hello world"
+    )
+    monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    _patch_kokoro_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "WhisperEngine", lambda: _StubWhisperEngine(next_text="hello world"))
+
+    _expect_pass(golden.test_kokoro_golden_content_matches_baseline)
+
+
+def test_content_gate_fails_when_the_baseline_transcript_differs(monkeypatch, tmp_path) -> None:
+    """M4 shape (#1911 s6): editing the RECORDED baseline transcript (not the
+    stub's fresh output, which is unchanged from the passing control above)
+    must flip this to a failure — proving the baseline is actually consulted
+    rather than the gate comparing a fresh transcript to itself."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
+        tmp_path, recorded_transcript="goodbye world"  # <- only this changed vs the control
+    )
+    monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    _patch_kokoro_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "WhisperEngine", lambda: _StubWhisperEngine(next_text="hello world"))
+
+    _expect_raise(
+        golden.test_kokoro_golden_content_matches_baseline,
+        AssertionError,
+        "content drift",
+    )
+
+
+def test_content_gate_fails_with_no_recorded_transcript(monkeypatch, tmp_path) -> None:
+    """An unblessed-for-content entry (duration data present, no `transcript`
+    key yet) must FAIL with a re-bless hint, not silently pass or skip
+    (#1911 s5 table) — on a box with everything else present this is a
+    defect, not a valid steady state."""
+    monkeypatch.delenv("GOLDEN_ASR", raising=False)
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
+        tmp_path, recorded_transcript=None
+    )
+    monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    _patch_kokoro_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "WhisperEngine", lambda: _StubWhisperEngine(next_text="hello world"))
+
+    _expect_raise(
+        golden.test_kokoro_golden_content_matches_baseline,
+        AssertionError,
+        "re-bless required",
+    )

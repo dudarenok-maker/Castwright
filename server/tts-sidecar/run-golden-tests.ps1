@@ -13,7 +13,11 @@
 # Otherwise runs ONLY the `-m golden` tests (the model-free golden helper unit
 # test stays in the fast `test:sidecar` tier). Extra args are forwarded to
 # pytest, so the orchestrator can pass `-k coqui` etc. Set GOLDEN_BLESS=1 to
-# record the baseline instead of asserting.
+# record the baseline instead of asserting. GOLDEN_ASR=0 disables the
+# ops-45 / #1911 content-drift check for this run (still SKIPs everything
+# else per the usual gates); GOLDEN_REBLESS_CONTENT=1 additionally permits a
+# `--bless` to overwrite a DIFFERING recorded transcript (see
+# compare.bless_guard's G1).
 #
 # ASCII-only by design (see CLAUDE.md / feedback_powershell_ascii_only).
 
@@ -120,7 +124,11 @@ if (-not $kokoroPresent -and -not $qwenPresent -and -not $coquiPresent) {
 
 Push-Location $here
 try {
-    & $venvPython -m pytest $testsDir -m golden --tb=short -q @args
+    # -rs (ops-45 / #1911 s5): print the reason for every SKIP. Without it a
+    # skip is a single "s" and GOLDEN_ASR=0 (or an unblessed baseline) is an
+    # invisible off-switch -- addopts in pytest.ini is just `-q`, with no
+    # -rs/-ra of its own.
+    & $venvPython -m pytest $testsDir -m golden --tb=short -q -rs @args
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

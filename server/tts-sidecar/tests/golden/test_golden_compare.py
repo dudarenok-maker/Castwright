@@ -1,18 +1,31 @@
-"""Unit coverage for the golden-audio comparison helpers (ops-11).
+"""Unit coverage for the golden-audio comparison helpers (ops-11, extended by
+ops-45 / #1911 for content drift).
 
 NO model, NO GPU — runs inside the normal fast `test:sidecar` tier (these
 have no `golden` marker, so `run-tests.ps1`'s `-m "not golden"` keeps them in
 while excluding the real-model goldens). This is the cheap paired coverage for
 the gate LOGIC, so a regression in the tolerance maths is caught everywhere,
 not just on a blessed GPU box.
+
+The content-drift section below pins `normalize_words` / `content_edits` /
+`assert_content` / `bless_guard` directly — pure functions, no engine, no
+stubs. This is also the fix for a verified objection to an earlier revision
+of #1911: a stub-driven pass/fail control in `test_golden_sanity_gating.py`
+can only ever be as good as its stub PCM's plausibility, so the threshold
+arithmetic itself needs coverage that never goes near a stub.
 """
 from __future__ import annotations
 
 import struct
 
 from tests.golden.compare import (
+    FIRST_BLESS_MAX_WER,
+    assert_content,
+    bless_guard,
     compare_to_baseline,
+    content_edits,
     measure_pcm,
+    normalize_words,
     rms,
 )
 
@@ -67,3 +80,248 @@ def test_compare_clean_match_no_reasons():
     baseline = {"sample_rate": 24000, "sample_count": 2048}
     measured = {"sample_rate": 24000, "sample_count": 2048}
     assert compare_to_baseline(measured, baseline) == []
+
+
+# ── normalize_words ────────────────────────────────────────────────────────
+
+
+def test_normalize_words_lowercases_and_splits():
+    assert normalize_words("The Lighthouse Keeper.") == ["the", "lighthouse", "keeper"]
+
+
+def test_normalize_words_strips_possessive_s():
+    # Matches segment-asr-qa.ts:276-277 -- "'s" and any stray apostrophe drop,
+    # rather than splitting into two tokens.
+    assert normalize_words("Aldric's before noon") == ["aldric", "before", "noon"]
+
+
+def test_normalize_words_strips_punctuation_and_dashes():
+    assert normalize_words('"Wait," she said -- it’s fine.') == [
+        "wait",
+        "she",
+        "said",
+        "it",
+        "fine",
+    ]
+
+
+def test_normalize_words_declines_integer_spelling():
+    # #1911 s2d: deliberately NOT ported from segment-asr-qa.ts -- digits stay
+    # digits, so "7" and "seven" are NOT treated as equal.
+    assert normalize_words("all 7 of them") == ["all", "7", "of", "them"]
+
+
+def test_normalize_words_empty_and_whitespace_only():
+    assert normalize_words("") == []
+    assert normalize_words("   ") == []
+    assert normalize_words(None) == []  # defensive: callers pass a recorded/fresh string
+
+
+# ── content_edits ──────────────────────────────────────────────────────────
+
+
+def test_content_edits_identical_is_zero():
+    assert content_edits("hello world", "hello world") == (0, 0.0)
+
+
+def test_content_edits_one_substitution():
+    edits, wer = content_edits("hello world", "hello there")
+    assert edits == 1
+    assert wer == 0.5
+
+
+def test_content_edits_ignores_case_and_punctuation_only_diffs():
+    # Both sides normalise to the same tokens -- 0 edits despite the raw
+    # strings differing in case/punctuation only.
+    edits, wer = content_edits("Wait, she said!", "wait she said")
+    assert (edits, wer) == (0, 0.0)
+
+
+def test_content_edits_wer_is_edits_over_expected_token_count():
+    edits, wer = content_edits("one two three four", "one two three")  # a deletion
+    assert edits == 1
+    assert wer == 0.25  # 1 / 4 expected tokens
+
+
+def test_content_edits_empty_expected_nonempty_actual_is_full_error():
+    assert content_edits("", "hello") == (1, 1.0)
+
+
+def test_content_edits_both_empty_is_clean():
+    assert content_edits("", "") == (0, 0.0)
+
+
+# ── assert_content -- the drift gate, tolerance 0 (#1911 s2b) ──────────────
+
+
+def test_assert_content_passes_on_an_exact_match():
+    assert assert_content("hello world", "hello world") is None
+
+
+def test_assert_content_passes_on_a_normalisation_only_difference():
+    # Casing/punctuation/possessive differences carry no content signal --
+    # both sides are Whisper output, so this is not the bless-path case.
+    assert assert_content("Wait, she said!", "wait she said") is None
+
+
+def test_assert_content_fails_on_a_single_word_substitution():
+    reason = assert_content("the grey sea roll in", "the green tea roll in")
+    assert reason is not None
+    assert "grey sea" in reason and "green tea" in reason
+
+
+def test_assert_content_tolerance_is_exactly_zero_not_one():
+    # A single edit must already fail -- the whole point of #1911 s2b's
+    # tolerance-0 decision (the earlier tolerance-1 design absorbed this).
+    reason = assert_content("one two three", "one too three")
+    assert reason is not None
+    assert "1 edit" in reason
+
+
+def test_assert_content_message_reports_edit_count():
+    reason = assert_content("one two three four", "uno dos tres cuatro")
+    assert reason is not None
+    assert "4 edits" in reason
+
+
+# ── bless_guard -- G1 + G2 + the first-bless ceiling (#1911 s2c) ───────────
+
+
+def test_bless_guard_first_bless_accepts_a_clean_transcript():
+    assert bless_guard("hello world", None, "hello world") is None
+
+
+def test_bless_guard_first_bless_accepts_the_five_measured_pairs_from_1911():
+    # Pins the 0.35 first-bless ceiling to the actual data (#1911 s1 / s2c):
+    # measured worst case across the five fixture lines was 0.231
+    # (numbers-and-year). Every pair here must clear the ceiling with room
+    # to spare, or the ceiling is mis-set.
+    pairs = [
+        (
+            "The lighthouse keeper watched the grey sea roll in.",
+            "The lighthouse keeper watch the grey sea roll in.",
+        ),
+        (
+            "In 1999, all 7 of them boarded the 4:15 train to Dover.",
+            "In 1999, all seven of them boarded the four, 15 trained to dover.",
+        ),
+        (
+            "Dr. Hollis and Mr. Vane arrived at St. Aldric's before noon.",
+            "Dr. Hollies and Mr. Vane arrived at St. Aldrich's before noon.",
+        ),
+        (
+            '"Wait," she said, "did you really mean it — all of it?"',
+            "Wait, she said, did you really mean it all of it?",
+        ),
+        (
+            "He paused at the door. The hallway was silent. Then he stepped through.",
+            "He paused at the door, the whole way was silent, then he stepped through.",
+        ),
+    ]
+    for text, fresh in pairs:
+        assert bless_guard(text, None, fresh) is None, (text, fresh)
+
+
+def test_bless_guard_first_bless_refuses_silence():
+    assert bless_guard("hello world", None, "") is not None
+
+
+def test_bless_guard_first_bless_refuses_wrong_text_entirely():
+    reason = bless_guard(
+        "The lighthouse keeper watched the grey sea roll in.",
+        None,
+        "completely unrelated words that share nothing with the fixture",
+    )
+    assert reason is not None
+
+
+def test_bless_guard_first_bless_ceiling_is_035():
+    # Sanity-pin the constant itself so a stray edit to compare.py's module
+    # constant is caught here, not just via the behavioural cases above.
+    assert FIRST_BLESS_MAX_WER == 0.35
+
+
+def test_bless_guard_g1_refuses_a_differing_transcript_without_the_flag():
+    existing = {"transcript": "hello world", "text_edits": 0}
+    reason = bless_guard("hello world", existing, "hello there", allow_rebless_content=False)
+    assert reason is not None
+    assert "GOLDEN_REBLESS_CONTENT" in reason
+
+
+def test_bless_guard_g1_allows_a_differing_transcript_with_the_flag():
+    # G2 must still pass for this to go through -- 1 edit vs recorded 0 is
+    # within the +1 cap.
+    existing = {"transcript": "hello world", "text_edits": 0}
+    assert (
+        bless_guard("hello world", existing, "hello there", allow_rebless_content=True) is None
+    )
+
+
+def test_bless_guard_g1_is_silent_on_an_identical_transcript_even_without_the_flag():
+    # Re-blessing durations after a fixture-neutral change (e.g. voice swap)
+    # must not require the content flag when the transcript hasn't moved.
+    existing = {"transcript": "hello world", "text_edits": 0}
+    assert bless_guard("hello world", existing, "hello world", allow_rebless_content=False) is None
+
+
+def test_bless_guard_g2_refuses_beyond_the_recorded_plus_one_cap_even_with_the_flag():
+    # The flag bypasses G1 (transcript-differs), never G2 (the edit-count cap).
+    existing = {"transcript": "hello world", "text_edits": 0}
+    reason = bless_guard(
+        "hello world",
+        existing,
+        "this is a completely different sentence with many more words",
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
+def test_bless_guard_g2_allows_exactly_the_plus_one_boundary():
+    existing = {"transcript": "one two three four five", "text_edits": 1}
+    # 2 edits vs recorded 1 -- exactly at the +1 cap, must be allowed once G1
+    # is satisfied by an identical transcript (no re-bless-content flag needed
+    # since we're not changing the recorded transcript here, only checking G2
+    # in isolation via a transcript that already matches).
+    assert bless_guard(
+        "one two three four five",
+        {"transcript": "one two three four five", "text_edits": 1},
+        "one two three four five",
+        allow_rebless_content=False,
+    ) is None
+    # Now drive G2 alone: allow the transcript diff, and check the cap edge.
+    reason = bless_guard(
+        "one two three four five",
+        existing,
+        "one two threee fourr fiver",  # 3 word-substitutions -> 3 edits, cap is 1+1=2
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
+def test_bless_guard_g2_protects_a_perfectly_transcribing_line():
+    # #1911 s2c's key argument for G2: a line with 0 recorded edits over many
+    # tokens is structurally unprotectable by a flat WER floor (a fraction of
+    # a big denominator hands it several free edits), but G2's absolute cap
+    # of recorded + 1 = 1 catches it regardless of line length.
+    existing = {
+        "transcript": "wait she said did you really mean it all of it",
+        "text_edits": 0,
+    }
+    reason = bless_guard(
+        "\"Wait,\" she said, \"did you really mean it — all of it?\"",
+        existing,
+        "wait she said did you really really mean it all of it",  # +1 word -> 1 edit, within cap
+        allow_rebless_content=True,
+    )
+    assert reason is None  # 1 edit <= recorded 0 + 1
+
+    reason2 = bless_guard(
+        "\"Wait,\" she said, \"did you really mean it — all of it?\"",
+        existing,
+        "wait she said did you really really truly mean it all of it all of it",  # 2+ edits
+        allow_rebless_content=True,
+    )
+    assert reason2 is not None
+    assert "text_edits" in reason2
