@@ -16,7 +16,8 @@ Four noise sources are silenced — none of them is actionable:
    the same flag for the prefetch subprocess.
 
 2. **`SoX could not be found!`** — a torchaudio/coqui transitive probe for the
-   optional SoX backend. We do all audio I/O via soundfile + ffmpeg, so SoX is
+   optional SoX backend. The sidecar does its own audio I/O with the stdlib
+   `wave` module and NumPy, never through torchaudio's loader, so SoX is
    never used; the message is a pure no-op nag. Filtered at the narrowest scope
    (message regex) so unrelated UserWarnings still surface.
 

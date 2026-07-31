@@ -77,12 +77,16 @@ function run(python, pyArgs, env) {
  * via transformers' is_torchcodec_available() (a bare `find_spec("torchcodec")`,
  * NOT a functional import). The sidecar venv pins torch 2.11 (CVE bump), so
  * without this `import TTS` (and the prefetch below) fails and Coqui can't load.
- * torchcodec only needs to be PRESENT, never functional: the sidecar never calls
- * torchaudio.load and XTTS inference uses precomputed manifest-speaker latents, so
- * torchcodec's FFmpeg decode path — which can't even load its shared libs against a
- * static FFmpeg 8 build — is never reached. `--no-deps` installs just the wheel so
- * torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
- * where torch<2.9 doesn't even need torchcodec).
+ * torchcodec only needs to be PRESENT, never functional: stock XTTS inference uses
+ * precomputed manifest-speaker latents, and the one call path that WOULD have
+ * reached torchcodec's FFmpeg decode — the XTTS clone path's reference-audio
+ * loader, `TTS.tts.models.xtts.load_audio` — is patched out at derive time
+ * (`xtts_audio_io.py`, #1967), so it stays unreached in practice. Without that
+ * patch it would fail here: torchcodec's FFmpeg decode path can't even load its
+ * shared libs against a static FFmpeg 8 build. `--no-deps` installs just the wheel
+ * so torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
+ * where torch<2.9 doesn't even need torchcodec). See also COQUI_VERIFY_CODE below,
+ * which fails the install outright if the patch can no longer apply.
  *
  * Why the CJK phonemizers (pypinyin / cutlet / unidic-lite): XTTS v2 needs
  * language-specific text frontends that coqui-tts doesn't pull. Chinese (zh-cn)
