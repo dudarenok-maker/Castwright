@@ -59,15 +59,25 @@ function avgAbsRange(pcm: Buffer, startSec: number, endSec: number): number {
    cached" case above (manuscriptId 'm_test') keeps its original empty-cache
    behaviour untouched. */
 const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
+/* #1972 — a manuscript whose analysis cache has moved the targeted sentence
+   to a DIFFERENT character than segments.json (the on-disk fixture below)
+   records for it, reproducing the attribution-source disagreement. */
+const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
     ...actual,
-    loadAnalysisCache: vi.fn(async (manuscriptId: string) =>
-      manuscriptId === TITLE_LED_MANUSCRIPT_ID
-        ? { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } }
-        : { chapters: {} },
-    ),
+    loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
+      if (manuscriptId === TITLE_LED_MANUSCRIPT_ID) {
+        return { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } };
+      }
+      if (manuscriptId === DIVERGENT_MANUSCRIPT_ID) {
+        // segments.json (below) says sentence 5 belongs to 'castor'; the
+        // current analysis says it's the narrator's — the two disagree.
+        return { chapters: { 1: [{ id: 5, characterId: 'narrator', text: 'Actually narration.' }] } };
+      }
+      return { chapters: {} };
+    }),
   };
 });
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
@@ -536,5 +546,124 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-38 Wave 3c 
     };
     const amy = lastArgs.cast.find((c) => c.id === 'amy');
     expect(amy?.ttsEngine).toBe('qwen');
+  });
+});
+
+/* #1972 — splice mixed two attribution sources: target SELECTION came from
+   segments.json (the chapter's last render), while sentence + voice
+   resolution came from the analysis cache, matched by sentence id. When the
+   analysis moved a sentence to a different character since that render, a
+   "re-record character A" rendered character B's line in character B's
+   voice, spliced into A's time slot — a silent substitution. The fix refuses
+   the WHOLE splice the moment any targeted segment's segFile characterId
+   disagrees with the current analysis's characterId for the same
+   sentenceIds, instead of rendering anything. */
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribution-source divergence', () => {
+  let divergentBookId: string;
+  let divergentAudioRoot: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Divergent Author';
+    const series = 'Standalones';
+    const title = 'Divergent Story';
+    divergentBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    divergentAudioRoot = join(bookDir, 'audio');
+    mkdirSync(divergentAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: divergentBookId,
+        manuscriptId: DIVERGENT_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+          { id: 'narrator', name: 'Narrator', gender: 'neutral', attributes: [] },
+        ],
+      }),
+    );
+
+    const chapterPcm = tone(1.0, 12000);
+    const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(divergentAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(divergentAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: divergentBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        // segments.json says sentence 5 is castor's — the mocked analysis
+        // cache (DIVERGENT_MANUSCRIPT_ID, above) says sentence 5 is the
+        // narrator's. The two sources disagree.
+        segments: [{ groupIndex: 0, characterId: 'castor', sentenceIds: [5], startSec: 0, endSec: 1.0 }],
+      }),
+    );
+  });
+
+  it('refuses the whole splice — nothing is synthesised, and the message names the divergence', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    synthMock.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(divergentBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'chapter_failed');
+    expect(failed, `expected chapter_failed, got ${res.text}`).toBeTruthy();
+    expect(events.some((e) => e.type === 'splice_complete')).toBe(false);
+
+    // Nothing was rendered — the divergence check runs BEFORE any synth call.
+    expect(synthMock).not.toHaveBeenCalled();
+
+    // The message states: the chapter predates the current analysis, HOW MANY
+    // segments changed owner, and what to do about it.
+    const reason = String(failed!.errorReason);
+    expect(reason).toMatch(/rendered before the current analysis/i);
+    expect(reason).toMatch(/1 of 1/);
+    expect(reason).toMatch(/different character/i);
+    expect(reason).toMatch(/re-run analysis|full chapter generation/i);
+
+    // The chapter's audio/segments files are untouched by the refusal.
+    expect(existsSync(join(divergentAudioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+  });
+
+  it('leaves a remix (gain-only) UNAFFECTED by the divergence — remix never consults the analysis cache', async () => {
+    // Remix only re-gains EXISTING audio; it never resolves sentences/voice
+    // from the analysis cache, so the same stale segFile/analysis mismatch
+    // that must refuse a re-record has nothing to disagree about here.
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(divergentBookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 6 });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'splice_complete');
+    expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
   });
 });
