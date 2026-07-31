@@ -1,7 +1,7 @@
 {
   "_comment": "Golden baseline for the Kokoro fixture (ops-11; content fields added by ops-45 / #1911). Re-bless after editing fixture.json or an intentional Kokoro weights upgrade: `npm run test:golden-audio -- --bless` on a box with the weights, then commit. `metadata` records the weights SHA + kokoro-onnx version so a model bump is legible (a sample-count mismatch then explains 'you upgraded the model'). Each entry is sample-count/duration (asserted within `tolerance`) plus, since #1911, `transcript` (the recorded Whisper output -- the content-drift reference, asserted at tolerance 0) and `text_edits` (that transcript's edit distance from fixture.json's `text`, used as the re-bless cap: a later bless may not exceed `text_edits + 1`). A bless that would silently overwrite a DIFFERING `transcript` is refused unless GOLDEN_REBLESS_CONTENT=1 is also set -- see compare.bless_guard.",
   "metadata": {
-    "kokoro_onnx_version": "0.4.9",
+    "kokoro_onnx_version": "0.5.0",
     "model_sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
     "blessed_at": "2026-06-05"
   },
@@ -11,31 +11,41 @@
       "voice": "af_heart",
       "sample_rate": 24000,
       "sample_count": 63488,
-      "duration_sec": 2.6453
+      "duration_sec": 2.6453,
+      "transcript": "The lighthouse keeper watch the grey sea roll in.",
+      "text_edits": 1
     },
     "numbers-and-year": {
       "voice": "af_heart",
       "sample_rate": 24000,
       "sample_count": 123904,
-      "duration_sec": 5.1627
+      "duration_sec": 5.1627,
+      "transcript": "In 1999, all seven of them boarded the four, 15 trained to dover.",
+      "text_edits": 3
     },
     "abbreviations": {
       "voice": "am_michael",
       "sample_rate": 24000,
       "sample_count": 110592,
-      "duration_sec": 4.608
+      "duration_sec": 4.608,
+      "transcript": "Dr. Hollies and Mr. Vane arrived at St. Aldrich's before noon.",
+      "text_edits": 2
     },
     "quotes-and-punctuation": {
       "voice": "bf_emma",
       "sample_rate": 24000,
       "sample_count": 62976,
-      "duration_sec": 2.624
+      "duration_sec": 2.624,
+      "transcript": "Wait, she said, did you really mean it all of it?",
+      "text_edits": 0
     },
     "multi-sentence-group": {
       "voice": "bm_george",
       "sample_rate": 24000,
       "sample_count": 100352,
-      "duration_sec": 4.1813
+      "duration_sec": 4.1813,
+      "transcript": "He paused at the door, the whole way was silent, then he stepped through.",
+      "text_edits": 2
     }
   }
 }
