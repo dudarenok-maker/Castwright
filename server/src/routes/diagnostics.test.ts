@@ -361,6 +361,24 @@ describe('GET /api/diagnostics', () => {
         expect(sidecar.detail).not.toMatch(/importable/i);
       });
 
+      it('package absent AND a load attempted → "missing" wins over "will not import"', async () => {
+        /* The cell the case above cannot reach: it leaves qwenImportOk absent,
+           so it only ever exercises importOk === undefined. Once ANYTHING has
+           tried to load an engine whose package is genuinely not installed, the
+           sidecar records importOk = false (the ImportError) AND find_spec
+           false — both known, and pointing at the same single fault. "Missing"
+           is the stronger and more actionable claim, so it must win; telling
+           the operator to "repair" a package that was never installed sends
+           them to the wrong remedy. */
+        probeSidecarHealth.mockResolvedValue(
+          reachable({ kokoroPackageInstalled: false, kokoroImportOk: false }),
+        );
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.detail).toMatch(/Kokoro package missing/i);
+        expect(sidecar.detail).not.toMatch(/will not import/i);
+      });
+
       it('importOk true outranks a find_spec false — a real import beats the probe', async () => {
         probeSidecarHealth.mockResolvedValue(
           reachable({ kokoroPackageInstalled: false, kokoroImportOk: true }),

@@ -168,18 +168,34 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
       /* Two distinct faults, and the copy must not conflate them (the old
          string said "not importable" for what the filter actually detected,
          which was a MISSING package):
-           - importOk === false  → present, but a real import raised (#1944).
-           - importOk unknown and find_spec says false → simply not installed.
+           - find_spec says false → the package is simply not installed.
+           - find_spec unknown/true but a real import raised → present but
+             broken (#1944).
          Unknown on both axes is never a fault — see the fail-open rule at
-         voice-engine-registry.ts:26-29. */
+         voice-engine-registry.ts:26-29.
+
+         Order matters, and it is not the order the signals' strength suggests:
+           1. importOk === true wins outright. A real import that RETURNED is
+              proof the package is usable, so it overrides a find_spec that
+              says otherwise (a stale or wrong probe).
+           2. specPresent === false then wins over importOk === false. When a
+              load is attempted against an engine whose package is genuinely
+              absent, the sidecar records BOTH — the ImportError sets
+              importOk = false and find_spec still says false — and they are
+              one fault, not two. "Missing" is the stronger and more
+              actionable claim: "will not import — repair in Model Manager"
+              sends the operator to repair something that was never installed.
+           3. importOk === false is left for the case it alone describes: the
+              package IS on the path and importing it still raised. */
       const broken = STANDARD_TTS.flatMap((e) => {
         const entry = VOICE_ENGINES.find((v) => v.id === e.engine);
         if (!entry) return [];
         const importOk = entry.liveImportOk(sidecar);
-        if (importOk === false) return [{ ...e, phrase: `${e.name} package will not import` }];
-        if (importOk === undefined && entry.liveSpecPresent(sidecar) === false) {
+        if (importOk === true) return [];
+        if (entry.liveSpecPresent(sidecar) === false) {
           return [{ ...e, phrase: `${e.name} package missing` }];
         }
+        if (importOk === false) return [{ ...e, phrase: `${e.name} package will not import` }];
         return [];
       });
       if (broken.length > 0) {
