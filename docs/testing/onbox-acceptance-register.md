@@ -198,12 +198,14 @@ prevent, and no automated suite was positioned to see it.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 4 of 9 now run (2026-07-31); E-03…E-07 still owed, and
-  re-blocked by #1967 on a stock box.** The #1944 blocker below is genuinely
+- **Section E — 4 of 9 now run (2026-07-31); E-03…E-07 still owed, but no
+  longer blocked.** The #1944 blocker below is genuinely
   gone — Coqui loaded cleanly in a post-`/embed` process during run 2, logging
-  `Coqui ready — 58 speakers in manifest`. But a *second*, separate blocker sits
-  behind it: the clone **derive** fails without shared FFmpeg libraries
-  (#1967), so E-03…E-07 cannot be attempted on an unpatched box. History of the
+  `Coqui ready — 58 speakers in manifest`. A *second*, separate blocker sat
+  behind it — the clone **derive** failed without shared FFmpeg libraries
+  (#1967) — and that is now fixed and merged (PR #1978, 2026-07-31), so
+  E-03…E-07 are runnable on a stock static-FFmpeg box without any hot patch.
+  Their first run doubles as A26 item 1. History of the
   first blocker follows, kept because it is what the run-2 result confirms:
   Coqui/XTTS could not load in a
   sidecar that had already served ECAPA `/embed`, and cloning always calls
@@ -793,14 +795,23 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 ### A26 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box; item 4 needs a Pinokio install**
 
-`xtts_audio_io.py`'s poison test and its mechanism/fidelity tiers prove the patch swaps and restores correctly against a fake `TTS.tts.models.xtts`; what they cannot reach is whether the same patch actually rescues a real cloned-voice derive on a box whose only FFmpeg is genuinely static, or whether the replacement decoder is bit-faithful against real XTTS latents. **The dev box's own venv is currently hot-patched** — PyAV's FFmpeg DLLs were copied into `site-packages/torchcodec/` under canonical names to unblock A1's Section E — so none of items 1–2 below can be honestly run against it without first reverting that hot patch, which returns the box to broken for the duration; schedule the revert with the repo owner rather than doing it opportunistically (design spec §12).
+**The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
 
-- **1. Static-FFmpeg derive.** Delete the non-hash-suffixed `*.dll` from `site-packages/torchcodec/` (undoing the hot patch above) and confirm `.venv\Scripts\python.exe -c "import torchcodec"` fails again. Then run a Coqui cloned-voice derive. It must **complete** and write `voices/xtts/xtts-<uuid>.{pt,json}` — the exact case that failed unpatched, and the one that blocked all nine of A1's Section E items.
-- **2. Latent equivalence.** On a box with a genuinely shared FFmpeg (so torchaudio's own loader also works there), derive the same cloned voice both with and without the patch active — e.g. by temporarily reverting the `patched_xtts_load_audio()` wrap — and compare the rendered output. Confirm the two are audibly equivalent: the stdlib `wave` + NumPy decode is a true substitution for torchaudio's loader, not a lookalike that merely produces *some* audio.
-- **3. Install-time verification, both directions.** Run `install-coqui.mjs` against a healthy `coqui-tts` install and confirm the new "Verifying the clone path can decode reference audio" step passes. Then deliberately break it — e.g. monkeypatch or otherwise corrupt the installed `TTS.tts.models.xtts.load_audio` signature before the verification snippet runs — and confirm the installer exits 1 with a message naming the installed `coqui-tts` version and pointing at #1967, rather than completing and leaving a Coqui install that looks healthy but cannot clone.
+**Partially discharged 2026-07-31** on that reverted box. What ran, and what it proved:
+
+- `import torchcodec` → `RuntimeError: Could not load libtorchcodec … FFmpeg is not properly installed`. The box is genuinely broken, so nothing below is a vacuous pass.
+- `torchaudio`'s own loader on a reference WAV → same failure. This is the pre-fix path.
+- **The real, installed `TTS.tts.models.xtts.load_audio`** — the exact function `get_conditioning_latents` calls — fails unpatched and returns a correct `(1, 22050)` tensor under `patched_xtts_load_audio()`. This is the seam #1967 is about, tested against the shipped upstream function rather than a fake.
+- `tests/test_xtts_audio_io.py` on that box → **10 passed, 2 skipped**, the skips being the fidelity tier correctly opting out when torchaudio's loader cannot run. That skip behaviour had never been exercised on a real static-FFmpeg box before; it was only inferred.
+
+**Still owed** is everything that needs the sidecar and a real voice — see items 1–4.
+
+- **1. Static-FFmpeg derive — STILL OWED.** The mechanism is proven above, but the full path through `CoquiEngine.clone_voice` has not run: it needs a sidecar started from post-merge code (the one running on 2026-07-31 predated the merge) plus a real consented sample. Run a Coqui cloned-voice derive on the reverted box; it must **complete** and write `voices/xtts/xtts-<uuid>.{pt,json}` — the exact case that failed unpatched, and the one that blocked all nine of A1's Section E items. Confirm from the sidecar log that the derive was reached rather than short-circuited by a cached `.pt`.
+- **2. Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was **measured** during PR #1978's review, on the still-hot-patched box, by running both decoders side by side against the same WAV: **max difference 0.0**, mono and stereo-downmix alike, so the replacement is bit-identical to the loader it replaces rather than merely similar. What remains is the *audible* end of it — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the rendered output is equivalent. Cheap once item 1 can run.
+- **3. Install-time verification — HALF RUN.** The healthy direction is done: `COQUI_VERIFY_CODE` was extracted and executed against the real venv with the installer's own `cwd`, printing `[install-coqui] entering clone-path patch` then `[install-coqui] clone-path verify ok`, exit 0. **The failure direction is still owed** — deliberately corrupt the installed `TTS.tts.models.xtts.load_audio` signature before the snippet runs and confirm the installer exits 1 with the *drift* message naming the `coqui-tts` version, **and** that an unrelated pre-patch crash (e.g. a broken `import TTS`) instead gets the neutral "could not run" message. That two-way distinction is the whole point of the marker line and is untested on a real install.
 - **4. Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` that `pinokio/install.js` provisions and record whether it succeeds or fails — genuinely unknown at design time (design spec §11): conda-forge's ffmpeg is built shared, but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to the conda env's `Library/bin` DLLs, so shared-ness there does not imply loadable here. #1967's fix makes the answer moot for *behaviour* either way — a Coqui clone derives correctly on Pinokio regardless — but the outcome itself is still owed as a recorded fact; see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. **Batch with E1**, which already owns the Pinokio box.
 
-*Needs:* items 1 and 3 want the 8 GB card with a real Coqui install (item 1 additionally wants that card's FFmpeg to be a genuine static build — the normal Windows install via `winget install Gyan.FFmpeg`, or the hot-patch reversion above); item 2 wants a box with a genuinely shared FFmpeg instead; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item; item 1's cost is mostly the coordination to safely revert the shared hot patch.
+*Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
 
 ---
 
