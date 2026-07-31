@@ -17,7 +17,10 @@
 # ops-45 / #1911 content-drift check for this run (still SKIPs everything
 # else per the usual gates); GOLDEN_REBLESS_CONTENT=1 additionally permits a
 # `--bless` to overwrite a DIFFERING recorded transcript (see
-# compare.bless_guard's G1).
+# compare.bless_guard's G1). GOLDEN_REBLESS_THRESHOLDS=1 is the sibling flag
+# for instruct-baseline.json's tolerances block (rtf_max etc.) -- required
+# whenever a `--bless` would move a THRESHOLD rather than just re-record a
+# measurement (see compare.bless_guard_thresholds, #1995).
 #
 # ASCII-only by design (see CLAUDE.md / feedback_powershell_ascii_only).
 
