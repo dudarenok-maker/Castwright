@@ -1477,3 +1477,60 @@ describe('GET /api/sidecar/health — coqui_version oracle (fs-38 Wave 3c Task 1
     expect(getLastKnownCoquiVersion()).toBe('0.27.5'); // unchanged
   });
 });
+
+describe('GET /api/sidecar/health — kokoro/qwen/whisper importOk forwarding (#1965)', () => {
+  /* #1965 — the same absent → null normalisation coquiImportOk got in #1963,
+     for the three engines that only ever had the find_spec probe. `null` is the
+     COMMON value here rather than an edge case: none of them has a startup pin,
+     so the flag stays null until something actually loads that engine. Every
+     consumer must see ONE "no real import attempt to trust" value, so an absent
+     field and an explicit null must be indistinguishable downstream. */
+  const FIELDS = [
+    { wire: 'kokoro_import_ok', node: 'kokoroImportOk' },
+    { wire: 'qwen_import_ok', node: 'qwenImportOk' },
+    { wire: 'whisper_import_ok', node: 'whisperImportOk' },
+  ] as const;
+
+  const probeWith = async (body: Record<string, unknown>) => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['kokoro'], ...body }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    return request(makeApp()).get('/api/sidecar/health');
+  };
+
+  for (const f of FIELDS) {
+    it(`${f.wire}: false forwards as ${f.node}: false`, async () => {
+      const res = await probeWith({ [f.wire]: false });
+      expect(res.body[f.node]).toBe(false);
+    });
+
+    it(`${f.wire}: true forwards as ${f.node}: true`, async () => {
+      const res = await probeWith({ [f.wire]: true });
+      expect(res.body[f.node]).toBe(true);
+    });
+
+    it(`${f.wire}: null forwards as ${f.node}: null`, async () => {
+      const res = await probeWith({ [f.wire]: null });
+      expect(res.body[f.node]).toBeNull();
+    });
+
+    it(`${f.wire} ABSENT (an older sidecar) normalises to ${f.node}: null, not undefined`, async () => {
+      const res = await probeWith({});
+      expect(res.body[f.node]).toBeNull();
+      expect(f.node in res.body).toBe(true);
+    });
+  }
+
+  it('a body omitting ALL THREE gives null for each — one shape of "unknown", never false', async () => {
+    const res = await probeWith({ kokoro_package_installed: true, whisper_package_installed: true });
+    expect(res.body.kokoroImportOk).toBeNull();
+    expect(res.body.qwenImportOk).toBeNull();
+    expect(res.body.whisperImportOk).toBeNull();
+    // ...and the weaker find_spec probes are untouched by the new fields.
+    expect(res.body.kokoroPackageInstalled).toBe(true);
+    expect(res.body.whisperPackageInstalled).toBe(true);
+  });
+});

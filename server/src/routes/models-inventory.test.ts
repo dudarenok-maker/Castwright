@@ -16,7 +16,12 @@ import {
   type InventoryDeps,
   type ModelInventoryItem,
 } from './models-inventory.js';
-import { dirSizeBytes, totalSizeBytes } from '../tts/model-paths.js';
+import {
+  dirSizeBytes,
+  totalSizeBytes,
+  qwenDesignRepoDir,
+  whisperRepoDir,
+} from '../tts/model-paths.js';
 import type { SidecarHealthResult } from './sidecar-health.js';
 import {
   _setUserSettingsCacheForTest,
@@ -145,6 +150,14 @@ describe('buildModelInventory', () => {
       ),
       8000,
     );
+  }
+  /* Resolved from model-paths rather than a hand-written repo name so these
+     can't silently stop matching if the pinned HF repo id ever changes. */
+  function installQwenDesign() {
+    writeFile(join(qwenDesignRepoDir(), 'snapshots', 'abc', 'model.safetensors'), 6000);
+  }
+  function installWhisper() {
+    writeFile(join(whisperRepoDir(), 'snapshots', 'abc', 'model.bin'), 300);
   }
 
   it('reports a present Kokoro with size, path, residency, and fallback flag', () => {
@@ -288,6 +301,66 @@ describe('buildModelInventory', () => {
       );
       const coqui = inv.items.find((i) => i.id === 'coqui')!;
       expect(coqui.installState).toBe('ready');
+    });
+  });
+
+  describe('kokoro/qwen/whisper import honesty (#1965)', () => {
+    /* Coqui got the real-import preference in #1963; the other five rows kept
+       reading find_spec alone. All six now compose it through the same
+       pkgUsable helper, so an engine whose package is present but genuinely
+       unimportable (#1944) stops reporting 'ready'. Weights are installed in
+       each case so installState turns on packageInstalled alone. */
+    it('kokoro: kokoroImportOk false downgrades to package-missing despite find_spec true', () => {
+      installKokoro();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: true, kokoroImportOk: false },
+        }),
+      );
+      expect(inv.items.find((i) => i.id === 'kokoro')!.installState).toBe('package-missing');
+    });
+
+    it('kokoro: kokoroImportOk null (the common value) falls back to find_spec — ready, unchanged', () => {
+      installKokoro();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, kokoroLoaded: false, kokoroPackageInstalled: true, kokoroImportOk: null },
+        }),
+      );
+      expect(inv.items.find((i) => i.id === 'kokoro')!.installState).toBe('ready');
+    });
+
+    it('qwen: qwenImportOk false downgrades ALL THREE qwen rows despite find_spec true', () => {
+      installQwenBase();
+      installQwenBase17();
+      installQwenDesign();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenPackageInstalled: true, qwenImportOk: false },
+        }),
+      );
+      for (const id of ['qwen-base', 'qwen-base17', 'qwen-design'])
+        expect(inv.items.find((i) => i.id === id)!.installState).toBe('package-missing');
+    });
+
+    it('qwen: qwenImportOk true outranks a find_spec false — a real import beats the probe', () => {
+      installQwenBase();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, qwenPackageInstalled: false, qwenImportOk: true },
+        }),
+      );
+      expect(inv.items.find((i) => i.id === 'qwen-base')!.installState).toBe('ready');
+    });
+
+    it('whisper: whisperImportOk false downgrades to package-missing despite find_spec true', () => {
+      installWhisper();
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, whisperPackageInstalled: true, whisperImportOk: false },
+        }),
+      );
+      expect(inv.items.find((i) => i.id === 'whisper')!.installState).toBe('package-missing');
     });
   });
 

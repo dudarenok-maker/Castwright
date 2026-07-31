@@ -36,15 +36,50 @@ const CP1252_CHAR_TO_BYTE = (() => {
 })();
 const UTF8_STRICT_DECODER = new TextDecoder('utf-8', { fatal: true });
 
+/* How many of a match's characters are actually double-encoded, measured at
+   match time from the reversed bytes themselves (#1982). Each chunk character
+   maps to exactly one windows-1252 byte, so walking the leading multi-byte
+   sequences byte-by-byte — 0xC2-0xDF spans 2, 0xE0-0xEF spans 3, 0xF0-0xF4
+   spans 4 — gives the length in characters exactly. The walk continues while
+   the next byte is itself >= 0x80, because a greedy 4-character match can hold
+   TWO mangles (`É™` + `Â©`), not one mangle plus ASCII context; stopping at the
+   first sequence would let an allowlist entry covering only the first half
+   drop the second half with it. */
+function coreLengthOf(bytes) {
+  let n = 0;
+  while (n < bytes.length && bytes[n] >= 0x80) {
+    n += bytes[n] >= 0xf0 ? 4 : bytes[n] >= 0xe0 ? 3 : 2;
+  }
+  return Math.min(n, bytes.length);
+}
+
 /**
  * Find double-UTF-8-encoded "mojibake" spans in `text`: runs of characters
  * that are exactly what you get when correct UTF-8 bytes are misread as
  * windows-1252 and re-encoded as UTF-8. Scans greedily, longest-match first
  * (up to 4 chars — the longest a UTF-8 sequence gets), and only accepts a
  * span whose windows-1252 byte values decode as *valid* UTF-8 starting with
- * a genuine multi-byte lead byte (0xC2-0xF4); ordinary ASCII or already-correct
- * Unicode text never satisfies that, so this doesn't false-positive on real
- * accented characters or emoji.
+ * a genuine multi-byte lead byte (0xC2-0xF4). Each hit carries `index` (its
+ * character offset into `text`) and `coreLength` alongside `chunk` and
+ * `decoded`, so a caller can reason about WHERE a span sits and how much of it
+ * is actually mangled, not only what it looks like.
+ *
+ * Two bounds on the heuristic, both measured in #1973. Neither is a defect in
+ * the reverse-decode approach, but do not over-trust a result in either
+ * direction:
+ *
+ * - **It false-positives on legitimate text.** The acceptance rule fires
+ *   whenever a Latin-1 letter mapping to 0xC2-0xF4 (`Â Ã Ä Å Æ Ç È É … ß à á
+ *   … ï ð ñ ò ó ô`) sits immediately adjacent — no space between — to one to
+ *   three characters mapping to 0x80-0xBF (`— – … ™ • ‘ ’ “ ” § ° © « » ¡ ¿ ±
+ *   µ ¶ ·`, and NBSP). Realistic shapes: `CAFÉ™`, a `groß—` construction,
+ *   `Ålesund` beside punctuation. That is what checkMojibake's in-file
+ *   allowlist marker exists for — see parseMojibakeAllowlist below.
+ * - **It silently misses a LOSSY double-encode.** If the corrupting round-trip
+ *   normalised a mojibake character away — `Â` + NBSP flattened to `Â` + a
+ *   plain space — the reverse bytes are `C2 20`, which is not valid UTF-8, so
+ *   the span never decodes and is never reported. A green gate is therefore
+ *   evidence, not proof, that a file is clean.
  */
 export function findMojibake(text) {
   const s = text ?? '';
@@ -67,7 +102,7 @@ export function findMojibake(text) {
       if (!ok || bytes[0] < 0xc2) continue;
       try {
         const decoded = UTF8_STRICT_DECODER.decode(Uint8Array.from(bytes));
-        hits.push({ chunk, decoded });
+        hits.push({ index: i, chunk, decoded, coreLength: coreLengthOf(bytes) });
         i += len;
         matched = true;
         break;
@@ -81,20 +116,214 @@ export function findMojibake(text) {
   return hits;
 }
 
-/** Check that `label`'s text contains no double-UTF-8-encoded mojibake. */
+/* #1973 — the allowlist marker. An HTML comment in the notes file itself names
+   the exact literal(s) to accept; CONTRIBUTING.md's "Release notes" section
+   carries a copy-pasteable example (deliberately NOT reproduced here, since
+   this file is not the one being gated but the docs it describes are).
+
+   Chosen over an env-var kill switch because it is span-scoped (the gate stays
+   live everywhere else in the same file), it travels in the same commit as the
+   text that needs it, and it is auditable in the diff. An HTML comment renders
+   as nothing on the releases page, which matters because docs/release-notes-
+   next.md ships verbatim into the tag annotation. Literals are exact strings —
+   no wildcards, no regex — and must each be a single whitespace-free word (see
+   allowedRanges).
+
+   A marker does NOT expire on its own. docs/release-notes-next.md is cleared
+   by hand in the first PR after a cut, which happens to drop any marker in it;
+   RELEASE_NOTES.md is cumulative, so a marker added there stays live — and
+   keeps that literal excused — for every future release.
+
+   Two fail-closed bounds (#1982):
+   - A marker must be self-contained on ONE line. Scanning to the next `-->`
+     anywhere in the file let a marker missing its terminator swallow the prose
+     after it and harvest every unrelated `"…"` in it as a literal.
+   - Markers inside a fenced code block are ignored, so documenting this syntax
+     inside a gated file cannot arm it. */
+const ALLOW_MARKER_RE = /<!--[ \t]*release-notes-gate:[ \t]*allow\b([^\n\r]*?)-->/g;
+const ALLOW_LITERAL_RE = /"([^"]*)"/g;
+const FENCE_RE = /^\s*```/;
+
+/** Collect every literal named by an allowlist marker in `text` (markers and
+    literals-per-marker are both many-per-file). Fenced code blocks are skipped
+    and a marker never spans a line break — see ALLOW_MARKER_RE above. */
+export function parseMojibakeAllowlist(text) {
+  const literals = [];
+  let inFence = false;
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    for (const marker of line.matchAll(ALLOW_MARKER_RE)) {
+      for (const lit of marker[1].matchAll(ALLOW_LITERAL_RE)) {
+        if (lit[1].length > 0) literals.push(lit[1]);
+      }
+    }
+  }
+  return literals;
+}
+
+/** Half-open [start, end) character ranges of every real occurrence of every
+    allowlisted literal. A literal naming text that isn't in the file yields no
+    range, and so suppresses nothing.
+
+    A literal containing ANY whitespace yields no range either (#1982 round 2).
+    isExcused only requires the occurrence to extend one CHARACTER past the
+    span, but the rule it is meant to encode — and the one the docs and the
+    failure message both state — is that it extends into the surrounding WORD.
+    Those differ by exactly one space, and the dominant #1956 shape is a mangle
+    standing between spaces: measured on the real 242-span file, a literal of
+    `" —"` (a space plus the flagged pair) excused 155 spans on its own, all
+    242 were suppressible, and 31 hand-written markers reached green. Requiring
+    a whitespace-free token closes that: the only literals that can excuse
+    anything are the ones suggestLiteral already emits, which is what makes a
+    standalone span genuinely un-allowlistable. Filtering here rather than in
+    parseMojibakeAllowlist keeps the parser's return shape (every literal a
+    marker names) intact.
+
+    suggestLiteral applies the SAME predicate, so the gate can never print a
+    marker line this loop would then throw away. Keep them sharing hasWhitespace
+    rather than each spelling the test out — a producer/consumer pair that
+    drifts is how a printed-but-inert suggestion gets back in. */
+const hasWhitespace = (literal) => [...literal].some((c) => c.trim() === '');
+
+function allowedRanges(text, literals) {
+  const ranges = [];
+  for (const literal of literals) {
+    if (hasWhitespace(literal)) continue;
+    for (let at = text.indexOf(literal); at !== -1; at = text.indexOf(literal, at + 1)) {
+      ranges.push([at, at + literal.length]);
+    }
+  }
+  return ranges;
+}
+
+/**
+ * A literal excuses the span at [start, end) only when its range COVERS the
+ * span and EXTENDS STRICTLY BEYOND it on at least one side (#1982).
+ *
+ * That rule is not a heuristic — it encodes why a false positive is legitimate
+ * in the first place. The detector only fires when a Latin-1 letter sits
+ * immediately adjacent to punctuation, so genuinely-legitimate text always
+ * carries the surrounding characters that made it legitimate (`CAFÉ` in front
+ * of the flagged `É™`, `gro` in front of the flagged `ß—`). A span with nothing
+ * around it is, by construction, a real mangle — and must not be allowlistable
+ * at all. Merely COVERING the span was the earlier rule, and it let a marker
+ * naming the two flagged characters alone excuse them at every occurrence in
+ * the file, which is exactly the file-wide blindness #1956 needs to stay
+ * impossible.
+ *
+ * "Standalone is not allowlistable" only actually holds because allowedRanges
+ * drops any literal containing whitespace. This function alone asks for one
+ * CHARACTER of extension; the property above needs one WORD of it, and the
+ * difference is exactly the adjacent space a standalone span sits between.
+ * The two halves of the rule live apart — read them together.
+ */
+function isExcused(ranges, start, end) {
+  return ranges.some(([from, to]) => from <= start && to >= end && (from < start || to > end));
+}
+
+/**
+ * The whitespace-delimited token around a hit, IF that token would be a valid
+ * allowlist literal for it — i.e. it strictly extends past the span (see
+ * isExcused) and would not break the marker's own syntax.
+ *
+ * Returns `{ literal }` when one exists, and otherwise `{ literal: null,
+ * why }` naming WHICH of three very different reasons applies (#1982 round 2).
+ * They are not interchangeable and the advice differs:
+ *
+ * - `'standalone'` — the span IS the whole token. There is no surrounding
+ *   context, no legal literal exists for it at all, and that is itself the
+ *   evidence it is a genuine mangle.
+ * - `'unquotable'` — context exists, but the token carries a `"` or a `-->`,
+ *   either of which would terminate the marker's own quoting. The right advice
+ *   is to reword, not "there's nothing around it".
+ * - `'straddles'` — the span itself contains a whitespace character, so EVERY
+ *   literal containing it contains whitespace and allowedRanges drops them all.
+ *   This is not hypothetical: a doubly-encoded NBSP is `Â` + NBSP, and a
+ *   doubly-encoded Cyrillic `Р` is `Ð` + NBSP, so the shape shows up in exactly
+ *   the corrupted files this gate was built for. Without this branch the gate
+ *   would print a marker line that its own allowlist then throws away.
+ */
+function suggestLiteral(text, hit) {
+  const start = hit.index;
+  const end = hit.index + hit.coreLength;
+  let left = start;
+  let right = end;
+  while (left > 0 && !/\s/.test(text[left - 1])) left--;
+  while (right < text.length && !/\s/.test(text[right])) right++;
+  if (left === start && right === end) return { literal: null, why: 'standalone' };
+  const token = text.slice(left, right);
+  if (hasWhitespace(token)) return { literal: null, why: 'straddles' };
+  if (token.includes('"') || token.includes('-->')) return { literal: null, why: 'unquotable' };
+  return { literal: token, why: null };
+}
+
+/**
+ * Check that `label`'s text contains no double-UTF-8-encoded mojibake.
+ *
+ * Suppression is POSITIONAL, not by substring (#1973): a span is dropped only
+ * when it sits inside a real occurrence of an allowlisted literal in this same
+ * text. Suppressing every span whose characters merely appear somewhere in an
+ * allowlisted literal would let a genuinely corrupted `É™` elsewhere in the
+ * file go unreported — quietly reintroducing #1956, which is the whole reason
+ * this gate exists. And the occurrence must extend beyond the span (#1982, see
+ * isExcused), so a marker naming only the flagged characters excuses nothing.
+ * The marker line contains the literal with its own quotes around it, so the
+ * marker's own occurrence still excuses itself; that falls out of the rule
+ * rather than being special-cased.
+ */
 export function checkMojibake(text, label) {
-  const hits = findMojibake(text);
+  const s = text ?? '';
+  const ranges = allowedRanges(s, parseMojibakeAllowlist(s));
+  const hits = findMojibake(s).filter((h) => !isExcused(ranges, h.index, h.index + h.coreLength));
   if (hits.length === 0) return { ok: true, reason: '' };
   const sample = hits
     .slice(0, 5)
     .map((h) => `${JSON.stringify(h.chunk)} (should be ${JSON.stringify(h.decoded)})`)
     .join(', ');
   const more = hits.length > 5 ? `, +${hits.length - 5} more` : '';
+  let suggestion = null;
+  const why = new Set();
+  for (const h of hits) {
+    const s2 = suggestLiteral(s, h);
+    if (s2.literal) {
+      suggestion = s2.literal;
+      break;
+    }
+    why.add(s2.why);
+  }
+  /* When nothing is suggestible, say WHICH reason applies rather than
+     defaulting to the standalone sentence for all of them (#1982 round 2, F4):
+     "no surrounding context to name" is plainly false of `He said "CAFÉ™"`,
+     where the context exists and simply cannot be quoted. */
+  const REASON = {
+    standalone: 'stand alone between spaces, with no surrounding word to name',
+    unquotable:
+      'sit inside a word carrying a double-quote or "-->", which would terminate the ' +
+      "marker's own quoting",
+    straddles:
+      'straddle a whitespace character themselves, so no literal containing them is ' +
+      'whitespace-free',
+  };
+  const advice = suggestion
+    ? `add this line to ${label}: <!-- release-notes-gate: allow "${suggestion}" --> — it excuses ` +
+      `only the span inside that literal, at every occurrence of the literal in this file.`
+    : `none of the spans above can be allowlisted at all — they ` +
+      `${[...why].map((w) => REASON[w]).join('; and they ')}. ` +
+      `Re-encode the file${why.has('unquotable') ? ', or reword the offending word' : ''}.`;
   return {
     ok: false,
     reason:
       `${label} contains ${hits.length} double-UTF-8-encoded mojibake span(s): ${sample}${more}. ` +
-      `Re-encode before tagging (see #1956).`,
+      `Re-encoding the file is the ordinary fix (see #1956). If a span is legitimate text and not ` +
+      `a mangle (#1973), allow it by naming a literal that is a SINGLE WHITESPACE-FREE WORD ` +
+      `CONTAINING the span and extending past it on at least one side — a literal that contains ` +
+      `whitespace, or that names only the flagged characters, suppresses NOTHING ` +
+      `(#1982), because a literal is excused at every occurrence and a span with nothing around ` +
+      `it is by construction a real mangle. To do that here, ${advice}`,
   };
 }
 

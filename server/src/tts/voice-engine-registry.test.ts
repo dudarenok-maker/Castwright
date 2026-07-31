@@ -10,7 +10,8 @@ describe('VOICE_ENGINES registry', () => {
     for (const e of VOICE_ENGINES) {
       expect(typeof e.packageInstalledOnDisk).toBe('function');
       expect(typeof e.weightsPresentOnDisk).toBe('function');
-      expect(typeof e.livePackageImportable).toBe('function');
+      expect(typeof e.liveImportOk).toBe('function');
+      expect(typeof e.liveSpecPresent).toBe('function');
       expect(typeof e.liveLoaded).toBe('function');
       expect(e.defaultModelKey).toMatch(/^(kokoro-v1|qwen3-tts-0\.6b|coqui-xtts-v2)$/);
     }
@@ -19,39 +20,56 @@ describe('VOICE_ENGINES registry', () => {
   it('live selectors read the matching SidecarHealthResult fields', () => {
     const kokoro = VOICE_ENGINES.find((e) => e.id === 'kokoro')!;
     expect(kokoro.liveLoaded({ kokoroLoaded: true } as never)).toBe(true);
-    expect(kokoro.livePackageImportable({ kokoroPackageInstalled: false } as never)).toBe(false);
+    expect(kokoro.liveSpecPresent({ kokoroPackageInstalled: false } as never)).toBe(false);
     // undefined health field (older sidecar) → not importable-confirmed, not loaded
     expect(kokoro.liveLoaded({} as never)).toBe(false);
-    expect(kokoro.livePackageImportable({} as never)).toBeUndefined();
+    expect(kokoro.liveSpecPresent({} as never)).toBeUndefined();
   });
 
-  describe('coqui livePackageImportable prefers coquiImportOk over coquiPackageInstalled (#1963)', () => {
-    const coqui = VOICE_ENGINES.find((e) => e.id === 'coqui')!;
+  /* #1965 — the two live signals are now reported SEPARATELY rather than
+     pre-collapsed by the registry: the "prefer importOk, fall back to
+     find_spec" rule moved into models-status's packageBroken predicate so it is
+     spelled exactly once. These pin that each accessor reads its OWN field and
+     collapses nothing. */
+  describe('liveImportOk / liveSpecPresent read distinct fields per engine', () => {
+    const byId = Object.fromEntries(VOICE_ENGINES.map((e) => [e.id, e]));
+    const CASES = [
+      { id: 'kokoro', importField: 'kokoroImportOk', specField: 'kokoroPackageInstalled' },
+      { id: 'qwen', importField: 'qwenImportOk', specField: 'qwenPackageInstalled' },
+      { id: 'coqui', importField: 'coquiImportOk', specField: 'coquiPackageInstalled' },
+    ] as const;
 
-    it('coquiImportOk: false wins even when coquiPackageInstalled (find_spec) says true', () => {
-      // Same on-box shape as #1944: find_spec claims "installed" for a
-      // package that cannot actually import (the speechbrain lazy-proxy
-      // collision) — the honesty fix must report false here, not true.
-      expect(
-        coqui.livePackageImportable({ coquiImportOk: false, coquiPackageInstalled: true } as never),
-      ).toBe(false);
-    });
+    for (const c of CASES) {
+      it(`${c.id}: liveImportOk reads ${c.importField}, liveSpecPresent reads ${c.specField}`, () => {
+        const e = byId[c.id];
+        // The #1944 shape: find_spec says installed, a real import raised.
+        const h = { [c.importField]: false, [c.specField]: true } as never;
+        expect(e.liveImportOk(h)).toBe(false);
+        expect(e.liveSpecPresent(h)).toBe(true);
+        // ...and the inverse, so neither accessor is silently reading the other.
+        const inv = { [c.importField]: true, [c.specField]: false } as never;
+        expect(e.liveImportOk(inv)).toBe(true);
+        expect(e.liveSpecPresent(inv)).toBe(false);
+      });
 
-    it('coquiImportOk: true wins', () => {
-      expect(
-        coqui.livePackageImportable({ coquiImportOk: true, coquiPackageInstalled: false } as never),
-      ).toBe(true);
-    });
+      it(`${c.id}: liveImportOk maps BOTH null and absent to undefined (one "unknown")`, () => {
+        const e = byId[c.id];
+        expect(e.liveImportOk({ [c.importField]: null } as never)).toBeUndefined();
+        expect(e.liveImportOk({} as never)).toBeUndefined();
+      });
+    }
 
-    it('coquiImportOk: null falls back to coquiPackageInstalled — today\'s behaviour, unchanged', () => {
-      expect(
-        coqui.livePackageImportable({ coquiImportOk: null, coquiPackageInstalled: true } as never),
-      ).toBe(true);
-    });
-
-    it('coquiImportOk absent (older sidecar) falls back to coquiPackageInstalled — same as null', () => {
-      expect(coqui.livePackageImportable({ coquiPackageInstalled: true } as never)).toBe(true);
-      expect(coqui.livePackageImportable({} as never)).toBeUndefined();
+    it('no accessor collapses the two — a false spec probe never leaks into liveImportOk', () => {
+      for (const e of VOICE_ENGINES) {
+        // Only the find_spec field is known; the real-import signal stays unknown.
+        const h = {
+          kokoroPackageInstalled: false,
+          qwenPackageInstalled: false,
+          coquiPackageInstalled: false,
+        } as never;
+        expect(e.liveImportOk(h)).toBeUndefined();
+        expect(e.liveSpecPresent(h)).toBe(false);
+      }
     });
   });
 });

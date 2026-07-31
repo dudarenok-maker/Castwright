@@ -851,6 +851,97 @@ and A20, which already stage a mixed-engine render on this same card.
 
 ---
 
+### A27 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986) · **no GPU needed, sidecar venv only**
+
+The whole point of `*_import_ok` is a package that `find_spec` finds and a real
+`import` cannot load — the #1944 speechbrain shape. **That state cannot be
+manufactured in CI**: every test here injects the flag, so what is proven is the
+plumbing from `/health` to the badge, not that a genuinely broken install
+actually produces `false` rather than an uncaught crash, a hang, or a sidecar
+that never reaches `/health` at all. Criteria live in this row; there is no
+separate run sheet (the ticket body plus the paired tests are the spec).
+
+- **Break the import, don't delete the package.** In the sidecar venv, leave
+  `site-packages/kokoro_onnx/` in place — `find_spec` must keep succeeding — and
+  make importing it raise: e.g. append `raise RuntimeError('onbox #1965')` to its
+  `__init__.py`. A `RuntimeError` rather than an `ImportError` is deliberate: it
+  is the second documented shape of the #1944 collision and the reason the
+  recording catches `BaseException`. Keep a copy of the original file.
+- **Confirm the null baseline first, before touching anything.** On a freshly
+  started sidecar, `GET /health` must show `kokoro_import_ok: null` — not
+  `false`. Null is the common value and must never read as broken: Model Manager
+  should show Kokoro exactly as it does today, and `GET /api/diagnostics`' Voice
+  engine row must be `ok`. A `false` here would mean the recording is firing
+  without a real attempt.
+- **Then force a load** (a one-line Kokoro render, or the Model Manager's own
+  load control) so the import chokepoint actually runs. It must fail *and* be
+  recorded: re-poll `/health` and observe `kokoro_import_ok: false` while
+  `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
+- **Observe the two user-facing surfaces.** Model Manager's Kokoro card must
+  offer **Repair** (not "install", and not a silent healthy row —
+  `installState: 'package-missing'` off a `true` find_spec is the tell), and the
+  Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
+  `src/views/admin.tsx:232` — this row is the *only* surface that shows this
+  string; the Setup checker's copy comes from a different endpoint and is not
+  under test here) must read
+  `reachable · Kokoro package will not import — repair in Model Manager`.
+- **Then check the *missing* variant, and check it AFTER a load attempt.** On a
+  venv with no `kokoro_onnx` at all, force a Kokoro load and re-poll: both live
+  signals are now known and both are `false` — the attempt records
+  `kokoro_import_ok: false` (the ImportError) while `kokoro_package_installed`
+  is `false` too — yet they describe one fault, not two. The Voice engine row
+  must read `reachable · Kokoro package missing — repair in Model Manager` and
+  must **not** say "will not import". This is the exact cell PR #1986's review
+  found inverted: "will not import" here sends the operator to repair a package
+  that was simply never installed. (A *successful* import still outranks a
+  `false` find_spec — if `kokoro_import_ok` is `true` the row is `ok` whatever
+  the probe says, since a real import that returned is the stronger evidence.)
+- **Confirm Coqui stays out of the diagnostics row.** On a box with Coqui
+  deliberately not installed, the Voice engine row must remain `ok` — Coqui is
+  opt-in and its absence is not a fault.
+- **Repeat every step above for `qwen_tts`** (break `qwen_tts/__init__.py`,
+  force a Qwen load). Qwen is the one to watch: `qwen_import_ok` means only that
+  `from qwen_tts import Qwen3TTSModel` returned — the load continues into
+  `from_pretrained` and a `.to(device)` retry loop, so a failure *after* the
+  import must leave the flag `true` and must **not** produce a Repair prompt.
+  That over-claim case is the specific thing this row exists to catch.
+- **Induce that post-import failure deliberately — breaking `__init__.py`
+  cannot reach it.** A broken `__init__.py` fails *at* the import, which is the
+  case already covered above; the over-claim case needs a load that gets *past*
+  the import and then fails. Starve it of weights: with the sidecar stopped,
+  rename the Qwen base snapshot directory in the HF hub cache —
+  `models--Qwen--Qwen3-TTS-12Hz-0.6B-Base`, the path shape
+  `server/src/tts/model-paths.ts:49-51` builds from `QWEN_BASE_MODEL` — to
+  `…-Base.bak`, then start the sidecar with `HF_HUB_OFFLINE=1` so
+  `from_pretrained` cannot quietly re-download it, and force a Qwen load. The
+  seam is real, not assumed: `_record_qwen_import_result` wraps only the
+  `from qwen_tts import Qwen3TTSModel` statement (`main.py:4457-4467`),
+  `_QWEN_IMPORT_OK` has exactly one writer (`main.py:1272-1274`), and
+  `from_pretrained` runs afterwards (`main.py:4520`), so nothing later in the
+  load can clear a `true` that the import already recorded. A non-meta load
+  fault also re-raises with **no** sidecar recycle, so the process stays up and
+  `/health` stays pollable — which is what makes this observable at all.
+  **Expect:** the load 500s; `/health` still reports `qwen_import_ok: true`
+  alongside `qwen_package_installed: true`; the Voice engine row stays `ok`;
+  and the Qwen card offers **no package Repair**. *Expected knock-on, not a
+  failure:* renaming that directory also flips the Node-side disk detector
+  (`qwenWeightsPresent()`, `model-paths.ts:83`, reads the same path), so the
+  card legitimately shows a weights-missing / download state. A weights state
+  is fine; a *package* Repair prompt, or `qwen_import_ok` flipping to `false`,
+  is the failure. Rename the directory back afterwards.
+- **Restore both `__init__.py` files and the renamed HF cache directory, and
+  restart the sidecar**, then confirm `/health` reports `true` for each engine
+  after a successful load.
+
+*Needs:* the sidecar venv with `kokoro_onnx` and `qwen_tts` installed plus the
+Qwen base snapshot already in the HF cache (the post-import step renames it),
+write access to both, and a sidecar restart between passes (the flags are
+sticky per process). No GPU is required for the Kokoro half — the import fails long before
+any device work — so this can ride along with any other Group A session, or run
+alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
+
+---
+
 ## Group B — local Ollama analyzer only
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. Both
