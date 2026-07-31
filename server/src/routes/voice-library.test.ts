@@ -1792,15 +1792,18 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
       .send({ bookId: 'book-t2', characterId: 'char-t2' });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/Qwen/);
-    expect(res.body.error).toMatch(/failed to derive/);
-    // Also pin the "or cast ... on X instead" alternative-engine suggestion:
-    // its correct value (Coqui XTTS v2) happens to coincide with what a
-    // hardcoded-wrong alternative would ALSO produce for the qwen-routed
-    // direction, so only T3's symmetric assertion (below) can catch that
-    // specific mutation — this one exists so the OTHER wrong-direction
-    // mutation (hardcoding the alternative to "Qwen") is caught here.
-    expect(res.body.error).toMatch(/Coqui XTTS v2/);
+    /* Anchored to surrounding prose, not bare engine names. This is the
+       ONLY arm naming both engines, so a presence-only `/Qwen/` +
+       `/Coqui XTTS v2/` pair survives a MISPLACEMENT — e.g. the first
+       `${label}` swapped for the other engine's label — that still leaves
+       both substrings present somewhere in the string, just bound to the
+       wrong clause (naming the wrong engine as broken, or recommending a
+       switch to the broken one). Binding each label to its own clause is
+       what actually pins the message; T3 below pins the reverse
+       direction, together closing both the label-hardcoding AND the
+       label-misplacement variants of this defect. */
+    expect(res.body.error).toMatch(/Qwen voice failed to derive/);
+    expect(res.body.error).toMatch(/cast "CharT2" on Coqui XTTS v2 instead/);
   });
 
   it('T3 — 409s a coqui-routed assign of a failed xtts slot even though qwen is ready (load-bearing: engine-blind slot read must fail this)', async () => {
@@ -1823,12 +1826,11 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
       .send({ bookId: 'book-t3', characterId: 'char-t3' });
 
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/Coqui XTTS v2/);
-    // Also pin the "or cast ... on X instead" alternative-engine suggestion
-    // in the OTHER direction from T2's — "Qwen" appears in this message
-    // ONLY as that alternative, so this specifically catches a hardcoded
-    // (wrong) alternative-engine label that T2's own assertions cannot.
-    expect(res.body.error).toMatch(/Qwen/);
+    // Anchored to surrounding prose — see T2's comment for why bare
+    // `/Qwen/` / `/Coqui XTTS v2/` substrings cannot distinguish a correct
+    // message from one with the labels swapped between clauses.
+    expect(res.body.error).toMatch(/Coqui XTTS v2 voice failed to derive/);
+    expect(res.body.error).toMatch(/cast "CharT3" on Qwen instead/);
   });
 
   it('T4 — 409s with "no retained reference clip" for a cloned entry with no master at all', async () => {
@@ -2126,6 +2128,45 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
     expect(res.body.warning).toMatch(/Qwen/);
     expect(res.body.warning).toMatch(/has no retained reference clip/);
     expect(res.body.warning).toMatch(/can never be derived/);
+  });
+
+  /* T15 — the coqui-routed twin of T10, closing the predicate-level hole
+     T11 leaves open: T11's `master` is entirely absent, so it reaches
+     `'no-clip'` via the `!entry.master` half of the predicate regardless
+     of engine — it never exercises the `clipOnDisk` half at all. An
+     implementation that scoped ONLY the disk-check half to
+     `engine === 'qwen'` (`if (!entry.master || (engine === 'qwen' &&
+     !clipOnDisk)) return 'no-clip';`) would pass T10 (qwen-routed,
+     catches it), T11 (coqui-routed, but master absent so the disk check
+     is never reached), AND T4 (qwen-routed, also `!entry.master`) while
+     silently letting a coqui-routed assign through when `master` is
+     DECLARED but its clip file is gone — the same missing-master hazard
+     T10 exists to catch, reachable from the untested engine on the
+     untested half of the predicate. Mock mode is exempt here:
+     `_mockClonedAssignBlock` has no filesystem stat at all (documented
+     approximation), so there is no `clipOnDisk` half to scope. */
+  it('T15 — 409s "no retained reference clip" for a coqui-routed assign when `master` is declared but its clip file was never written to disk', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't15-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: {},
+        consent: baseConsent,
+      }),
+    );
+    // Deliberately do NOT write master.wav to disk.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t15', [
+      { id: 'char-t15', name: 'CharT15', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t15-voice/assign')
+      .send({ bookId: 'book-t15', characterId: 'char-t15' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no retained reference clip/);
+    expect(res.body.error).toMatch(/Coqui XTTS v2/);
   });
 });
 

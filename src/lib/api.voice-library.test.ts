@@ -206,11 +206,13 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
     it('T2-mirror — 409s a qwen-routed assign of the same terminally failed qwen slot', () => {
       const entry = makeCloned({ engines: { qwen: { status: 'failed' } } });
       const error = _mockAssignGuardError(entry, 'qwen3-tts-0.6b');
-      expect(error).toMatch(/Qwen/);
-      expect(error).toMatch(/failed to derive/);
-      // The alternative-engine suggestion ("or cast ... on X instead") is
-      // the OTHER label direction from T3-mirror's — pin it here too.
-      expect(error).toMatch(/Coqui XTTS v2/);
+      /* Anchored to surrounding prose, not bare engine names — see the
+         server T2/T3's equivalent comment: presence-only substring checks
+         survive a label MISPLACEMENT (the first `${label}` swapped for
+         the other engine's), which still leaves both names present
+         somewhere in the string, just bound to the wrong clause. */
+      expect(error).toMatch(/Qwen voice failed to derive/);
+      expect(error).toMatch(/cast this character on Coqui XTTS v2 instead/);
     });
 
     it('T3-mirror — 409s a coqui-routed assign of a failed xtts slot even though qwen is ready', () => {
@@ -218,12 +220,9 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
         engines: { qwen: { status: 'ready', baseModel: 'x' }, xtts: { status: 'failed' } },
       });
       const error = _mockAssignGuardError(entry, 'coqui-xtts-v2');
-      expect(error).toMatch(/Coqui XTTS v2/);
-      // Alternative-engine suggestion in the OTHER direction from
-      // T2-mirror's — "Qwen" appears in this message ONLY as that
-      // alternative, so this specifically catches a hardcoded (wrong)
-      // alternative-engine label that T2-mirror's assertions cannot.
-      expect(error).toMatch(/Qwen/);
+      // Anchored to surrounding prose — see T2-mirror's comment.
+      expect(error).toMatch(/Coqui XTTS v2 voice failed to derive/);
+      expect(error).toMatch(/cast this character on Qwen instead/);
     });
 
     it('T6b-mirror — allows a coqui-routed assign of a transcript-less clip, with a Qwen transcript advisory', () => {
