@@ -299,7 +299,10 @@ Three of these are not routine wraps despite sitting in this class:
   specified exactly, and the implementer invents nothing:
 
   1. Inside `withCastLock`, **re-read** cast.json and re-find the character. If it
-     is gone, return the same 404 the handler would have.
+     is gone, **no-op — do not 404.** The artifact renames have already committed
+     by this point and the handler reports them as done, so a 404 would misreport
+     completed work. (An earlier draft of this section said 404; the plan's Task 8
+     is correct and this is the retraction.)
   2. **Re-derive `qwenSlot` and `staleVariantIds` from the fresh object**, apply
      the `delete`, and write that object. The `:692` copy must not be the payload.
   3. **`realVoiceId` stays pinned to the pre-lock read, deliberately** — the

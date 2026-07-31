@@ -26,9 +26,12 @@ Read it before Task 1. Section references below (§3.1, §5, §10.2 …) point a
 
 ## Global Constraints
 
-- **Base branch:** cut after `fix/server-1933-assign-readiness` merges, or rebase
-  onto it. It rewrites 208 lines of `voice-library.ts` and shifts the assign
-  read/write by +138/+178. **Cite symbols, never line numbers, in code comments.**
+- **Base branch: cut off current `main`.** #1933 has since merged, so the
+  sequencing constraint earlier drafts carried is discharged. It landed the
+  +138/+178 shift in `voice-library.ts` that spec §9.1 predicted (the assign RMW
+  is now `:1415` → `:1612`) and added a second readiness gate,
+  `clonedAssignBlock`, *below* the cast read. Spec line numbers are as of
+  `88476dca` and several have moved. **Cite symbols, never line numbers.**
 - **Global lock order: `design` → `series` → `library-voice` → `cast`.** Never
   acquire an earlier class while holding a later one. Every acquisition site
   names its position in a comment.
@@ -227,8 +230,14 @@ git commit -m "test(server): pin the cast.json lost-update race before locking a
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { withCastLock, withCastLocks } from './cast-lock.js';
+/* Namespace import so vi.spyOn can intercept the call cast-lock.ts makes
+   internally — Vite's SSR transform rewrites it to a property access resolved
+   at call time. Do NOT reach for vi.mock('./file-lock.js') instead; that
+   replaces the module and the spy stops observing real acquisition. */
+import * as fileLock from './file-lock.js';
+import { castJsonPath } from './paths.js';
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
@@ -379,7 +388,11 @@ export function withCastLock<T>(bookDir: string, fn: () => Promise<T>): Promise<
  *  Deduping matters because library-cast-override can legitimately receive the
  *  same book twice (its guard rejects same-book AND same-character only), and a
  *  promise-chain mutex acquired twice on one key never releases. */
-export function withCastLocks<T>(bookDirs: string[], fn: () => Promise<T>): Promise<T> {
+/* `async` deliberately: the empty-list guard below must surface as a REJECTED
+   promise, not a synchronous throw. A sync throw fires while evaluating
+   `expect()`'s argument, before `.rejects` can catch it, and the test fails
+   instead of passing. */
+export async function withCastLocks<T>(bookDirs: string[], fn: () => Promise<T>): Promise<T> {
   const keys = [...new Set(bookDirs.map(castJsonPath))].sort();
   /* reduceRight over an empty array returns `fn` unwrapped, which would run the
      critical section with no lock at all — fail loudly instead. */
@@ -405,7 +418,7 @@ export function withLibraryVoiceLock<T>(voiceUuid: string, fn: () => Promise<T>)
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/workspace/cast-lock.test.ts`
-Expected: PASS (4 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Flip the race harness to the both-survive assertion**
 
@@ -646,7 +659,7 @@ export function __chainsSizeForTest(): number {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd server && npx vitest run src/workspace/cast-lock.test.ts -t "drops the map entry"`
-Expected: FAIL — received `before + 1`. (Not "1 vs 0": the four Task 2 tests
+Expected: FAIL — received `before + 1`. (Not "1 vs 0": the six Task 2 tests
 above have already leaked their own entries into the same map.) The cleanup is
 dead code today.
 
@@ -842,9 +855,19 @@ Expected: FAIL — reference present and artifacts erased.
 
 - [ ] **Step 3: Wrap scan → clear → erase in the library-voice lock**
 
-Wrap from `scanLibraryVoiceUsage` through `clearLibraryVoiceReferences` and
-`eraseLibraryVoiceArtifacts` in `withLibraryVoiceLock(voiceUuid, …)`. Task 4
-already made `/assign` take the same key, which is what makes this bite.
+Open `withLibraryVoiceLock(voiceUuid, …)` **before `readEntry` and its 404** —
+symmetric with Task 5's assign side — and close it after
+`eraseLibraryVoiceArtifacts`, spanning `scanLibraryVoiceUsage` and
+`clearLibraryVoiceReferences`.
+
+Starting it at `scanLibraryVoiceUsage` instead would leave a decision derived
+from the library entry outside its own lock: rule 2's failure mode, in the very
+PR that establishes rule 2, and not one of the four sanctioned carve-outs. Two
+concurrent DELETEs are harmless in practice (the second erases nothing), but the
+`high`-effort code-review gate will read an unreasoned exception as exactly that,
+and symmetry costs nothing.
+
+Task 5 already made `/assign` take the same key, which is what makes this bite.
 
 In `voice-library-usage.ts`, `clearLibraryVoiceReferences` takes a
 `withCastLock` per book **inside** its loop and **re-reads** the cast in there —
@@ -897,6 +920,26 @@ Every other spec here races a site against itself, which uses one import and one
 key and therefore cannot detect a key mismatch *between* sites. This is the only
 test in the suite that can. Put it in `server/src/workspace/cast-lock.race.test.ts`
 alongside the primitive harness, not in either route's spec.
+
+**Two modules cannot use the self-vs-self shape at all — race them cross-writer:**
+
+- **`cast-design.ts`** — `cast-design.ts:648` gates on
+  `inFlightByBook.get(bookId)`, so a second concurrent POST for the same book
+  *attaches to the running job's SSE stream* rather than starting a second one.
+  There is only ever one design writer per book. Race the job's
+  `fresh`-read-through-write against a different module's writer on that book
+  (`cast-aliases`), or drive the write helper directly rather than through the
+  route.
+- **`book-state.ts`** — its cast slice writes `body.patch` wholesale and is
+  last-writer-wins **by contract**, so "two PUTs, different characters, both
+  survive" stays red after the lock too. (Task 12 already reasons this out for
+  its own test and picks a different writer; the same reasoning applies here.)
+  What the lock actually protects is the **clone-consent guards** inside
+  `preserveDesignedVoices`. The red→green test is: a cast PUT whose patch omits a
+  character's `overrideTtsVoices`, raced against `/assign` planting one.
+  Unlocked, the stale read means `preserveDesignedVoicesOnCastWrite` fails to
+  fill the gap and the designed voice is erased; locked, the read lands after the
+  write and it is restored.
 
 - [ ] **Step 2: Run them and confirm each fails**
 
@@ -1205,8 +1248,24 @@ one takes a cast lock. The **series** branch delegates to
 wrapping it here would violate rule 1 and self-deadlock the moment the walk
 reaches this book.
 
-- [ ] **Step 1: Write the failing tests** — concurrent book-scoped calls; assert
-  no double-mint and no lost sibling write.
+- [ ] **Step 1: Write the failing tests — and NOT as a self-vs-self race**
+
+`ensureCharacterVoiceUuid`'s entire body — read, decide, mint, write — is
+**already inside `withDesignLock(bookDir)`**. Two concurrent calls on one book
+are serialised today, so neither "no double-mint" nor "no lost sibling write"
+can fail, before or after this task. Writing the usual two-concurrent-calls test
+here produces a green test that proves nothing, and Task 1 Step 3's advice
+("a red-phase test that will not go red is a harness problem") would then send
+you hunting a harness bug that does not exist.
+
+Race it against a writer that does **not** hold the design lock:
+
+- **`ensureCharacterVoiceUuid`** vs a `cast-aliases` route call on the same book.
+  Assert the alias mutation survives. Red today: the uuid write replays a
+  snapshot taken before the alias write landed.
+- **`persistEmotionVariant`** has no design lock at all, so the ordinary
+  self-vs-self shape *is* valid there. The two functions are not symmetric and
+  the plan does not treat them as such.
 
 - [ ] **Step 2: Run to verify they fail.**
 
@@ -1295,7 +1354,20 @@ git commit -m "fix(server): take the cast lock when deleting cast.json"
 Walk `server/src/**/*.ts` (excluding `*.test.ts`). For each file containing
 `castJsonPath`, assert every `writeJsonAtomic(castJsonPath(` and
 `rm(castJsonPath(` occurrence sits inside a `withCastLock` / `withCastLocks`
-scope. Maintain an explicit allowlist with a reason per entry:
+scope.
+
+**Use a brace-depth scan, and say so.** For each occurrence, walk backwards to
+the nearest enclosing `withCastLock(` / `withCastLocks(` / `withSeriesLock(`
+call and confirm the occurrence is inside its brace range. A file-level
+heuristic ("does this module mention `withCastLock`?") is not sufficient — it
+cannot resolve *per-occurrence* lockedness, which is exactly what a 6000-line
+module like `analysis.ts` requires, and a guard that cannot do that is
+decorative.
+
+**Acceptance target, stated concretely:** on the finished branch the guard
+reports **zero** unlocked occurrences in every file, including `analysis.ts`
+(whose five writes are revision-checked and locked by Task 14). Maintain an
+explicit allowlist with a reason per entry:
 
 ```ts
 /* Empty by design. Every cast.json write and delete in the tree is locked and
