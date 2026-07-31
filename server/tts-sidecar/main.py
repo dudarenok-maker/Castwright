@@ -3456,6 +3456,59 @@ class ReservationLedger:
             return best_key
 
 
+def _reclaim_device_cache(device_key: str) -> None:
+    """Bare `gc.collect()` + `torch.cuda.empty_cache()` scoped to
+    `device_key`, with no target model to unload first (#1976).
+
+    Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
+    `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
+    side effect of freeing a specific *resident* model's tensors; that
+    residency check is what makes their own `empty_cache()` call effective
+    (there's something just-freed for it to return to the driver). But a
+    chapter render leaves a caching-allocator pool behind on the render card
+    even after the engine reports unloaded: the model itself was already
+    freed and `empty_cache()`'d at unload time, yet the driver still shows
+    several GB reserved on that card (measured ~3.9 GB, #1976's table) —
+    fully reclaimable (a load/unload cycle on the SAME stranded state
+    recovered it), just never reclaimed, because nothing is resident anymore
+    for any existing reclaim path to key off. This function is the only one
+    of the shape "reclaim regardless of what (if anything) is resident" —
+    see `PlacementController._reclaim_stranded_cache` for why it runs as its
+    own last-resort phase, once, only on the admission-failure path, rather
+    than as another `_idle_evict_steps` entry.
+
+    `gc.collect()` first, same reasoning as `unload()`: dropped `nn.Module`
+    reference cycles keep their tensors alive past a plain `del`/None
+    assignment until the collector runs, which would otherwise make
+    `empty_cache()` a no-op. Safe to run even when something else IS
+    resident on this card — `empty_cache()` only returns cache blocks the
+    allocator holds but nothing currently references; it can never evict a
+    live model's own tensors, so this never competes with (or races) a real
+    resident model's memory.
+
+    Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
+    swallowed here, matching every other reclaim path in this file — this is
+    a last-resort cushion, not a step whose failure should propagate."""
+    gc.collect()
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return
+        idx: Optional[int] = None
+        if ":" in device_key:
+            _, _, idx_str = device_key.partition(":")
+            if idx_str.isdigit():
+                idx = int(idx_str)
+        if idx is not None:
+            with torch.cuda.device(idx):
+                torch.cuda.empty_cache()
+        else:
+            torch.cuda.empty_cache()
+    except Exception:
+        log.warning("stranded-cache reclaim failed for %s", device_key, exc_info=True)
+
+
 class PlacementController:
     """Capacity-aware admission: decides which device (or cpu, or no
     capacity) a model load / synth op may proceed on, and reserves the
@@ -3470,6 +3523,7 @@ class PlacementController:
         reserve_mb: Optional[Callable[[], int]] = None,
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
+        reclaim: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
@@ -3480,6 +3534,9 @@ class PlacementController:
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+        # #1976 — injectable so tests can assert call count / sequence a fake
+        # probe against without a real allocator; see `_reclaim_stranded_cache`.
+        self.reclaim = reclaim if reclaim is not None else _reclaim_device_cache
         # Serialises the admission-RESOLUTION phase only (probe -> try_hold ->
         # evict -> resolve) across concurrent `reservation()` calls (plan 273,
         # T4) — NOT the `yield`/`finally` (that would serialise every op
@@ -3583,6 +3640,25 @@ class PlacementController:
                 return got
         return None
 
+    async def _reclaim_stranded_cache(self, device_key: str) -> None:
+        """The #1976 last-resort reclaim: a bare `gc.collect()` +
+        `torch.cuda.empty_cache()` on `device_key`, called by `admit()` /
+        `_resolve_admission()` exactly once, AFTER `_evict_until`'s residency
+        ladder has already run and failed — never in a loop, never retried.
+
+        Deliberately NOT another `_idle_evict_steps` entry (see that
+        function's own #1976 note for the full reasoning): this reclaim has
+        no residency precondition — there's no "nothing loaded here, skip"
+        case for it the way every real eviction step has — so it belongs
+        outside that per-engine, cheapest-reload-first list, as its own
+        unconditional final phase instead.
+
+        Runs on a worker thread via `asyncio.to_thread`, same reasoning as
+        every `step.run()` in `_evict_until`: `empty_cache()` can block on
+        the CUDA allocator's own lock, and this must not stall the event
+        loop (`/health` etc.) any more than a real eviction step would."""
+        await asyncio.to_thread(self.reclaim, device_key)
+
     async def admit(
         self,
         engine: str,
@@ -3642,6 +3718,19 @@ class PlacementController:
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
         # yet resident) op needs Node to evict from ITS pinned card too.
         device_key = resident if resident is not None else (pinned if pinned is not None else worst)
+        # Last resort before reporting noCapacity (#1976): `_evict_until` above
+        # only frees RESIDENT engines — a stranded, reserved-but-unallocated
+        # pool left behind by an earlier unload has nothing there for it to
+        # evict, so it falls straight through unreclaimed even after the whole
+        # ladder ran. One bare reclaim + one re-probe, only here on the
+        # failure path, so a stranded pool can never by itself cause a refusal.
+        if device_key is not None:
+            await self._reclaim_stranded_cache(device_key)
+            key = self.ledger.best_fit(
+                self._gpu_candidates(self.probe(), constraint), peak, reserve_cap
+            )
+            if key is not None:
+                return {"device": key}
         return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
     @staticmethod
@@ -3712,6 +3801,23 @@ class PlacementController:
                 held = await self._evict_until(worst, engine, _fits)
             if held is None:
                 devices = self.probe()
+                # Last resort before noCapacity (#1976) — see `admit()`'s twin
+                # step / `_reclaim_stranded_cache`'s docstring: `_evict_until`
+                # above only frees RESIDENT engines, so a stranded,
+                # reserved-but-unallocated pool left behind by an earlier
+                # unload survives the whole ladder untouched. One bare
+                # reclaim + one re-probe + one re-`try_hold`, only here on the
+                # failure path, so a stranded pool can never by itself cause
+                # a refusal.
+                reclaim_key = resident if resident is not None else (
+                    pinned if pinned is not None else self._worst_device_key(devices)
+                )
+                if reclaim_key is not None:
+                    await self._reclaim_stranded_cache(reclaim_key)
+                    devices = self.probe()
+                    held = self.ledger.try_hold(
+                        self._gpu_candidates(devices, constraint), peak, reserve_cap, engine
+                    )
 
         if held is not None:
             admission: dict = {"device": held[0]}
@@ -3874,6 +3980,24 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
     entirely when the admitting op is itself Coqui: evicting would unload the
     model that op is about to reload. It also uses a real idle TTL rather than
     the 0.0 the transient models take.
+
+    NOTE (#1976): this list is deliberately residency-only — every step here
+    frees a *specific resident engine's* tensors. The bare "reclaim whatever
+    the allocator is holding regardless of what's resident" fallback lives
+    OUTSIDE this list, as `PlacementController._reclaim_stranded_cache` /
+    `_reclaim_device_cache`, run once by `admit()`/`_resolve_admission()`
+    after this whole ladder has already been tried and failed. It is not a
+    step here on purpose: unlike every step above, it always has *something*
+    to try (there's no "not resident, skip" case for it), so folding it into
+    this cheapest-first, re-probe-after-each list would mean it fires on
+    EVERY admission failure BEFORE the resident-engine steps below even
+    where nothing is stranded — turning "cheapest first" into "run every
+    time first" and forcing every idle-evict test in test_devices.py to
+    special-case an always-present leading entry. Keeping it as a separate
+    final phase instead means: this list, and everything that pins its
+    ordering/contents, is unchanged by #1976; the stranded-cache reclaim
+    still runs exactly once, only after residency-based eviction has already
+    had its chance and failed.
     """
     steps: list["EvictStep"] = []
     if _same_card(getattr(SPK, "device", None), device_key):
@@ -7002,6 +7126,38 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (None, None, None)
 
 
+def _cuda_vram_mb_per_device() -> dict[str, dict[str, float]]:
+    """{"cuda:N": {"reserved_mb", "total_mb"}} for every CUDA-API-visible
+    device — the multi-GPU-safe complement to `_cuda_vram_mb()` above.
+
+    `_cuda_vram_mb()` deliberately stays current-device-only (it feeds the
+    recycle watchdog, which is intentionally scoped that way — see its own
+    docstring); it is NOT touched here. But that same current-device reading
+    is also what `/health` surfaces as `vram_reserved_mb`, and on a box where
+    `torch.cuda.current_device()` isn't device 0 (any code path that called
+    `set_device()` elsewhere in the process) that field silently reports the
+    WRONG card — measured on #1976's box: `50` while nvidia-smi showed 3587
+    MiB reserved on cuda:0. Rather than change the existing scalar field's
+    meaning (a live Node consumer reads it, `server/src/routes/sidecar-
+    health.ts`) or redesign the health payload, this adds an unambiguous
+    per-device breakdown alongside it. Never raises; {} when CUDA is
+    unavailable — same fail-open contract as `_cuda_vram_mb`."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return {}
+        out: dict[str, dict[str, float]] = {}
+        for i in range(torch.cuda.device_count()):
+            out[f"cuda:{i}"] = {
+                "reserved_mb": torch.cuda.memory_reserved(i) / 1_000_000.0,
+                "total_mb": torch.cuda.get_device_properties(i).total_memory / 1_000_000.0,
+            }
+        return out
+    except Exception:
+        return {}
+
+
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -8372,8 +8528,14 @@ def health() -> dict[str, Any]:
         # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
         "committed_mb": _process_commit_mb(),
+        # CURRENT-DEVICE-ONLY (#1976) — `_cuda_vram_mb()` reads
+        # `torch.cuda.current_device()`, not necessarily the render/recycle
+        # card, so this can under-report on a multi-GPU box. Kept as-is for
+        # back-compat (`server/src/routes/sidecar-health.ts` reads it); use
+        # `vram_reserved_mb_by_device` for an unambiguous per-card reading.
         "vram_reserved_mb": _vram_reserved,
         "vram_total_mb": _vram_total,
+        "vram_reserved_mb_by_device": _cuda_vram_mb_per_device(),
         # EFFECTIVE hard recycle ceilings (committed RAM / reserved VRAM, MB) —
         # what this process will actually self-exit (code 43) at, after resolving
         # env + auto defaults. The Node spawn-gate compares these against its
