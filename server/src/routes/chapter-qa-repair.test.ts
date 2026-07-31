@@ -336,6 +336,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
       qa?: { status: string; reasons: string[] };
       suspect?: boolean;
       qaRetries?: number;
+      voiceSubstitutedFrom?: string;
     }>;
   } {
     const bookDir = join(workspaceRoot, 'books', 'Verdict Author', 'Standalones', bookTitle);
@@ -393,6 +394,72 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].suspect).toBe(true);
     expect(segFile.segments[1].qa?.status).toBe('suspect');
     expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
+  });
+
+  /* #1888 — the repair's own synth call (synthesiseChapter) DOES compute
+     voiceSubstitutedFrom correctly per segment; this test pins that the
+     accepted take's value actually survives onto the persisted segment,
+     instead of being dropped along the way (the route's local `best`
+     tracker, the returned SynthOutput, and buildSynthReplacements's
+     freshVerdict all had to drop it — this is the repro for all three). */
+  it('threads voiceSubstitutedFrom from the accepted re-record take onto the repaired segment (#1888)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+      segments: [
+        { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 0.5, voiceSubstitutedFrom: 'Requested Voice' },
+      ],
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Substituted Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const segFile = readSegmentsJson('Substituted Story', chapterSlug);
+    expect(segFile.segments[1].voiceSubstitutedFrom).toBe('Requested Voice');
+  });
+
+  /* #1888 guard rail — the field must reflect the REPAIRED render's truth,
+     not whatever the segment carried before the repair. A clean accepted
+     take must CLEAR a stale prior substitution flag, not preserve it. */
+  it('clears a stale voiceSubstitutedFrom when the accepted re-record take reports no substitution (#1888)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+      segments: [{ groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 0.5 }], // clean — no substitution this time
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Cleared Substitution Story');
+    // Inject a stale voiceSubstitutedFrom onto the pre-repair segment,
+    // simulating a prior render that DID substitute.
+    const segPath = join(
+      audioDirFn(join(workspaceRoot, 'books', 'Verdict Author', 'Standalones', 'Cleared Substitution Story')),
+      `${chapterSlug}.segments.json`,
+    );
+    const segFileBefore = JSON.parse(readFileSync(segPath, 'utf8'));
+    segFileBefore.segments[1].voiceSubstitutedFrom = 'Old Requested Voice';
+    writeFileSync(segPath, JSON.stringify(segFileBefore));
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const segFile = readSegmentsJson('Cleared Substitution Story', chapterSlug);
+    expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
   });
 
   it('#1839 finding 3 — resolveForEngine("qwen") delegates to the shared canonicalModelKeyForEngine mapper, not a local hardcoded copy', async () => {

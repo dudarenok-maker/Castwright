@@ -551,11 +551,38 @@ CLAUDE.md's Before-shipping checklist step 3.
   three streams: `generation-stream-runner` already did, and the splice and
   QA-repair consumers were added afterwards (the QA-repair endpoint had no
   frontend consumer at all until then). [#1889](https://github.com/dudarenok-maker/Castwright/issues/1889).
-- **(g) `voiceSubstitutedFrom` is not carried through a re-record merge**
-  `[ADV-H6]` — the per-line diagnostic field that records when a rendered
-  line used a substituted voice does not survive the re-record/merge path
-  that folds a repaired line back into a chapter's segment list. Filed as
-  [#1888](https://github.com/dudarenok-maker/Castwright/issues/1888).
+- **(g) ~~`voiceSubstitutedFrom` is not carried through a re-record merge~~
+  CLOSED.** `[ADV-H6]` — the per-line diagnostic field that records when a
+  rendered line used a substituted voice did not survive the re-record/merge
+  path that folds a repaired line back into a chapter's segment list.
+  Root cause was produced-but-dropped (shape (a), not (b)):
+  `synthesiseChapter` (`server/src/tts/synthesise-chapter.ts`) always
+  computed the field correctly per segment, but it was dropped at three
+  separate points downstream — both repair routes' inline `synth` closures
+  (`server/src/routes/chapter-splice.ts`, `chapter-qa-repair.ts`, the latter
+  also in its local `best` take-tracker) never read it off the fresh
+  segment, and `buildSynthReplacements`'s `freshVerdict` construction
+  (`server/src/audio/build-synth-replacement.ts`) never carried it into the
+  `SegmentReplacement` the splice engine merges (`server/src/audio/
+  splice-chapter.ts`). Fixed by threading it through all four sites —
+  unconditionally, unlike `voiceName`/`baseVoiceName`'s omit-when-absent
+  rule, since a re-record always has a definite substitution answer and an
+  omitted key would let a clean take's merge preserve a stale prior
+  substitution flag. Filed as
+  [#1888](https://github.com/dudarenok-maker/Castwright/issues/1888), fixed
+  on `fix/server-substitution-provenance` — closes when that PR merges.
+  **Scope caveat — the merge is fixed, the diagnostic is not yet universal.**
+  On the **batched** synth path the field is never *produced* in the first
+  place: `SynthesizeBatchOutput` (`server/src/tts/index.ts`) has no field to
+  carry it, unlike `SynthesizeOutput`, and the per-group scatter in
+  `synthesise-chapter.ts` rebuilds each result as `{ pcm, sampleRate }`. That
+  path is the default for a real render (Qwen, `tts.batch.size` 32), so most
+  body groups still persist no substitution provenance regardless of this
+  fix. Closing that needs an interface change to `SynthesizeBatchOutput` plus
+  a per-item sidecar batch response contract — tracked separately as
+  [#2033](https://github.com/dudarenok-maker/Castwright/issues/2033). Read
+  this item as "the re-record merge no longer drops it", not "the diagnostic
+  now works everywhere".
 - **(h) The manual cast-link consent bypass (copy direction) is closed;
   the destructive-path gap in the same file is now closed too.** `[ADV-M4]`
   The two copy-direction bypasses this item originally described are both
