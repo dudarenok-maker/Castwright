@@ -34,6 +34,8 @@ const baseState = (stage: Stage): UiState => ({
   rebaselineBookId: null,
   startGenPrompt: null,
   voiceReadinessGate: null,
+  cloneReadinessGate: null,
+  startGenerationPending: false,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {

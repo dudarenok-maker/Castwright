@@ -137,6 +137,14 @@ export function ManuscriptView({
   const dispatch = useAppDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
+  /* Plan 276 — disables "Approve cast & start generating" while
+     `startGenerationFlow`'s fetchVoiceLibrary round-trip (the clone-
+     readiness pre-check) is in flight, so a slow fetch can't be
+     double-clicked into two starts. Optional-chained like `bookId` above —
+     several existing test stores in manuscript.test.tsx omit the `ui`
+     reducer entirely (they predate this view needing any `ui` state). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const startGenerationPending = useAppSelector((s) => Boolean((s as any).ui?.startGenerationPending));
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
@@ -1225,7 +1233,8 @@ export function ManuscriptView({
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}
-                  className="shrink-0 inline-flex items-center gap-2 px-5 min-h-11 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card"
+                  disabled={startGenerationPending}
+                  className="shrink-0 inline-flex items-center gap-2 px-5 min-h-11 py-3 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink/90 shadow-card disabled:opacity-40 disabled:pointer-events-none"
                 >
                   Approve cast &amp; start generating
                   <IconChevR className="w-4 h-4" />
