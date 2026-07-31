@@ -2265,6 +2265,12 @@ paths:
             (#1933) the ROUTED engine's own slot isn't usable: it's terminally
             failed, or has no derivable source (no retained reference clip; or,
             for Qwen, no transcript).
+
+            Precedence note: the consent-revoked check runs first and can fire
+            before `bookId`/`characterId` are resolved, but the wrong-engine and
+            per-engine-readiness checks run only after they resolve to a real
+            book and character — an unresolvable book or character returns
+            **404** instead, even for an otherwise-unready cloned entry.
           content:
             application/json:
               schema:
