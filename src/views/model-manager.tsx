@@ -24,6 +24,7 @@ import {
   type ModelInventoryItem,
   type ModelInventoryResponse,
   type ModelsStatus,
+  type PackageFault,
 } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm, MODEL_SETTINGS_SECTIONS } from '../components/model-settings-form';
@@ -69,8 +70,20 @@ const MODELS_STATUS_ENGINE_BY_ID = { kokoro: 'kokoro', coqui: 'coqui', 'qwen-bas
 function engineInstallLabel(status: {
   state: EngineHealthState;
   packageBroken: boolean;
+  packageFault: PackageFault;
 }): 'Repair' | 'Update' | 'Install' {
-  if (status.packageBroken || status.state === 'package-missing') return 'Repair';
+  /* #2010 (Major 2) — packageFault is now the single source of the
+     install-vs-repair verb, shared with the Setup checker (setup-diagnosis.ts)
+     and the Admin console (diagnostics.ts) so the three surfaces can't
+     disagree: "broken" (present but won't import) always means Repair, and
+     "missing" (never installed, per the live sidecar probe) always means
+     Install — even when the disk-only `state` still says 'ready' or
+     'package-missing'. Only when the live probe hasn't run yet (packageFault
+     'ok' — sidecar down, or nothing attempted) does this fall back to the
+     disk-only heuristic below. */
+  if (status.packageFault === 'broken') return 'Repair';
+  if (status.packageFault === 'missing') return 'Install';
+  if (status.state === 'package-missing') return 'Repair';
   if (status.state === 'not-installed') return 'Install';
   return 'Update'; // ready | loaded | weights-missing → present; an update/complete action
 }

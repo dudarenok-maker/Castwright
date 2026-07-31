@@ -184,11 +184,30 @@ describe('diagnoseTts', () => {
       expect(r.remediation).not.toMatch(/Repair/i);
     });
 
-    it('names a package that will not import and points at repair', () => {
+    /* #2010 (Minor 5) — the missing branch used to return no `action`, so the
+       user read "Install Kokoro in Model Manager." with nothing to click. The
+       sibling no-engine-installed branch already passes
+       ENGINE_INSTALL_ACTION.kokoro; this branch now does too. */
+    it('a MISSING package carries the matching kokoro-install action, not just text', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing' });
+      expect(r.action).toMatchObject({ kind: 'kokoro-install' });
+    });
+
+    it('a MISSING qwen package carries the matching qwen-install action', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'missing' });
+      expect(r.action).toMatchObject({ kind: 'qwen-install' });
+    });
+
+    /* #2010 (Minor 6) — the broken branch's remediation used to say the bare
+       "Repair in Model Manager.", leaving the engine unnamed even though the
+       message right above it already names it — and even though the sibling
+       "missing" branch (previous test) does name it. Both now name the
+       engine. */
+    it('names a package that will not import and points at repair, naming the engine in both message and remediation', () => {
       const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
       expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
       expect(r.message).toMatch(/Kokoro package is present but will not import/i);
-      expect(r.remediation).toMatch(/Repair in Model Manager/i);
+      expect(r.remediation).toMatch(/Repair Kokoro in Model Manager/i);
     });
 
     it('names qwen when kokoro is fine but qwen is missing', () => {
@@ -197,11 +216,37 @@ describe('diagnoseTts', () => {
       expect(r.remediation).toMatch(/Install Qwen/i);
     });
 
-    it('kokoro fault takes precedence over qwen when both are at fault', () => {
+    it('kokoro fault takes precedence over qwen when both share the SAME fault', () => {
+      const r = diagnoseTts(SIDECAR_PASS, {
+        ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing', qwenPackageFault: 'missing',
+      });
+      expect(r.message).toMatch(/Kokoro/i);
+    });
+
+    /* #2010 (Major 1) — THE regression independent review found: a "broken"
+       fault (a real import attempted and confirmed to fail — the #1944 shape
+       this whole lane exists for) must outrank a "missing" one (nothing on
+       disk, nothing even attempted) regardless of which engine has which.
+       Before this fix the kokoro-first ternary named Kokoro for a plain "not
+       installed" while Qwen was silently failing to import — the real
+       breakage went unmentioned, and the Admin console's diagnostics row
+       (which names both) disagreed with the Setup checker on this exact
+       input. Mutation check: reverting the fix to the flat
+       `kokoroPackageFault !== 'ok' ? 'kokoro' : ...` ternary makes this fail
+       (it would assert /Qwen/ but get "Kokoro"). */
+    it('a BROKEN qwen outranks a MISSING kokoro — the real breakage is named, not the self-evident one', () => {
       const r = diagnoseTts(SIDECAR_PASS, {
         ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'missing', qwenPackageFault: 'broken',
       });
-      expect(r.message).toMatch(/Kokoro/i);
+      expect(r.message).toMatch(/Qwen package is present but will not import/i);
+      expect(r.remediation).toMatch(/Repair Qwen in Model Manager/i);
+    });
+
+    it('a BROKEN kokoro still outranks a MISSING qwen (kokoro-first tiebreak preserved for equal faults, but broken always wins regardless of order)', () => {
+      const r = diagnoseTts(SIDECAR_PASS, {
+        ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken', qwenPackageFault: 'missing',
+      });
+      expect(r.message).toMatch(/Kokoro package is present but will not import/i);
     });
   });
 

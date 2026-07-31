@@ -234,6 +234,32 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     expect(res.body.blockers.tts.message).toMatch(/Kokoro/i);
   });
 
+  /* #2010 (Major 3) — the paired "missing" case for the "broken" one two tests
+     above. The PR that introduced the widening (commit 299659b6) pinned only
+     the `importOk === false` shape; independent review found the widening
+     actually flips FOUR of eighteen input cells, and the one this PR's own
+     tests missed is the DOMINANT real-world shape: `importOk === undefined`
+     (nothing has attempted the import — the documented common value) with
+     `specPresent === false` (the package is absent). That is the everyday
+     "kokoro package gone" state, not an edge case. Mitigating: anyEngineUsable
+     is already false here too, so this introduces no new false positive —
+     only the correct fail replaces a wrong-and-silent pass. */
+  it('a package-missing engine that the live probe ALSO confirms missing (the common shape — nothing attempted, spec absent) now fails tts too', async () => {
+    computeModelsStatus.mockResolvedValue(modelsStatus({
+      engines: {
+        kokoro: engineStatus('package-missing', false, 'missing'), // packageBroken false (disk-gated); packageFault missing (live-confirmed)
+        qwen: engineStatus('not-installed'),
+        coqui: engineStatus('not-installed'),
+      },
+    }));
+
+    const res = await request(makeApp()).get('/api/setup/readiness');
+
+    expect(res.body.blockers.tts.status).toBe('fail');
+    expect(res.body.blockers.tts.cause).toBe('package-broken');
+    expect(res.body.blockers.tts.message).toMatch(/Kokoro package is missing/i);
+  });
+
   it('derives weightsMissingEngine from models.engines — a weights-missing kokoro with nothing else usable surfaces as tts:weights-missing', async () => {
     computeModelsStatus.mockResolvedValue(modelsStatus({
       engines: {

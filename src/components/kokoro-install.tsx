@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PrimaryButton } from './primitives';
-import type { EngineHealthState } from '../lib/api';
+import type { EngineHealthState, PackageFault } from '../lib/api';
 
 export interface KokoroInstallJob {
   id: string;
@@ -29,7 +29,7 @@ export function KokoroInstall({
   status,
   onInstalled,
 }: {
-  status: { state: EngineHealthState; packageBroken: boolean };
+  status: { state: EngineHealthState; packageBroken: boolean; packageFault: PackageFault };
   onInstalled?: () => void;
 }) {
   const [job, setJob] = useState<KokoroInstallJob | null>(null);
@@ -102,7 +102,7 @@ export function KokoroInstall({
       );
     }
 
-    if (status.packageBroken) {
+    if (status.packageFault === 'broken') {
       return (
         <div
           data-testid="kokoro-install-repair"
@@ -119,6 +119,32 @@ export function KokoroInstall({
           </div>
           <PrimaryButton variant="dark" onClick={startInstall} disabled={busy} icon={false}>
             {busy ? 'Starting…' : 'Repair Kokoro'}
+          </PrimaryButton>
+          {error && <p className="text-xs text-rose-700">{error}</p>}
+        </div>
+      );
+    }
+
+    /* #2010 (Major 2) — the voice engine has confirmed the package is genuinely
+       missing (not merely disk-state's `package-missing`, which can be stale
+       until the sidecar has actually probed it). packageFault takes priority
+       over the disk-only state below so this card can never say "Repair" for
+       a fault the Setup checker / Admin console are simultaneously calling
+       "missing" and pointing at Install for. */
+    if (status.packageFault === 'missing') {
+      return (
+        <div
+          data-testid="kokoro-install-missing"
+          className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3"
+        >
+          <div>
+            <p className="text-sm font-semibold text-amber-900">The Kokoro package is missing</p>
+            <p className="mt-1 text-xs text-amber-900/70">
+              The voice engine confirmed the Kokoro package is not installed. Install reinstalls it.
+            </p>
+          </div>
+          <PrimaryButton variant="dark" onClick={startInstall} disabled={busy} icon={false}>
+            {busy ? 'Starting…' : 'Install Kokoro'}
           </PrimaryButton>
           {error && <p className="text-xs text-rose-700">{error}</p>}
         </div>

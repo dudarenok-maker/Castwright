@@ -843,6 +843,46 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Repair/);
   });
 
+  /* #2010 (Major 2) — packageFault is now the single source of the
+     install-vs-repair verb, so it must win over both packageBroken and the
+     disk-only `state` when the sidecar has live-confirmed the package is
+     genuinely missing. Before this fix, engineInstallLabel read packageBroken
+     (which fires for state 'ready' whenever the live probe disagrees with
+     disk at all, missing or broken alike) and labeled this row "Repair" while
+     the Setup checker's matching copy already said "Install", contradicting
+     the button — the exact regression independent review found. */
+  it('a live-confirmed "missing" fault labels the installer action "Install", not "Repair", even when state is "ready"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'ready', packageBroken: true, packageFault: 'missing' } },
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    await waitFor(() =>
+      expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Install/),
+    );
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).not.toHaveTextContent(/Repair/);
+  });
+
   /* Regression (#1647): the toggle label and the installer card body must derive
      from ONE source (models-status) so the two 30s polls can't momentarily
      disagree on wording. Here the inventory poll says qwen is 'ready' (which the

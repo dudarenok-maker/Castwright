@@ -25,33 +25,47 @@ afterEach(() => {
 
 describe('QwenInstall — controlled idle states', () => {
   it('renders ready as installed', () => {
-    render(<QwenInstall status={{ state: 'ready', packageBroken: false }} />);
+    render(<QwenInstall status={{ state: 'ready', packageBroken: false, packageFault: 'ok' }} />);
     expect(screen.getByText(/Qwen3-TTS is installed/i)).toBeInTheDocument();
   });
 
   it('Re-check on the ready card calls onInstalled (parent refetches models-status)', () => {
     const onInstalled = vi.fn();
     render(
-      <QwenInstall status={{ state: 'ready', packageBroken: false }} onInstalled={onInstalled} />,
+      <QwenInstall
+        status={{ state: 'ready', packageBroken: false, packageFault: 'ok' }}
+        onInstalled={onInstalled}
+      />,
     );
     fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
     expect(onInstalled).toHaveBeenCalledTimes(1);
   });
 
   it('renders weights-missing distinctly (not "not installed")', () => {
-    render(<QwenInstall status={{ state: 'weights-missing', packageBroken: false }} />);
+    render(<QwenInstall status={{ state: 'weights-missing', packageBroken: false, packageFault: 'ok' }} />);
     expect(screen.getByText(/voice weights not downloaded/i)).toBeInTheDocument();
     expect(screen.queryByText(/Qwen3-TTS is not installed/i)).not.toBeInTheDocument();
   });
 
   it('renders package-broken as a repair state', () => {
-    render(<QwenInstall status={{ state: 'ready', packageBroken: true }} />);
+    render(<QwenInstall status={{ state: 'ready', packageBroken: true, packageFault: 'broken' }} />);
     expect(screen.getByText(/is installed but fails to load/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /repair/i })).toBeInTheDocument();
   });
 
+  /* #2010 (Major 2) — see kokoro-install.test.tsx's identical case: a
+     live-confirmed "missing" fault must render Install, not Repair, even
+     when the disk-only `state` still says 'ready'. */
+  it('a live-confirmed "missing" fault renders Install, not Repair, even when state is still "ready"', () => {
+    render(<QwenInstall status={{ state: 'ready', packageBroken: true, packageFault: 'missing' }} />);
+    expect(screen.getByTestId('qwen-install-missing')).toBeInTheDocument();
+    expect(screen.getByText(/Qwen package is missing/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /install qwen3-tts/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^repair/i })).not.toBeInTheDocument();
+  });
+
   it('renders not-installed with an install CTA', () => {
-    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false }} />);
+    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false, packageFault: 'ok' }} />);
     expect(screen.getByRole('button', { name: /install qwen3-tts/i })).toBeInTheDocument();
   });
 });
@@ -66,7 +80,7 @@ describe('QwenInstall — install job', () => {
       }
       return Promise.resolve(jsonResponse({}));
     });
-    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false }} />);
+    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false, packageFault: 'ok' }} />);
     fireEvent.click(screen.getByRole('button', { name: /install qwen3-tts/i }));
     await waitFor(() => expect(screen.getByTestId('qwen-install-job')).toBeInTheDocument());
     expect(screen.getByText(/Pre-fetching models/i)).toBeInTheDocument();
@@ -79,7 +93,7 @@ describe('QwenInstall — install job', () => {
       }
       return Promise.resolve(jsonResponse({}));
     });
-    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false }} />);
+    render(<QwenInstall status={{ state: 'not-installed', packageBroken: false, packageFault: 'ok' }} />);
     fireEvent.click(screen.getByRole('button', { name: /install qwen3-tts/i }));
     await waitFor(() => expect(screen.getByTestId('qwen-install-error')).toBeInTheDocument());
     expect(screen.getByText(/pip failed/i)).toBeInTheDocument();

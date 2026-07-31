@@ -7421,6 +7421,7 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    described in the contract. Do NOT hand-edit — change openapi.yaml and run
    `npm run openapi:types`. */
 export type EngineHealthState = ApiComponents['schemas']['EngineStatus']['state'];
+export type PackageFault = ApiComponents['schemas']['EngineStatus']['packageFault'];
 export type RuntimeProcessState = ApiComponents['schemas']['RuntimeStatus']['process'];
 /* NeedsAnswer is a UI key-set label (the wizard's guided-question answer
    key), not a wire field on any /api/setup/* response — openapi.yaml has no

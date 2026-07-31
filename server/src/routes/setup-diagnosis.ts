@@ -193,13 +193,26 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
     );
   }
   if (!input.anyEngineUsable) {
-    /* #1999 — same precedence as classifyPackageFault: kokoro checked first,
-       matching the pre-split `kokoroPackageConfirmedBroken || qwenPackageConfirmedBroken`
-       order. Naming which engine and which fault (missing vs broken) so this
-       surface stops conflating them the way the Admin console's row used to
-       (#1965 / PR #1986) — "missing" points at installing, never at repair. */
+    /* #1999 / #2010 (Major 1) — a "broken" fault (a real import that was
+       attempted and raised) is preferred over a "missing" one (nothing on
+       disk, so nothing has even been attempted) REGARDLESS of which engine
+       has which: a broken package is the fault the user cannot infer on
+       their own, while a missing one is self-evident from Model Manager's
+       own inventory. Naming Kokoro for a plain "not installed" while Qwen
+       silently fails to import — the #1944 shape this whole lane exists
+       for — hid the real breakage entirely. Kokoro is still checked first
+       when both engines share the SAME fault, matching the pre-split
+       `kokoroPackageConfirmedBroken || qwenPackageConfirmedBroken` order. */
     const engine: 'kokoro' | 'qwen' | null =
-      input.kokoroPackageFault !== 'ok' ? 'kokoro' : input.qwenPackageFault !== 'ok' ? 'qwen' : null;
+      input.kokoroPackageFault === 'broken'
+        ? 'kokoro'
+        : input.qwenPackageFault === 'broken'
+          ? 'qwen'
+          : input.kokoroPackageFault === 'missing'
+            ? 'kokoro'
+            : input.qwenPackageFault === 'missing'
+              ? 'qwen'
+              : null;
     if (engine) {
       const fault = engine === 'kokoro' ? input.kokoroPackageFault : input.qwenPackageFault;
       const name = PACKAGE_FAULT_ENGINE_NAME[engine];
@@ -209,13 +222,14 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
           'package-broken',
           `The ${name} package is missing from the voice engine runtime.`,
           `Install ${name} in Model Manager.`,
+          ENGINE_INSTALL_ACTION[engine],
         );
       }
       return diagnosis(
         'fail',
         'package-broken',
         `The ${name} package is present but will not import in the voice engine runtime.`,
-        'Repair in Model Manager.',
+        `Repair ${name} in Model Manager.`,
       );
     }
   }
