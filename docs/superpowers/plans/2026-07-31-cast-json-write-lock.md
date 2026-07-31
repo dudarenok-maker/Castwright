@@ -420,7 +420,7 @@ export function withLibraryVoiceLock<T>(voiceUuid: string, fn: () => Promise<T>)
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/workspace/cast-lock.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 5: Flip the race harness to the both-survive assertion**
 
@@ -474,14 +474,16 @@ under their lock — see "Where it is used" below, and do not widen it.
 - Consumes: `readJson`, `writeJsonAtomic` from `./state-io.js`; `castJsonPath`.
 - Produces:
   - `readCastForUpdate<T extends object>(bookDir): Promise<{ cast: T; fingerprint: string | null }>`
-  - `writeCastChecked<T extends object>(bookDir, next: T, expected: string | null): Promise<void>`
+  - `writeCastChecked<T extends object>(bookDir, next: T, expected: string | null): Promise<string | null>`
+    — returns the fingerprint of what it wrote
   - `assertCastUnchanged(bookDir, expected: string | null): Promise<void>`
   - `class CastStaleError extends Error` with `bookDir`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fsp from 'node:fs/promises';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -536,6 +538,17 @@ it('detects a write made by a caller that never used these helpers', async () =>
   await expect(assertCastUnchanged(dir, fingerprint)).rejects.toBeInstanceOf(CastStaleError);
 });
 
+it('derives the fingerprint from the same bytes it parses', async () => {
+  /* Guards the single-read property. Two reads with an await between them would
+     let a writer land in the gap, and the fingerprint would describe bytes other
+     than the parsed ones — the window a revision counter had and this design
+     exists to remove. Spy on readFile and assert exactly one call. */
+  const spy = vi.spyOn(fsp, 'readFile');
+  await readCastForUpdate(dir);
+  expect(spy.mock.calls.filter(([p]) => String(p).endsWith('cast.json'))).toHaveLength(1);
+  spy.mockRestore();
+});
+
 it('asserts a consulted book without writing it', async () => {
   const { fingerprint } = await readCastForUpdate(dir);
   await expect(assertCastUnchanged(dir, fingerprint)).resolves.toBeUndefined();
@@ -584,50 +597,59 @@ export class CastStaleError extends Error {
   }
 }
 
-/** sha256 of the raw bytes, or null when the file is absent. `null` is a real
- *  value, not a failure: "there was nothing here" is distinct from any content,
- *  which is what makes delete-then-recreate detectable. */
-async function fingerprintOf(bookDir: string): Promise<string | null> {
+/** Read the file's bytes once. `null` when absent — a real value, not a
+ *  failure: "there was nothing here" is distinct from any content, which is what
+ *  makes delete-then-recreate detectable. */
+async function readBytes(bookDir: string): Promise<Buffer | null> {
   try {
-    const raw = await readFile(castJsonPath(bookDir));
-    return createHash('sha256').update(raw).digest('hex');
+    return await readFile(castJsonPath(bookDir));
   } catch {
     return null;
   }
 }
 
+const sha = (raw: Buffer | null): string | null =>
+  raw === null ? null : createHash('sha256').update(raw).digest('hex');
+
 export async function readCastForUpdate<T extends object>(
   bookDir: string,
 ): Promise<{ cast: T; fingerprint: string | null }> {
-  /* Fingerprint FIRST, then parse, so the hash describes bytes we have actually
-     taken. Reading them in the other order would reintroduce the very window
-     this design exists to remove. */
-  const fingerprint = await fingerprintOf(bookDir);
-  const cast = (await readJson<T>(castJsonPath(bookDir))) ?? ({ characters: [] } as unknown as T);
-  return { cast, fingerprint };
+  /* ONE read. Hash and parse are both derived from the same Buffer.
+     Hashing in one readFile and parsing in another would put an await between
+     them and reintroduce the exact window this design exists to remove — a
+     writer landing in the gap makes the fingerprint describe bytes that are not
+     the ones we parsed, which is worse than no check at all because it reads as
+     a guarantee. */
+  const raw = await readBytes(bookDir);
+  const cast = raw === null ? ({ characters: [] } as unknown as T) : (JSON.parse(raw.toString('utf8')) as T);
+  return { cast, fingerprint: sha(raw) };
 }
 
 export async function assertCastUnchanged(
   bookDir: string,
   expected: string | null,
 ): Promise<void> {
-  if ((await fingerprintOf(bookDir)) !== expected) throw new CastStaleError(bookDir);
+  if (sha(await readBytes(bookDir)) !== expected) throw new CastStaleError(bookDir);
 }
 
+/** Write `next` if the file still matches `expected`. Returns the fingerprint of
+ *  what was written, so a caller doing repeated writes (analysis.ts) can carry it
+ *  forward without a re-read. */
 export async function writeCastChecked<T extends object>(
   bookDir: string,
   next: T,
   expected: string | null,
-): Promise<void> {
+): Promise<string | null> {
   await assertCastUnchanged(bookDir, expected);
   await writeJsonAtomic(castJsonPath(bookDir), next);
+  return sha(await readBytes(bookDir));
 }
 ```
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/workspace/cast-io.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1539,12 +1561,11 @@ await withCastLock(bookDir, async () => {
     fingerprint === capturedFingerprint
       ? priorCastForMerge
       : rebuildBase(priorCastForMerge, onDisk.characters ?? []);
-  await writeCastChecked(
+  capturedFingerprint = await writeCastChecked(
     bookDir,
     { ...onDisk, characters: mergeAnalysisResultWithExistingCast(base, freshRows) },
     fingerprint,
   );
-  capturedFingerprint = await fingerprintAfterWrite(bookDir);
 });
 ```
 
