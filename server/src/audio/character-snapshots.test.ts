@@ -179,7 +179,18 @@ describe('buildCharacterSnapshots — per-character render tier (srv-36 audition
 describe('buildCharacterSnapshots + synthesiseChapter — #1972 end-to-end voice provenance', () => {
   it('resolvedVoiceName equals the voice actually sent to the provider', async () => {
     const provider = makeProvider();
-    const castMember: CastCharacter = { id: 'oduvan', name: 'Oduvan', gender: 'male' };
+    /* #1992 review (M3) — an EXPLICIT override, so the expected voice is a
+       literal known independently of the code under test. Reading the expected
+       value out of `provider.calls[0]` (as this test first did) pins only that
+       the snapshot AGREES with the provider — it cannot tell "the right voice
+       was sent" from "a wrong voice was sent consistently", which is precisely
+       the #1972 substitution class. */
+    const castMember: CastCharacter = {
+      id: 'oduvan',
+      name: 'Oduvan',
+      gender: 'male',
+      overrideTtsVoices: { kokoro: { name: 'kokoro-oduvan-explicit' } },
+    };
 
     const result = await synthesiseChapter({
       sentences: [{ id: 1, chapterId: 1, characterId: 'oduvan', text: 'A short line.' }],
@@ -191,6 +202,10 @@ describe('buildCharacterSnapshots + synthesiseChapter — #1972 end-to-end voice
 
     expect(provider.calls).toHaveLength(1);
     const sentVoice = provider.calls[0].voiceName;
+    // The load-bearing assertion: the voice the provider ACTUALLY received is
+    // the character's assigned one, checked against a literal — not against a
+    // value re-read from the same call.
+    expect(sentVoice).toBe('kokoro-oduvan-explicit');
     expect(result.segments[0].voiceName).toBe(sentVoice);
 
     // Same voiceNameByChar-building loop finalize-chapter-write.ts runs.
