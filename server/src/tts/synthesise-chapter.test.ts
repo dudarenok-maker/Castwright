@@ -2649,6 +2649,63 @@ describe('synthesiseChapter — orphaned characterId falls back to narrator', ()
     warnSpy.mockRestore();
   });
 
+  /* #2023 Piece 1 — before this fix, the ONLY record of an orphaned-id
+     substitution was the console.warn line above (once per orphan id per
+     render, covering every affected line). `renderedFallbackByCharacter`
+     stayed `{}` even after a render that substituted dozens of segments —
+     there was no way to discover it short of diffing cast.json ids against
+     rendered segments.json ids by hand. This test fails before the fix
+     (no `renderedFallbackCharacterId` field exists on the segment at all)
+     and passes after. */
+  it('#2023 Piece 1: records WHO actually spoke an orphaned-characterId line on the segment', async () => {
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Alice', gender: 'female' }];
+    const provider = makeProvider();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'ghost-character')],
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    const body = result.segments.find((s) => s.kind !== 'title');
+    // characterId stays the ORIGINAL (orphaned) attribution — every existing
+    // consumer (revisions drift detector, srv-36 anchors) keys off it — the
+    // new field is the only place the substitution itself is recorded.
+    expect(body?.characterId).toBe('ghost-character');
+    expect(body?.renderedFallbackCharacterId).toBe('narrator');
+
+    warnSpy.mockRestore();
+  });
+
+  /* #2023 Piece 1 — a NORMAL fallback (Qwen character with no designed
+     voice, character IS in cast) must not be mistaken for an orphaned-id
+     substitution: `renderedFallbackCharacterId` names WHO spoke, which is
+     unrelated to `renderedFallbackEngine` (WHICH ENGINE rendered it) — a
+     regular Qwen→Kokoro reroute must leave the new field undefined. */
+  it('#2023 Piece 1: leaves renderedFallbackCharacterId undefined for a normal (non-orphaned) Qwen→Kokoro fallback', async () => {
+    const cast: CastCharacter[] = [{ id: 'wren', name: 'Wren', gender: 'female' }];
+    const provider = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro' ? { provider: kokoro, modelKey: 'kokoro-v1' as const } : { provider, modelKey: 'qwen3-tts-0.6b' as const };
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'wren')],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+    });
+
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBe('kokoro');
+    expect(body?.renderedFallbackCharacterId).toBeUndefined();
+  });
+
   it('still throws MissingDesignedVoiceError for a KNOWN undesigned character (unaffected by the fallback)', async () => {
     const cast: CastCharacter[] = [{ id: 'sofiya', name: 'Sofiya', gender: 'female' }];
     const qwen = makeProvider();

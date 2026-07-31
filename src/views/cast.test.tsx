@@ -620,6 +620,72 @@ describe('CastView Qwen status pill (plan 117)', () => {
     expect(within(row).queryByText('Needs voice')).toBeNull();
   });
 
+  it('shows the orphaned-characterId advisory banner when a line was substituted (#2023)', () => {
+    /* An orphaned characterId (no cast entry at all — a cast/analysis id
+       drift) rendered in the narrator's voice at render time. Unlike
+       renderedFallbackByCharacter above, there is no cast row to attach a
+       per-row pill to, so this surfaces as a book-level advisory banner. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+      preloadedState: {
+        cast: {
+          ...castSlice.getInitialState(),
+          orphanedCharacterFallbacks: { mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' } },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    const banner = screen.getByTestId('orphaned-character-fallback-banner');
+    expect(within(banner).getByText(/mayrin/)).toBeInTheDocument();
+  });
+
+  it('omits the orphaned-characterId advisory banner when nothing has substituted', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+      preloadedState: {
+        cast: { ...castSlice.getInitialState(), orphanedCharacterFallbacks: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByTestId('orphaned-character-fallback-banner')).toBeNull();
+  });
+
   it('clears the fallback pill once a voice is designed + regenerated (no fallback in the map)', () => {
     /* After designing the voice + regenerating, generation writes snapshots
        with no renderedFallbackEngine → the map no longer carries the id, so

@@ -116,6 +116,11 @@ interface ChapterSegmentsFile {
     asrSuspect?: boolean;
     qa?: { reasons?: string[] };
     asr?: { reasons?: string[] };
+    /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this segment
+        when `characterId` above is an orphaned id substituted for the
+        narrator. See `ChapterSegment.renderedFallbackCharacterId`'s doc
+        comment in tts/synthesise-chapter.ts. */
+    renderedFallbackCharacterId?: string;
   }>;
   /** Per-character voice snapshot captured at synthesis time. Read by the
       revisions route to surface drift. Older segments files (pre-snapshot
@@ -155,6 +160,13 @@ function publishSegment(s: ChapterSegmentsFile['segments'][number]) {
     ...(s.kind === 'title' ? { kind: 'title' as const } : {}),
     ...(suspect ? { suspect: true } : {}),
     ...(reasons && reasons.length ? { reasons } : {}),
+    /* #2023 Piece 1 — publish the orphaned-characterId substitution alongside
+       `characterId` (left as the manuscript's own, orphaned attribution) so a
+       consumer can tell this segment didn't actually render as the id it's
+       attributed to. */
+    ...(s.renderedFallbackCharacterId
+      ? { renderedFallbackCharacterId: s.renderedFallbackCharacterId }
+      : {}),
   };
 }
 

@@ -637,6 +637,39 @@ describe('meta endpoint — per-segment QA issues (issue-waveform)', () => {
     expect(res.body.segments[0].suspect).toBeUndefined();
     expect(res.body.segments[0].reasons).toBeUndefined();
   });
+
+  /* #2023 Piece 1 — publish the orphaned-characterId substitution alongside
+     `characterId` (left as the manuscript's own, orphaned attribution), so a
+     consumer of the per-chapter meta endpoint can tell this segment didn't
+     actually render as the id it's attributed to. */
+  it('publishes renderedFallbackCharacterId for an orphaned-characterId segment', async () => {
+    resetAudio();
+    writeMp3();
+    writeSegments([
+      {
+        groupIndex: 0,
+        characterId: 'mayrin',
+        sentenceIds: [101],
+        startSec: 0,
+        endSec: 6.2,
+        renderedFallbackCharacterId: 'narrator',
+      },
+    ]);
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+    expect(res.status).toBe(200);
+    expect(res.body.segments[0].characterId).toBe('mayrin');
+    expect(res.body.segments[0].renderedFallbackCharacterId).toBe('narrator');
+  });
+
+  it('omits renderedFallbackCharacterId for a normally-resolved segment', async () => {
+    resetAudio();
+    writeMp3();
+    writeSegments([
+      { groupIndex: 0, characterId: 'marlow', sentenceIds: [101], startSec: 0, endSec: 12.5 },
+    ]);
+    const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+    expect(res.body.segments[0].renderedFallbackCharacterId).toBeUndefined();
+  });
 });
 
 /* Regression for bug #1290: a workspace nested under a dot-prefixed ancestor
