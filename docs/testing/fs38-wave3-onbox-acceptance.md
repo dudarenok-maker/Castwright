@@ -2793,9 +2793,31 @@ supposed to produce it. E-01's ECAPA reading (0.604 vs the narrator, 0.279 vs
 the audition) was the bug announcing itself in run 2, and it was filed under
 "ambiguous" rather than chased.
 
-Run 2 also discharged the **core** criterion of register row **A24** (a cloned
-voice renders a non-English book in the book's language) — not one of the 60,
-tracked separately on the register. Two of A24's sub-checks remain: the
+**Reconciling "13 of 21" against the issue's earlier "10 attributed elsewhere +
+8 absent ids".** The two numbers describe different scopes, not a discrepancy:
+the "10 + 8" figure was the WHOLE-BOOK comparison (71 sentences vs 80 segments,
+sentence-by-sentence) between `segments.json` and the current analysis — "10
+attributed elsewhere" (a different `characterId` for the same id) plus "8
+absent" (an id the current analysis no longer has at all, from re-segmentation
+renumbering ids). "13 of 21" is the SAME defect measured only over `oduvan`'s
+21 targeted segments: 10 reattributed elsewhere, plus 3 of the book-wide 8
+absent ids that happen to fall inside those 21 — 10 + 3 = 13. The fix's shipped
+check (`findDivergentSentences`,
+[server/src/audio/build-synth-replacement.ts](../../server/src/audio/build-synth-replacement.ts))
+treats both shapes as divergent, and for good reason: an **absent** sentence id
+doesn't just get mis-voiced, it produces an EMPTY subset → zero synthesised
+groups → zero PCM for that slot, so the splice would have written **silence**
+over it — audio deletion, not merely re-voicing. That strengthens the case for
+refusing the whole splice rather than reconciling silently.
+
+Run 2 also touched register row **A24** (a cloned voice renders a non-English
+book in the book's language) — not one of the 60, tracked separately on the
+register. **A24 is NOT discharged**, for the same reason as above: its chapter
+render used the same splice re-record, so most of what it measured was
+narrator audio, not the clone (0.949 against the chapter's own narrator). What
+survives is the direct-`/synthesize` evidence, which never touches the splice
+path (German in, `de` out, identity 0.809 against the source clip) — see the
+register's A24 row for the full breakdown. Two of A24's sub-checks remain: the
 designed-self-heal-then-restart comparison, and the "no `voice-mismatch` rows"
 check, which **failed** for a reason unrelated to language — see **DEF-E**.
 
@@ -2803,8 +2825,9 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-**Zero failures** — but that is not an acceptance signal: 33 tests were never
-reached and 9 are blocked, including all of the highest-risk ⭐ set except C-10.
+**Zero failures** — but that is not an acceptance signal: 31 tests were never
+reached and 8 are blocked (the corrected totals above), including all of the
+highest-risk ⭐ set except C-10.
 The one Critical defect this run found (#1941) was discovered *outside* the
 scripted steps, while populating an artifact set for C-10.
 

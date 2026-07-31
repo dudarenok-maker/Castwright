@@ -50,7 +50,12 @@ import {
   secToByteOffset,
   type SegmentReplacement,
 } from '../audio/splice-chapter.js';
-import { buildSynthReplacements, isRerecordableSegment } from '../audio/build-synth-replacement.js';
+import {
+  buildSynthReplacements,
+  isRerecordableSegment,
+  findDivergentSentences,
+} from '../audio/build-synth-replacement.js';
+import type { SentenceOutput } from '../handoff/schemas.js';
 import {
   finalizeChapterAudioWrite,
   type ChapterSegmentsFile,
@@ -182,6 +187,72 @@ chapterSpliceRouter.post(
       }
     }
 
+    /* M2 (#1972 follow-up) — resolve + validate a re-record against the
+       CURRENT analysis BEFORE any side effect: displacing a concurrent
+       in-flight generation of this chapter (abortInFlightChapterJob,
+       below), registering this splice as the chapter's job, or decoding the
+       whole chapter's audio. This check used to run only after all three —
+       so a refused splice still killed a real running render, and the
+       refusal message's own advice ("run a full chapter generation") was
+       actively self-defeating. It needs only `state.manuscriptId`,
+       `bookDir`, `segFile`, and `targetIndices` — nothing computed below.
+       Cached in `rerecordSentences` so the synth loop further down doesn't
+       reload the analysis a second time. */
+    let rerecordSentences: SentenceOutput[] = [];
+    if (mode === 'rerecord') {
+      /* Sentences come from the same analysis source generation uses; rebuild
+         from edits first so a re-record matches the last rendered text. */
+      const editsPath = manuscriptEditsJsonPath(bookDir);
+      const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
+      if (Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0) {
+        await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch(() => {});
+      }
+      const analysis = await loadAnalysisCache(state.manuscriptId);
+      const sentences = analysis.chapters?.[chapterId] ?? [];
+      if (!sentences.length) {
+        return fail('No analysed sentences cached for this chapter — re-run analysis first.');
+      }
+
+      /* #1972 — splice must resolve "which segments belong to this
+         character" and "who speaks (and would actually re-synthesise) each
+         of those segments' sentences" from the SAME source. `targetIndices`
+         (above) answers the first question from segments.json — the
+         chapter's LAST RENDER. `sentences` (just loaded) answers the second
+         from the CURRENT analysis cache. When they disagree, blindly
+         re-recording under the segFile's characterId either renders another
+         character's line in THIS character's voice (proven on a real book,
+         issue #1972), or — for a sentence id that's absent, excluded, or
+         empty post-normalisation — splices SILENCE over the segment's slot
+         instead (buildSentenceGroups drops all three; see
+         findDivergentSentences's doc).
+
+         Refuse the WHOLE splice rather than silently reconciling: on the
+         real repro the ANALYSIS was the damaged copy (a pre-fix analyzer
+         had collapsed dialogue into the narrator), so trusting either side
+         by default can just as easily destroy correct data. The user
+         decides — by re-running analysis or doing a full chapter
+         generation — instead of the splice guessing for them. */
+      const divergent = findDivergentSentences(segFile.segments, targetIndices, sentences);
+      if (divergent.length > 0) {
+        const divergentSegmentCount = new Set(divergent.map((d) => d.segmentIndex)).size;
+        // n1 — name a few of the actual sentenceId → newOwner pairs so the
+        // on-box (or any manual) follow-up doesn't have to re-derive them.
+        const examples = divergent
+          .slice(0, 3)
+          .map((d) => `${d.sentenceId} → ${d.newOwner ?? '(no longer synthesised)'}`)
+          .join(', ');
+        return fail(
+          `This chapter was rendered before the current analysis: ${divergentSegmentCount} of ` +
+            `${targetIndices.length} targeted segment(s) now belong to a different character (or would ` +
+            `render as silence) per the latest analysis than "${characterId}", the character recorded in ` +
+            `this chapter's last render (e.g. ${examples}). Re-recording would risk splicing another ` +
+            `character's line — or silence — into "${characterId}"'s voice. Re-run analysis for this book, ` +
+            `or run a full chapter generation to reconcile them, then retry.`,
+        );
+      }
+      rerecordSentences = sentences;
+    }
+
     /* Cast (hydrated like generation) so the rewritten segments file carries
        accurate drift snapshots. */
     const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
@@ -277,57 +348,9 @@ chapterSpliceRouter.post(
         const qwenState = getLastKnownQwenInstallState();
         const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
 
-        /* Sentences come from the same analysis source generation uses; rebuild
-           from edits first so a re-record matches the last rendered text. */
-        const editsPath = manuscriptEditsJsonPath(bookDir);
-        const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
-        if (Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0) {
-          await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch(() => {});
-        }
-        const analysis = await loadAnalysisCache(state.manuscriptId);
-        const sentences = analysis.chapters?.[chapterId] ?? [];
-        if (!sentences.length) {
-          return fail('No analysed sentences cached for this chapter — re-run analysis first.');
-        }
-
-        /* #1972 — splice must resolve "which segments belong to this
-           character" and "who speaks each of those segments' sentences" from
-           the SAME source. `targetIndices` (above) answers the first question
-           from segments.json — the chapter's LAST RENDER. `sentences` (just
-           loaded) answers the second from the CURRENT analysis cache. When
-           analysis has moved a sentence to a different character since that
-           render, the two disagree, and blindly re-recording under the
-           segFile's characterId renders another character's line in THIS
-           character's voice, spliced into their old time slot — proven on a
-           real book (issue #1972): four segments attributed to a minor
-           character in segments.json were, per the current analysis, narrator
-           lines, and the "re-record" rendered narrator dialogue in the
-           narrator's own voice, spliced into that character's slots.
-
-           Refuse the WHOLE splice rather than silently reconciling: on that
-           real repro the ANALYSIS was the damaged copy (a pre-fix analyzer
-           had collapsed dialogue into the narrator), so trusting either side
-           by default can just as easily destroy correct data. The user
-           decides — by re-running analysis or doing a full chapter
-           generation — instead of the splice guessing for them. */
-        const sentenceById = new Map(sentences.map((s) => [s.id, s]));
-        const divergentIndices = targetIndices.filter((idx) => {
-          const seg = segFile.segments[idx];
-          return seg.sentenceIds.some((id) => {
-            const current = sentenceById.get(id);
-            return !current || current.characterId !== seg.characterId;
-          });
-        });
-        if (divergentIndices.length > 0) {
-          return fail(
-            `This chapter was rendered before the current analysis: ${divergentIndices.length} of ` +
-              `${targetIndices.length} targeted segment(s) now belong to a different character per the ` +
-              `latest analysis than "${characterId}", the character recorded in this chapter's last ` +
-              `render. Re-recording would risk splicing another character's line into "${characterId}"'s ` +
-              `voice. Re-run analysis for this book, or run a full chapter generation to reconcile them, ` +
-              `then retry.`,
-          );
-        }
+        // M2 (#1972 follow-up) — already loaded + validated above, before the
+        // abort/register/decode side effects.
+        const sentences = rerecordSentences;
 
         replacements = await buildSynthReplacements({
           segments: segFile.segments,
@@ -382,6 +405,8 @@ chapterSpliceRouter.post(
               // re-record; threaded onto the spliced segment so the snapshot
               // (character-snapshots.ts) records it instead of re-deriving.
               voiceName: s?.voiceName,
+              // M1 — the same, minus any emotion-variant suffix.
+              baseVoiceName: s?.baseVoiceName,
               /* fs-51 follow-up — the signal-QA gate only actually evaluates a
                  verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
                  gate); ASR only runs when `asrOn`. Without these flags,

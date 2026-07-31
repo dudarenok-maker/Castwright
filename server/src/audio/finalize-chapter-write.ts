@@ -270,11 +270,38 @@ export async function finalizeChapterAudioWrite(
   const fallbackByChar = new Map<string, string>();
   /* #1972 — the voice ACTUALLY sent to the provider per character, read back
      from this render's own segments rather than re-derived from the cast
-     record. See buildCharacterSnapshots' voiceNameByChar doc for why. */
+     record. See buildCharacterSnapshots' voiceNameByChar doc for why.
+     M1 — prefer `baseVoiceName` (pre-emotion-variant) over the exact
+     per-segment `voiceName`, so a character whose LAST speaking segment this
+     run happens to be an emotion-tagged quote doesn't get the variant's
+     `__<emotion>`-suffixed name stamped as its resolved voice. */
   const voiceNameByChar = new Map<string, string>();
   for (const s of segments) {
     if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
-    if (s.voiceName) voiceNameByChar.set(s.characterId, s.voiceName);
+    const voiceName = s.baseVoiceName ?? s.voiceName;
+    if (voiceName) voiceNameByChar.set(s.characterId, voiceName);
+  }
+  /* C1 (#1972 follow-up) — a character can be "speaking" this render (it has
+     segments in `segments`) without this run having synthesised a single new
+     sample for it: a gain-only remix reuses every existing segment's PCM
+     untouched, so none of THIS run's segments carry `voiceName` at all —
+     `voiceNameByChar` ends up SMALLER than `speakingIds`. Before this fix
+     that silently dropped `resolvedVoiceName` for every character on a
+     remix of a legacy (pre-#1972) chapter (and for any character a rerecord
+     didn't target), corrupting revisions.ts's drift detector, the Voices
+     "Designed vs Generated" split, and the srv-36 audition centroid — all of
+     which read `resolvedVoiceName` back off disk. Nothing was actually
+     re-synthesised for these characters, so the LAST render's own recorded
+     voice is still the truthful answer: carry it forward from the prior
+     segments file, read here BEFORE `preserveExistingAsPrevious` renames it
+     to `.previous.segments.json` below. */
+  if (voiceNameByChar.size < speakingIds.size) {
+    const prior = await readJson<ChapterSegmentsFile>(segPath).catch(() => null);
+    for (const id of speakingIds) {
+      if (voiceNameByChar.has(id)) continue;
+      const priorVoice = prior?.characterSnapshots?.[id]?.resolvedVoiceName;
+      if (priorVoice) voiceNameByChar.set(id, priorVoice);
+    }
   }
   const characterSnapshots = buildCharacterSnapshots(
     cast,

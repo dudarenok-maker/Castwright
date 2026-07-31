@@ -96,6 +96,15 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   };
 });
 
+/* M2 (#1972 follow-up) — spy-wrap the real export (same pattern as the
+   canonicalModelKeyForEngine spy below) so a test can assert the divergence
+   refusal fires WITHOUT displacing a concurrent in-flight generation job —
+   the side effect the fix hoists the check above. */
+vi.mock('./generation.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./generation.js')>();
+  return { ...real, abortInFlightChapterJob: vi.fn(real.abortInFlightChapterJob) };
+});
+
 /* #1839 finding 3 — the route used to carry its own local canonicalModelKeyForEngine
    lambda (pinning every 'qwen' resolution to the 0.6B constant) instead of calling
    the shared server/src/tts/model-keys.ts mapper. Spy-wrap the real export so a
@@ -253,11 +262,14 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
   it('fails a valid re-record gracefully when no analysis is cached', async () => {
     // No analysis cache exists for this fixture book, so the re-record can't
     // find the sentences to re-synthesise → clean chapter_failed (not a crash).
+    // M2 (#1972 follow-up) — this check now runs BEFORE splice_start is ever
+    // sent (it's resolved ahead of the abort/register/decode side effects),
+    // so a refused splice is a true no-op: no splice_start, nothing decoded.
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
       .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
     const events = parseSse(res.text);
-    expect(events.some((e) => e.type === 'splice_start')).toBe(true);
+    expect(events.some((e) => e.type === 'splice_start')).toBe(false);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
   });
 });
@@ -649,9 +661,30 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribut
     expect(reason).toMatch(/1 of 1/);
     expect(reason).toMatch(/different character/i);
     expect(reason).toMatch(/re-run analysis|full chapter generation/i);
+    // n1 — names the actual sentenceId → newOwner pair, not just a count.
+    expect(reason).toMatch(/5 → narrator/);
 
     // The chapter's audio/segments files are untouched by the refusal.
     expect(existsSync(join(divergentAudioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+  });
+
+  it('#1972 M2 — refuses BEFORE displacing any in-flight generation job for this chapter (a refused splice is a true no-op)', async () => {
+    const genMod = await import('./generation.js');
+    const abortMock = vi.mocked(genMod.abortInFlightChapterJob);
+    abortMock.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(divergentBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
+    // The regression: this used to fire unconditionally before the
+    // divergence check ran, so a refused splice still killed a real
+    // in-flight generation of the same chapter.
+    expect(abortMock).not.toHaveBeenCalled();
+    // Nothing was ever announced as starting, either.
+    expect(events.some((e) => e.type === 'splice_start')).toBe(false);
   });
 
   it('leaves a remix (gain-only) UNAFFECTED by the divergence — remix never consults the analysis cache', async () => {

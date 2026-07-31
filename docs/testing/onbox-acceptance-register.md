@@ -254,9 +254,15 @@ asserts which voice reached the provider.
   not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar
   recycled 3× (committed memory peaked at 29,395 MB). The sidecar's own log
   names it: *"expected for the variable-shape leak; the restart ceiling is the
-  real guard"*. **Workaround that works today:** the per-character re-record
-  (splice) path renders one character's lines without the full-chapter memory
-  churn — that is how the central claim above was proven.
+  real guard"*. **Workaround, qualified since [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972):**
+  the per-character re-record (splice) path renders one character's lines
+  without the full-chapter memory churn — that is how the central claim above
+  was proven — but it now REFUSES on a chapter whose `segments.json` and the
+  current analysis disagree (exactly the shape both fixture books in this run
+  hit). It only stays usable as a workaround when the two agree; when they
+  don't, re-run analysis first (so the splice becomes usable again), or fall
+  back to a full chapter generation — which the side-11 leak still blocks, but
+  which is at least immune to the splice's own attribution defect.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.

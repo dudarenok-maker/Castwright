@@ -107,9 +107,19 @@ describe('buildCharacterSnapshots', () => {
     expect(snaps['char-wren'].resolvedVoiceName).not.toBe(assignedVoice);
   });
 
-  it('#1972 — omits resolvedVoiceName rather than asserting a voice that was never sent, when this run never actually synthesised the character', () => {
-    // e.g. a remix (gain-only) pass: the character spoke (has segments) but
-    // nothing was synthesised this run, so voiceNameByChar carries no entry.
+  it('#1972 — omits resolvedVoiceName rather than asserting a voice that was never sent, when `voiceNameByChar` carries no entry for a speaking character', () => {
+    /* This pins buildCharacterSnapshots' OWN contract in isolation: given an
+       empty voiceNameByChar, it must never invent a voice. It does NOT pin
+       "what happens on a real remix" — a gain-only remix in production
+       doesn't actually reach this empty-map state, because
+       finalize-chapter-write.ts (the only caller) pre-populates
+       voiceNameByChar with the PRIOR render's resolvedVoiceName for any
+       speaking character this run didn't synthesise, before ever calling
+       this function (see finalize-chapter-write.test.ts's "carries
+       resolvedVoiceName forward" cases, C1 (#1972 follow-up)). This test's
+       empty map models the one case that carry-forward can't fill: a
+       character with no prior recorded voice at all (e.g. a first-ever
+       render that somehow reached this state). */
     const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map(), 'kokoro-v1', new Map());
     expect(snaps.castor.resolvedVoiceName).toBeUndefined();
   });
