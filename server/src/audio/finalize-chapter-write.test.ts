@@ -337,6 +337,131 @@ describe('finalizeChapterAudioWrite QA clip check — the centrepiece (plan 274 
   );
 });
 
+describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 follow-up)', () => {
+  it('carries resolvedVoiceName forward from the PRIOR segments file when this run synthesised nothing for a speaking character (e.g. a gain-only remix)', async () => {
+    // A LEGACY (pre-#1972) prior render: characterSnapshots carries
+    // resolvedVoiceName but the segment itself carries no voiceName field at
+    // all — the shape every chapter rendered before this PR has on disk.
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+        characterSnapshots: { amy: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-amy-legacy' } },
+      }),
+    );
+
+    // This "run" mirrors a remix: amy still speaks (has a segment in the
+    // input) but nothing was actually synthesised, so baseInput()'s segment
+    // carries no voiceName/baseVoiceName.
+    await finalizeChapterAudioWrite(baseInput());
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('kokoro-amy-legacy');
+  });
+
+  it('does NOT carry forward a stale voice for a character this run DID synthesise for — the fresh voiceName wins', async () => {
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-amy-STALE' },
+        ],
+        characterSnapshots: { amy: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-amy-STALE' } },
+      }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-amy-FRESH' },
+      ],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('kokoro-amy-FRESH');
+  });
+
+  it('carries forward a voice for a character NOT targeted by a partial rerecord, while the targeted character gets its fresh voice', async () => {
+    // Prior render: amy + wren both have a resolvedVoiceName on disk.
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.5 },
+          { groupIndex: 1, characterId: 'wren', sentenceIds: [2], startSec: 0.5, endSec: 1.0 },
+        ],
+        characterSnapshots: {
+          amy: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-amy-legacy' },
+          wren: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-wren-legacy' },
+        },
+      }),
+    );
+
+    // This run only re-recorded wren; amy's segment carries no voiceName.
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.5 },
+        { groupIndex: 1, characterId: 'wren', sentenceIds: [2], startSec: 0.5, endSec: 1.0, voiceName: 'kokoro-wren-FRESH' },
+      ],
+      cast: [
+        { id: 'amy', name: 'Amy', gender: 'female' as const, attributes: [] },
+        { id: 'wren', name: 'Wren', gender: 'female' as const, attributes: [] },
+      ],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('kokoro-amy-legacy');
+    expect(segFile.characterSnapshots.wren.resolvedVoiceName).toBe('kokoro-wren-FRESH');
+  });
+});
+
+describe('finalizeChapterAudioWrite resolvedVoiceName strips the emotion-variant suffix (M1, #1972 follow-up)', () => {
+  it('stamps the BASE voice, not an emotion-suffixed variant, even when the LAST segment for a character is emotion-tagged', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.5, voiceName: 'qwen-amy', baseVoiceName: 'qwen-amy' },
+        { groupIndex: 1, characterId: 'amy', sentenceIds: [2], startSec: 0.5, endSec: 1.0, voiceName: 'qwen-amy__angry', baseVoiceName: 'qwen-amy' },
+      ],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('qwen-amy');
+  });
+
+  it('falls back to the exact voiceName when baseVoiceName is absent (an un-migrated caller)', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [{ groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'qwen-amy' }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('qwen-amy');
+  });
+});
+
 describe('finalizeChapterAudioWrite QA — three-shape fail-soft (plan 274 T2)', () => {
   afterEach(() => {
     vi.doUnmock('./measure-loudness.js');

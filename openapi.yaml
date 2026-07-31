@@ -2234,22 +2234,43 @@ paths:
                     type: string
                     nullable: true
                     description: |
-                      Non-fatal advisory (#1953) — set when a DESIGNED voice's baked
-                      manifest language differs from the book's language. The
-                      assignment still succeeds; this is a warning, never a 409 (see
-                      the cloned-voice wrong-engine 409 below, which is a distinct,
-                      unrelated guard). Applies on an English book as well as a
-                      non-English one. Absent for a cloned/imported entry (which has
-                      no baked design language) and for a matching-language designed
-                      voice.
+                      Non-fatal advisory. Carries one of two mutually exclusive
+                      (by provenance) signals, never both:
+
+                      - (#1953) set when a DESIGNED voice's baked manifest language
+                        differs from the book's language. Applies on an English book
+                        as well as a non-English one. Absent for a cloned/imported
+                        entry (which has no baked design language) and for a
+                        matching-language designed voice.
+                      - (#1933) set when a CLONED entry's OTHER clone-capable engine
+                        (not the one this assign routed to) is not derivable — its
+                        slot is terminally failed, or has no derivable source (no
+                        retained reference clip; or, for Qwen, no transcript). Both
+                        engine slots are always written for a cloned entry
+                        regardless of which one this assign routed to, so this warns
+                        about the one left unusable rather than letting it surface
+                        silently the next time the character is switched to it.
+
+                      Either way the assignment still succeeds; this is a warning,
+                      never a 409 (see the cloned-voice per-engine-readiness 409
+                      below, which blocks on the ROUTED engine instead of warning
+                      about the other one).
         '404':
           description: No library entry, book, or character matching the request
         '409':
           description: |
-            The entry's consent has been revoked, or the entry hasn't finished
-            deriving on Qwen yet, or (cloned entries only) the character would
-            route to an engine that isn't clone-capable — cloned voices render
-            on Qwen or Coqui XTTS v2, never on a third engine.
+            The entry's consent has been revoked, or (cloned entries only) the
+            character would route to an engine that isn't clone-capable — cloned
+            voices render on Qwen or Coqui XTTS v2, never on a third engine — or
+            (#1933) the ROUTED engine's own slot isn't usable: it's terminally
+            failed, or has no derivable source (no retained reference clip; or,
+            for Qwen, no transcript).
+
+            Precedence note: the consent-revoked check runs first and can fire
+            before `bookId`/`characterId` are resolved, but the wrong-engine and
+            per-engine-readiness checks run only after they resolve to a real
+            book and character — an unresolvable book or character returns
+            **404** instead, even for an otherwise-unready cloned entry.
           content:
             application/json:
               schema:

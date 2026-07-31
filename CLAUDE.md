@@ -267,19 +267,29 @@ Design rationale:
   a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
   Runs `-m "not golden"` so the opt-in golden-audio tier never loads a model here.
 - `npm run test:golden-audio` — **opt-in** golden-audio regression gate (ops-11,
-  plan 185). NOT in `test:all` / `verify` — run on demand. Two layers: **Suite B**
-  (`:assembly`, GPU-free) feeds a committed recorded-PCM fixture through the real
-  `synthesiseChapter` + ffmpeg loudnorm; **Suite A** (`:sidecar`, real Kokoro)
-  asserts each fixture line's length vs `kokoro-baseline.json` within tolerance —
-  triple-gated (venv / pytest / Kokoro weights), SKIP+exit-0 when absent. Partials:
-  `npm run test:golden-audio:assembly` (Node-side audio changes, runs anywhere) and
-  `npm run test:golden-audio:sidecar` (engine changes, box with weights). Flags via
-  the full runner: `--assembly-only`, `--sidecar-only`, `--engine=<kokoro|coqui|qwen>`,
-  and `--bless` (re-records the baselines of the **selected** suites — bare `--bless`
-  does both, `--assembly-only --bless` records Suite B's `golden-chapter.baseline.json`
-  + `.decoded.pcm`, `--sidecar-only --bless` records `kokoro-baseline.json`; note
-  `npm run test:golden-audio:assembly` bypasses the runner and so can never bless).
-  Cross-engine sanity needs `GOLDEN_COQUI=1` / `GOLDEN_QWEN_VOICE=<id>`.
+  plan 185; content-drift check added by ops-45 / #1911). NOT in `test:all` /
+  `verify` — run on demand. Two layers: **Suite B** (`:assembly`, GPU-free) feeds
+  a committed recorded-PCM fixture through the real `synthesiseChapter` + ffmpeg
+  loudnorm; **Suite A** (`:sidecar`, real Kokoro) asserts each fixture line's
+  length vs `kokoro-baseline.json` within tolerance, AND (since #1911) that a
+  fresh Whisper transcript of the line matches the baseline's recorded
+  `transcript` at tolerance 0 — triple-gated (venv / pytest / Kokoro weights),
+  SKIP+exit-0 when absent. Partials: `npm run test:golden-audio:assembly`
+  (Node-side audio changes, runs anywhere) and `npm run test:golden-audio:sidecar`
+  (engine changes, box with weights). Flags via the full runner: `--assembly-only`,
+  `--sidecar-only`, `--engine=<kokoro|coqui|qwen>`, and `--bless` (re-records the
+  baselines of the **selected** suites — bare `--bless` does both,
+  `--assembly-only --bless` records Suite B's `golden-chapter.baseline.json` +
+  `.decoded.pcm`, `--sidecar-only --bless` records **both** `kokoro-baseline.json`
+  and `instruct-baseline.json`; note `npm run test:golden-audio:assembly` bypasses
+  the runner and so can never bless). Cross-engine sanity needs `GOLDEN_COQUI=1` /
+  `GOLDEN_QWEN_VOICE=<id>`. The content-drift check adds `ASR_MODEL=base`'s ~145 MB
+  Whisper weights as a **network prerequisite** on first run (fetched from
+  HuggingFace, not by the bootstrap) and ~+9–10s of wall-clock to a Suite A run
+  (~+50%) — `GOLDEN_ASR=0` disables the check for a run where that's a problem.
+  A `--bless` that would silently overwrite a DIFFERING recorded transcript is
+  refused unless `GOLDEN_REBLESS_CONTENT=1` is also set (see
+  `tests/golden/compare.py`'s `bless_guard`, G1/G2).
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.

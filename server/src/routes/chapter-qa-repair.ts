@@ -52,7 +52,11 @@ import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { spliceChapterSegments, secToByteOffset, type SegmentReplacement } from '../audio/splice-chapter.js';
-import { buildSynthReplacements, isRerecordableSegment } from '../audio/build-synth-replacement.js';
+import {
+  buildSynthReplacements,
+  isRerecordableSegment,
+  findDivergentSentences,
+} from '../audio/build-synth-replacement.js';
 import { finalizeChapterAudioWrite, type ChapterSegmentsFile } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
@@ -414,9 +418,37 @@ chapterQaRepairRouter.post(
         targetIndices.push(f.segmentIndex);
       }
 
+      /* C2 (#1972 follow-up) — this route has the SAME two-source-mix defect
+         chapter-splice.ts had: `targetIndices` above selects segments by
+         their segFile.segments[i].characterId (the chapter's LAST RENDER),
+         while the synth callback below resolves each one's sentences (and
+         therefore its VOICE) from `sentences`, the CURRENT analysis cache.
+         When the two disagree, re-recording a flagged segment renders a
+         DIFFERENT character's line in the flagged character's voice — the
+         exact #1972 defect, reached here via the repair path instead of a
+         manual re-record.
+
+         Unlike chapter-splice.ts (one character, one explicit user action —
+         refusing the WHOLE thing is the right call), this route repairs many
+         segments across possibly many characters in a single automated pass.
+         Refusing the entire repair over one diverged segment would block
+         fixing every genuinely bad segment alongside it, for no benefit to
+         the user. So: drop just the diverged indices into `stillSuspect`
+         (the route's existing "flagged but not fixed" bucket) and repair
+         everything else. The diverged segment's PRIOR audio is left
+         untouched — never re-recorded under a voice this pass can't
+         verify — and it surfaces to the user the same way any other
+         still-suspect segment does. */
+      const divergent = findDivergentSentences(segFile.segments, targetIndices, sentences);
+      const divergentSegmentIndices = new Set(divergent.map((d) => d.segmentIndex));
+      const safeTargetIndices = targetIndices.filter((i) => !divergentSegmentIndices.has(i));
+      for (const i of divergentSegmentIndices) {
+        if (!stillSuspect.includes(i)) stillSuspect.push(i);
+      }
+
       const replacements: SegmentReplacement[] = await buildSynthReplacements({
         segments: segFile.segments,
-        targetIndices,
+        targetIndices: safeTargetIndices,
         chapterSampleRate: sampleRate,
         synth: async (seg) => {
           const segIndex = segFile.segments.indexOf(seg);
@@ -425,7 +457,8 @@ chapterQaRepairRouter.post(
           const ids = new Set(seg.sentenceIds);
           const subset = sentences.filter((s) => ids.has(s.id));
           const text = segText(seg);
-          let best: { pcm: Buffer; sampleRate: number } | null = null;
+          let best: { pcm: Buffer; sampleRate: number; voiceName?: string; baseVoiceName?: string } | null =
+            null;
           let bestVerdict: SegmentQaVerdict | null = null;
           let bestAsr: AsrClassification | null = null;
           /* Edit 3b (srv-36): extend running best-state with bestCosine. */
@@ -509,7 +542,13 @@ chapterQaRepairRouter.post(
               (isAcceptable(v, a, cos, candidate) === isAcceptable(bestVerdict, bestAsr, bestCosine, candidate) &&
                 isBetter(v, bestVerdict));
             if (better) {
-              best = { pcm: r.pcm, sampleRate: r.sampleRate };
+              const bestSeg = r.segments?.[0];
+              best = {
+                pcm: r.pcm,
+                sampleRate: r.sampleRate,
+                voiceName: bestSeg?.voiceName,
+                baseVoiceName: bestSeg?.baseVoiceName,
+              };
               bestVerdict = v;
               bestAsr = a;
               bestCosine = cos;
@@ -572,6 +611,12 @@ chapterQaRepairRouter.post(
             asrSuspect: accepted || !asrOn ? undefined : bestAsr?.verdict === 'drift' ? true : undefined,
             qaRetries: retryCount || undefined,
             asrRetries: asrOn ? asrRetryCount || undefined : undefined,
+            // C1/M1 (#1972 follow-up) — the voice actually sent to the
+            // provider for the ACCEPTED take, so the character snapshot
+            // records it instead of re-deriving (same wiring chapter-splice.ts
+            // already had; this route was missing it entirely).
+            voiceName: best.voiceName,
+            baseVoiceName: best.baseVoiceName,
             /* fs-51 follow-up — unlike the splice route, THIS route's whole job
                is signal-QA repair: `bestVerdict` above is always populated by
                `evaluateSegmentPcm` regardless of any config gate, so the

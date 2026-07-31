@@ -407,6 +407,26 @@ export interface ChapterSegment {
       (its `X-Voice-Substituted-From` header). Absent on a clean render. Surfaces
       a silent voice fallback so the golden-audio gate can fail on it. */
   voiceSubstitutedFrom?: string;
+  /** #1972 — the voice name ACTUALLY sent to the provider for this segment
+      (post-fallback, post-emotion-variant — `resolveGroup(group).voiceName`
+      for a body group, the title beat's own resolved narrator voice for
+      `kind: 'title'`). `buildCharacterSnapshots` reads this back per character
+      instead of re-deriving `resolvedVoiceName` from the cast record, so the
+      snapshot can never claim a voice that was never requested — the
+      provenance gap `character-snapshots.ts` used to have. */
+  voiceName?: string;
+  /** M1 (#1972 follow-up) — the same voice, minus any `__<emotion>` variant
+      suffix `pickEmotionVariantVoice` may have appended to `voiceName` for a
+      single tagged quote. `finalize-chapter-write.ts` collects THIS field
+      (falling back to `voiceName`) into the per-CHARACTER snapshot, so a
+      character whose LAST-rendered segment happened to be an emotion-tagged
+      quote doesn't get its `resolvedVoiceName` stamped with the variant's
+      suffixed name — which would permanently false-flag "Voice" drift
+      against every consumer that expects the base voice (revisions.ts, the
+      Voices Designed/Generated split, the srv-36 audition centroid). Equal
+      to `voiceName` whenever no variant applied (every non-Qwen engine, a
+      fallback reroute, an untagged/neutral quote, or the title beat). */
+  baseVoiceName?: string;
   /** Per-sentence pre-assembly QA verdict (segment-qa.ts). Set only when the
       gate ran (`maxSegmentRerecords > 0`); absent on the title beat and on
       legacy chapters synthesised before the gate landed. */
@@ -2149,6 +2169,10 @@ export async function synthesiseChapter(
       endSec: titleEndSec,
       kind: 'title',
       renderedFallbackEngine: titleFb.renderedFallbackEngine,
+      voiceName: narratorVoice,
+      // The title beat never goes through pickEmotionVariantVoice, so its
+      // resolved voice is already the base — no separate derivation needed.
+      baseVoiceName: narratorVoice,
     });
 
     onTitleComplete?.({ accumulatedSec: titleEndSec });
@@ -2167,7 +2191,15 @@ export async function synthesiseChapter(
      decides WHICH character actually speaks the line. It reaches the sidecar as
      the book language on the wire; a designed voice sends none and keeps its
      manifest language. See `SynthesizeInput.cloned`. */
-  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine; configuredEngine: TtsEngine; cloned: boolean };
+  type GroupRoute = {
+    route: Route;
+    voiceName: string;
+    /** M1 (#1972 follow-up) — see `ChapterSegment.baseVoiceName`'s doc. */
+    baseVoiceName: string;
+    renderedFallbackEngine?: TtsEngine;
+    configuredEngine: TtsEngine;
+    cloned: boolean;
+  };
   const resolvedByIndex = new Map<number, GroupRoute>();
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
@@ -2219,17 +2251,18 @@ export async function synthesiseChapter(
        call), so the fallback is decided in one place — the partition then
        sees the post-fallback Kokoro engine and routes the group as a Kokoro
        single item, not a Qwen batch item. */
+    const fallback = applyQwenFallback(
+      character,
+      baseRoute,
+      voiceForGroup,
+      orphanedFromId
+        ? `(This line's original characterId "${orphanedFromId}" is not in this book's cast and ` +
+            `was substituted with the narrator — that substitution is what's failing here, not a ` +
+            `narrator dialogue line.)`
+        : undefined,
+    );
     const r = {
-      ...applyQwenFallback(
-        character,
-        baseRoute,
-        voiceForGroup,
-        orphanedFromId
-          ? `(This line's original characterId "${orphanedFromId}" is not in this book's cast and ` +
-              `was substituted with the narrator — that substitution is what's failing here, not a ` +
-              `narrator dialogue line.)`
-          : undefined,
-      ),
+      ...fallback,
       configuredEngine,
       /* Tested against 'qwen' specifically — the only engine whose synth honours
          a per-request language for clones. Coqui gets a BCP-47 code for EVERY
@@ -2241,6 +2274,11 @@ export async function synthesiseChapter(
          synthesised, but provenance lives on the CHARACTER, so a variant of a
          cloned voice is still flagged. */
       cloned: hasClonedProvenance(character, 'qwen'),
+      /* M1 (#1972 follow-up) — the pre-emotion-variant voice for the
+         CHARACTER-level snapshot. A fallback reroute (Kokoro/Coqui) already
+         carries no emotion suffix — its OWN voiceName IS the base — so only
+         the non-rerouted path needs the pre-variant `baseVoice`. */
+      baseVoiceName: fallback.renderedFallbackEngine ? fallback.voiceName : baseVoice,
     };
     resolvedByIndex.set(group.index, r);
     return r;
@@ -3099,6 +3137,8 @@ export async function synthesiseChapter(
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
+      voiceName: resolveGroup(group).voiceName,
+      baseVoiceName: resolveGroup(group).baseVoiceName,
       qa,
       suspect: quarantined || qa?.status === 'suspect' ? true : undefined,
       qaRetries: qaRetryCountByIndex.get(group.index) || undefined,

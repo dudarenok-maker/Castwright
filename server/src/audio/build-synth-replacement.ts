@@ -11,6 +11,8 @@
 import type { ChapterSegment } from '../tts/synthesise-chapter.js';
 import type { SegmentReplacement } from './splice-chapter.js';
 import { resamplePcm16 } from '../tts/resample-pcm16.js';
+import type { SentenceOutput } from '../handoff/schemas.js';
+import { normaliseForTts } from '../tts/text-normalize.js';
 
 /** A segment can be re-recorded only if it's backed by manuscript sentences.
     The synthetic chapter-title beat (`kind:'title'`, empty `sentenceIds`) has
@@ -45,6 +47,18 @@ export interface SynthOutput {
       actually run for this call, gating whether `asr`/`asrSuspect`/`asrRetries`
       are meaningful. */
   asrRan?: boolean;
+  /** #1972 — the voice ACTUALLY sent to the provider for this re-record
+      (`ChapterSegment['voiceName']`). Absent only for a caller that hasn't
+      wired it through; when present it always overwrites the segment's prior
+      value (unlike the gated QA fields above, a re-record always synthesises,
+      so there's no "gate didn't run" state to protect against). */
+  voiceName?: ChapterSegment['voiceName'];
+  /** M1 (#1972 follow-up) — the PRE-emotion-variant voice name for this
+      re-record (`ChapterSegment['baseVoiceName']`). Same "always overwrites
+      when present" rule as `voiceName`. Threaded separately so a re-recorded
+      quote that happens to carry an emotion variant doesn't stamp its
+      `__<emotion>`-suffixed voiceName onto the character-level snapshot. */
+  baseVoiceName?: ChapterSegment['baseVoiceName'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -89,6 +103,13 @@ export async function buildSynthReplacements(
       ...(out.signalQaRan ? { qa: out.qa, qaRetries: out.qaRetries } : {}),
       ...(out.asrRan ? { asr: out.asr, asrSuspect: out.asrSuspect, asrRetries: out.asrRetries } : {}),
       ...(out.signalQaRan || out.asrRan ? { suspect: out.suspect } : {}),
+      // #1972 — only set the key when the caller actually reports a voice, so
+      // an un-migrated caller can't wipe a segment's prior voiceName with an
+      // explicit `undefined` (same "omit, don't overwrite" rule as above).
+      ...(out.voiceName ? { voiceName: out.voiceName } : {}),
+      // M1 — same omit-don't-overwrite rule for the base (pre-emotion-variant)
+      // voice name.
+      ...(out.baseVoiceName ? { baseVoiceName: out.baseVoiceName } : {}),
     };
     replacements.push({
       startSegmentIndex: i,
@@ -98,4 +119,66 @@ export async function buildSynthReplacements(
     });
   }
   return replacements;
+}
+
+export interface DivergentSentence {
+  /** Index into `segments[]` (the source array passed to
+      `findDivergentSentences`, matching `targetIndices`). */
+  segmentIndex: number;
+  sentenceId: number;
+  /** The characterId the CURRENT analysis attributes this sentence id to.
+      `null` when re-recording this id today would splice SILENCE, not
+      merely the wrong voice: the id no longer exists in the current
+      analysis (re-segmentation renumbered ids), it's `excludeFromSynthesis`
+      (fs-58), or it normalises to empty text — `buildSentenceGroups`
+      (synthesise-chapter.ts) silently drops all three, so a "re-record"
+      targeting one produces no audio for that slot at all. */
+  newOwner: string | null;
+}
+
+/** #1972 — target SELECTION for a re-record comes from `segments.json` (the
+    chapter's last render: "which segments belong to this character?");
+    sentence + voice resolution comes from the CURRENT analysis cache
+    ("who speaks sentence N, and what's its text, today?"). When analysis has
+    run since the render, the two can disagree, and blindly re-recording
+    under the segment's `characterId` either (a) renders a DIFFERENT
+    character's line in this character's voice — the original #1972 defect —
+    or (b) targets a sentence id the current analysis would never actually
+    synthesise, splicing SILENCE over the segment's slot — audio deletion,
+    not re-voicing.
+
+    Shared by `chapter-splice.ts` (refuses the whole splice on any hit) and
+    `chapter-qa-repair.ts` (drops just the diverged indices into
+    `stillSuspect`) so the two callers can't drift on what counts as unsafe
+    to re-record. Returns one entry per diverged SENTENCE — a segment
+    spanning several sentence ids can contribute more than one entry; a
+    caller that only needs "which segments" should dedupe by
+    `segmentIndex`. */
+export function findDivergentSentences(
+  segments: ChapterSegment[],
+  targetIndices: number[],
+  currentSentences: Pick<SentenceOutput, 'id' | 'characterId' | 'text' | 'excludeFromSynthesis'>[],
+): DivergentSentence[] {
+  const byId = new Map(currentSentences.map((s) => [s.id, s]));
+  const out: DivergentSentence[] = [];
+  for (const idx of targetIndices) {
+    const seg = segments[idx];
+    for (const id of seg.sentenceIds) {
+      const current = byId.get(id);
+      if (!current) {
+        out.push({ segmentIndex: idx, sentenceId: id, newOwner: null });
+        continue;
+      }
+      const wouldSynthesiseSilence =
+        !!current.excludeFromSynthesis || normaliseForTts(current.text).trim() === '';
+      if (wouldSynthesiseSilence) {
+        out.push({ segmentIndex: idx, sentenceId: id, newOwner: null });
+        continue;
+      }
+      if (current.characterId !== seg.characterId) {
+        out.push({ segmentIndex: idx, sentenceId: id, newOwner: current.characterId });
+      }
+    }
+  }
+  return out;
 }
