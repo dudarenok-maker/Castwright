@@ -94,7 +94,7 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **21 of 60 run (2026-07-29, 2026-07-31) · ~39 still owed · first FAILURE**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
@@ -179,20 +179,33 @@ place on this box (run sheet §7.3).
 [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969) is why
 A24 below is not fully discharged.
 
-**C-17 ⭐ ran and FAILED — the sheet's first `F`, and the best argument yet for
-this register.** A **designed** voice whose `.pt` is missing did not self-heal
-from its retained clip, and the chapter then rendered that character's lines
-**in the narrator's voice** — while `characterSnapshots.<id>.resolvedVoiceName`
-recorded the assigned voice and nothing was logged. The chapter *completed*;
-every on-disk artifact claimed the right voice; only the sidecar's own synth log
-disagreed, naming `qwen-fDtxqBAQEy9Os1LA5yVUo` on four synths whose durations
-match the character's four segments exactly. The sidecar itself refuses cleanly
-when probed (409 `voice_not_designed`), so the substitution is Node-side. Filed
-as [**#1972**](https://github.com/dudarenok-maker/Castwright/issues/1972); this
-is the failure mode 268 Invariant 8 and the plan-149 persona guard exist to
-prevent, and no automated suite was positioned to see it.
+**RETRACTED — three run-2 results were wrong, and the cause is
+[#1972](https://github.com/dudarenok-maker/Castwright/issues/1972).** A
+per-character re-record picks its target segments from `segments.json` but
+resolves their sentences — and so the voice — from the **analysis cache**, by
+sentence id. Once analysis has run since the render the two disagree, and the
+re-record renders another character's line in the requested character's voice.
+`resolvedVoiceName` still reports the assigned voice, because it was re-derived
+from the cast record rather than recorded from the render.
 
-**Still owed (~39), and why:**
+Every retracted result had been read from that field:
+
+- **A24** — identity half withdrawn. Its German chapter measured **0.949**
+  against the chapter's own narrator. The **language** claim stands: it was
+  measured from the audio by Whisper, which does not consult the cast, and is
+  independently confirmed at the `/synthesize` boundary.
+- **E-01** — identity half withdrawn (13 of 21 targeted segments divergent).
+  The derive, the artifacts and the language all stand.
+- **C-17** — its `F` is withdrawn entirely. The self-heal was never *reached*,
+  so the test was never exercised. It is not-run, not failing.
+
+Reproduced with a **healthy** designed voice, and on two books that diverged for
+unrelated reasons — one from pre-#1598 attribution damage, one from ordinary
+re-segmentation. **The precondition is only "analysis has run since the last
+render."** Full chapter generation is unaffected. No test caught it because none
+asserts which voice reached the provider.
+
+**Still owed (~40), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -691,31 +704,41 @@ opportunistic.
 
 ### A24 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
-> **Core criterion DISCHARGED 2026-07-31** (run 2, SHA `b5479e9c`). German
-> Coalfall ch.2, cloned voice `563501c7-…` cast onto `oduvan`, spliced over the
-> **`/synthesize-batch`** wire — the path the fix had to reach. 12 spans (27.2 s)
-> through `/transcribe` with **no `x-language`**: detected **`de`**,
-> `avg_logprob` **−0.233**, against a designed-voice control at −0.352 in the
-> same chapter and the pre-fix baseline of `en` / −1.303.
-> `resolvedVoiceName` stayed `qwen-563501c7-…` — never-substitute held.
-> Corroborated on the single-synth wire with an identity control: the same clone,
-> same sentence, gave `en`/0.865-cos with `language: English`, **`de`**/0.809-cos
-> with `language: German`, and — reproducing the shipped bug live — `en` with
-> unintelligible phonetics when the language was omitted. Speaker identity
-> survives the language switch (0.809 vs the human source clip, ~0.03
-> different-speaker floor). E-01 additionally proved the same claim on **Coqui**:
-> Russian book, detected `ru` at −0.368.
+> **PARTIALLY evidenced 2026-07-31 — NOT discharged.** Corrected after
+> [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
+> understood; the original entry claimed a full discharge and was wrong.
 >
-> **Two sub-checks still owed, and one of them FAILED.** The
-> designed-self-heal-then-restart comparison was not run. The final bullet's "no
-> `voice-mismatch` rows" check **failed** — but *not* for the reason this row
-> predicted. `auditionCentroid` **does** carry the book's language
-> (`audition-centroid.ts:50-57`); the flag came from a stale persisted reference
-> centroid built from the character's *previous* voice, which is reused
-> unconditionally after a reassignment. Filed as
-> [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969); the
-> hypothesis in the bullet below is superseded, keep the check but expect it to
-> stay red until #1969 lands.
+> **What still stands — the fix works, proven at the synthesis boundary.** Three
+> direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
+> with Whisper auto-detect and embedded with `/embed`:
+>
+> | Call | detected | `avg_logprob` | cos vs source clip |
+> |---|---|---|---|
+> | English text + `language: English` | `en` | −0.258 | 0.865 |
+> | **German text + `language: German`** | **`de`** | −0.699 | **0.809** |
+> | German text, language omitted (pre-fix) | `en` | −0.904 | 0.876 |
+>
+> Row 3 reproduces the shipped bug live — German in, English phonetics out,
+> transcript garbage. Row 2 is the fix, with the cloned identity intact at 0.809
+> against a ~0.03 different-speaker floor. This is real evidence and does not
+> depend on the splice path.
+>
+> **What is withdrawn.** The row's actual criterion is *"render a non-English
+> **chapter** with a cloned voice and transcribe the output"*. That chapter
+> render used a splice re-record, so most of what was measured was **narrator**
+> audio, not the clone — the rendered lines scored **0.949** against the
+> chapter's own narrator. The `de` / −0.233 figure is therefore a measurement of
+> the wrong audio: it shows the chapter rendered in German, not that *a cloned
+> voice* did. `resolvedVoiceName` said otherwise, and that is the field #1972
+> falsifies.
+>
+> **To finish this row:** re-run the chapter-level criterion once #1972 has
+> landed, on a book whose `segments.json` and analysis agree — or via a full
+> chapter generation, which is unaffected by the defect. The remaining
+> sub-checks (designed self-heal → restart → identical; the QA
+> `voice-mismatch` check, blocked on
+> [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969)) are
+> unchanged.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a

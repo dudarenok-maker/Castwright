@@ -406,7 +406,7 @@ that synthesise the same voice disagreeing with it.
 
 ### On-box acceptance, run 2026-07-31 (SHA `b5479e9c`, clean tree)
 
-**§"On-box acceptance" step 1 — PASS.** German Coalfall ch.2, cloned voice
+**§"On-box acceptance" step 1 — PARTIAL (corrected 2026-07-31).** The chapter-level half is **withdrawn**: that render went through a splice re-record and hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972), so most of the audio measured was the *narrator*, not the clone (0.949 against the chapter's own narrator). The direct-`/synthesize` evidence below is unaffected and does prove the fix. Re-run the chapter-level criterion after #1972 lands, or via a full chapter generation, which the defect does not touch. Original (now-qualified) text follows. German Coalfall ch.2, cloned voice
 `563501c7-…` cast onto `oduvan`, re-recorded via splice so the render went over
 the **`/synthesize-batch`** wire — the transport the original fix would have
 missed. 12 spans (27.2 s) through `/transcribe` with **no `x-language`**:
