@@ -692,7 +692,7 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
     it('leaves a HEALTHY (non-failed) qwen slot untouched by a transcript edit', async () => {
       await vl.writeEntry(
         makeClonedMasterEntry('transcript-healthyslot-1', {
-          engines: { qwen: { status: 'ready', baseModel: 'current-model' } },
+          engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
         }),
       );
 
@@ -701,9 +701,9 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
         .send({ transcript: 'a corrected transcript' });
 
       expect(res.status).toBe(200);
-      expect(res.body.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+      expect(res.body.engines.qwen).toEqual({ status: 'ready', baseModel: modelPaths.currentQwenBaseModel() });
       const onDisk = await vl.readEntry('transcript-healthyslot-1');
-      expect(onDisk?.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+      expect(onDisk?.engines.qwen).toEqual({ status: 'ready', baseModel: modelPaths.currentQwenBaseModel() });
     });
 
     /* The write must go through the shared, per-uuid-locked `updateEntry`
@@ -770,6 +770,40 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
       // transcript edit spread `fresh.master`, not the pre-lock `existing`
       // one. The assertion above covers only the ROOT spread.
       expect(final?.master?.durationSeconds).toBe(99);
+    });
+
+    /* Plan 276 Decision 2 [R4]. `patchEntry.fulfilled`
+       (src/store/voice-library-slice.ts:237-240) REPLACES the slice's entry
+       with this response, so if PATCH returns the raw persisted status while
+       GET returns the computed one, the client's copy silently downgrades
+       after any edit — and `cloneReadiness`'s rules 5/6, gated on
+       `slotStatus !== 'ready'`, stop firing. The plan's own "Add transcript"
+       CTA triggers exactly this path.
+
+       The fixture is the only shape where it shows: a slot that is `ready`
+       on disk but version-stale, so the transform has something to change.
+       A fixture stamped with the CURRENT baseModel passes either way. */
+    it('returns the COMPUTED staleness, matching GET, not the raw persisted status', async () => {
+      await vl.writeEntry(
+        makeClonedMasterEntry('transcript-stale-1', {
+          engines: { qwen: { status: 'ready', baseModel: 'an-old-base-model' } },
+        }),
+      );
+
+      const listed = await request(app).get('/api/voice-library');
+      const fromGet = listed.body.voices.find(
+        (v: { voiceUuid: string }) => v.voiceUuid === 'transcript-stale-1',
+      );
+      expect(fromGet.engines.qwen.status).toBe('stale');
+
+      const patched = await request(app)
+        .patch('/api/voice-library/transcript-stale-1')
+        .send({ name: 'a new name' });
+
+      expect(patched.status).toBe(200);
+      expect(patched.body.engines.qwen.status).toBe('stale');
+      // The persisted value is untouched — this is a response transform, not a write.
+      expect((await vl.readEntry('transcript-stale-1'))?.engines.qwen?.status).toBe('ready');
     });
   });
 });
@@ -841,16 +875,16 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
   it('is a no-op on a `ready` slot', async () => {
     await vl.writeEntry(
       makeClonedEntry('retry-ready-1', {
-        engines: { qwen: { status: 'ready', baseModel: 'current-model' } },
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
       }),
     );
 
     const res = await request(app).post('/api/voice-library/retry-ready-1/engines/qwen/retry');
 
     expect(res.status).toBe(200);
-    expect(res.body.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+    expect(res.body.engines.qwen).toEqual({ status: 'ready', baseModel: modelPaths.currentQwenBaseModel() });
     const onDisk = await vl.readEntry('retry-ready-1');
-    expect(onDisk?.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+    expect(onDisk?.engines.qwen).toEqual({ status: 'ready', baseModel: modelPaths.currentQwenBaseModel() });
   });
 
   it('is a no-op on an absent slot', async () => {
@@ -962,6 +996,36 @@ describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, De
     expect(final?.master?.durationSeconds).toBe(99);
     // ...and B's own deletion of the failed qwen slot also landed.
     expect(final?.engines.qwen).toBeUndefined();
+  });
+
+  /* Plan 276 Decision 2 [R4] — the NO-OP path, which is where this matters
+     most for the retry route. A `ready`-but-version-stale slot is both the
+     case that no-ops here (nothing to clear) AND the case the transform
+     rewrites, so it is the one shape where returning the entry raw changes
+     the client's answer. The route's other paths delete the slot entirely,
+     leaving nothing for the transform to touch. */
+  it('no-op response carries the COMPUTED staleness, matching GET', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-stale-noop-1', {
+        engines: { qwen: { status: 'ready', baseModel: 'an-old-base-model' } },
+      }),
+    );
+
+    const listed = await request(app).get('/api/voice-library');
+    const fromGet = listed.body.voices.find(
+      (v: { voiceUuid: string }) => v.voiceUuid === 'retry-stale-noop-1',
+    );
+    expect(fromGet.engines.qwen.status).toBe('stale');
+
+    const res = await request(app).post('/api/voice-library/retry-stale-noop-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.qwen.status).toBe('stale');
+    // Still a no-op on disk — a response transform, not a write.
+    expect((await vl.readEntry('retry-stale-noop-1'))?.engines.qwen).toEqual({
+      status: 'ready',
+      baseModel: 'an-old-base-model',
+    });
   });
 });
 

@@ -662,7 +662,22 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
     if (!written) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }
-    res.json(written);
+    /* Plan 276 Decision 2 [R4] — this response goes through
+       `withComputedStaleness` for the same reason `GET /` does, and it is
+       load-bearing rather than cosmetic. `patchEntry.fulfilled`
+       (src/store/voice-library-slice.ts:237-240) REPLACES the slice's entry
+       with whatever this returns, so a raw response silently downgrades the
+       client's copy from the computed status to the persisted one. A
+       version-stale-but-`ready` slot then reads `'ready'` on the client
+       instead of `'stale'`, and `cloneReadiness`'s rules 5/6 — gated on
+       `slotStatus !== 'ready'` — stop firing. That is a false negative of
+       exactly the class that killed rev 2, and the plan's own "Add
+       transcript" flow triggers it: the CTA PATCHes, this response lands in
+       the slice, and the gate can then clear for the wrong reason. Every
+       route that hands an entry to the client must apply the same transform
+       or the "post-`withComputedStaleness`" contract is only true until the
+       first write. */
+    res.json(withComputedStaleness(written));
   } catch (e) {
     console.error('[voice-library] patch failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library update failed.' });
@@ -738,10 +753,21 @@ voiceLibraryRouter.post('/:voiceUuid/engines/:engine/retry', async (req: Request
     if (!entryFound) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }
+    /* Plan 276 Decision 2 [R4] — same transform as the PATCH above and for
+       the same reason: whatever this returns is what the client's slice
+       holds next. The no-op path needs it too — a `ready`-but-version-stale
+       slot is precisely the case that no-ops here AND is rewritten by the
+       transform, so returning it raw is the one shape where skipping this
+       actually changes the answer. */
     if (!written) {
-      return res.json(noop);
+      /* `noop` is set by the locked callback on exactly this path. The guard
+         is for TypeScript — it cannot narrow a variable assigned inside a
+         callback — but it is a real 500 rather than a silent `null` body if
+         the two paths ever drift apart. */
+      if (!noop) throw new Error('retry reached the no-op path with no entry captured');
+      return res.json(withComputedStaleness(noop));
     }
-    res.json(written);
+    res.json(withComputedStaleness(written));
   } catch (e) {
     console.error('[voice-library] retry failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice engine retry failed.' });
