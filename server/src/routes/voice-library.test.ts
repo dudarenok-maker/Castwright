@@ -733,6 +733,14 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
         return {
           ...fresh!,
           engines: { ...fresh!.engines, xtts: { status: 'ready', coquiVersion: 'v-set-by-A' } },
+          /* A also touches `master`. Without this the two snapshots' `master`
+             are byte-identical, so spreading `existing.master` instead of
+             `fresh.master` inside the transcript edit is INVISIBLE — measured:
+             that mutation left this test green while the `engines` assertion
+             below still passed, because the root spread and the `master`
+             sub-spread are two separate reads of two separate snapshots and
+             only the first one was pinned. */
+          master: { ...fresh!.master!, durationSeconds: 99 },
         };
       });
 
@@ -758,6 +766,10 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
       // was based on the FRESH (post-A) entry, not the stale pre-lock read.
       expect(final?.engines.xtts).toEqual({ status: 'ready', coquiVersion: 'v-set-by-A' });
       expect(final?.master?.transcript).toBe('a corrected transcript');
+      // ...and A's concurrent `master` write survives too — proof the
+      // transcript edit spread `fresh.master`, not the pre-lock `existing`
+      // one. The assertion above covers only the ROOT spread.
+      expect(final?.master?.durationSeconds).toBe(99);
     });
   });
 });
