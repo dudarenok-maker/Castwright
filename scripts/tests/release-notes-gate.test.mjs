@@ -566,7 +566,7 @@ test('a literal naming only the flagged span suppresses nothing, and the failure
 // literal excused for every future release with nothing to expire it. This
 // must fail EVEN THOUGH the marker would otherwise excuse a real span — the
 // refusal fires on the marker's mere presence, not on whether it was needed.
-test('a marker in RELEASE_NOTES.md is refused outright, naming the file and both alternatives', () => {
+test('a marker in RELEASE_NOTES.md is refused outright, naming the file, the literal, and both alternatives', () => {
   const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nOrder at ${CAFE} today.\n`;
   const res = checkMojibake(text, 'RELEASE_NOTES.md');
   assert.equal(res.ok, false);
@@ -574,7 +574,17 @@ test('a marker in RELEASE_NOTES.md is refused outright, naming the file and both
   assert.match(res.reason, /refused/);
   assert.match(res.reason, /re-encode/i);
   assert.match(res.reason, /--force/);
+  assert.ok(res.reason.includes(JSON.stringify(CAFE)), res.reason); // names the literal, not just the file
   assert.deepEqual(res.honoured, []); // refused, so nothing is honoured or echoed
+});
+
+// A refusal naming several literals at once names all of them, not just one.
+test('a refusal in RELEASE_NOTES.md names every literal a marker offered, not only the first', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}", "${GROSS}" -->\n\nOrder at ${CAFE} today.\n`;
+  const res = checkMojibake(text, 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.ok(res.reason.includes(JSON.stringify(CAFE)), res.reason);
+  assert.ok(res.reason.includes(JSON.stringify(GROSS)), res.reason);
 });
 
 // The refusal is keyed on the label naming RELEASE_NOTES.md specifically —

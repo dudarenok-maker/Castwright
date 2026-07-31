@@ -317,15 +317,16 @@ export function checkMojibake(text, label) {
   // Refuse outright rather than silently honouring or merely reporting it —
   // an ignored marker would read to the author as "my marker worked".
   if (literals.length > 0 && isCumulativeReleaseNotesFile(label)) {
+    const named = literals.map((l) => JSON.stringify(l)).join(', ');
     return {
       ok: false,
       honoured: [],
       reason:
-        `${label} contains a release-notes-gate allowlist marker, but markers are refused in ` +
-        `${label} (#1985): it is cumulative and never reset, so a marker there would keep that ` +
-        `literal excused for every future release with nothing to remove it. Re-encode the ` +
-        `offending text so it no longer flags, or run bump-version.mjs with --force to downgrade ` +
-        `this whole check to a warning for this release.`,
+        `${label} contains a release-notes-gate allowlist marker naming ${named}, but markers are ` +
+        `refused in ${label} (#1985): it is cumulative and never reset, so a marker there would ` +
+        `keep that literal excused for every future release with nothing to remove it. Re-encode ` +
+        `the offending text so it no longer flags, or run bump-version.mjs with --force to ` +
+        `downgrade this whole check to a warning for this release.`,
     };
   }
 
