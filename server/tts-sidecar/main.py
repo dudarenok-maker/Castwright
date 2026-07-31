@@ -7366,7 +7366,10 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
             return (None, None, None)
         allocated = torch.cuda.memory_allocated() / 1_000_000.0
         reserved = torch.cuda.memory_reserved() / 1_000_000.0
-        total = torch.cuda.get_device_properties(0).total_memory / 1_000_000.0
+        # #1997 — `allocated`/`reserved` above already read the CURRENT device
+        # (torch's no-arg default); `total` must match, or the ratio this feeds
+        # to the recycle watchdog mixes two different cards on a multi-GPU box.
+        total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0
         return (allocated, reserved, total)
     except Exception:
         return (None, None, None)
@@ -8884,7 +8887,12 @@ def debug_memory() -> dict[str, Any]:
                 "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
                 # total card size — `reserved_mb` crossing this is the spill line
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
-                "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
+                # #1997 review (M1) — `allocated_mb`/`reserved_mb` above already
+                # read the CURRENT device (no-arg calls); `total_mb` must match,
+                # or an operator sees two different totals disagree between this
+                # endpoint and /health once _cuda_vram_mb() was fixed to be
+                # current-device-consistent but this sibling reading wasn't.
+                "total_mb": torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0,
             }
             # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
             # staging buffers for H2D/D2H copies). torch's caching host
