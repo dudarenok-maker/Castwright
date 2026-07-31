@@ -1235,6 +1235,50 @@ def _record_coqui_import_result(ok: bool) -> None:
     _COQUI_IMPORT_OK = ok
 
 
+# (#1965) The same sticky, real-attempt import status for the other three
+# engines whose `/health` story is otherwise a `find_spec`-only probe. Each is
+# recorded OPPORTUNISTICALLY — at the single import chokepoint the engine
+# already runs on its own cold-load path — so none of them adds startup work.
+# Coqui's eager `_pin_coqui_import_order` costs a measured +11.7 s of
+# sidecar-unreachable boot; paying that per engine is not worth it.
+#
+# Honest ceiling, shared by all four: a sticky flag only populates once
+# something actually tries to load. On an install that never renders with
+# Kokoro, `_KOKORO_IMPORT_OK` stays `None` for ever and the caller's
+# `find_spec` fallback governs, exactly as before. This narrows the window in
+# which a find_spec probe can advertise an unloadable engine; it does not
+# close it.
+_KOKORO_IMPORT_OK: Optional[bool] = None
+
+# NOTE the deliberately narrow claim: `True` here means "`from qwen_tts import
+# Qwen3TTSModel` returned", NOT "the Qwen engine loaded". `_load_qwen_model`
+# continues past the import into `from_pretrained`, a manual `.to(device)`
+# move and a documented intermittent meta-tensor retry loop, any of which can
+# still fail with the import perfectly healthy. Do not let this flag (or a
+# field derived from it) grow a name that claims more than the import — a
+# field claiming more than it knows is the whole subject of #1965. `torch` is
+# imported separately from `qwen_tts` at that chokepoint so a missing PyTorch
+# is never mis-recorded as a broken qwen-tts package.
+_QWEN_IMPORT_OK: Optional[bool] = None
+
+_WHISPER_IMPORT_OK: Optional[bool] = None
+
+
+def _record_kokoro_import_result(ok: bool) -> None:
+    global _KOKORO_IMPORT_OK
+    _KOKORO_IMPORT_OK = ok
+
+
+def _record_qwen_import_result(ok: bool) -> None:
+    global _QWEN_IMPORT_OK
+    _QWEN_IMPORT_OK = ok
+
+
+def _record_whisper_import_result(ok: bool) -> None:
+    global _WHISPER_IMPORT_OK
+    _WHISPER_IMPORT_OK = ok
+
+
 class CoquiEngine(Engine):
     """Coqui XTTS v2 via the `TTS` package. The model is loaded once on first
     call. XTTS speaks ~24 kHz; we down/up nothing — emit at native rate and
@@ -2419,7 +2463,25 @@ class CoquiEngine(Engine):
         which Property 2's purge path already reaches via `_voice_paths`.
         """
         import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
-        import TTS as _tts_pkg  # noqa: PLC0415
+
+        # (#1965) This `import TTS` runs BEFORE `_ensure_loaded` below, so on a
+        # broken Coqui install it is the frame that raises — and it used to do
+        # so without recording anything, leaving `coqui_import_ok` at None on
+        # exactly the #1944 failure shape. Record the FAILURE here (any
+        # exception class, per #1962 review finding 3) and re-raise unchanged.
+        #
+        # Deliberately does NOT record success: `import TTS` is a strictly
+        # weaker import than the `from TTS.api import TTS` the flag documents —
+        # the speechbrain lazy-proxy collision fires inside `TTS.api`'s own
+        # import chain, which this package-level import never enters. Claiming
+        # True off it would be the overclaim #1965 is about. The success case
+        # needs no help anyway: `_ensure_loaded` on the next line does the real
+        # import and records it either way.
+        try:
+            import TTS as _tts_pkg  # noqa: PLC0415
+        except BaseException:
+            _record_coqui_import_result(False)
+            raise
 
         self._ensure_loaded(model, device=device)
         # Claim BEFORE the acquire -- mirrors `synthesize()`'s TOCTOU guard
@@ -2705,7 +2767,20 @@ class KokoroEngine(Engine):
             self._requested_device = device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
-        except ImportError as e:
+            _record_kokoro_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui). A duplicate kernel-registration
+            # RuntimeError out of the onnxruntime/torch stack is NOT an
+            # ImportError, so an ImportError-only record would leave
+            # `kokoro_import_ok` at None (or stale True) while the engine is
+            # genuinely unstartable — which is precisely the "advertises an
+            # engine that cannot start" defect this flag exists to close.
+            # Non-ImportError failures re-raise unchanged so their own
+            # diagnostic isn't swallowed by the kokoro-onnx install message.
+            _record_kokoro_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
             # Profile-aware remediation: the right ONNX-runtime package depends on
             # this box's accelerator profile (injected as CASTWRIGHT_ACCELERATOR_
             # PROFILE), not a hard-coded "needs an NVIDIA GPU".
@@ -4353,14 +4428,37 @@ class QwenEngine(Engine):
         (e.g. "eager" to bench the baseline, "flash_attention_2" with a wheel).
         A build that *rejects* the kwarg retries without it — the load never
         hardens into a failure over the attention knob."""
+        # torch and qwen_tts are imported SEPARATELY (#1965). They used to share
+        # one `try`, which meant a missing/broken PyTorch would have been
+        # recorded as `qwen_import_ok=False` and mis-attributed the fault to the
+        # qwen-tts package — sending the operator to reinstall the wrong thing.
+        # Only the qwen_tts import feeds the flag.
         try:
             import torch  # type: ignore
-            from qwen_tts import Qwen3TTSModel  # type: ignore
         except ImportError as e:
             raise RuntimeError(
-                f"Failed to import qwen_tts/torch ({e}). Install with: "
-                "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
-                "server/tts-sidecar."
+                f"Failed to import torch, which qwen_tts needs ({e}). Install "
+                "with: `.\\.venv\\Scripts\\python.exe -m pip install torch "
+                "torchaudio` in server/tts-sidecar."
+            ) from e
+        try:
+            from qwen_tts import Qwen3TTSModel  # type: ignore
+            _record_qwen_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui): a non-ImportError failure out
+            # of the import chain leaves the engine just as unstartable, and an
+            # ImportError-only record would leave `qwen_import_ok` at None (or
+            # stale True) while claiming health it doesn't have. Non-ImportError
+            # failures re-raise unchanged so their own diagnostic survives.
+            _record_qwen_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
+            raise RuntimeError(
+                f"Failed to import qwen_tts ({e}). PyTorch IS importable in "
+                "this venv, so this is not a missing-PyTorch problem. Install "
+                "with: `.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` "
+                "in server/tts-sidecar."
             ) from e
         _apply_torch_perf_flags(torch)
         _validate_cuda_index(self._device, torch)
@@ -6215,7 +6313,18 @@ class WhisperEngine:
         dev = device if device is not None else self._device
         try:
             from faster_whisper import WhisperModel  # type: ignore
-        except ImportError as e:
+            _record_whisper_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui). faster-whisper pulls in
+            # ctranslate2, whose CUDA/cuDNN loader raises plain RuntimeErrors on
+            # a mismatched runtime — not ImportError — so an ImportError-only
+            # record would leave `whisper_import_ok` at None (or stale True)
+            # while ASR is genuinely unstartable. Non-ImportError failures
+            # re-raise unchanged so their own diagnostic isn't swallowed.
+            _record_whisper_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
             raise RuntimeError(
                 f"Failed to import faster-whisper ({e}). Install with: "
                 "`.\\.venv\\Scripts\\python.exe -m pip install faster-whisper` "
@@ -7655,12 +7764,24 @@ async def _pin_coqui_import_order() -> None:
     for every install would tax Qwen-only and Kokoro-only users, who can
     never hit a collision that requires BOTH cloning (which calls /embed) and
     Coqui rendering. So the package being importable is not the gate — the
-    XTTS v2 WEIGHTS being on disk is. `coqui-tts` ships as an ordinary
-    dependency and is always present; the ~2 GB `model.pth` only exists if
-    someone deliberately installed Coqui, which makes it a reliable "this
-    install uses Coqui" signal. Same reasoning that flipped PRELOAD_KOKORO
-    off in fs-60: an always-paid, engine-specific cost stops being a good
-    default once not everyone uses that engine.
+    XTTS v2 WEIGHTS being on disk is.
+
+    (#1965 corrects the reason this docstring used to give. It claimed
+    `coqui-tts` "ships as an ordinary dependency and is always present", which
+    is false: `coqui-tts` appears in no requirements file's install lines, and
+    both `requirements/nvidia-cuda.txt:4` and `requirements/amd-rocm.txt:7` say
+    Coqui is opt-in, pip-installed from the Model Manager. The gate is still
+    correct, but by CORRELATION rather than by the package being universal —
+    the same Model Manager action installs the package and fetches the ~2 GB
+    `model.pth`, so weights-present implies package-present in practice, while
+    the weights are the stricter and more durable "this install uses Coqui"
+    signal (a package can linger after the weights are purged). Note the
+    package check above still runs first and still skips the pin on its own;
+    the weights check only narrows it further.)
+
+    Same reasoning that flipped PRELOAD_KOKORO off in fs-60: an always-paid,
+    engine-specific cost stops being a good default once not everyone uses
+    that engine.
 
     The Python default here MUST match the registry knob's default (a known
     past bug class in this repo — see `_QWEN_DEGEN_GUARD_ENABLED` /
@@ -8341,6 +8462,22 @@ def health() -> dict[str, Any]:
         "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
         "whisper_package_installed": _whisper_package_installed(),
+        # (#1965) The same real-import-attempt truth for the other three
+        # engines, alongside their find_spec-only `*_package_installed` probes.
+        # Tri-state in all four cases: None = nothing has tried to import this
+        # engine yet in this process (fall back to the find_spec probe — never
+        # read None as "broken"); True/False = the most recent REAL import
+        # attempt returned / raised.
+        #
+        # These are recorded opportunistically at each engine's own cold-load
+        # chokepoint, so unlike Coqui there is no startup pin that can populate
+        # them before first use. `qwen_import_ok` in particular means only that
+        # `from qwen_tts import Qwen3TTSModel` returned — the rest of
+        # `_load_qwen_model` (from_pretrained, the .to(device) move, the
+        # meta-tensor retry loop) can still fail with this True.
+        "kokoro_import_ok": _KOKORO_IMPORT_OK,
+        "qwen_import_ok": _QWEN_IMPORT_OK,
+        "whisper_import_ok": _WHISPER_IMPORT_OK,
         # ASR (srv-31) load state — its own pair, same pattern as the synth
         # engines, so the one-poll invariant holds. `asr_device` lets an
         # operator confirm whether transcription is on the GPU or CPU.
