@@ -154,9 +154,8 @@ export class UnresolvableClonedVoiceError extends Error {
       );
     }
     if (hasDeriveFailed) {
-      remedies.push(
-        `Re-run the clone for ${engineLabelFor(broken, 'derive-failed')} and check the sidecar log`,
-      );
+      const clause = `re-run the clone for ${engineLabelFor(broken, 'derive-failed')} and check the sidecar log`;
+      remedies.push(remedies.length === 0 ? clause.charAt(0).toUpperCase() + clause.slice(1) : clause);
     }
     if (hasWrongEngine) {
       /* GATE 1 I-2 — this remedy used to be hardcoded to "switch the book to

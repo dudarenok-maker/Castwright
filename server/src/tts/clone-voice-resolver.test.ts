@@ -2536,7 +2536,16 @@ describe('#1967 — derive-failed remedy copy', () => {
     ]);
     expect(e.message).not.toContain('Re-enable Qwen');
     expect(e.message).toContain('Restore the missing voice(s)');
-    expect(e.message).toContain('Re-run the clone for Coqui');
+    expect(e.message).toContain('re-run the clone for Coqui');
+  });
+
+  it('in a mixed list, the derive-failed remedy is lowercase (not sentence-initial)', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'revoked' },
+      { name: 'Reeve', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).toContain('re-run the clone for Coqui');
+    expect(e.message).not.toContain('; Re-run');
   });
 
   it('an UNTAGGED derive-failed (the persisted-failed-slot path) never names Qwen', () => {
