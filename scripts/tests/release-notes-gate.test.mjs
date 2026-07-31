@@ -45,6 +45,35 @@ test('checkReleaseNotes fails on placeholder or version mismatch', () => {
 const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —
 const MOJIBAKE_ARROW = 'â†’'; // should decode to U+2192 →
 
+/* #1982 round 2 — helpers for the standalone-span invariant.
+
+   Whitespace-padded variants of a span: the literal an operator writes by hand
+   when the gate offers nothing, i.e. the span plus the whitespace beside it.
+   NBSP is written as an escape on purpose — as a literal glyph it is
+   indistinguishable from a plain space in a diff, and gets flattened into one
+   by some editors, which would silently reduce this to the space case. */
+const PADS = [' ', '\t', '\u00a0'];
+const paddedVariants = (span) =>
+  PADS.flatMap((l) => ['', ...PADS].map((r) => `${l}${span}${r}`)).concat(
+    PADS.map((r) => `${span}${r}`),
+  );
+
+/** How many spans checkMojibake actually reports (0 when it passes). */
+const reportedSpans = (text) => {
+  const res = checkMojibake(text, 'test.md');
+  return res.ok ? 0 : Number(/contains (\d+) double/.exec(res.reason)[1]);
+};
+
+/** Assert that `text`'s own markers excused NOTHING: every span the detector
+    finds is still reported. Stronger and less brittle than a fixed count —
+    a marker line carries its own copy of its literal, so "the count did not
+    drop" has to hold for that copy too. */
+const assertSuppressesNothing = (text, what) => {
+  const found = findMojibake(text).length;
+  assert.ok(found > 0, `${what}: nothing to suppress in the first place`);
+  assert.equal(reportedSpans(text), found, `${what}: suppressed at least one span`);
+};
+
 test('findMojibake finds double-UTF-8-encoded spans and decodes them correctly', () => {
   const corrupt = `dash: ${MOJIBAKE_EM_DASH} arrow: ${MOJIBAKE_ARROW} end`;
   const hits = findMojibake(corrupt);
@@ -224,16 +253,90 @@ test('pasting the suggested marker and re-running still flags genuine corruption
   assert.ok(res2.reason.includes(JSON.stringify('É™zz')), res2.reason);
 });
 
-// #1982 — the failure message must never print a line that would not work or
+// #1982 - the failure message must never print a line that would not work or
 // would over-suppress. A token carrying a double-quote cannot go inside the
 // marker's own quoted literal, and the old fallback (print the bare core) was
 // precisely the file-wide-blinding line. So: print nothing, and say why.
+//
+// #1982 round 2 (F4): "why" has THREE answers and they are not
+// interchangeable. Here the span DOES have surrounding context - `"CAFÉ™"` -
+// it just cannot be quoted inside the marker. Saying "no surrounding context to
+// name" was simply wrong for this input, and this test used to pin exactly that
+// wrong sentence against exactly that input.
 test('no marker is suggested when the surrounding token would break the marker syntax', () => {
   const text = `He said "CAFÉ™" yesterday.`;
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, false);
   assert.equal(/<!-- release-notes-gate: allow "[^"]*" -->/.test(res.reason), false, res.reason);
-  assert.match(res.reason, /can be allowlisted at all/);
+  // The right reason: context exists, it just cannot be quoted.
+  assert.match(res.reason, /sit inside a word carrying a double-quote/, res.reason);
+  assert.match(res.reason, /terminate the marker's own quoting/, res.reason);
+  // And NOT the standalone sentence, which is false for this input.
+  assert.equal(/no surrounding word to name/.test(res.reason), false, res.reason);
+});
+
+// #1982 F4 - the other half of the same distinction, so neither branch can
+// silently absorb the other: a genuinely standalone span still gets the
+// "no surrounding word" wording.
+test('a genuinely standalone span is told it has no surrounding word to name', () => {
+  const res = checkMojibake(`line with a ${MOJIBAKE_EM_DASH} in it`, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(
+    res.reason,
+    /stand alone between spaces, with no surrounding word to name/,
+    res.reason,
+  );
+  assert.equal(/terminate the marker's own quoting/.test(res.reason), false, res.reason);
+});
+
+// #1982 round 2 - the third reason, and the one the whitespace guard CREATES.
+// A doubly-encoded NBSP is `Â` + NBSP and a doubly-encoded Cyrillic `Р` is
+// `Ð` + NBSP, so a real span can carry whitespace INSIDE it. Every literal
+// containing such a span therefore contains whitespace, and allowedRanges drops
+// it - so the gate must not print one. It used to: with the F1 guard in place
+// but no matching check here, `Order at CAFÉ<NBSP>! today.` printed
+// `allow "CAFÉ<NBSP>!"`, which parsed, looked right, and suppressed nothing.
+test('no marker is suggested when the span itself straddles whitespace', () => {
+  const NBSP = String.fromCharCode(0x00a0);
+  const text = `Order at CAFÉ${NBSP}! today.`;
+  assert.equal(findMojibake(text).length, 1); // the span spans the NBSP
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  // No marker line at all - and in particular not one the allowlist would drop.
+  assert.equal(/<!-- release-notes-gate: allow "[^"]*" -->/.test(res.reason), false, res.reason);
+  assert.match(res.reason, /straddle a whitespace character themselves/, res.reason);
+});
+
+// Producer/consumer lockstep: whatever the gate DOES offer must survive its own
+// allowlist. Sweep a spread of shapes and assert that every printed marker,
+// pasted back, actually suppresses something.
+test('every marker line the gate prints is one its own allowlist accepts', () => {
+  const NBSP = String.fromCharCode(0x00a0);
+  const samples = [
+    `Order at ${CAFE} today.`,
+    `We serve ${GROSS} portions.`,
+    `${TROLL} is up north.`,
+    `It hit ${DEGREE} at noon.`,
+    `A ${MOJIBAKE_EM_DASH} standing alone.`,
+    `He said "${CAFE}" yesterday.`,
+    `Order at CAFÉ${NBSP}! today.`,
+    `Mangled ${MOJIBAKE_ARROW} arrow and a ${CAFE} too.`,
+    `tail-->${CAFE} carries a terminator.`,
+  ];
+  for (const body of samples) {
+    const res = checkMojibake(body, 'test.md');
+    if (res.ok) continue;
+    const m = /<!-- release-notes-gate: allow "([^"]*)" -->/.exec(res.reason);
+    if (!m) continue; // nothing offered is always a legal answer
+    const pasted = `${m[0]}\n\n${body}`;
+    const found = findMojibake(pasted).length;
+    const still = checkMojibake(pasted, 'test.md');
+    const remaining = still.ok ? 0 : Number(/contains (\d+) double/.exec(still.reason)[1]);
+    assert.ok(
+      remaining < found,
+      `the gate offered ${JSON.stringify(m[1])} for ${JSON.stringify(body)} but it suppressed nothing`,
+    );
+  }
 });
 
 // #1982 F1 — THE REPLAY. The suggestion mechanism must never be a route to a
@@ -268,6 +371,80 @@ test('replaying the suggested markers can never drive a corrupted file green', (
   // And it terminated because nothing was offered, not because it ran out of road.
   assert.equal(MARKER_RE.test(res.reason), false, res.reason);
   assert.match(res.reason, /6 double-UTF-8-encoded mojibake span\(s\)/);
+
+  // #1982 round 2 - REPLAYING ONLY WHAT THE GATE OFFERS IS NOT THE THREAT
+  // MODEL. The gate offers nothing here, so the loop above ends after zero
+  // rounds and proves nothing about an operator who writes a marker by hand.
+  // isExcused only asks for one CHARACTER of extension, so the obvious
+  // hand-written literal - the span plus the space beside it - used to excuse
+  // every occurrence of that span in the file. Replay the padded variants too.
+  for (const span of spans) {
+    for (const lit of paddedVariants(span)) {
+      const padded = `<!-- release-notes-gate: allow "${lit}" -->\n${text}`;
+      // The marker parses - this is not a syntax rejection...
+      assert.ok(parseMojibakeAllowlist(padded).includes(lit), JSON.stringify(lit));
+      // ...it simply excuses nothing at all, so the gate cannot move to green.
+      assertSuppressesNothing(padded, `padded suggestion ${JSON.stringify(lit)}`);
+    }
+  }
+});
+
+// #1982 round 2 (F1) - THE STANDALONE-SPAN INVARIANT, STATED DIRECTLY.
+//
+// "A span standing alone between spaces cannot be allowlisted at all" is the
+// gate's own contract (isExcused's doc comment) and the sentence the failure
+// message prints at the operator. Nothing pinned it. isExcused requires the
+// literal's occurrence to extend one CHARACTER past the span; every doc says
+// one WORD. The difference is exactly the adjacent space, and on the real
+// 242-span file a literal of " —" (a space plus the flagged pair)
+// excused 155 of the 242 spans on its own, all 242 were suppressible, and 31
+// hand-written markers reached green.
+//
+// The assertion is deliberately "not one span was excused" rather than a fixed
+// count: the marker line carries its own copy of the literal, and a padded
+// literal must fail to excuse even that.
+test('a whitespace-padded literal suppresses nothing, so a standalone span stays unallowlistable', () => {
+  const body = `The build ${MOJIBAKE_EM_DASH} yes, that one ${MOJIBAKE_EM_DASH} shipped.\n`;
+  assert.match(checkMojibake(body, 'test.md').reason, /2 double-UTF-8-encoded mojibake span\(s\)/);
+
+  for (const lit of paddedVariants(MOJIBAKE_EM_DASH)) {
+    const text = `<!-- release-notes-gate: allow "${lit}" -->\n\n${body}`;
+    assert.deepEqual(parseMojibakeAllowlist(text), [lit]); // the marker parses fine...
+    assertSuppressesNothing(text, `padded literal ${JSON.stringify(lit)}`);
+  }
+});
+
+// The other side of the guard: rejecting whitespace must not cost the feature
+// anything. Every literal suggestLiteral can emit is a whitespace-free token,
+// and all three documented false-positive shapes are single words.
+test('a legitimate whitespace-free token literal still suppresses its span', () => {
+  const TOKEN = `serverâ†”frontend`; // the middle three read as a mangled U+2194
+  const body = `The ${TOKEN} contract is stable.\n`;
+  assert.equal(checkMojibake(body, 'test.md').ok, false); // flagged without a marker
+  const res = checkMojibake(`<!-- release-notes-gate: allow "${TOKEN}" -->\n\n${body}`, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+
+  // And the three documented false-positive shapes keep working, one marker each.
+  for (const shape of [CAFE, GROSS, TROLL]) {
+    const t = `<!-- release-notes-gate: allow "${shape}" -->\n\nWe mention ${shape} here.\n`;
+    const r = checkMojibake(t, 'test.md');
+    assert.equal(r.ok, true, `${shape}: ${r.reason}`);
+  }
+});
+
+// The strongest form of the invariant: a file whose every span stands between
+// spaces cannot be driven green by ANY marker naming the span with adjacent
+// whitespace - not one at a time, and not all of them at once.
+test('no set of whitespace-padded markers can drive a standalone-span file green', () => {
+  const spans = [MOJIBAKE_EM_DASH, MOJIBAKE_ARROW, 'â€¦', 'Â§'];
+  const body = spans.map((s, n) => `- item ${n} uses a ${s} here\n`).join('');
+  assert.match(checkMojibake(body, 'test.md').reason, /4 double-UTF-8-encoded mojibake span\(s\)/);
+
+  const literals = spans.flatMap((s) => paddedVariants(s));
+  const markers = literals.map((l) => `<!-- release-notes-gate: allow "${l}" -->`).join('\n');
+  const text = `${markers}\n\n${body}`;
+  assert.equal(parseMojibakeAllowlist(text).length, literals.length); // all of them parsed
+  assertSuppressesNothing(text, `${literals.length} padded markers at once`);
 });
 
 // #1982 F2 — a hit's tail is NOT always mere context. A greedy 4-character match

@@ -126,7 +126,8 @@ export function findMojibake(text) {
    text that needs it, and it is auditable in the diff. An HTML comment renders
    as nothing on the releases page, which matters because docs/release-notes-
    next.md ships verbatim into the tag annotation. Literals are exact strings —
-   no wildcards, no regex.
+   no wildcards, no regex — and must each be a single whitespace-free word (see
+   allowedRanges).
 
    A marker does NOT expire on its own. docs/release-notes-next.md is cleared
    by hand in the first PR after a cut, which happens to drop any marker in it;
@@ -166,10 +167,32 @@ export function parseMojibakeAllowlist(text) {
 
 /** Half-open [start, end) character ranges of every real occurrence of every
     allowlisted literal. A literal naming text that isn't in the file yields no
-    range, and so suppresses nothing. */
+    range, and so suppresses nothing.
+
+    A literal containing ANY whitespace yields no range either (#1982 round 2).
+    isExcused only requires the occurrence to extend one CHARACTER past the
+    span, but the rule it is meant to encode — and the one the docs and the
+    failure message both state — is that it extends into the surrounding WORD.
+    Those differ by exactly one space, and the dominant #1956 shape is a mangle
+    standing between spaces: measured on the real 242-span file, a literal of
+    `" —"` (a space plus the flagged pair) excused 155 spans on its own, all
+    242 were suppressible, and 31 hand-written markers reached green. Requiring
+    a whitespace-free token closes that: the only literals that can excuse
+    anything are the ones suggestLiteral already emits, which is what makes a
+    standalone span genuinely un-allowlistable. Filtering here rather than in
+    parseMojibakeAllowlist keeps the parser's return shape (every literal a
+    marker names) intact.
+
+    suggestLiteral applies the SAME predicate, so the gate can never print a
+    marker line this loop would then throw away. Keep them sharing hasWhitespace
+    rather than each spelling the test out — a producer/consumer pair that
+    drifts is how a printed-but-inert suggestion gets back in. */
+const hasWhitespace = (literal) => [...literal].some((c) => c.trim() === '');
+
 function allowedRanges(text, literals) {
   const ranges = [];
   for (const literal of literals) {
+    if (hasWhitespace(literal)) continue;
     for (let at = text.indexOf(literal); at !== -1; at = text.indexOf(literal, at + 1)) {
       ranges.push([at, at + literal.length]);
     }
@@ -191,6 +214,12 @@ function allowedRanges(text, literals) {
  * naming the two flagged characters alone excuse them at every occurrence in
  * the file, which is exactly the file-wide blindness #1956 needs to stay
  * impossible.
+ *
+ * "Standalone is not allowlistable" only actually holds because allowedRanges
+ * drops any literal containing whitespace. This function alone asks for one
+ * CHARACTER of extension; the property above needs one WORD of it, and the
+ * difference is exactly the adjacent space a standalone span sits between.
+ * The two halves of the rule live apart — read them together.
  */
 function isExcused(ranges, start, end) {
   return ranges.some(([from, to]) => from <= start && to >= end && (from < start || to > end));
@@ -199,9 +228,24 @@ function isExcused(ranges, start, end) {
 /**
  * The whitespace-delimited token around a hit, IF that token would be a valid
  * allowlist literal for it — i.e. it strictly extends past the span (see
- * isExcused) and would not break the marker's own syntax. Returns null when no
- * such literal exists, so the failure message can say so instead of printing a
- * line that would not work or would over-suppress.
+ * isExcused) and would not break the marker's own syntax.
+ *
+ * Returns `{ literal }` when one exists, and otherwise `{ literal: null,
+ * why }` naming WHICH of three very different reasons applies (#1982 round 2).
+ * They are not interchangeable and the advice differs:
+ *
+ * - `'standalone'` — the span IS the whole token. There is no surrounding
+ *   context, no legal literal exists for it at all, and that is itself the
+ *   evidence it is a genuine mangle.
+ * - `'unquotable'` — context exists, but the token carries a `"` or a `-->`,
+ *   either of which would terminate the marker's own quoting. The right advice
+ *   is to reword, not "there's nothing around it".
+ * - `'straddles'` — the span itself contains a whitespace character, so EVERY
+ *   literal containing it contains whitespace and allowedRanges drops them all.
+ *   This is not hypothetical: a doubly-encoded NBSP is `Â` + NBSP, and a
+ *   doubly-encoded Cyrillic `Р` is `Ð` + NBSP, so the shape shows up in exactly
+ *   the corrupted files this gate was built for. Without this branch the gate
+ *   would print a marker line that its own allowlist then throws away.
  */
 function suggestLiteral(text, hit) {
   const start = hit.index;
@@ -210,10 +254,11 @@ function suggestLiteral(text, hit) {
   let right = end;
   while (left > 0 && !/\s/.test(text[left - 1])) left--;
   while (right < text.length && !/\s/.test(text[right])) right++;
-  if (left === start && right === end) return null; // standalone span — nothing to name
+  if (left === start && right === end) return { literal: null, why: 'standalone' };
   const token = text.slice(left, right);
-  if (token.includes('"') || token.includes('-->')) return null; // would break the marker
-  return token;
+  if (hasWhitespace(token)) return { literal: null, why: 'straddles' };
+  if (token.includes('"') || token.includes('-->')) return { literal: null, why: 'unquotable' };
+  return { literal: token, why: null };
 }
 
 /**
@@ -241,23 +286,42 @@ export function checkMojibake(text, label) {
     .join(', ');
   const more = hits.length > 5 ? `, +${hits.length - 5} more` : '';
   let suggestion = null;
+  const why = new Set();
   for (const h of hits) {
-    suggestion = suggestLiteral(s, h);
-    if (suggestion) break;
+    const s2 = suggestLiteral(s, h);
+    if (s2.literal) {
+      suggestion = s2.literal;
+      break;
+    }
+    why.add(s2.why);
   }
+  /* When nothing is suggestible, say WHICH reason applies rather than
+     defaulting to the standalone sentence for all of them (#1982 round 2, F4):
+     "no surrounding context to name" is plainly false of `He said "CAFÉ™"`,
+     where the context exists and simply cannot be quoted. */
+  const REASON = {
+    standalone: 'stand alone between spaces, with no surrounding word to name',
+    unquotable:
+      'sit inside a word carrying a double-quote or "-->", which would terminate the ' +
+      "marker's own quoting",
+    straddles:
+      'straddle a whitespace character themselves, so no literal containing them is ' +
+      'whitespace-free',
+  };
   const advice = suggestion
     ? `add this line to ${label}: <!-- release-notes-gate: allow "${suggestion}" --> — it excuses ` +
       `only the span inside that literal, at every occurrence of the literal in this file.`
-    : `none of the spans above has any surrounding context to name, so none of them can be ` +
-      `allowlisted at all — a span standing alone between spaces is almost certainly genuine ` +
-      `corruption. Re-encode the file.`;
+    : `none of the spans above can be allowlisted at all — they ` +
+      `${[...why].map((w) => REASON[w]).join('; and they ')}. ` +
+      `Re-encode the file${why.has('unquotable') ? ', or reword the offending word' : ''}.`;
   return {
     ok: false,
     reason:
       `${label} contains ${hits.length} double-UTF-8-encoded mojibake span(s): ${sample}${more}. ` +
       `Re-encoding the file is the ordinary fix (see #1956). If a span is legitimate text and not ` +
-      `a mangle (#1973), allow it by naming a literal that CONTAINS the span and extends past it ` +
-      `on at least one side — a marker naming only the flagged characters suppresses NOTHING ` +
+      `a mangle (#1973), allow it by naming a literal that is a SINGLE WHITESPACE-FREE WORD ` +
+      `CONTAINING the span and extending past it on at least one side — a literal that contains ` +
+      `whitespace, or that names only the flagged characters, suppresses NOTHING ` +
       `(#1982), because a literal is excused at every occurrence and a span with nothing around ` +
       `it is by construction a real mangle. To do that here, ${advice}`,
   };
