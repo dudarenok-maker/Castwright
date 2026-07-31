@@ -173,6 +173,13 @@ interface SidecarHealthBody {
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
   vram_total_mb?: number | null;
+  /* #1976 / #1993 review (m8) — the multi-GPU-safe complement to
+     `vram_reserved_mb`/`vram_total_mb` above, which are CURRENT-DEVICE-ONLY
+     (see `_cuda_vram_mb_per_device`'s docstring in main.py: measured
+     reporting `50` while nvidia-smi showed 3587 MiB reserved on cuda:0,
+     because torch's current device wasn't 0). `{}` / absent on an older
+     sidecar or a CUDA-unavailable box. */
+  vram_reserved_mb_by_device?: Record<string, { reserved_mb: number; total_mb: number }>;
 }
 
 /* side-14 — per-engine device ground-truth. Sidecar values are normalised
@@ -370,6 +377,11 @@ export interface SidecarHealthResult {
   committedMb?: number | null;
   vramReservedMb?: number | null;
   vramTotalMb?: number | null;
+  /* #1993 review (m8) — per-card breakdown forwarded verbatim from the
+     sidecar body's vram_reserved_mb_by_device (see SidecarHealthBody's own
+     doc above for why the scalar fields above can't be trusted on a
+     multi-GPU box). undefined on an older sidecar. */
+  vramReservedMbByDevice?: Record<string, { reserved_mb: number; total_mb: number }>;
   /* side-14 — per-engine device map + probe state, forwarded from the sidecar. */
   devices?: SidecarDeviceMap | null;
   devicesState?: SidecarDevicesState | null;
@@ -466,6 +478,10 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
+      vramReservedMbByDevice:
+        body.vram_reserved_mb_by_device && typeof body.vram_reserved_mb_by_device === 'object'
+          ? body.vram_reserved_mb_by_device
+          : undefined,
       devices,
       devicesState: normaliseDevicesState(body.devices_state),
     };

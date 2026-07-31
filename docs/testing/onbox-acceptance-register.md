@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 27 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 28 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**44 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**45 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -94,7 +94,7 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **21 of 60 run (2026-07-29, 2026-07-31) · ~39 still owed · first FAILURE**
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
@@ -179,20 +179,33 @@ place on this box (run sheet §7.3).
 [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969) is why
 A24 below is not fully discharged.
 
-**C-17 ⭐ ran and FAILED — the sheet's first `F`, and the best argument yet for
-this register.** A **designed** voice whose `.pt` is missing did not self-heal
-from its retained clip, and the chapter then rendered that character's lines
-**in the narrator's voice** — while `characterSnapshots.<id>.resolvedVoiceName`
-recorded the assigned voice and nothing was logged. The chapter *completed*;
-every on-disk artifact claimed the right voice; only the sidecar's own synth log
-disagreed, naming `qwen-fDtxqBAQEy9Os1LA5yVUo` on four synths whose durations
-match the character's four segments exactly. The sidecar itself refuses cleanly
-when probed (409 `voice_not_designed`), so the substitution is Node-side. Filed
-as [**#1972**](https://github.com/dudarenok-maker/Castwright/issues/1972); this
-is the failure mode 268 Invariant 8 and the plan-149 persona guard exist to
-prevent, and no automated suite was positioned to see it.
+**RETRACTED — three run-2 results were wrong, and the cause is
+[#1972](https://github.com/dudarenok-maker/Castwright/issues/1972).** A
+per-character re-record picks its target segments from `segments.json` but
+resolves their sentences — and so the voice — from the **analysis cache**, by
+sentence id. Once analysis has run since the render the two disagree, and the
+re-record renders another character's line in the requested character's voice.
+`resolvedVoiceName` still reports the assigned voice, because it was re-derived
+from the cast record rather than recorded from the render.
 
-**Still owed (~39), and why:**
+Every retracted result had been read from that field:
+
+- **A24** — identity half withdrawn. Its German chapter measured **0.949**
+  against the chapter's own narrator. The **language** claim stands: it was
+  measured from the audio by Whisper, which does not consult the cast, and is
+  independently confirmed at the `/synthesize` boundary.
+- **E-01** — identity half withdrawn (13 of 21 targeted segments divergent).
+  The derive, the artifacts and the language all stand.
+- **C-17** — its `F` is withdrawn entirely. The self-heal was never *reached*,
+  so the test was never exercised. It is not-run, not failing.
+
+Reproduced with a **healthy** designed voice, and on two books that diverged for
+unrelated reasons — one from pre-#1598 attribution damage, one from ordinary
+re-segmentation. **The precondition is only "analysis has run since the last
+render."** Full chapter generation is unaffected. No test caught it because none
+asserts which voice reached the provider.
+
+**Still owed (~40), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -241,9 +254,15 @@ prevent, and no automated suite was positioned to see it.
   not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar
   recycled 3× (committed memory peaked at 29,395 MB). The sidecar's own log
   names it: *"expected for the variable-shape leak; the restart ceiling is the
-  real guard"*. **Workaround that works today:** the per-character re-record
-  (splice) path renders one character's lines without the full-chapter memory
-  churn — that is how the central claim above was proven.
+  real guard"*. **Workaround, qualified since [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972):**
+  the per-character re-record (splice) path renders one character's lines
+  without the full-chapter memory churn — that is how the central claim above
+  was proven — but it now REFUSES on a chapter whose `segments.json` and the
+  current analysis disagree (exactly the shape both fixture books in this run
+  hit). It only stays usable as a workaround when the two agree; when they
+  don't, re-run analysis first (so the splice becomes usable again), or fall
+  back to a full chapter generation — which the side-11 leak still blocks, but
+  which is at least immune to the splice's own attribution defect.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.
@@ -574,6 +593,29 @@ motivated the old fail-loud behaviour — Coqui loading while Qwen is still resi
 a card too small for both. Worth watching once, because the failure mode if the
 judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 
+> **Observation 2026-07-31 — NOT a discharge, but the first real datapoint.** A mixed
+> Qwen+Coqui render was run on the 8 GB card incidentally, while discharging A26 item 1:
+> the Russian Coalfall chapter 2 with twelve designed-Qwen characters and `oduvan` forced
+> onto a cloned XTTS voice. **The evict was NOT forced to fail** — this is the ordinary
+> path, not A19's scenario — and the chapter still died:
+>
+> ```
+> chapter_failed  errorCode: "vram-spill"
+> "The GPU ran out of video memory (VRAM) mid-render — too many models were resident at once."
+> ```
+>
+> So of the three outcomes this row asks you to distinguish, the *unforced* case already
+> lands on **"a sidecar OOM that fails the chapter with its own message"** — cleanly
+> classified and remediated, not a crash or a recycle storm. Repeated with
+> `modelKey: coqui-xtts-v2` at run level and it spilled again, because a character's own
+> `ttsEngine` still routes it: the run-level key does not force single-engine.
+>
+> What this does **not** tell us is A19's actual question — whether a *failed evict* makes
+> it worse — since the evict here was never made to fail. But it does mean the co-residency
+> hazard is reachable on this card **without** any evict failure at all, which is worth
+> knowing before running the forced case. Note the box also had two agent pytest suites
+> holding ~2 GB of cuda:0 at the time, so this is a contended-card datapoint, not a clean one.
+
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
   character that falls back to Coqui. Force the evict to fail: point
@@ -691,31 +733,41 @@ opportunistic.
 
 ### A24 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
-> **Core criterion DISCHARGED 2026-07-31** (run 2, SHA `b5479e9c`). German
-> Coalfall ch.2, cloned voice `563501c7-…` cast onto `oduvan`, spliced over the
-> **`/synthesize-batch`** wire — the path the fix had to reach. 12 spans (27.2 s)
-> through `/transcribe` with **no `x-language`**: detected **`de`**,
-> `avg_logprob` **−0.233**, against a designed-voice control at −0.352 in the
-> same chapter and the pre-fix baseline of `en` / −1.303.
-> `resolvedVoiceName` stayed `qwen-563501c7-…` — never-substitute held.
-> Corroborated on the single-synth wire with an identity control: the same clone,
-> same sentence, gave `en`/0.865-cos with `language: English`, **`de`**/0.809-cos
-> with `language: German`, and — reproducing the shipped bug live — `en` with
-> unintelligible phonetics when the language was omitted. Speaker identity
-> survives the language switch (0.809 vs the human source clip, ~0.03
-> different-speaker floor). E-01 additionally proved the same claim on **Coqui**:
-> Russian book, detected `ru` at −0.368.
+> **PARTIALLY evidenced 2026-07-31 — NOT discharged.** Corrected after
+> [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
+> understood; the original entry claimed a full discharge and was wrong.
 >
-> **Two sub-checks still owed, and one of them FAILED.** The
-> designed-self-heal-then-restart comparison was not run. The final bullet's "no
-> `voice-mismatch` rows" check **failed** — but *not* for the reason this row
-> predicted. `auditionCentroid` **does** carry the book's language
-> (`audition-centroid.ts:50-57`); the flag came from a stale persisted reference
-> centroid built from the character's *previous* voice, which is reused
-> unconditionally after a reassignment. Filed as
-> [**#1969**](https://github.com/dudarenok-maker/Castwright/issues/1969); the
-> hypothesis in the bullet below is superseded, keep the check but expect it to
-> stay red until #1969 lands.
+> **What still stands — the fix works, proven at the synthesis boundary.** Three
+> direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
+> with Whisper auto-detect and embedded with `/embed`:
+>
+> | Call | detected | `avg_logprob` | cos vs source clip |
+> |---|---|---|---|
+> | English text + `language: English` | `en` | −0.258 | 0.865 |
+> | **German text + `language: German`** | **`de`** | −0.699 | **0.809** |
+> | German text, language omitted (pre-fix) | `en` | −0.904 | 0.876 |
+>
+> Row 3 reproduces the shipped bug live — German in, English phonetics out,
+> transcript garbage. Row 2 is the fix, with the cloned identity intact at 0.809
+> against a ~0.03 different-speaker floor. This is real evidence and does not
+> depend on the splice path.
+>
+> **What is withdrawn.** The row's actual criterion is *"render a non-English
+> **chapter** with a cloned voice and transcribe the output"*. That chapter
+> render used a splice re-record, so most of what was measured was **narrator**
+> audio, not the clone — the rendered lines scored **0.949** against the
+> chapter's own narrator. The `de` / −0.233 figure is therefore a measurement of
+> the wrong audio: it shows the chapter rendered in German, not that *a cloned
+> voice* did. `resolvedVoiceName` said otherwise, and that is the field #1972
+> falsifies.
+>
+> **To finish this row:** re-run the chapter-level criterion once #1972 has
+> landed, on a book whose `segments.json` and analysis agree — or via a full
+> chapter generation, which is unaffected by the defect. The remaining
+> sub-checks (designed self-heal → restart → identical; the QA
+> `voice-mismatch` check, blocked on
+> [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969)) are
+> unchanged.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
@@ -797,7 +849,7 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 **The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
 
-**Partially discharged 2026-07-31** on that reverted box. What ran, and what it proved:
+**Partially discharged — items 1 and 3 are now DONE (2026-07-31); items 2 and 4 remain.** What ran, and what it proved:
 
 - `import torchcodec` → `RuntimeError: Could not load libtorchcodec … FFmpeg is not properly installed`. The box is genuinely broken, so nothing below is a vacuous pass.
 - `torchaudio`'s own loader on a reference WAV → same failure. This is the pre-fix path.
@@ -806,9 +858,40 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 **Still owed** is everything that needs the sidecar and a real voice — see items 1–4.
 
-- **1. Static-FFmpeg derive — STILL OWED.** The mechanism is proven above, but the full path through `CoquiEngine.clone_voice` has not run: it needs a sidecar started from post-merge code (the one running on 2026-07-31 predated the merge) plus a real consented sample. Run a Coqui cloned-voice derive on the reverted box; it must **complete** and write `voices/xtts/xtts-<uuid>.{pt,json}` — the exact case that failed unpatched, and the one that blocked all nine of A1's Section E items. Confirm from the sidecar log that the derive was reached rather than short-circuited by a cached `.pt`.
+- **1. Static-FFmpeg derive — DISCHARGED 2026-07-31.** Ran on the reverted box against a sidecar the server genuinely supervised. The derive **completed** through the full `CoquiEngine.clone_voice` path and wrote both artifacts into a directory that was **empty** beforehand, so no cached `.pt` could have short-circuited it:
+
+  ```
+  18:12:59.558 [sidecar] Cloned + cached Coqui voice 'xtts-0abceba4-…' from caller clip.
+  xtts-0abceba4-5eba-4d8f-8bdf-46bee14c931d.pt    135,509 B
+  xtts-0abceba4-5eba-4d8f-8bdf-46bee14c931d.json      172 B
+  ```
+
+  No `derive-failed`, no `Cloned voice(s) unavailable`. The rendered audio is the clone and not a substitute — **0.229** cosine against the source clip versus a **0.014** different-speaker floor, measured through the production `/synthesize` → `/embed` path rather than read off `resolvedVoiceName`.
+
+  **Three preconditions were verified, not assumed** — each is a way this acceptance can be faked:
+  1. *The box is really static-FFmpeg.* `import torchcodec` still fails. The 25 stray hash-suffixed FFmpeg DLLs the first revert left inside `site-packages/torchcodec/` were also removed (62.6 MB); torchcodec's own 10 extensions are intact.
+  2. *The sidecar is post-merge.* The running one had been orphaned by a recycle storm — `POST /api/sidecar/restart` returned **409**, i.e. nothing supervised it, so its vintage was unknown. Restarted the stack; `/restart` then returned **200**. **Treat a 409 as "this sidecar may be any age."**
+  3. *No cache existed to short-circuit the derive.* `voices/xtts/` was empty.
+
+  **Deviation, deliberate:** the hand-off brief suggests reusing E-01's splice setup. A **full chapter generation** was used instead, because [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) — found the same day — makes the splice unsafe on that book (13 of 21 targeted segments divergent), and that contamination is exactly why E-01's original identity claim had to be retracted.
+
+  **This does NOT discharge E-01.** The chapter itself failed *after* the derive with `vram-spill` (mixed Qwen+Coqui on the 8 GB card — see A19), so "the chapter renders" and the by-ear check remain owed there.
+
+  A separate finding came out of it: a clone rendered in a language other than its source clip's loses most of its speaker identity on XTTS — 0.600 (English) → 0.229 (Russian), same derive. Filed as [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998).
+
 - **2. Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was **measured** during PR #1978's review, on the still-hot-patched box, by running both decoders side by side against the same WAV: **max difference 0.0**, mono and stereo-downmix alike, so the replacement is bit-identical to the loader it replaces rather than merely similar. What remains is the *audible* end of it — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the rendered output is equivalent. Cheap once item 1 can run.
-- **3. Install-time verification — HALF RUN.** The healthy direction is done: `COQUI_VERIFY_CODE` was extracted and executed against the real venv with the installer's own `cwd`, printing `[install-coqui] entering clone-path patch` then `[install-coqui] clone-path verify ok`, exit 0. **The failure direction is still owed** — deliberately corrupt the installed `TTS.tts.models.xtts.load_audio` signature before the snippet runs and confirm the installer exits 1 with the *drift* message naming the `coqui-tts` version, **and** that an unrelated pre-patch crash (e.g. a broken `import TTS`) instead gets the neutral "could not run" message. That two-way distinction is the whole point of the marker line and is untested on a real install.
+- **3. Install-time verification — DISCHARGED 2026-07-31.** Both failure directions now run on a real install, and they produce **different** messages, which was the whole point of the marker line:
+
+  | Scenario | exit | marker in stdout | branch selected |
+  |---|---|---|---|
+  | control — healthy | **0** | true | PASS, no failure branch |
+  | **loader drift** (rebound to a wrong signature) | **1** | **true** | **MSG-1** — "patch could not be applied", names `coqui-tts 0.27.5`, points at #1967 |
+  | **unrelated crash** (`import TTS` raises) | **1** | **false** | **MSG-2** — neutral "verification could not run" |
+
+  Direction 2 correctly did **not** get MSG-1 — the specific defect this item existed to rule out. Drift message verbatim: `RuntimeError: XTTS reference-audio patch cannot be applied: unexpected load_audio signature ('some_other_name', 'and_another', 'extra') (coqui-tts 0.27.5).`
+
+  Driven through the **real** `COQUI_VERIFY_CODE` and the **real** branch predicate from `install-coqui.mjs:222-232`; perturbations injected via `PYTHONPATH` only (a `sitecustomize.py` rebinding `load_audio`, and a shadow `TTS/__init__.py` raising `ImportError`), so the shared venv was never mutated. The guard's other drift shape (attribute missing) is already unit-covered by `test_raises_when_load_audio_missing`; the on-box-unique part was the marker-driven branch selection, which is what ran.
+
 - **4. Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` that `pinokio/install.js` provisions and record whether it succeeds or fails — genuinely unknown at design time (design spec §11): conda-forge's ffmpeg is built shared, but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to the conda env's `Library/bin` DLLs, so shared-ness there does not imply loadable here. #1967's fix makes the answer moot for *behaviour* either way — a Coqui clone derives correctly on Pinokio regardless — but the outcome itself is still owed as a recorded fact; see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. **Batch with E1**, which already owns the Pinokio box.
 
 *Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
@@ -931,6 +1014,44 @@ write access to both, and a sidecar restart between passes (the flags are
 sticky per process). No GPU is required for the Kokoro half — the import fails long before
 any device work — so this can ride along with any other Group A session, or run
 alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
+
+---
+
+### A28 · Stranded VRAM pool reclaimed on the admission-failure path ([#1976](https://github.com/dudarenok-maker/Castwright/issues/1976), PR [#1993](https://github.com/dudarenok-maker/Castwright/pull/1993)) · **single 8 GB card**
+
+Unit tests inject a fake `probe()` and a fake `reclaim` hook, proving the CALL
+SEQUENCE (idle-evict first, reclaim once on failure, cooldown, the
+in-use skip) — none of them touch a real CUDA allocator, so whether an actual
+stranded `torch.cuda.empty_cache()` pool comes back on real hardware, and
+whether the two new guards (C1, PR #1993 review) behave under real timing,
+is unproven.
+
+- Render a chapter to completion, let the engine report unloaded, and confirm
+  (via `nvidia-smi` and `GET /api/sidecar/health`'s new
+  `vramReservedMbByDevice`) that a reserved-but-unallocated pool is left
+  behind on the render card, matching #1976's own measured shape (~3.9 GB on
+  an 8 GB card).
+- With that stranded pool present and nothing resident, issue an op that
+  would otherwise be refused (an ASR `/transcribe`, or a voice design). It
+  must be **admitted**, and `nvidia-smi` on that card must drop to
+  near-baseline afterward — the #1976 acceptance criterion this row exists
+  to close.
+- Confirm the two C1 guards don't misfire on real hardware: (a) start a
+  genuine render (so the render's engine holds a live reservation) and, from
+  a second client, issue a refused op on the SAME card — the reclaim must
+  NOT fire mid-render (watch for `stranded-cache reclaim` in the sidecar log;
+  it must not appear while the render is in flight); (b) issue two refused
+  ops on the same card within 30 s of each other and confirm the reclaim log
+  line appears only once, not twice.
+- This PR's `Closes #1976` was narrowed to `Refs #1976` in review (M5) — the
+  render/unload-completion reclaim (#1976's other acceptance criterion) is a
+  SEPARATE, not-yet-built lever tracked on its own follow-up issue. Do not
+  treat this row's discharge as closing #1976 itself.
+
+*Needs:* the 8 GB card only, a chapter render, and something to run past it
+(ASR or a design) once it finishes. *Criteria:* PR #1993's description +
+the C1/M3 review findings quoted above. *Cost:* short — rides along with A19
+and A20, which already stage a mixed-engine render on this same card.
 
 ---
 

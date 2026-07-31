@@ -31,9 +31,11 @@ export interface CharacterSnapshot {
       0.6B base is never pulled co-resident with a 1.7B render. Absent on segments
       written before this stamp (aggregate falls back to the chapter `modelKey`). */
   modelKey?: TtsModelKey;
-  /** The voice NAME resolved at render time (plan 108 Wave 2b) — for a
-      bespoke Qwen render this is the designed voiceId (e.g. `qwen-oduvan`).
-      Absent on pre-108 segments. */
+  /** The voice NAME actually sent to the provider at render time (plan 108
+      Wave 2b) — for a bespoke Qwen render this is the designed voiceId (e.g.
+      `qwen-oduvan`). Absent on pre-108 segments. #1972 — recorded from what
+      the render actually synthesised, not re-derived from the cast record
+      afterwards; see `character-snapshots.ts`'s `buildCharacterSnapshots`. */
   resolvedVoiceName?: string;
   /** Engine this character ACTUALLY rendered in when it differs from its
       configured engine — `'kokoro'` when a Qwen character fell back (no
