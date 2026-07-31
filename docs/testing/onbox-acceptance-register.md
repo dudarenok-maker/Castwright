@@ -616,6 +616,37 @@ judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 > knowing before running the forced case. Note the box also had two agent pytest suites
 > holding ~2 GB of cuda:0 at the time, so this is a contended-card datapoint, not a clean one.
 
+> **Correction 2026-08-01 — that datapoint was contention, not a card-size limit.** The
+> caveat above understated it. Re-run on a **quiet** box the same mixed Qwen+Coqui chapter
+> **completed 71/71** with `audioEngines {qwen: 3, coqui: 1}`. Measured footprints via
+> `POST /load` + `/health`:
+>
+> | state | cuda:0 | cuda:1 |
+> |---|---|---|
+> | Qwen 0.6B alone | 0 MB | 1,845 MB |
+> | Qwen **+** Coqui, both resident | 0 MB | **3,758 MB** |
+> | sidecar fresh, **nothing loaded** | **5,743 MB** | 393 MB |
+>
+> Both engines together are **3.7 GB** — they fit an 8 GB card with room to spare. That
+> last row is the tell: a brand-new sidecar with zero models resident, and cuda:0 already
+> two-thirds full. The holder was another worktree's real-GPU Qwen pytest suite
+> (`wt-1975-batch-inlock-load`, ~5.4 GB across **both** cards). The refusal itself was
+> correct and self-describing — `NoCapacityError … deviceKey: 'cuda:0', blockers: []`, where
+> `blockers: []` means "something I cannot see holds this card", since the placement
+> controller only knows its own engines.
+>
+> **So A19's question is still entirely open** — the unforced case does *not* reliably spill
+> on an 8 GB card, and the earlier reading that it did was measuring a foreign process.
+> Caveat in the other direction: our own peak across a 1,588-sample trace was **6,727 MB**
+> (Qwen + Coqui + Whisper ASR together), which on an 8 GB card leaves little headroom — so
+> co-residency is genuinely tight, just not the 6.7 GB-at-idle that was observed.
+>
+> **Box policy since 2026-08-01 (owner's call):** renders are pinned to the 16 GB 5070 Ti
+> via `COQUI_DEVICE=cuda:1` / `QWEN_DEVICE=cuda:1` / `ASR_DEVICE=cuda:1` in the git-ignored
+> `server/.env`, leaving cuda:0 free for other worktrees' PR suites. **A19's forced-evict run
+> must temporarily undo those pins**, or it will not exercise the single-8 GB-card scenario
+> this row is about.
+
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
   character that falls back to Coqui. Force the evict to fail: point
