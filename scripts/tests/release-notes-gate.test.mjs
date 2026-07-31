@@ -147,9 +147,10 @@ test('a failing reason names the offending literal and a paste-able marker line'
   assert.equal(res.ok, false);
   assert.match(res.reason, /docs\/release-notes-next\.md/);
   assert.ok(res.reason.includes('É™'), res.reason); // the offending literal
+  // The marker now contains the full token "CAFÉ™", not just the core "É™"
   assert.ok(
-    res.reason.includes(`<!-- release-notes-gate: allow "É™" -->`),
-    res.reason, // the exact line to paste
+    res.reason.includes(`<!-- release-notes-gate: allow "CAFÉ™" -->`),
+    res.reason, // the widened literal to stay scoped to the legitimate use
   );
 });
 
@@ -180,4 +181,56 @@ test('the committed RELEASE_NOTES.md is free of mojibake', () => {
   const text = readFileSync(resolve(repoRoot, 'RELEASE_NOTES.md'), 'utf8');
   const res = checkMojibake(text, 'RELEASE_NOTES.md');
   assert.equal(res.ok, true, res.reason);
+});
+
+// #1973 follow-up: the suggested allowlist literal must be the full token, not just the core
+test('checkMojibake suggests the full whitespace-delimited token, not just the mojibake core', () => {
+  // CAFE = 'CAFÉ™', chunk detected = 'É™', core length = 2, so core = 'É™'
+  // But the token is 'CAFÉ™', so the suggestion should widen to that
+  const res = checkMojibake(`Order at ${CAFE} today.`, 'test.md');
+  assert.equal(res.ok, false);
+  // The marker should contain the full token 'CAFÉ™', not just the core
+  assert.match(res.reason, /allow "CAFÉ™"/);
+});
+
+// LOAD-BEARING: suppression by exact literal match means a narrow marker suppresses all instances.
+// The fix's suggestion must be wide enough to stay scoped to the legitimate use.
+test('pasting the suggested marker and re-running still flags genuine corruption elsewhere', () => {
+  // Scenario: CAFÉ™ is legitimate, but zzÉ™zz is genuine corruption
+  const text1 = `Order at ${CAFE} today.\nCorruption: zzÉ™zz was mangled.\n`;
+
+  // Before the marker, both mojibake spans are flagged
+  const res1 = checkMojibake(text1, 'test.md');
+  assert.equal(res1.ok, false);
+  assert.match(res1.reason, /2 double-UTF-8-encoded mojibake span/);
+
+  // Extract the suggested marker line from the failure message
+  const markerMatch = res1.reason.match(/<!-- release-notes-gate: allow "[^"]*" -->/);
+  assert.ok(markerMatch, 'should find the suggested marker');
+  const suggestedMarker = markerMatch[0];
+
+  // Paste the marker and re-run
+  const text2 = `${suggestedMarker}\n\n${text1}`;
+  const res2 = checkMojibake(text2, 'test.md');
+
+  // The key assertion: we should still fail because the genuine corruption is not suppressed
+  // (suppression is positional, and the corruption sits outside the "CAFÉ™" span)
+  assert.equal(res2.ok, false, 'should still fail after pasting the suggested marker');
+  assert.match(res2.reason, /1 double-UTF-8-encoded mojibake span/);
+  // The survivor should be the genuine corruption, identified by its surrounding context
+  assert.ok(res2.reason.includes(JSON.stringify('É™zz')), res2.reason);
+});
+
+test('checkMojibake degrades safely when a token contains a double-quote', () => {
+  // Create a scenario where the token containing the mojibake includes a quote
+  // E.g., something like: He said "CAFÉ™"
+  const text = `He said "CAFÉ™" yesterday.`;
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  // Should still print a marker, but safely degraded to the core since the token has a quote
+  assert.match(res.reason, /<!-- release-notes-gate: allow "[^"]*" -->/);
+  // The marker should parse correctly via parseMojibakeAllowlist
+  const marker = res.reason.match(/<!-- release-notes-gate: allow "[^"]*" -->/)[0];
+  const allowlist = parseMojibakeAllowlist(marker);
+  assert.ok(allowlist.length > 0, 'marker should parse without error');
 });

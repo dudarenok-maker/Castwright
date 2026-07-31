@@ -139,6 +139,38 @@ function allowedRanges(text, literals) {
   return ranges;
 }
 
+/**
+ * Extract the whitespace-delimited token containing the mojibake span at `hit.index`.
+ * If the token contains a double-quote, returns the bare core instead (to avoid
+ * breaking the marker's literal syntax). If the span is already standalone (whitespace
+ * on both sides), returns the span itself.
+ */
+function widenToToken(text, hit) {
+  const core = hit.chunk.slice(0, mojibakeCoreLength(hit));
+  let left = hit.index;
+  let right = hit.index + core.length;
+
+  // Expand left to the start of the token (stop at whitespace)
+  while (left > 0 && !/\s/.test(text[left - 1])) {
+    left--;
+  }
+
+  // Expand right to the end of the token (stop at whitespace)
+  while (right < text.length && !/\s/.test(text[right])) {
+    right++;
+  }
+
+  const token = text.slice(left, right);
+
+  // If the token contains a double-quote, it would break the marker's literal syntax.
+  // Fall back to the core to degrade safely.
+  if (token.includes('"')) {
+    return core;
+  }
+
+  return token;
+}
+
 /** Characters of a hit that are actually the double-encoded sequence.
     findMojibake matches greedily up to 4 characters, so a hit routinely carries
     trailing single-byte characters (a space, a quote) that are mere context —
@@ -177,15 +209,16 @@ export function checkMojibake(text, label) {
     .map((h) => `${JSON.stringify(h.chunk)} (should be ${JSON.stringify(h.decoded)})`)
     .join(', ');
   const more = hits.length > 5 ? `, +${hits.length - 5} more` : '';
-  const first = hits[0].chunk.slice(0, mojibakeCoreLength(hits[0]));
+  const literal = widenToToken(s, hits[0]);
   return {
     ok: false,
     reason:
       `${label} contains ${hits.length} double-UTF-8-encoded mojibake span(s): ${sample}${more}. ` +
       `Re-encode before tagging (see #1956). If a span is legitimate text and not a mangle ` +
       `(#1973), allow it by adding this line to ${label}: ` +
-      `<!-- release-notes-gate: allow "${first}" --> — widen the quoted literal to the ` +
-      `surrounding word (e.g. "CAFÉ™") so the gate stays live for that span elsewhere.`,
+      `<!-- release-notes-gate: allow "${literal}" --> — this literal matches exactly, so it ` +
+      `suppresses that span everywhere it occurs in this file. Widen to the surrounding word ` +
+      `(e.g. "CAFÉ™" instead of "É™") to stay scoped to the legitimate use.`,
   };
 }
 
