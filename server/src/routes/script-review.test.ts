@@ -1583,13 +1583,18 @@ describe('cancellation (fs-58 follow-up #1481)', () => {
     // Retry the SAME scope immediately — WITHOUT waiting for the first
     // (still-gated, not-yet-actually-rejected) job to settle. This is the
     // exact race the finding describes.
-    const secondCall = makeGate<void>();
-    runReview.mockImplementationOnce(() => {
-      secondCall.enter();
-      return Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] });
-    });
+    runReview.mockImplementationOnce(() =>
+      Promise.resolve({ ops: [{ id: 1, op: 'strip_tag', newText: 'Hello', rationale: 'r' }] }),
+    );
     const second = firePost(`/api/books/${bookId}/script-review`, { chapterId: 1 });
-    await secondCall.entered;
+    // Stays wall-clock, like the rejoin test above: the retry either starts a
+    // genuinely new analyzer call or (in the buggy case) JOINS the doomed
+    // first job and never calls runReview a second time at all — which of
+    // those happens is exactly what this test is checking, so there is no
+    // single mocked-call-entered condition to gate on here; a regression
+    // would make that signal dead by construction, turning a red assertion
+    // into a 15s timeout instead of a crisp failure.
+    await new Promise((r) => setTimeout(r, 20));
 
     // A genuinely new analyzer call was made — the second request did NOT
     // join the doomed first job.

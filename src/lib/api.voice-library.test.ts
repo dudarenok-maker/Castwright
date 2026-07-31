@@ -288,7 +288,7 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
     it('requires attestedBy for guardian-of-minor (omitted is rejected)', async () => {
       await expect(
         mockCloneVoice({ candidateId: 'cand-1', consent }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/attestedBy/);
     });
 
     it('requires attestedBy for guardian-of-minor (blank is rejected)', async () => {
@@ -297,7 +297,7 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
           candidateId: 'cand-1',
           consent: { ...consent, attestedBy: '   ' },
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/attestedBy/);
     });
   });
 });
