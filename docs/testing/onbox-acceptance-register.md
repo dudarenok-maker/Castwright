@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 29 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 30 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**46 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**47 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1115,6 +1115,67 @@ cache to seed/inspect both `base` and the configured model's snapshots. No GPU
 required. *Criteria:* this row plus PR #2008's description of the failure
 scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
 Remove click.
+
+---
+
+### A30 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+
+PR #2032 (hardened further by the independent pre-merge review that produced
+this row) closes three "a gate that silently stopped asserting" defects in
+`server/tts-sidecar/tests/golden/compare.py`'s bless guards and in
+`test_golden_regression.py`'s `_make_kokoro`. All three files' pure-function
+gating tests (`test_golden_compare.py`, `test_instruct_bless_gating.py`,
+`test_make_kokoro_gating.py`) are mutation-verified and run in the fast
+`test:sidecar` tier — but two behaviours only a real bless run against real
+weights can prove, and neither was exercised on real hardware for this PR:
+
+- **A guard that never blocks honest work.** Every guard added/hardened here
+  (`bless_guard`'s G1/G2, `bless_guard_thresholds`'s tolerances check and its
+  new `previously_blessed` disambiguation) is proven only against synthetic
+  fixtures. The thing that would make it a *rubber stamp in the other
+  direction* — refusing a bless that changed nothing real, or demanding
+  `GOLDEN_REBLESS_THRESHOLDS=1`/`GOLDEN_REBLESS_CONTENT=1` on a routine,
+  uncontended re-bless — has never been observed end to end.
+- **`_make_kokoro` against a real `KokoroEngine`.** `test_make_kokoro_gating.py`
+  pins the classifier wiring (`synthesise_or_skip` / `prereq.py`) with a
+  stubbed engine; #1987's actual claim — a genuine CUDA/model-corruption
+  failure during Kokoro warm-up now FAILS the test instead of reading as a
+  green SKIP — has not been forced against the real engine.
+
+- **Prerequisite:** Kokoro weights installed
+  (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx` +
+  `voices-v1.0.bin`), sidecar venv bootstrapped. A single 8 GB card is
+  sufficient (Kokoro is the ~1 GB fallback engine); CUDA is not required —
+  `ASR_DEVICE=cpu`/CPU Kokoro also exercises this.
+- Run `npm run test:golden-audio -- --bless --sidecar-only` on a clean,
+  **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
+  contention warning should print nothing). Confirm it completes and writes
+  `kokoro-baseline.json` / `instruct-baseline.json` **without**
+  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set — i.e. the
+  guards stay silent on a routine bless where nothing actually drifted.
+  `git diff` those two files afterward: only `blessed_at`-adjacent /
+  measurement noise should move, no `tolerances` or `transcript` values.
+- Then force one refusal for real: hand-edit a committed baseline to null out
+  its `transcript` (or delete its `tolerances` key) exactly as a bad
+  merge-resolution would, re-run the same `--bless` command, and confirm it
+  refuses with the expected `GOLDEN_REBLESS_*` message and leaves the file
+  byte-identical to before the attempt — then revert the hand-edit.
+  This is the "#2003/#1995 shape, on a real file, via the real CLI entry
+  point" check the unit tests can only approximate with `tmp_path` fixtures.
+- Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
+  (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
+  normally (expect pass), then deliberately break the engine (e.g. rename
+  the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM) and
+  confirm the run now **FAILS** rather than SKIPping — the #1987 defect this
+  PR closed. Restore the weights afterward.
+
+*Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
+stable, reproducible value (no concurrent GPU work), and permission to
+hand-edit a baseline JSON for the refusal drill (revert before committing).
+*Criteria:* this row; PR #2032's own mutation-verification table is the
+synthetic-fixture half of the evidence, this row is the real-file half.
+*Cost:* short — one clean bless, one deliberately-broken bless, one
+deliberately-broken Kokoro run; well under an hour total.
 
 ---
 

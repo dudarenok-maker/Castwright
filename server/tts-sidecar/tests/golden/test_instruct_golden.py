@@ -180,7 +180,15 @@ def _bless(measured: dict) -> None:
     silently move it to whatever THIS run measured. `bless_guard_thresholds`
     refuses (raises, no write at all -- same all-or-nothing shape as
     `test_golden_regression._bless`'s G1/G2) unless the computed tolerances
-    match what's already committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set."""
+    match what's already committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set.
+
+    `previously_blessed=bool(baseline.get("identity"))` disambiguates a
+    genuine first bless (no `identity` recorded yet) from a previously
+    blessed baseline that lost its `tolerances` key (e.g. a hand-resolved
+    merge conflict) -- `existing is None` alone cannot tell those apart, and
+    conflating them was the exact #2003 shape reproduced inside this guard.
+    `baseline.get("identity")` is the same signal `test_live_instruct_golden`
+    already uses below for its own unblessed-SKIP."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
@@ -191,7 +199,10 @@ def _bless(measured: dict) -> None:
     }
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
     guard_reason = bless_guard_thresholds(
-        baseline.get("tolerances"), computed_tolerances, allow_rebless_thresholds=allow_rebless_thresholds
+        baseline.get("tolerances"),
+        computed_tolerances,
+        previously_blessed=bool(baseline.get("identity")),
+        allow_rebless_thresholds=allow_rebless_thresholds,
     )
     if guard_reason is not None:
         raise AssertionError(guard_reason)

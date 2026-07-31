@@ -290,13 +290,20 @@ Design rationale:
   A `--bless` that would silently overwrite a DIFFERING recorded transcript is
   refused unless `GOLDEN_REBLESS_CONTENT=1` is also set (see
   `tests/golden/compare.py`'s `bless_guard`, G1/G2) — this also fails CLOSED
-  (refuses, same flag) when an existing entry is missing its `transcript` or
-  `text_edits` key outright (e.g. a hand-resolved merge conflict), rather than
-  silently reopening the no-op first-bless path (#2003). Separately,
+  (refuses, same flag) when an existing entry is missing its `transcript` key
+  outright (or the key is present but `null`/non-string — the same corruption
+  shape) rather than silently reopening the no-op first-bless path; a missing
+  (or `null`/non-int) `text_edits` key is a separate mechanism — it neither
+  refuses nor needs the flag, it just applies the strictest possible recorded
+  cap (`0 + 1`), so it only refuses if the fresh transcript's edit count
+  exceeds that cap (#2003). Separately,
   `instruct-baseline.json` mixes measurements with a THRESHOLD
   (`tolerances.rtf_max` etc.) — a `--bless` that would move a tolerance is
   refused unless `GOLDEN_REBLESS_THRESHOLDS=1` is also set (`bless_guard_thresholds`,
-  #1995), so an unrelated bless (e.g. one only meant to re-record Kokoro
+  #1995) — including when a previously-blessed baseline lost its `tolerances`
+  key outright (same merge-conflict shape as above; disambiguated from a
+  genuine first bless via `baseline.get("identity")`), so an unrelated bless
+  (e.g. one only meant to re-record Kokoro
   transcripts) can't silently loosen a throughput/identity/loudness ceiling to
   whatever the blessing box happened to measure.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.

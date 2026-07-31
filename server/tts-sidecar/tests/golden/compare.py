@@ -248,7 +248,14 @@ def bless_guard(
     transcript, never fall into the no-op first-bless branch. Likewise a
     missing `text_edits` key on an otherwise-populated entry must not
     silently disable G2's cap; it is treated as the strictest possible
-    recorded value (0), not "no cap"."""
+    recorded value (0), not "no cap". A JSON `null` (present key, `None`
+    value) or a wrong-typed value (e.g. a string) is the same corruption
+    shape a hand-resolved merge conflict produces just as easily as an
+    absent key, so both get the identical missing-key treatment: a null/
+    non-string `transcript` fails closed via G1 (not silently accepted —
+    `normalize_words(None)` collapses to `[]`, which would otherwise compare
+    equal to a silent fresh transcript), and a null/non-int `text_edits`
+    falls back to the strictest cap (0) rather than raising."""
     edits, wer = content_edits(text, fresh)
 
     if existing is None:
@@ -259,7 +266,8 @@ def bless_guard(
             )
         return None
 
-    if "transcript" not in existing:
+    recorded_transcript = existing.get("transcript")
+    if not recorded_transcript:
         if not allow_rebless_content:
             return (
                 "refusing to bless: existing entry has no recorded "
@@ -267,7 +275,6 @@ def bless_guard(
                 "GOLDEN_REBLESS_CONTENT=1 to confirm this is intentional"
             )
     else:
-        recorded_transcript = existing["transcript"]
         if (
             normalize_words(recorded_transcript) != normalize_words(fresh)
             and not allow_rebless_content
@@ -278,7 +285,8 @@ def bless_guard(
                 "GOLDEN_REBLESS_CONTENT=1 to confirm this is intentional"
             )
 
-    recorded_edits = existing.get("text_edits", 0)
+    recorded_edits_raw = existing.get("text_edits", 0)
+    recorded_edits = recorded_edits_raw if isinstance(recorded_edits_raw, int) else 0
     if edits > recorded_edits + 1:
         return (
             f"refusing to bless: text_edits {edits} would exceed the recorded "
@@ -292,6 +300,7 @@ def bless_guard_thresholds(
     existing: Optional[dict],
     computed: dict,
     *,
+    previously_blessed: bool = False,
     allow_rebless_thresholds: bool = False,
 ) -> Optional[str]:
     """Refuse a `--bless` write that would change a baseline's `tolerances`
@@ -303,15 +312,41 @@ def bless_guard_thresholds(
     under GPU contention, recorded by a bless that was about something else
     entirely).
 
-    `existing` is the CURRENTLY COMMITTED `tolerances` dict (or None on a
-    brand-new / never-blessed baseline — nothing to protect yet); `computed`
-    is what this bless run would write. Pure: the caller reads
+    `existing` is the CURRENTLY COMMITTED `tolerances` dict (or None when
+    there is no committed `tolerances` block at all); `computed` is what
+    this bless run would write. Pure: the caller reads
     `GOLDEN_REBLESS_THRESHOLDS` from the environment and passes it as
     `allow_rebless_thresholds` — this function never touches os.environ.
 
     Mirrors `bless_guard`'s G1 shape (refuse a silent change, escape via an
-    explicit flag) but for the ceiling(s) rather than the transcript."""
-    if existing is None or existing == computed:
+    explicit flag) but for the ceiling(s) rather than the transcript.
+
+    A missing `tolerances` block is ambiguous on its own: it is either a
+    genuine first bless (nothing recorded yet — the ORIGINAL, and still the
+    common, case for `existing is None`) or a PREVIOUSLY blessed baseline
+    that lost its `tolerances` key (e.g. a hand-resolved merge conflict) —
+    the exact #2003 shape, reproduced inside this guard by an earlier
+    revision of this fix. `existing is None` alone cannot tell those apart,
+    so the caller passes `previously_blessed` — its own
+    `bool(baseline.get("identity"))`, the file's existing definition of
+    "has this baseline ever been blessed" (`test_instruct_golden.py`'s
+    unblessed-SKIP already uses that same signal). A never-blessed baseline
+    (`previously_blessed=False`) is accepted with no flag, same as before;
+    a previously-blessed baseline missing `tolerances`
+    (`previously_blessed=True`) now fails CLOSED via the same flag as any
+    other threshold change."""
+    if existing is None:
+        if not previously_blessed:
+            return None
+        if allow_rebless_thresholds:
+            return None
+        return (
+            "refusing to bless: baseline has been blessed before but its "
+            "'tolerances' key is missing (e.g. a hand-resolved merge "
+            f"conflict) -- computed {computed!r} would be written blind -- "
+            "set GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
+        )
+    if existing == computed:
         return None
     if allow_rebless_thresholds:
         return None

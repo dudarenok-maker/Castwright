@@ -37,11 +37,21 @@ import pytest
 # stdlib phrasing of a bare missing module. Matched case-insensitively on the
 # message because `_ensure_loaded` re-wraps the original ImportError in a
 # plain RuntimeError, so the exception TYPE alone can't distinguish
-# "coqui-tts isn't installed" from "the render failed". The generic "no
-# module named" entry also covers `KokoroEngine._ensure_loaded`'s equivalent
-# "Failed to import kokoro-onnx (...)" wrapper (#1987) without a
-# Kokoro-specific marker — no engine-specific string needed there since the
-# underlying ImportError already reads "No module named 'kokoro_onnx'".
+# "coqui-tts isn't installed" from "the render failed".
+#
+# Kokoro has no dedicated marker of its own — it relies solely on the
+# generic "no module named" entry, which matches ONLY the specific case
+# where the `kokoro_onnx` package itself is absent from this venv (the
+# underlying ImportError reads "No module named 'kokoro_onnx'"). A box
+# where the package IS installed but a downstream native dependency is
+# broken (observed: a corrupt onnxruntime provider raising "Failed to
+# import kokoro-onnx (DLL load failed while importing
+# onnxruntime_pybind11_state...)") matches no marker here and so FAILS
+# rather than skips. That is deliberate, not a gap: #1987's whole point is
+# that a broken install must read as a real failure, not a green SKIP, so
+# `_make_kokoro` propagating it (via `synthesise_or_skip`, same as here) is
+# the intended behaviour for the opt-in golden tier -- this comment
+# previously implied blanket Kokoro coverage, which overstated it.
 _ENGINE_ABSENT_MARKERS = (
     "failed to import coqui-tts",
     "pytorch missing from this venv",

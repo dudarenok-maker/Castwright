@@ -348,6 +348,54 @@ def test_bless_guard_missing_text_edits_key_fails_closed_not_open_cap():
     assert "text_edits" in reason
 
 
+def test_bless_guard_null_valued_transcript_fails_closed_like_a_missing_key():
+    # #2003 follow-up (independent review of #2032, F2): JSON `null` is the
+    # sibling corruption shape to a missing key -- a hand-resolved merge
+    # conflict produces it just as easily. `normalize_words(None)` returns
+    # [] (`text or ""`), so an unguarded null transcript previously compared
+    # equal to an empty FRESH transcript (silence) and sailed through. The
+    # cap here (99) is deliberately huge so only G1 -- not G2 -- can catch
+    # this: the old code accepted it outright.
+    existing = {"transcript": None, "text_edits": 99}
+    reason = bless_guard(
+        "The lighthouse keeper watched the grey sea roll in.",
+        existing,
+        "",  # silence
+    )
+    assert reason is not None
+    assert "GOLDEN_REBLESS_CONTENT" in reason
+
+
+def test_bless_guard_null_text_edits_treated_as_missing_not_a_crash():
+    # #2003 follow-up (F2, row 2): a null `text_edits` must not raise
+    # (`None + 1` was a TypeError before this fix) -- it gets the same
+    # strictest-possible-cap (0) treatment as a missing key.
+    existing = {"transcript": "one two three four five", "text_edits": None}
+    reason = bless_guard(
+        "one two three four five",
+        existing,
+        "one two threee fourr five",  # 2 edits > 0 + 1 cap
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
+def test_bless_guard_wrong_type_text_edits_treated_as_missing_not_a_crash():
+    # #2003 follow-up (F2, row 3): a wrong-typed `text_edits` (e.g. a string
+    # from a hand-resolved merge conflict) must not raise (`"2" + 1` was a
+    # TypeError before this fix) and must not be trusted as a numeric cap.
+    existing = {"transcript": "one two three four five", "text_edits": "2"}
+    reason = bless_guard(
+        "one two three four five",
+        existing,
+        "one two threee fourr five",  # 2 edits > 0 + 1 cap ("2" not trusted)
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
 def test_bless_guard_g2_protects_a_perfectly_transcribing_line():
     # #1911 s2c's key argument for G2: a line with 0 recorded edits over many
     # tokens is structurally unprotectable by a flat WER floor (a fraction of
@@ -402,3 +450,23 @@ def test_bless_guard_thresholds_allows_the_change_with_the_flag():
     existing = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
     computed = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.31}
     assert bless_guard_thresholds(existing, computed, allow_rebless_thresholds=True) is None
+
+
+def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_fails_closed():
+    # #2003-shaped hole inside the #1995 fix (independent review of #2032,
+    # F1): `existing is None` was the guard's ONLY signal, which makes "this
+    # baseline was never blessed" (nothing to protect) and "this blessed
+    # baseline lost its `tolerances` key" (e.g. a hand-resolved merge
+    # conflict) the same state. The caller must pass `previously_blessed`
+    # (its own `baseline.get("identity")` truthiness) so the two states are
+    # distinguishable, and the latter must fail CLOSED.
+    reason = bless_guard_thresholds(None, {"rtf_max": 1.31}, previously_blessed=True)
+    assert reason is not None
+    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+
+
+def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_allows_with_the_flag():
+    reason = bless_guard_thresholds(
+        None, {"rtf_max": 1.31}, previously_blessed=True, allow_rebless_thresholds=True
+    )
+    assert reason is None
