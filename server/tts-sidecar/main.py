@@ -8887,7 +8887,12 @@ def debug_memory() -> dict[str, Any]:
                 "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
                 # total card size — `reserved_mb` crossing this is the spill line
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
-                "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
+                # #1997 review (M1) — `allocated_mb`/`reserved_mb` above already
+                # read the CURRENT device (no-arg calls); `total_mb` must match,
+                # or an operator sees two different totals disagree between this
+                # endpoint and /health once _cuda_vram_mb() was fixed to be
+                # current-device-consistent but this sibling reading wasn't.
+                "total_mb": torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0,
             }
             # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
             # staging buffers for H2D/D2H copies). torch's caching host
@@ -9131,23 +9136,6 @@ async def unload_model(req: Request) -> JSONResponse:
         kokoro = ENGINES.get("kokoro")
         if isinstance(kokoro, KokoroEngine):
             await asyncio.to_thread(kokoro.unload)
-        # #1996 — reclaim at unload completion, engine-agnostically. PR #1993's
-        # gc.collect()+empty_cache() reclaim (`_reclaim_device_cache`, wired
-        # through `_placement.reclaim`) only ran on a LATER admission failure,
-        # so a render's stranded pool sat there indefinitely when nothing else
-        # happened to request capacity afterward (#1976's measured ~3.9GB).
-        # Which engine's pool was actually stranded was never established
-        # (#1996's open question: Qwen's own, or ASR's/the speaker model's,
-        # both co-resident in the same session) — firing here UNCONDITIONALLY,
-        # regardless of which engine this call unloaded or whether it had
-        # anything resident to drop, sidesteps that question rather than
-        # resolving it: an engine-agnostic completion hook can't miss the
-        # stranded pool no matter which engine produced it. `/unload` is the
-        # one route that reports "engine unloaded" for all three TTS engines,
-        # so hooking it here (once) covers all of them instead of just one
-        # engine's own unload path. Off the event loop, same as every other
-        # reclaim in this file — `empty_cache()` can block.
-        await asyncio.to_thread(_placement.reclaim, f"unload:{engine_id}")
         return JSONResponse({"status": "idle"})
 
     if engine_id == "qwen":
@@ -9158,15 +9146,11 @@ async def unload_model(req: Request) -> JSONResponse:
                 await asyncio.to_thread(qwen.unload_base17)
             else:
                 await asyncio.to_thread(qwen.unload)
-        # #1996 — see the kokoro branch above for why this runs unconditionally.
-        await asyncio.to_thread(_placement.reclaim, f"unload:{engine_id}")
         return JSONResponse({"status": "idle"})
 
     coqui = ENGINES.get("coqui")
     if isinstance(coqui, CoquiEngine):
         await asyncio.to_thread(coqui.unload)
-    # #1996 — see the kokoro branch above for why this runs unconditionally.
-    await asyncio.to_thread(_placement.reclaim, f"unload:{engine_id}")
     return JSONResponse({"status": "idle"})
 
 

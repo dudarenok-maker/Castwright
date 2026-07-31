@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 30 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 29 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**47 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**46 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1115,48 +1115,6 @@ cache to seed/inspect both `base` and the configured model's snapshots. No GPU
 required. *Criteria:* this row plus PR #2008's description of the failure
 scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
 Remove click.
-
----
-
-### A30 · Stranded VRAM pool reclaimed at render/unload completion, not only on a later admission failure ([#1996](https://github.com/dudarenok-maker/Castwright/issues/1996), closes [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)) · **single 8 GB card**
-
-**Companion to A28.** A28 discharges #1976's admission-failure-path reclaim
-(PR #1993) and explicitly notes its own `Closes #1976` was narrowed to
-`Refs #1976` because it does **not** cover #1976's other acceptance
-criterion: a render that finishes with nothing subsequently requesting
-capacity leaves its stranded pool in place indefinitely. This row is that
-remaining criterion. `/unload` now fires the same `_placement.reclaim` hook
-unconditionally, engine-agnostically, at completion — unit tests (an
-injected `probe()` + a fake `reclaim` hook, mirroring A28's seam) prove the
-call sequence, not a real CUDA allocator; whether an actual stranded pool
-comes back on real hardware is unproven here.
-
-- Render a chapter to completion (Qwen, the default engine) and let it
-  report unloaded — same setup as A28's first bullet. Confirm via
-  `nvidia-smi` that the render card is holding a reserved-but-unallocated
-  pool matching #1976's measured shape (~3.9 GB on an 8 GB card).
-- With **nothing else run afterward** — no later admission, no ASR call, no
-  design — confirm the pool comes back on its own: `nvidia-smi` on `cuda:0`
-  drops back under ~500 MiB without a process restart, and the render
-  card's reserved figure in `GET /health`'s `vram_reserved_mb_by_device`
-  returns to near-baseline. This is #1976's acceptance criterion 1, verbatim,
-  and the case A28 explicitly could not close (it needs a *later* refused op
-  to fire at all; this row must NOT need one).
-- Confirm the sidecar log carries the reclaim running from `/unload`'s
-  completion (not from an admission-failure retry) — there is no later
-  `noCapacity`/`stranded-cache reclaim` log line preceding it in this run.
-- Repeat once with Coqui as the unloaded engine and once with the ASR/
-  speaker-embed models resident instead of Qwen at the time of the render
-  (mirrors #1996's own open question about which engine's pool was actually
-  stranded on the box that produced the original measurement) — the
-  engine-agnostic hook should recover the pool either way, since it does not
-  key off which engine unloaded.
-
-*Needs:* the 8 GB card only, a chapter render, and NOTHING run past it (the
-opposite setup from A28, which needs a later refused op). *Criteria:* #1976's
-acceptance criterion 1 + #1996's own description. *Cost:* short — rides
-along with A28 in the same sitting (run A28's flow first, then repeat the
-render once more for this row without the trailing refused op).
 
 ---
 
