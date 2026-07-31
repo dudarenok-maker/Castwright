@@ -9,7 +9,7 @@ owner: null
 > Status: draft
 > Key files: `server/src/tts/clone-readiness.ts` (new, shared by both sides), `src/store/voice-readiness-selectors.ts`, `src/store/start-generation-flow.ts`, `src/modals/clone-readiness-gate.tsx` (new), `server/src/routes/voice-library.ts`
 > URL surface: `#/books/<id>/cast` ("Approve cast & start generating") and `#/books/<id>/generation` ("Resume generation")
-> OpenAPI ops: `PATCH /api/voices/{voiceUuid}` (**extended**), `POST /api/voices/{voiceUuid}/engines/{engine}/retry` (**new**)
+> OpenAPI ops: `PATCH /api/voice-library/{voiceUuid}` (**extended**), `POST /api/voice-library/{voiceUuid}/engines/{engine}/retry` (**new**)
 
 Closes #1980. Complements #1933 (PR #1991, merged 2026-07-31 as `d496ce6d`).
 
@@ -32,6 +32,16 @@ Closes #1980. Complements #1933 (PR #1991, merged 2026-07-31 as `d496ce6d`).
 > **[R3]**. The most important is C1: the client never sees the persisted slot
 > status, so rev 3 as first written reproduced rev 2's false negative by a new
 > route.
+>
+> **[R4] Path correction, made during implementation.** Every revision wrote
+> these routes as `/api/voices/...`. **That is a different, existing endpoint
+> family** — `GET /api/voices` (`openapi.yaml:1815`) walks every confirmed
+> `cast.json` in the workspace and has nothing to do with the voice library. The
+> library is mounted at **`/api/voice-library`** (`app.ts:195`), which is what
+> `withComputedStaleness` serves and what the client actually fetches
+> (`api.ts:9576`). Corrected throughout. Left uncorrected it would have had
+> Task 9 document two routes that do not exist, under a name that collides with
+> a real and unrelated one.
 
 ## Benefit / Rationale
 
@@ -99,7 +109,7 @@ accepts a client-side mirror of this rule (`_mockClonedAssignBlock`,
 `src/lib/api.ts:9950-9956`).
 
 The verdict is a **pure selector**, and the flow reuses the existing
-`fetchVoiceLibrary` thunk (`voice-library-slice.ts:61`, `GET /api/voices`) to
+`fetchVoiceLibrary` thunk (`voice-library-slice.ts:61`, `GET /api/voice-library`) to
 ensure entries are present. That matters: `fetchVoiceLibrary` is dispatched from
 exactly one place — `src/components/voices/my-voices-section.tsx:30` — so on the
 cast view the slice is empty unless the user visited My Voices. The check must
@@ -110,7 +120,7 @@ no per-character `stat()`, and no possibility of the readiness call and the
 generation call disagreeing about the engine — they read the same session value.
 
 **[R3] What the client does NOT see — the correction that matters most.**
-`GET /api/voices` maps every entry through `withComputedStaleness`
+`GET /api/voice-library` maps every entry through `withComputedStaleness`
 (`routes/voice-library.ts:509-513`, impl `:489-500`), which **overwrites** `status`
 with `'stale'` whenever the stored version stamp differs from current — *including
 a slot whose persisted status is `'failed'`*. The render reads the raw on-disk
@@ -322,7 +332,7 @@ advisory it could not compute — and the CTA **disables while in flight**.
 Folded on the repo owner's instruction ("no follow ups, fix it now"). This makes
 Decision 1's primary CTA real.
 
-Extend `PATCH /api/voices/{voiceUuid}` (`routes/voice-library.ts:528-587`) to accept
+Extend `PATCH /api/voice-library/{voiceUuid}` (`routes/voice-library.ts:528-587`) to accept
 `transcript`:
 
 - Rejected unless `provenance === 'cloned'` and `existing.master` is present.
@@ -362,7 +372,7 @@ not an absent field. A fixture omitting it will not typecheck.
 
 ## Decision 7 (folded) — a `failed` slot can be cleared
 
-`POST /api/voices/{voiceUuid}/engines/{engine}/retry` **deletes the engine's slot
+`POST /api/voice-library/{voiceUuid}/engines/{engine}/retry` **deletes the engine's slot
 key** from `entry.engines`, through the same `updateEntry` lock. **[R3]** Deletion
 rather than a status rewrite: `VoiceLibraryEngineStatus.status` is required
 (`workspace/voice-library.ts:24-29`) so there is no "unset", and an absent slot
@@ -466,7 +476,7 @@ wrong-helper bugs live, and where rev 3 had no coverage:
   case goes wrong → red.
 - `slotStatus` is the post-`withComputedStaleness` value.
 - **The C1 regression:** `{status:'failed', baseModel:'old'}` served through
-  `GET /api/voices` still yields `derive-failed`. Mutation: restore
+  `GET /api/voice-library` still yields `derive-failed`. Mutation: restore
   `withComputedStaleness`'s overwrite of a failed status → red.
 
 **Co-oracle contract (`server/src/tts/clone-readiness-contract.test.ts`)** — the
