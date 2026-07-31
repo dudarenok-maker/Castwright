@@ -61,7 +61,7 @@ Read it before Task 1. Section references below (§3.1, §5, §10.2 …) point a
 | File | Responsibility |
 |---|---|
 | `server/src/workspace/cast-lock.ts` | **New.** The three named lock wrappers + the lock-order rule in its header. Sole owner of key derivation. |
-| `server/src/workspace/cast-lock.test.ts` | **New.** Primitive unit tests: sorted acquisition, dedupe, release-on-throw, waiter ordering. |
+| `server/src/workspace/cast-lock.test.ts` | **New.** Primitive unit tests: sorted acquisition (observed within one call), the AB/BA deadlock test, dedupe, release-on-throw, non-overlapping FIFO waiters, empty-list refusal. |
 | `server/src/workspace/cast-lock.race.test.ts` | **New.** The outcome harness — two overlapping RMWs, both mutations must survive. The reference for every later site test. |
 | `server/src/workspace/file-lock.ts` | Modify — #2001 map-cleanup fix. |
 | `server/src/tts/design-lock.ts` | Modify — same fix, cleanup only. **Do not touch acquire/release/ordering**: `ensureCharacterVoiceUuid`'s series branch still depends on it (§5.1). |
@@ -84,7 +84,11 @@ Lands the spike as a committed test **before any site is converted**, so the
 - Produces: `assignVoice(castPath, characterId, voice)` and
   `readVoices(castPath)` — the RMW shape every later task's test reuses.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Pin the defect**
+
+This one is a characterization test, not a red-phase test: it PASSES while the
+bug exists. Task 2 adds the both-survive assertion *beside* it and both stay in
+the file permanently — the pair is the red→green evidence.
 
 ```ts
 /* The outcome harness for the cast.json lock sweep. Two overlapping
@@ -97,6 +101,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { castJsonPath } from './paths.js';
 
 interface Cast {
   characters: Array<{ id: string; voice?: string }>;
@@ -107,7 +112,10 @@ let castPath: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'cast-lock-race-'));
-  castPath = join(dir, 'cast.json');
+  /* Build at castJsonPath(dir), NOT join(dir, 'cast.json') — castJsonPath
+     returns <dir>/.audiobook/cast.json, and later tasks derive the lock key
+     from the same helper. */
+  castPath = castJsonPath(dir);
   await writeJsonAtomic(castPath, {
     characters: [{ id: 'alice' }, { id: 'bob' }],
   } satisfies Cast);
@@ -143,8 +151,11 @@ describe('cast.json concurrent read-modify-write', () => {
       assignVoice(castPath, 'bob', 'b'),
     ]);
     const v = await readVoices(castPath);
-    /* Documents the defect. Task 2 replaces this with the both-survive
-       assertion once the lock exists. */
+    /* Documents the defect: unlocked, one mutation is always lost. Task 2 adds
+       the locked counterpart beside this. If a future change to readJson /
+       writeJsonAtomic ever stops them yielding in the same tick, this test goes
+       red — the correct response is to update THIS test, never to reintroduce
+       an unlocked write path. */
     expect(v.alice === 'a' && v.bob === 'b').toBe(false);
   });
 });
@@ -160,6 +171,24 @@ Expected: PASS. A pass here means a mutation *was* lost, which is the defect.
 Run: `cd server && npx vitest run src/workspace/cast-lock.race.test.ts --repeat=20`
 Expected: 20/20 PASS. The spec's claim is 200/200; if any run fails, stop and
 report — the whole test strategy depends on this interleave being deterministic.
+
+**On route-level tests being deterministic too.** Route handlers do several
+`await`s before their cast read, and two requests can take different branches
+(`/assign`'s `hasRetainedDesignedClip` `stat` fires only for a designed entry),
+so it is fair to ask whether the bare `Promise.all` still interleaves. Measured
+during planning, 50 trials per configuration, at prologue depths 0v0, 2v2, 3v3,
+2v3, 1v4 and 0v3: **the race was observed 50/50 in every case.** Differing
+`await` depth does not desynchronise it — both requests dispatch in one tick and
+both reads land before either write, because the write (`mkdir` + `writeFile` +
+`rename`) is much the slower half.
+
+**The one exception is wall-clock duration, not await depth.** `promote-voice`
+does a sidecar `fetch` before its read, which takes real time and *will*
+separate the two racers. Task 7's test must stub that `fetch` (or point it at a
+local no-op) so the two requests reach their cast reads together. If any other
+route-level red-phase test fails to go red, treat it as a **harness** problem —
+not as evidence the site is safe — and stub whatever slow call sits in its
+prologue before reaching for a different mechanism.
 
 - [ ] **Step 4: Commit**
 
@@ -193,16 +222,46 @@ import { withCastLock, withCastLocks } from './cast-lock.js';
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe('withCastLocks', () => {
-  it('acquires in the same order regardless of argument order', async () => {
-    const order: string[] = [];
-    const track = (tag: string) => async () => {
-      order.push(tag);
+  /* Sorting is the ONLY thing standing between the 8 two-book sites and a
+     permanent, diagnostic-free hang, so it gets two tests that genuinely fail
+     without it. An earlier draft of this plan tested it by awaiting two
+     withCastLocks calls SEQUENTIALLY and asserting they ran in call order —
+     which is true with or without .sort(), with or without any lock at all.
+     That is the placebo shape this whole PR exists to prevent. */
+
+  it('acquires keys in sorted order within a single call', async () => {
+    const acquired: string[] = [];
+    const spy = vi.spyOn(fileLock, 'withKeyLock').mockImplementation(
+      async (key: string, fn: () => Promise<unknown>) => {
+        acquired.push(key);
+        return fn();
+      },
+    );
+    await withCastLocks(['/w/b', '/w/a'], async () => undefined);
+    expect(acquired).toEqual([castJsonPath('/w/a'), castJsonPath('/w/b')]);
+
+    acquired.length = 0;
+    await withCastLocks(['/w/a', '/w/b'], async () => undefined);
+    expect(acquired).toEqual([castJsonPath('/w/a'), castJsonPath('/w/b')]);
+    spy.mockRestore();
+  });
+
+  it('does not deadlock when two callers pass the books in opposite orders', async () => {
+    /* THE test for .sort(). Both hold their first lock across an await before
+       asking for the second — the classic AB/BA setup. Without sorting this
+       hangs forever; withKeyLock has no timeout. */
+    const hold = async () => {
       await settle();
+      return 'ok';
     };
-    await withCastLocks(['/w/b', '/w/a'], track('first'));
-    await withCastLocks(['/w/a', '/w/b'], track('second'));
-    /* Both calls lock /w/a then /w/b — sorted, so AB/BA cannot arise. */
-    expect(order).toEqual(['first', 'second']);
+    const raced = await Promise.race([
+      Promise.all([
+        withCastLocks(['/w/a', '/w/b'], hold),
+        withCastLocks(['/w/b', '/w/a'], hold),
+      ]),
+      new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+    ]);
+    expect(raced).toEqual(['ok', 'ok']);
   });
 
   it('dedupes a repeated book instead of self-deadlocking', async () => {
@@ -229,17 +288,26 @@ describe('withCastLocks', () => {
     expect(after).toBe('ok');
   });
 
-  it('runs waiters in FIFO order', async () => {
-    const seen: number[] = [];
+  it('runs waiters in FIFO order without overlapping them', async () => {
+    /* `seen.push(n)` as the FIRST statement would run in map order with or
+       without a lock. Record entry AND exit so overlap is observable. */
+    const seen: string[] = [];
     await Promise.all(
       [1, 2, 3].map((n) =>
         withCastLock('/w/fifo', async () => {
-          seen.push(n);
+          seen.push(`enter${n}`);
           await settle();
+          seen.push(`exit${n}`);
         }),
       ),
     );
-    expect(seen).toEqual([1, 2, 3]);
+    expect(seen).toEqual(['enter1', 'exit1', 'enter2', 'exit2', 'enter3', 'exit3']);
+  });
+
+  it('refuses an empty book list rather than running unlocked', async () => {
+    /* reduceRight over [] returns the initial value, so the critical section
+       would run with no lock acquired at all. */
+    await expect(withCastLocks([], async () => 'ran')).rejects.toThrow();
   });
 });
 ```
@@ -302,6 +370,9 @@ export function withCastLock<T>(bookDir: string, fn: () => Promise<T>): Promise<
  *  promise-chain mutex acquired twice on one key never releases. */
 export function withCastLocks<T>(bookDirs: string[], fn: () => Promise<T>): Promise<T> {
   const keys = [...new Set(bookDirs.map(castJsonPath))].sort();
+  /* reduceRight over an empty array returns `fn` unwrapped, which would run the
+     critical section with no lock at all — fail loudly instead. */
+  if (keys.length === 0) throw new Error('withCastLocks: no bookDirs given');
   const chained = keys.reduceRight<() => Promise<T>>(
     (next, key) => () => withKeyLock(key, next),
     fn,
@@ -333,7 +404,7 @@ In `cast-lock.race.test.ts`, add a second `it` beside the existing one:
 import { withCastLock } from './cast-lock.js';
 
 it('keeps both mutations when the writers hold the cast lock', async () => {
-  const bookDir = dir; // castJsonPath(dir) === castPath for this fixture
+  const bookDir = dir; // castPath was built as castJsonPath(dir) in beforeEach
   await Promise.all([
     withCastLock(bookDir, () => assignVoice(castPath, 'alice', 'a')),
     withCastLock(bookDir, () => assignVoice(castPath, 'bob', 'b')),
@@ -343,9 +414,8 @@ it('keeps both mutations when the writers hold the cast lock', async () => {
 });
 ```
 
-Confirm `castJsonPath(dir)` really equals `castPath` for the fixture; if
-`castJsonPath` appends a subdirectory, build the fixture at that path instead.
-**Do not** hand-roll the key in the test — that would defeat the point of Task 2.
+**Do not** hand-roll the lock key in the test — deriving it any way other than
+through `withCastLock` would defeat the point of Task 2.
 
 - [ ] **Step 6: Run both, then mutation-verify**
 
@@ -403,7 +473,9 @@ export function __chainsSizeForTest(): number {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cd server && npx vitest run src/workspace/cast-lock.test.ts -t "drops the map entry"`
-Expected: FAIL — received 1, expected 0. The cleanup is dead code today.
+Expected: FAIL — received `before + 1`. (Not "1 vs 0": the four Task 2 tests
+above have already leaked their own entries into the same map.) The cleanup is
+dead code today.
 
 - [ ] **Step 3: Fix all three helpers**
 
@@ -517,7 +589,21 @@ Three changes to the handler:
    Early `return res.status(...)` inside the callback is fine; the lock releases
    when the callback settles.
 
-3. **Wrap that in `withLibraryVoiceLock(voiceUuid, …)`, outside the cast lock.**
+3. **Wrap in `withLibraryVoiceLock(voiceUuid, …)`, outside the cast lock — and
+   it must start much higher than the cast RMW.** Rule 2 applies to *every* lock
+   class, not just the cast lock: the read goes inside, and so does every
+   decision derived from it. The decisions derived from the library entry are
+   `readEntry` and its 404, the revoked-consent 409, and the
+   `hasRetainedDesignedClip` readiness gate — all of which sit well above the
+   cast read. The library-voice lock opens **before `readEntry`** and closes
+   after the cast write.
+
+   This is what makes Task 5 deterministic. `eraseLibraryVoiceArtifacts` deletes
+   the entry directory, so with the 404 gate *inside* the lock a delete-first
+   ordering makes the assign 404 cleanly; with it outside, the assign proceeds on
+   an entry that is being erased underneath it and Task 5's assertion becomes a
+   coin flip.
+
    Order matters and is not arbitrary: the DELETE path holds the library-voice
    key across `clearLibraryVoiceReferences`, which takes cast locks per book. Take
    them the other way round here and the two paths deadlock permanently.
@@ -615,7 +701,7 @@ git commit -m "fix(server): hold a library-voice lock across voice delete scan, 
 
 ### Task 6: Class 1 — the mechanical single-book sites
 
-**Files (16 sites across 10 modules):**
+**Files (15 sites across 11 modules):**
 - `cast-aliases.ts` ×3, `cast-create.ts`, `cast-merge.ts`, `cast-series-patch.ts`,
   `cast-design.ts` ×2, `voice-style.ts` ×2, `voice-override-linked.ts`,
   `book-state.ts` (the cast write in the save handler),
@@ -641,8 +727,16 @@ alongside the primitive harness, not in either route's spec.
 
 - [ ] **Step 2: Run them and confirm each fails**
 
-Run: `cd server && npx vitest run src/routes/cast-aliases.test.ts src/routes/cast-create.test.ts src/routes/cast-merge.test.ts src/routes/cast-series-patch.test.ts src/routes/cast-design.test.ts src/routes/voice-style.test.ts src/routes/voice-override-linked.test.ts src/routes/book-state.test.ts src/routes/qwen-voice.test.ts src/routes/cast-add-from-roster.test.ts`
+Run: `cd server && npx vitest run src/routes/cast-aliases.test.ts src/routes/cast-create.test.ts src/routes/cast-merge.test.ts src/routes/cast-series-patch.test.ts src/routes/cast-design.test.ts src/routes/voice-style.test.ts src/routes/voice-override-linked.test.ts src/routes/book-state.test.ts src/routes/qwen-voice.test.ts src/routes/cast-add-from-roster.test.ts src/routes/voice-library.test.ts`
 Expected: each new test FAILS.
+
+(`voice-library.test.ts` is in the list for the `DELETE /assign` site only —
+`POST /assign` was Task 4.)
+
+**Arithmetic check.** 15 sites here + 1 (Task 4 `POST /assign`) + 1 (Task 5
+`voice-library-usage`) + 1 (Task 7 `promote-voice`) + 8 (Task 8) + 2 (Task 9)
++ 2 (Task 10) = **30 locked**, plus 5 deferred to #2015 = **35**. If your count
+differs, stop — the spec's §5 enumeration is the authority.
 
 - [ ] **Step 3: Wrap each read..write span**
 
@@ -666,9 +760,10 @@ Per-site notes:
   `writeJsonAtomic(manuscriptEditsJsonPath(...))`. Leave that inner write where
   it is; it is a different file and the cast lock does not cover it.
 - **`cast-design.ts`** — both sites already re-read a `fresh` cast immediately
-  before writing. Lock from that `fresh` read through the write, not from the
-  earlier read. Deleting the re-read is fine once the lock is in place, but if
-  you keep it, the lock must still enclose it.
+  before writing. Lock from that `fresh` read through the write. **Do not remove
+  the re-read**: the only other read is the loop-top one at `:263`, which sits
+  above an LLM persona generation at `:273`, so writing from it would put a
+  multi-second `await` inside the lock or the read outside it — both wrong.
 
   Known and accepted: the two idempotency `continue` guards (`:268`, `:269`) are
   evaluated against the *first* read, before the LLM persona generation at
@@ -714,7 +809,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Mutation-verify each site**
 
-For each of the 10 modules: remove that module's `withCastLock`, re-run its spec,
+For each of the 11 modules: remove that module's `withCastLock`, re-run its spec,
 confirm red, restore. Record the list in the commit message. **A site whose test
 stays green with the lock removed is a placebo — stop and investigate rather than
 moving on.**
@@ -722,9 +817,17 @@ moving on.**
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/routes/
+git add server/src/routes/cast-aliases.ts server/src/routes/cast-create.ts \
+  server/src/routes/cast-merge.ts server/src/routes/cast-series-patch.ts \
+  server/src/routes/cast-design.ts server/src/routes/voice-style.ts \
+  server/src/routes/voice-override-linked.ts server/src/routes/book-state.ts \
+  server/src/routes/qwen-voice.ts server/src/routes/cast-add-from-roster.ts \
+  server/src/routes/voice-library.ts server/src/routes/*.test.ts
 git commit -m "fix(server): serialise the single-book cast.json read-modify-writes"
 ```
+
+Enumerate the files. `git add server/src/routes/` sweeps any concurrent session's
+in-progress edits into this commit — a recurring incident in this repo.
 
 ---
 
@@ -744,6 +847,15 @@ would stall every cast write for that book for minutes.
 
 Concurrent `promote-voice` and a `/assign` on a different character of the same
 book; assert both survive.
+
+**Stub the sidecar `fetch` first.** It is the one prologue in the sweep slow
+enough to separate the two racers in wall-clock terms, so without a stub this
+test will not go red and you will be looking at a placebo. Everything else about
+the bare `Promise.all` harness holds here (see Task 1 Step 3).
+
+Also give the character emotion variants in the fixture — the write is guarded
+on `variants` being non-empty, so a variant-less character never writes cast.json
+at all and there is nothing to race.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -768,11 +880,17 @@ await withCastLock(located.bookDir, async () => {
   const freshChar = fresh?.characters?.find((c) => c.id === characterId);
   if (!fresh || !freshChar) return; // deleted mid-promotion — artifacts already moved
   const freshSlot = freshChar.overrideTtsVoices?.qwen;
-  staleVariantIds = Object.values(freshSlot?.variants ?? {})
-    .map((v) => v?.name)
-    .filter((n): n is string => !!n);
-  if (freshSlot) delete freshSlot.variants;
-  await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
+  /* KEEP this guard — it is the current behaviour (qwen-voice.ts:788) and it
+     encloses the write. Without it every promote-voice writes cast.json and
+     takes the lock even when the character has no emotion variants, which is
+     the common path. Evaluated against the FRESH slot, per rule 2. */
+  if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
+    staleVariantIds = Object.values(freshSlot.variants)
+      .map((v) => v?.name)
+      .filter((n): n is string => !!n);
+    delete freshSlot.variants;
+    await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
+  }
 });
 /* Teardown stays outside: filesystem work, and holding the lock across it
    reintroduces exactly the stall this narrowing avoids. */
@@ -820,8 +938,13 @@ it('does not lose the source merge when source and target are the same book', as
   /* Its guard rejects same-book AND same-character only, so same-book with two
      different characters is reachable — and broken with no concurrency at all:
      two independent reads of one file, two arrays derived from separate
-     snapshots, two writes to the same path. nextTargetCharacters does not
-     contain mergedSource, so the second write discards the first. */
+     snapshots, two writes to the same path. nextTargetCharacters is derived
+     from the PRE-merge targetCast read, so the second write puts alice back
+     unmodified and her merge is gone.
+
+     Assert on `aliases`. This route never touches overrideTtsVoices — it merges
+     description, role, gender, ageRange, tone, attributes and aliases — so an
+     overrideTtsVoices assertion would pass before and after and prove nothing. */
   await request(app).post('/api/library-cast-override')
     .send({ sourceBookId: bookId, sourceCharacterId: 'alice',
             targetBookId: bookId, targetCharacterId: 'bob' })
@@ -829,8 +952,10 @@ it('does not lose the source merge when source and target are the same book', as
 
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const byId = Object.fromEntries((cast?.characters ?? []).map((c) => [c.id, c]));
-  expect(byId.alice.overrideTtsVoices).toBeDefined(); // the merge that got dropped
-  expect(byId.bob.overrideTtsVoices).toBeDefined();
+  /* alice's merge takes bob's name into her alias pool. Red today: alice is
+     written back from the pre-merge snapshot. */
+  expect(byId.alice.aliases).toContain(bobName);
+  expect(byId.bob.aliases).toContain(aliceName);
 });
 ```
 
@@ -849,7 +974,10 @@ deadlock, but dedupe alone leaves the data loss — it just puts a lock around i
 - [ ] **Step 4: Run, mutation-verify, commit**
 
 ```bash
-git add server/src/routes/cast-link-prior.ts server/src/routes/cast-not-linked-to.ts server/src/routes/library-cast-override.ts server/src/routes/
+git add server/src/routes/cast-link-prior.ts server/src/routes/cast-not-linked-to.ts \
+  server/src/routes/library-cast-override.ts \
+  server/src/routes/cast-link-prior.test.ts server/src/routes/cast-not-linked-to.test.ts \
+  server/src/routes/library-cast-override.test.ts
 git commit -m "fix(server): lock multi-book cast writes in sorted order and fix the same-book merge"
 ```
 
@@ -949,16 +1077,28 @@ git commit -m "fix(server): lock the book-scoped voice-uuid and emotion-variant 
 - Modify: their `*.test.ts`
 
 These destroy cast.json and match neither the write pattern nor the guard's.
-They matter **more** after this change: a locked writer whose read predates the
-delete recreates the file afterwards, resurrecting the stale roster the delete
-exists to remove — and the lock lengthens the gap between a queued writer's read
-and its write.
+They matter because a delete that is not serialised against the writers can
+simply be undone: a writer that acquires *after* the delete recreates cast.json,
+resurrecting the stale roster the delete exists to remove.
+
+(An earlier draft said the lock "lengthens the gap between a queued writer's read
+and its write". That is wrong and the spec retracts it — `file-lock.ts:12-14`
+awaits `prior` before `fn()`, so under rule 2 a queued writer's *read* happens
+after the holder's write. Do not reintroduce the claim.)
 
 **This is the only `analysis.ts` change in this plan.** Its five *write* sites are
 out of scope (#2015). Touch the `rm` and nothing else.
 
 - [ ] **Step 1: Write the failing test** — a delete concurrent with a cast write;
   assert the file stays deleted.
+
+  **Name the writer deliberately.** Use a rule-2-compliant one that re-reads
+  inside its lock and refuses on an absent cast — `cast-aliases.ts` returns 409
+  "Book has no cast on disk yet", so it leaves the file deleted in both
+  orderings once serialised. Do **not** use `book-state.ts`'s cast-slice
+  handler: it writes `body.patch` regardless of on-disk state and legitimately
+  recreates cast.json when it acquires second, so the assertion would be
+  ordering-dependent rather than lock-dependent.
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Wrap each `rm` in `withCastLock(bookDir, …)`.** In
   `book-state.ts` the `rm` is one arm of a `Promise.all`; wrap that arm.
@@ -984,10 +1124,17 @@ Walk `server/src/**/*.ts` (excluding `*.test.ts`). For each file containing
 scope. Maintain an explicit allowlist with a reason per entry:
 
 ```ts
+/* Keyed on file AND expected count, never on file alone. `analysis.ts` holds
+   both the 5 deferred writes and the one rm that Task 11 DOES lock — a
+   file-level exemption would blind the guard to that rm forever, which is the
+   exact hole spec §5 class 6 exists to close. */
 const ALLOWED_UNLOCKED = new Map([
-  ['routes/analysis.ts', 'the 5 merge-base writes are deferred to #2015; the rm IS locked'],
+  ['routes/analysis.ts', { writes: 5, rms: 0, why: 'merge-base writes deferred to #2015 (the rm IS locked)' }],
 ]);
 ```
+
+Assert the counts match exactly. A 6th unlocked write in `analysis.ts` must fail
+the guard, not inherit the exemption.
 
 Document the known blind spots in the file header: it sees one syntactic form, so
 `const p = castJsonPath(dir); await writeJsonAtomic(p, …)` slips through, as
@@ -1019,16 +1166,36 @@ git commit -m "test(server): fail the build on an unlocked cast.json write"
 ### Task 13: Docs, notes and ticket hygiene
 
 **Files:**
+- Create: `docs/features/<n>-cast-json-write-lock.md` (from `docs/features/TEMPLATE.md`)
+- Modify: `docs/features/INDEX.md`
 - Modify: `CLAUDE.md` (*Conventions worth preserving*)
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 - Modify: `docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` (status)
 
-- [ ] **Step 1: Add the convention to CLAUDE.md**
+Walk CLAUDE.md's Before-shipping checklist and discharge every step explicitly.
+Steps 1 and 4 were silently omitted from an earlier draft of this plan; the
+checklist's own escape hatch is conditional — skipping is fine, *saying nothing*
+is not.
+
+- [ ] **Step 1: Create the regression plan (checklist step 1)**
+
+This is substantial cross-cutting work introducing a codebase-wide invariant, so
+it needs a durable `docs/features/` plan, not just the issue bodies. Scan the
+worktrees for the next free plan number first (concurrent sessions claim them).
+Record: the invariant and its four rules, the 30 locked sites, the deferred sets
+(#2006, #2015) and *why* each is deferred, and a manual acceptance walkthrough —
+two browser tabs editing one book's cast simultaneously, both edits surviving.
+
+- [ ] **Step 2: Update `docs/features/INDEX.md` (checklist step 4)**
+
+New entry under its area.
+
+- [ ] **Step 3: Add the convention to CLAUDE.md**
 
 One bullet with the four rules from `cast-lock.ts`'s header, including the
 three-class lock order.
 
-- [ ] **Step 2: Release notes, both files**
+- [ ] **Step 4: Release notes, both files (checklist step 5)**
 
 `docs/release-notes-next.md` — technical, PR-ref'd. `RELEASE_NOTES.md` — one
 user-facing line in brand voice. The user-visible delta is real: concurrent cast
@@ -1036,15 +1203,32 @@ edits no longer silently discard one another. Do **not** claim cast.json is full
 protected — `analysis.ts` is not (#2015), and the check-then-act gates are not
 (#2006).
 
-- [ ] **Step 3: On-box acceptance**
+- [ ] **Step 5: Discharge the remaining checklist steps in the PR body**
 
-No new hardware-only behaviour: every claim here is provable in-process by the
-outcome tests. Say so explicitly in the PR body rather than omitting the step.
+State each explicitly rather than omitting it:
 
-- [ ] **Step 4: Commit**
+- **Step 3, on-box acceptance — N/A.** No hardware-only behaviour; every claim
+  here is provable in-process by the outcome tests. No register row is owed.
+- **openapi.yaml — N/A.** No wire shape changes. The `isAnalysisBusy` admission
+  gate that *would* have added a 409 across ~20 routes was rejected (spec §6).
+- **Frontend — N/A.** No component, slice or API-surface change.
+- **e2e — N/A.** The behaviour is server-side concurrency; it crosses no
+  router/redux/layout seam, so Playwright cannot observe it. The two-tab
+  walkthrough in the regression plan is the manual equivalent.
+
+- [ ] **Step 6: Confirm the deferred issues carry the residuals**
+
+Spec §12 lists eight accepted residuals. Check #2006 and #2015 actually name the
+ones assigned to them — `cast-link-prior`'s unnamed `libraryUuid` references, the
+cross-book double-mint, and the `voice-override-linked` / `cast-series-patch`
+cross-book consultations — and comment them onto the issues if not. A residual
+that exists only in a spec section is a residual being lost.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add CLAUDE.md docs/release-notes-next.md RELEASE_NOTES.md docs/superpowers/specs/
+git add CLAUDE.md docs/release-notes-next.md RELEASE_NOTES.md \
+  docs/features/ docs/superpowers/specs/
 git commit -m "docs(docs): record the cast.json lock convention and release notes"
 ```
 
