@@ -231,6 +231,16 @@ works, but a twice-rewritten plan should not rest on that: **Task 1 runs
 `npm run build` and greps `dist/assets` for a `clone-readiness` symbol**, and
 records the result here before any other task starts.
 
+> **Gate result — PASSED, 2026-08-01.** A throwaway `server/src/tts/clone-readiness.ts`
+> value-importing `isCloneEngine` from `./clone-engines.js`, imported (extensionless,
+> matching the `help-failures.ts` precedent) from `src/data/help-failures.ts`:
+> `npm run build` succeeded and the probe's marker string landed in
+> `dist/assets/help-failures-*.js`, i.e. Vite resolved the `.js` specifier to the
+> `.ts` source and bundled the value. `npm run typecheck` (frontend `tsc --noEmit`,
+> `moduleResolution: Bundler`) was clean over the same import. Decision 3's
+> shared-module approach stands as written; the probe was reverted before Task 2.
+
+
 **Binding to the render.** A shared module removes implementation drift but not
 behavioural drift — `cloneReadiness` is still a second opinion about what
 `resolveClonedVoicesForChapter` (`clone-voice-resolver.ts:415`) will do. A
