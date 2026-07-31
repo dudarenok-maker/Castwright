@@ -108,7 +108,7 @@ describe('selectCloneReadinessVerdicts', () => {
     expect(selectCloneReadinessVerdicts(state([c], [e]), 'b1')).toEqual([]);
   });
 
-  it('fires for a character routed to Kokoro with a qwen-only cloned slot, and otherEngineOk is true because the qwen slot is healthy', () => {
+  it('fires for a character routed to Kokoro with a qwen-only cloned slot, and castOnEngine is qwen because the qwen slot is healthy', () => {
     const c = char({
       ttsEngine: 'kokoro',
       overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
@@ -120,12 +120,12 @@ describe('selectCloneReadinessVerdicts', () => {
         characterId: 'c1',
         engine: 'kokoro',
         reason: 'wrong-engine',
-        otherEngineOk: true,
+        castOnEngine: 'qwen',
       }),
     ]);
   });
 
-  it('otherEngineOk is false, not vacuously true, when the character has no qwen slot at all — a coqui-only clone routed to Kokoro (mutation: drop the second argument off `hasClonedProvenance` -> `characterHasClonedSlot(character)`, which is true for ANY cloned character regardless of which engine)', () => {
+  it('a coqui-only clone routed to Kokoro yields castOnEngine "coqui" (regression: the old blind `engine === "qwen" ? "coqui" : "qwen"` swap landed on qwen for ANY non-qwen routed engine, including Kokoro, so a coqui-only clone was reported as unfixable with no CTA at all)', () => {
     const c = char({
       ttsEngine: 'kokoro',
       overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
@@ -133,8 +133,49 @@ describe('selectCloneReadinessVerdicts', () => {
     const e = entry({ engines: { xtts: { status: 'ready', coquiVersion: 'x' } }, master: healthyMaster() });
     const verdicts = selectCloneReadinessVerdicts(state([c], [e]), 'b1');
     expect(verdicts).toEqual([
-      expect.objectContaining({ reason: 'wrong-engine', otherEngineOk: false }),
+      expect.objectContaining({ reason: 'wrong-engine', castOnEngine: 'coqui' }),
     ]);
+  });
+
+  it('a qwen-routed character with a healthy coqui cast slot (no qwen cast slot at all) yields castOnEngine "coqui" — the pre-existing binary case, unchanged by the CLONE_ENGINE_LIST iteration', () => {
+    const c = char({
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
+    });
+    const e = entry({ engines: { xtts: { status: 'ready', coquiVersion: 'x' } }, master: healthyMaster() });
+    const verdicts = selectCloneReadinessVerdicts(state([c], [e]), 'b1');
+    expect(verdicts).toEqual([
+      expect.objectContaining({ engine: 'qwen', reason: 'wrong-engine', castOnEngine: 'coqui' }),
+    ]);
+  });
+
+  it('a character routed to Kokoro with BOTH clone-capable cast slots healthy yields the CLONE_ENGINE_LIST-first candidate ("qwen"), deterministically — neither slot is excluded by routing since Kokoro is not clone-capable', () => {
+    const c = char({
+      ttsEngine: 'kokoro',
+      overrideTtsVoices: {
+        qwen: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' },
+        coqui: { name: 'v2', libraryUuid: 'v2', provenance: 'cloned' },
+      },
+    });
+    const e1 = entry({ voiceUuid: 'v1', engines: { qwen: { status: 'ready', baseModel: 'x' } }, master: healthyMaster() });
+    const e2 = entry({ voiceUuid: 'v2', engines: { xtts: { status: 'ready', coquiVersion: 'x' } }, master: healthyMaster() });
+    const verdicts = selectCloneReadinessVerdicts(state([c], [e1, e2]), 'b1');
+    expect(verdicts).toEqual([
+      expect.objectContaining({ engine: 'kokoro', reason: 'wrong-engine', castOnEngine: 'qwen' }),
+    ]);
+  });
+
+  it('the routed engine is excluded from candidacy: a qwen-routed character with NO qwen cast slot (so qwen is never a real candidate) and a healthy coqui slot must not offer "Cast on qwen" — pins that the loop never re-suggests the character\'s own routed engine as its own fix', () => {
+    const c = char({
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
+    });
+    const e = entry({ engines: { xtts: { status: 'ready', coquiVersion: 'x' } }, master: healthyMaster() });
+    const verdicts = selectCloneReadinessVerdicts(state([c], [e]), 'b1');
+    expect(verdicts).toEqual([
+      expect.objectContaining({ engine: 'qwen', reason: 'wrong-engine', castOnEngine: 'coqui' }),
+    ]);
+    expect(verdicts[0].castOnEngine).not.toBe('qwen');
   });
 
   it('a plain, non-cloned cast produces no verdicts at all', () => {
@@ -149,7 +190,7 @@ describe('selectCloneReadinessVerdicts', () => {
       expect(selectCloneReadinessVerdicts(state([c], [e]), 'b1')).toEqual([]);
     });
 
-    it('reports wrong-engine when routed off qwen, with otherEngineOk false — the legacy shape carries no `provenance` on ANY engine, so `hasClonedProvenance` (the ONLY correct otherEngineOk helper, arity 2) is false for it everywhere; a mutation dropping its second argument (`characterHasClonedSlot(character)`, always true for any cloned character) would read otherEngineOk as true here', () => {
+    it('reports wrong-engine when routed off qwen, with castOnEngine null — the legacy shape carries no `provenance` on ANY engine, so `hasClonedProvenance` (the ONLY correct castOnEngine helper, arity 2) is false for it everywhere; a mutation dropping its second argument (`characterHasClonedSlot(character)`, always true for any cloned character) would read castOnEngine as "qwen" here', () => {
       const c = char({
         ttsEngine: 'coqui',
         overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: 'v1' } },
@@ -157,7 +198,7 @@ describe('selectCloneReadinessVerdicts', () => {
       const e = entry({ engines: { qwen: { status: 'ready', baseModel: 'x' } }, master: healthyMaster() });
       const verdicts = selectCloneReadinessVerdicts(state([c], [e]), 'b1');
       expect(verdicts).toEqual([
-        expect.objectContaining({ reason: 'wrong-engine', otherEngineOk: false }),
+        expect.objectContaining({ reason: 'wrong-engine', castOnEngine: null }),
       ]);
     });
   });

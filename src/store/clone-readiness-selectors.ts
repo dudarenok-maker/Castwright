@@ -60,10 +60,11 @@ export interface CloneCharacterVerdict {
   /** The engine this character will actually render on this run — Decision 4. */
   engine: TtsEngine;
   reason: CloneUnready;
-  /** Whether "Cast on <other engine>" is a safe CTA for a `wrong-engine`
-      verdict — see Decision 5. Meaningless (always false) for any other
-      reason; callers should only read it when `reason === 'wrong-engine'`. */
-  otherEngineOk: boolean;
+  /** The clone-capable engine to offer as "Cast on <engine>" for a
+      `wrong-engine` verdict, or null when no re-cast would fix it. Always
+      null for any other reason; callers should only read it when
+      `reason === 'wrong-engine'`. */
+  castOnEngine: CloneEngine | null;
 }
 
 /** [R3] Legacy bare-uuid shape (#1891) — a qwen slot carrying a `libraryUuid`
@@ -117,8 +118,9 @@ function libraryUuidForClonedCharacter(character: Character, engine: TtsEngine):
 
 /** Builds the `CloneReadinessInput` for one character at one engine — shared
     by the real per-character check (`engine` = the character's resolved
-    render engine, Decision 4) and `otherEngineOk` (`engine` = the swapped
-    clone-capable engine, Decision 5). Returns `undefined` when no library
+    render engine, Decision 4) and `castOnEngine` (`engine` = each
+    routed-engine-excluded clone-capable candidate, Decision 5). Returns
+    `undefined` when no library
     uuid can be resolved at all — this plan has no "misconfigured" verdict of
     its own (the render's equivalent, `clone-voice-resolver.ts`'s
     `misconfigured` reason, is out of scope — Decision 2's "what stays
@@ -160,32 +162,39 @@ function buildInput(
   };
 }
 
-/** Deterministic swap of a clone-capable engine — same expression as the
-    existing `otherCloneEngine` (server/src/routes/voice-library.ts:1408) and
-    `otherCloneEngineSlot` (src/lib/api.ts:9946), just widened to accept any
-    `TtsEngine` (a character can be routed to a non-clone-capable engine like
-    Kokoro, which those two never see). */
-function otherCloneCapableEngine(engine: TtsEngine): CloneEngine {
-  return engine === 'qwen' ? 'coqui' : 'qwen';
-}
+/** Decision 5's `castOnEngine` — which clone-capable engine, if any, "Cast on
+    <engine>" should offer for a `wrong-engine` verdict. Iterates
+    `CLONE_ENGINE_LIST` (never a hardcoded `['qwen', 'coqui']` pair — see
+    `clone-engines.ts`'s own rationale for why) EXCLUDING the character's
+    currently routed engine, and returns the first candidate the check comes
+    back clean for. `CLONE_ENGINE_LIST`'s declared order ('qwen' before
+    'coqui') is the deterministic tie-break when both remaining candidates
+    are clean — an arbitrary-but-stable choice, not an accident. This
+    subsumes the old binary swap (`otherCloneCapableEngine`, since removed):
+    a qwen-routed character has only 'coqui' left once qwen is excluded, so
+    behaviour for that case is unchanged.
 
-/** Decision 5's `otherEngineOk` — whether "Cast on <other engine>" would
-    actually fix a `wrong-engine` verdict. Trap 4 (of the plan's revision
-    history, not this file's five): this MUST be `hasClonedProvenance`
-    (arity 2, single-engine) — `characterHasClonedSlot` takes ONE argument
-    and does not compile with two; dropping the second argument silently
-    makes this always-true for any cloned character. */
-function otherEngineOkFor(
+    Trap 4 (of the plan's revision history, not this file's five): the
+    per-candidate `characterHasSlot` MUST be `hasClonedProvenance` (arity 2,
+    single-engine) — `characterHasClonedSlot` takes ONE argument and does not
+    compile with two; dropping the second argument silently makes this
+    always-true for any cloned character. */
+function castOnEngineFor(
   character: Character,
   mainInput: CloneReadinessInput,
   entries: readonly VoiceLibraryEntry[],
-): boolean {
-  const other = otherCloneCapableEngine(mainInput.engine);
-  const otherInput = buildInput(character, other, entries);
-  if (!otherInput) return false;
-  return (
-    cloneReadiness({ ...otherInput, characterHasSlot: hasClonedProvenance(character, other) }) === null
-  );
+): CloneEngine | null {
+  const candidates = CLONE_ENGINE_LIST.filter((candidate) => candidate !== mainInput.engine);
+  for (const candidate of candidates) {
+    const candidateInput = buildInput(character, candidate, entries);
+    if (!candidateInput) continue;
+    const verdict = cloneReadiness({
+      ...candidateInput,
+      characterHasSlot: hasClonedProvenance(character, candidate),
+    });
+    if (verdict === null) return candidate;
+  }
+  return null;
 }
 
 /* Stable empty array so the closed-gate / no-cloned-cast case (the common
@@ -221,7 +230,7 @@ export const selectCloneReadinessVerdicts = createSelector(
         characterName: character.name,
         engine,
         reason,
-        otherEngineOk: reason === 'wrong-engine' && otherEngineOkFor(character, input, entries),
+        castOnEngine: reason === 'wrong-engine' ? castOnEngineFor(character, input, entries) : null,
       });
     }
     return verdicts.length > 0 ? verdicts : NO_CLONE_VERDICTS;
