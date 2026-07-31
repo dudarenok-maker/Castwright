@@ -233,6 +233,7 @@ mismatches) — the table's risk column shows each correctly.
 | Render-integrity QA (voice match) | ECAPA speaker-embed match check per rendered line | `false` | boolean | live | low |
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |
+| Content-QA (Whisper) model | faster-whisper model size/name; cap at `base` on an 8 GB card | `base` | string | restart · sidecar | **medium** |
 | Auto-fix voice mismatches | Re-render+replace severe voice mismatches | `false` | boolean | live | **medium** |
 | ASR max deletion run | Longest deletion run → truncation/drop drift | 4 | integer | live | low |
 | ASR min chars | Sentences shorter than this aren't scored | 12 | integer | live | low |

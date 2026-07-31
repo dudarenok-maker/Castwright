@@ -41,4 +41,9 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     const k = getKnob('qa.asr.device')!;
     expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_DEVICE', 'string', 'restart-sidecar', 'cpu']);
   });
+
+  it('adds ASR_MODEL registry knob (string, restart-sidecar, default base) alongside ASR_DEVICE', () => {
+    const k = getKnob('qa.asr.model')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_MODEL', 'string', 'restart-sidecar', 'base']);
+  });
 });
