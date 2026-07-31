@@ -406,7 +406,7 @@ that synthesise the same voice disagreeing with it.
 
 ### On-box acceptance, run 2026-07-31 (SHA `b5479e9c`, clean tree)
 
-**§"On-box acceptance" step 1 — PASS.** German Coalfall ch.2, cloned voice
+**§"On-box acceptance" step 1 — PARTIAL (corrected 2026-07-31).** The chapter-level half is **withdrawn**: that render went through a splice re-record and hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972), so most of the audio measured was the *narrator*, not the clone (0.949 against the chapter's own narrator). The direct-`/synthesize` evidence below is unaffected and does prove the fix. Re-run the chapter-level criterion after #1972 lands, or via a full chapter generation, which the defect does not touch. Original (now-qualified) text follows. German Coalfall ch.2, cloned voice
 `563501c7-…` cast onto `oduvan`, re-recorded via splice so the render went over
 the **`/synthesize-batch`** wire — the transport the original fix would have
 missed. 12 spans (27.2 s) through `/transcribe` with **no `x-language`**:
@@ -417,7 +417,12 @@ missed. 12 spans (27.2 s) through `/transcribe` with **no `x-language`**:
 | Designed `narrator` control, same chapter | `de` | −0.352 |
 | Pre-fix baseline (2026-07-30) | `en` | −1.303 |
 
-`characterSnapshots.oduvan.resolvedVoiceName` stayed `qwen-563501c7-…`.
+`characterSnapshots.oduvan.resolvedVoiceName` stayed `qwen-563501c7-…` — **not
+corroborating evidence**: this is exactly the field [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)
+showed was re-derived from the cast record rather than recorded from the
+render, so it reports the assigned voice regardless of what actually rendered.
+Kept here only as a record of what the field said at the time; the retraction
+above is what actually holds.
 
 Corroborated on the single-synth wire, with an identity control the criterion
 did not ask for but which matters — the fix changes *what language the model is
