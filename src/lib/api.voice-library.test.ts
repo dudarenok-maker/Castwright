@@ -221,6 +221,21 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       expect(advisory).toMatch(/Qwen/);
       expect(advisory).toMatch(/transcript/);
     });
+
+    /* T9-mirror — closes a hole T1/T3/T6b-mirror leave open: none of them
+       have a COQUI slot that is itself `ready`, so an implementation that
+       narrowed case 2 ("a ready slot is always OK") to `engine === 'qwen'`
+       would pass all three above while silently over-blocking every
+       coqui-ready case. This is the coqui-routed mirror of the "allows a
+       ready, non-revoked cloned entry assigned to Qwen" case above. */
+    it('T9-mirror — allows a coqui-routed assign whose OWN (xtts) slot is ready, even with no master and an irrelevantly-failed qwen slot', () => {
+      const entry = makeCloned({
+        engines: { qwen: { status: 'failed' }, xtts: { status: 'ready', coquiVersion: 'x' } },
+      });
+      expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toBeNull();
+      const advisory = _mockAssignAdvisory(entry, 'coqui-xtts-v2');
+      expect(advisory).toMatch(/Qwen/);
+    });
   });
 
   it('mockAssignLibraryVoice succeeds for the ready lib-cloned-demo fixture', async () => {
