@@ -6,11 +6,12 @@
 reach), #2015 (`analysis.ts`'s five writes)
 **Sequencing:** implementation bases on / rebases onto `fix/server-1933-assign-readiness`
 
-**Review:** three adversarial passes — 3C/8M/3m, then 4C/6M/8m, then 1C/5M/5m.
-Each round's worst findings landed in whatever the *previous* round had just
-rewritten, which is the main thing to know when reading this document: the parts
-revised most recently are the parts least proven. Round 3 verified ~60 citations
-clean and judged §§1–5 and §§8–11 implementable as they stand.
+**Review:** four adversarial passes — 3C/8M/3m, 4C/6M/8m, 1C/5M/5m, then
+0C/4M/4m. Each round's worst findings landed in whatever the *previous* round had
+just rewritten, which is the main thing to know when reading this document: the
+parts revised most recently are the parts least proven. Round 3 verified ~60
+citations clean; round 4 confirmed the three-class lock order holds across every
+traced path, and that the scope reductions did not hollow the sweep out.
 
 Two sections were re-decided outright rather than patched. §6 tried "analysis owns
 cast.json" (round 1), then a route-level admission gate (round 2), and now defers
@@ -20,9 +21,15 @@ failing the next. §7 claimed all four clone-consent gates were folded in (round
 inert, because no *writer* took the key. It now specifies both sides.
 
 The pattern is worth naming: every one of those failures was a design that read
-as coverage while covering nothing. That is what §10's revert-verification and
-§10.3's import-graph pin exist to catch in the tests, and it is what this header
-exists to flag in the prose.
+as coverage while covering nothing. §10's revert-verification and §10.3's
+cross-module outcome spec exist to catch that in the tests; this header exists to
+flag it in the prose.
+
+Round 4 also inverted a claim the first three drafts all carried — that a
+partitioned lock passes tests silently. It does not; partition means no
+contention, which means a lost mutation, which makes the outcome test go **red**
+(§3.1). The countermeasure moved accordingly, from detecting partition to
+covering the one case no self-vs-self race can reach.
 
 ## 1. What was filed, and what is actually wrong
 
@@ -86,8 +93,15 @@ Two further sites *delete* it. Measured read→write spans:
 `promote-voice` — not `/assign` — holds the longest window in the codebase, and
 it spans a network call to the sidecar. `cast-design.ts`'s re-read-then-write is
 a hand-rolled mitigation of this exact race, corroborating that the defect class
-is real and has been felt before; it is also the shape a lock wants, so those two
-sites convert cleanly.
+is real and has been felt before, and it is the shape a lock wants.
+
+It is not, however, a clean template. Its decisions — the two idempotency
+`continue`s at `:268`/`:269` — are taken from the *first* read, and an LLM persona
+generation runs at `:273` before the `fresh` re-read at `:289`. Locking `:289-293`
+protects other characters' fields but leaves those decisions stale: two concurrent
+runs can each generate a persona and the second overwrites the first. Recorded as
+a residual in §12. The narrowing pattern is right; this instance of it is
+incomplete, and §5 says so where it reuses the shape.
 
 Line numbers here are as of `main` at `88476dca` and will shift — see §9. The
 implementation plan cites symbols, not lines.
@@ -115,8 +129,7 @@ withCastLocks<T>(bookDirs: string[], fn: () => Promise<T>): Promise<T>
 `withCastLock` delegates to `withKeyLock(castJsonPath(bookDir), fn)`.
 
 The wrapper is not ceremony. **Key derivation must live in exactly one place.**
-There are two ways this lock can silently partition into mutexes that never
-contend, and both leave every test green:
+Two things can partition this lock into mutexes that never contend:
 
 - **Derivation drift.** One site keys on `bookDir`, another on
   `castJsonPath(bookDir)`, or on an unnormalised path separator. A single named
@@ -128,9 +141,21 @@ contend, and both leave every test green:
   `routes/backup.test.ts:7`). Any spec where the route under test and a second
   writer resolve through different module registries gets **two `chains` Maps**.
 
-The second mode is the more dangerous, because a partitioned lock behaves like no
-lock *in both directions*: the outcome test passes by partition, and §10.2's
-revert-verification also passes vacuously. §10.3 states the countermeasure.
+**Partition surfaces as a failing test, not a passing one** — the first three
+drafts had this exactly backwards, and it is worth stating plainly because it
+redirects the whole countermeasure. Two `chains` Maps means no contention, which
+means the unlocked behaviour §10.1 measured at 200/200 lost mutations. §10.2's
+outcome test asserts *both* mutations survive, so a partitioned lock makes it go
+**red**. Key-derivation drift has the same signature: different keys, no
+contention, red.
+
+So partition is a false-red/flake risk, not a silent-coverage risk, and the
+import-graph pin in §10.3 is hygiene rather than a detector.
+
+**The genuinely undetectable case is different**, and it is the one to design
+against: a spec that races one site *against itself* resolves both calls through
+one import and one key, so it can never observe a key mismatch **between two
+different sites**. That is what §10.3 now targets.
 
 `withCastLocks` **dedupes, then sorts** the derived keys, then nests:
 
@@ -171,6 +196,18 @@ CLAUDE.md's *Conventions worth preserving*:
 2. **The read goes inside the lock, and so does every decision derived from it.**
    Wrapping only the write buys nothing at all. This is the easy way to produce a
    diff that looks correct and fixes nothing.
+
+   **The carve-out, and its criterion.** Four sites legitimately leave something
+   outside — `promote-voice`'s `realVoiceId`, `cast-design.ts`'s two idempotency
+   guards, `cast-add-from-roster`'s target read, and
+   `ensureCharacterVoiceUuid`'s series branch. A value may stay outside the lock
+   **only when** (a) re-deriving it inside would be wrong rather than merely
+   redundant — because irreversible work outside the lock has already committed to
+   it, as with `realVoiceId`'s renamed artifacts — or (b) it is a cross-book read a
+   per-book lock cannot cover anyway. Every such case is named at its site and
+   carried as a residual in §12. **Anything not on that list, with a reason
+   written down, is rule 2's failure mode and not a narrowing.** A reviewer who
+   cannot tell which they are looking at should treat it as the failure mode.
 3. **Two or more books → `withCastLocks`, never nested `withCastLock`s.**
 4. **Global lock order: `design` → `library-voice` → `cast`.** Every acquisition
    site names where it sits in that order. Never acquire a lock from an earlier
@@ -237,10 +274,39 @@ Three of these are not routine wraps despite sitting in this class:
   network round-trip inside the hottest lock in the product and stall every cast
   write for that book behind it.
 
-  **Instead: narrow the lock to a fresh re-read plus the write, at the end.** The
-  artifact moves and the evict `fetch` stay outside it. This is exactly the shape
-  `cast-design.ts:289`/`:293` already uses, and it keeps §12's "one file read plus
-  one file write" hold-time claim true — which, wrapped naively, it would not be.
+  **Instead: narrow the lock to a fresh re-read plus the write, at the end**, with
+  the artifact moves and the evict `fetch` outside it. That keeps §12's "one file
+  read plus one file write" hold-time claim true — which, wrapped naively, it
+  would not be.
+
+  Narrowing here is not a one-line change, because the `:692` read is load-bearing
+  throughout: `:698` derives `realVoiceId` from `character.voiceUuid`, and that
+  value drives the 400 gate, the `stat` 409, the `rm`s and `rename`s, the
+  `copyFile` and the evict payload; `:787` takes `qwenSlot`, `:789-791` builds
+  `staleVariantIds` from it, and `:792`'s `delete qwenSlot.variants` mutates the
+  `:692` object *in place* — which `:793` then writes. So the lock body is
+  specified exactly, and the implementer invents nothing:
+
+  1. Inside `withCastLock`, **re-read** cast.json and re-find the character. If it
+     is gone, return the same 404 the handler would have.
+  2. **Re-derive `qwenSlot` and `staleVariantIds` from the fresh object**, apply
+     the `delete`, and write that object. The `:692` copy must not be the payload.
+  3. **`realVoiceId` stays pinned to the pre-lock read, deliberately** — the
+     artifacts have already been renamed to it by the time the lock is taken, so
+     re-deriving it afterwards would name files that do not exist. The divergence
+     (a concurrent write changing `voiceUuid` mid-promotion) is a residual,
+     recorded in §12, not something this lock can fix.
+  4. The `staleVariantIds` teardown stays **outside** the lock — it is filesystem
+     work, and holding the lock across it reintroduces the problem being avoided.
+- **`book-state.ts:634`** has **no cast read at the call site** — the write's
+  argument is `await preserveDesignedVoices(bookDir, body.patch)`, and the read
+  lives inside that helper (`book-state.ts:128-130`). Wrapping "the span"
+  mechanically therefore locks the *write only*, which is rule 2's named failure
+  mode. It is also the site where a stale read does the most damage: that read
+  feeds `rejectForeignCloneKeys` (`:135`) and `preserveClonedSlotsOnCastWrite`
+  (`:140`), both **clone-consent guards**. The lock must enclose the
+  `preserveDesignedVoices` call and the write together, or be pushed into the
+  helper.
 - **`cast-add-from-roster.ts:147`** moved here from class 2 after round 2: it
   reads *both* books (`:104`, `:105`) but writes **only the source** (`:147`), and
   `:79` already 400s same-book. A single-book lock on the source is correct;
@@ -248,10 +314,13 @@ Three of these are not routine wraps despite sitting in this class:
   read-only consultation. Note the target read still feeds the decision, so it is
   a check-then-act — accepted per §12, not closed here.
 - **`voice-library-usage.ts:113`** needs its read moved inside the lock, because
-  `walkConfirmedCasts()` (`:43`) *yields* an already-read `cast`. But that walker
-  is **shared** with `scanLibraryVoiceUsage` (`:71-85`) — §7's gate 2 — so
-  changing what it yields reaches into a consent gate. It is a shared-seam
-  restructure, sequenced with §7's library-voice lock rather than done blind.
+  `walkConfirmedCasts()` (`:43`) *yields* an already-read `cast`. An earlier draft
+  called this a shared-seam restructure, on the grounds that the walker is shared
+  with `scanLibraryVoiceUsage` (`:71-85`). It is not: `clearLibraryVoiceReferences`
+  consumes only `bookDir` and `cast.characters`, so it can **ignore the yielded
+  `cast` and re-read `castJsonPath(bookDir)` inside its own per-book lock**,
+  leaving the walker's signature and the read-only scan untouched. A contained
+  conversion, not a design decision.
 
 ### Class 2 — multi-book: `withCastLocks` (8 sites)
 
@@ -303,11 +372,17 @@ See §6.
 cast.json and neither matches `writeJsonAtomic(castJsonPath(`, so the first
 draft's guard test could not see them.
 
-They matter more after this change, not less: a locked writer whose read predates
-the delete recreates cast.json afterwards, resurrecting the stale roster the
-delete exists to remove (`analysis.ts:2836-2841` documents that intent) — and the
-lock *lengthens* the gap between a queued writer's read and its write. Both take
-the cast lock; the guard pattern extends to `rm(castJsonPath(`.
+They matter because a delete that is not serialised against the writers can
+simply be undone: a writer that acquires after the delete recreates cast.json,
+resurrecting the stale roster the delete exists to remove
+(`analysis.ts:2836-2841` documents that intent). Both take the cast lock; the
+guard pattern extends to `rm(castJsonPath(`.
+
+(An earlier draft justified this by claiming the lock "lengthens the gap between
+a queued writer's read and its write". That is wrong under rule 2 —
+`file-lock.ts:12-14` awaits `prior` *before* `fn()`, so a queued writer's read
+happens after the holder's write and the gap is unchanged. The claim held only
+for the sites whose reads are deliberately left outside, i.e. the exceptions.)
 
 ### 5.1 The re-entrancy restructure
 
@@ -359,7 +434,7 @@ at `:193`**, as the function's own docstring claims (`:182-184`).
 **Across books it is not prevented at all, and that is a pre-existing defect this
 spec must not paper over.** `withDesignLock` keys on `bookDir`
 (`design-lock.ts:26-27`), and so do `isDesignBusy`, `isAnalysisBusy` and
-`cast-design.ts:668`'s `inFlightByBook` gate. Two bulk-design jobs on **two
+`cast-design.ts:648`'s `inFlightByBook` gate. Two bulk-design jobs on **two
 different books of one series** therefore hold two different design locks; both
 call `ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter)`
 (`cast-design.ts:485`) for the same linked identity, both see no `voiceUuid` at
@@ -632,25 +707,30 @@ as a required step with recorded output.
 
 ### 10.3 The partition assertion — mandatory, and it comes first
 
-Because a partitioned lock passes both the outcome test and the revert
-verification, each outcome spec must establish that the two writers actually
-share one lock instance.
+Two countermeasures were proposed across earlier drafts and both were aimed at
+the wrong failure. Recording the correction, because the reasoning matters more
+than the conclusion:
 
-The first rewrite made a test-only `chains.size` accessor the mandatory
-countermeasure and a pinned import graph the fallback. **That is backwards, and
-the accessor does not work.** It is imported into the *spec file*, so it resolves
-through the spec file's registry — which in the failure mode being detected is
-neither writer's. Worse, in the half-partitioned case the observed size is `1`,
-indistinguishable from a correctly shared lock with one queued waiter, because
-`file-lock.ts:11` overwrites the same key rather than adding an entry per waiter.
-An instance token would only help if each *writer* reported which instance it
-used, and nothing in this design plumbs that.
+- A **test-only `chains.size` accessor** was made mandatory in round 2. It cannot
+  work: imported into the *spec file*, it resolves through the spec file's
+  registry, which in the failure mode being detected is neither writer's. And in
+  the half-partitioned case the observed size is `1` — indistinguishable from a
+  correctly shared lock with one queued waiter, because `file-lock.ts:11`
+  overwrites the key rather than adding an entry per waiter. **Not added.**
+- **Pinning a single import graph** was then made mandatory in round 3, on the
+  premise that partition otherwise passes silently. §3.1 now establishes that
+  partition makes the outcome test go **red**, so this is hygiene against a
+  confusing false failure, not a detector. **Keep it, but as hygiene.**
 
-**Inverted: pinning a single import graph is the mandatory requirement.** Every
-outcome spec drives both writers through one module registry and states in a
-comment that it does; specs in this set do not call `vi.resetModules()` between
-the two writers. No test-only accessor is added — a countermeasure that cannot
-detect the failure it targets is worse than none, because it looks like coverage.
+**The requirement that actually closes the gap:** at least one outcome spec must
+race **two different modules'** write sites against the same book — for example
+`cast-aliases.ts`'s alias split against `voice-style.ts`'s style write. A spec
+that races one site against itself resolves both calls through one import and one
+key, so it can never observe a key mismatch *between* sites, and cross-site
+derivation drift is the one partition mode no self-vs-self test can reach.
+
+Concretely: every outcome spec pins one registry (hygiene), and the cross-module
+spec is a required deliverable, not an optional extra.
 
 This is also why §10.1's spike lands as a committed test rather than a quoted
 number: it is the reference for what a correctly-pinned harness looks like.
@@ -740,8 +820,8 @@ the code.
   write. Without them the claim is false, which is how it read before round 3.
 
   A warn-after-N-seconds log was considered and **dropped**. `withKeyLock` has
-  five existing non-cast callers (`book-state.ts:1588`,
-  `script-review-ledger.ts:83`/`:105`/`:131`/`:143`), so a timer per acquisition
+  five existing non-cast callers (`book-state.ts:1588`, and
+  `workspace/script-review-ledger.ts:83`/`:105`/`:131`/`:143`), so a timer per acquisition
   is a behaviour change to all of them, and a non-`unref()`d one would hold the
   event loop open on what is about to become the hottest lock in the product —
   in a repo whose flake register already tracks tinypool worker-exit failures.
@@ -758,9 +838,29 @@ the code.
   series-wide), and this sweep makes the resulting damage finer-grained — a split
   uuid across the series rather than last-writer-wins. §5.1 has the mechanism;
   added to **#2006**.
-- **`cast-add-from-roster.ts` reads the target book to decide a source write.**
-  That consultation is check-then-act and is not closed by a single-book lock on
-  the source.
+- **Three cross-book check-then-act consultations survive**, not one. Earlier
+  drafts named only the smallest:
+  - `cast-add-from-roster.ts` reads the target book to decide a source write;
+  - `voice-override-linked.ts` reads the **source** cast and derives
+    `canonicalVoiceId`, `sourceTokens`, the `inGroup` predicate and the entire
+    `writes` list from that snapshot, then writes **other** books via
+    `applyToBook`;
+  - `cast-series-patch.ts` reads the source cast, derives `sourceChar` and the
+    `targets` list, additionally reads other books via
+    `scanSeriesCharactersForBookId`, then writes per book.
+
+  The latter two are the worse pair — they carry *data and grouping* derived from
+  a stale cross-book snapshot into writes in other books, where
+  `cast-add-from-roster` carries only a decision. A per-book lock closes none of
+  the three. Added to **#2006**.
+- **`promote-voice`'s `realVoiceId` is pinned to its pre-lock read** (§5), so a
+  concurrent write that changes `voiceUuid` mid-promotion leaves the artifacts
+  named for the old uuid.
+- **`cast-design.ts`'s two sites keep stale idempotency decisions.** Its
+  `continue` guards are evaluated against the first read, before an LLM persona
+  generation, and the lock covers only the later re-read and write — so two
+  concurrent runs can each generate a persona and the second overwrites the
+  first.
 - **In-process only.** Two server processes against one workspace would defeat
   this entirely. The product runs one server; verified that `server/src` has no
   `worker_threads` and no cast.json writer in a child process.
