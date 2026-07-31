@@ -37,7 +37,11 @@ import pytest
 # stdlib phrasing of a bare missing module. Matched case-insensitively on the
 # message because `_ensure_loaded` re-wraps the original ImportError in a
 # plain RuntimeError, so the exception TYPE alone can't distinguish
-# "coqui-tts isn't installed" from "the render failed".
+# "coqui-tts isn't installed" from "the render failed". The generic "no
+# module named" entry also covers `KokoroEngine._ensure_loaded`'s equivalent
+# "Failed to import kokoro-onnx (...)" wrapper (#1987) without a
+# Kokoro-specific marker — no engine-specific string needed there since the
+# underlying ImportError already reads "No module named 'kokoro_onnx'".
 _ENGINE_ABSENT_MARKERS = (
     "failed to import coqui-tts",
     "pytorch missing from this venv",
@@ -67,10 +71,11 @@ def synthesise_or_skip(engine: Any, model: str, voice: str, text: str) -> Any:
     """`engine.synthesize(...)`, skipping ONLY if the engine is absent.
 
     Use this for the FIRST synth in a golden test — the one whose failure can
-    still legitimately mean "this box has no Coqui". Any later call in the
-    same test should invoke `engine.synthesize` directly: once the first
-    render has succeeded the engine is demonstrably present, so a second
-    failure is a regression by definition and must not be skippable."""
+    still legitimately mean "this box has no Coqui" (or, since #1987, "no
+    Kokoro" for `_make_kokoro`'s warm-up call). Any later call in the same
+    test should invoke `engine.synthesize` directly: once the first render
+    has succeeded the engine is demonstrably present, so a second failure is
+    a regression by definition and must not be skippable."""
     try:
         return engine.synthesize(model, voice, text)
     except Exception as exc:

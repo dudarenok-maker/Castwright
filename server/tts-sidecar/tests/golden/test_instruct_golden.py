@@ -50,6 +50,8 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
+from tests.golden.compare import bless_guard_thresholds  # noqa: E402
+
 pytestmark = pytest.mark.golden
 
 GOLDEN_DIR = Path(__file__).resolve().parent
@@ -171,14 +173,30 @@ def _measure(engine) -> dict:
 
 
 def _bless(measured: dict) -> None:
+    """Record measurements AND (guarded) the derived tolerances. #1995: the
+    `tolerances` block is a THRESHOLD, not a measurement -- a bless run
+    performed for an unrelated reason (e.g. re-blessing kokoro-baseline.json's
+    transcripts in the same `--sidecar-only --bless` invocation) must not
+    silently move it to whatever THIS run measured. `bless_guard_thresholds`
+    refuses (raises, no write at all -- same all-or-nothing shape as
+    `test_golden_regression._bless`'s G1/G2) unless the computed tolerances
+    match what's already committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
-    baseline["tolerances"] = {
+    computed_tolerances = {
         # Calibrated ceilings with headroom over the on-box measurement.
         "identity_cosine_max": round(max(0.15, id_max + 0.10), 3),
         "loudness_dbfs_abs": 4.0,
         "rtf_max": round(max(1.0, measured["rtf"] * 1.5), 2),
     }
+    allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
+    guard_reason = bless_guard_thresholds(
+        baseline.get("tolerances"), computed_tolerances, allow_rebless_thresholds=allow_rebless_thresholds
+    )
+    if guard_reason is not None:
+        raise AssertionError(guard_reason)
+
+    baseline["tolerances"] = computed_tolerances
     baseline["identity"] = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
     baseline["loudness_dbfs"] = measured["loudness_dbfs"]
     baseline["rtf"] = {"batched": measured["rtf"]}
