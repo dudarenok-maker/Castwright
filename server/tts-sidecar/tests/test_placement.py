@@ -8,7 +8,10 @@ VRAM the first one already claimed; `reservation()` releases that hold (and
 records the observed peak) on exit, whether the op succeeded or raised."""
 from __future__ import annotations
 
+import asyncio
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -59,51 +62,119 @@ def make(devices, peak, reserve_cap=768, idle_evict_steps=None, resident=None):
     )
 
 
+# plan 273 (T6): `reservation()`/`admit()` are `async def` (T4). This suite has
+# no pytest-asyncio and no conftest — the established sidecar pattern
+# (test_lifespan_order.py, test_memory.py, test_speaker_embed.py,
+# test_transcribe_embed_admission.py) is a sync `def test_...()` that drives
+# a single `async def body()` via `asyncio.run(body())`. Followed here rather
+# than adding a test dependency.
+#
+# `run_case` is the mandatory anti-placebo control (T6): every ported body
+# ends `return _RAN`, and this assert proves the body ran to its LAST line —
+# an early `return`, a swallowed branch, or a body that never reached its
+# assertions all fail here rather than passing quietly. Verified by mutation:
+# replacing any body's `return _RAN` with `return None` fails that test with
+# "async test body did not run to completion".
+#
+# It is the primary control, NOT `-W error::RuntimeWarning`: "coroutine was
+# never awaited" is raised from the coroutine's own `__del__`, and CPython
+# prints-and-ignores an exception raised inside a finalizer, so it only fails
+# a test if GC happens to land in that test's scope.
+#
+# What `run_case` does NOT need to defend against, contrary to T6's stated
+# rationale in plan 273: a ported test written as a bare
+# `async def test_...(): ...` with no `asyncio.run` driving it does NOT pass
+# vacuously here. Measured on this venv (pytest 9.1.1, no pytest-asyncio and
+# no active anyio plugin), pytest FAILS such a test outright with "async def
+# functions are not natively supported", so a missing driver is loud on its
+# own. That framing may have held for older pytest, which warned and passed;
+# it does not hold for the pinned toolchain. Do not weaken this control on
+# the strength of that — its real value is the last-line guarantee above.
+_RAN = object()
+
+
+def run_case(coro):
+    assert asyncio.run(coro) is _RAN, "async test body did not run to completion"
+
+
 def test_reserves_peak_so_second_op_cannot_double_book():
-    devices = [dev(free=8000, total=8192)]
-    pc = make(devices, peak=5600)
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a1:
-        assert a1["device"] == "cuda:0"
-        # second op: the per-device reserve on an 8192 MB card is
-        # min(round(0.05*8192), 768) = 410, so headroom = min(8000, 8192 -
-        # 5600(reserved)) - 410 = 2592 - 410 = 2182 < 5600 -> no capacity
-        a2 = pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
-        assert "noCapacity" in a2 and a2["noCapacity"]["neededMb"] == 5600
-    # after the first releases, it fits again
-    assert pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)["device"] == "cuda:0"
+    """Also the concrete T4-hazard-(b) case: one `PlacementController` is
+    used for a `reservation()` AND two `admit()` calls (one nested INSIDE the
+    open reservation), so all three must run under exactly ONE `asyncio.run`
+    — `asyncio.Lock` binds to the first loop that awaits it, and reusing a
+    controller across two `asyncio.run` calls raises "bound to a different
+    event loop". The nested `admit()`-inside-`reservation()` call also
+    exercises T4 hazard (a): `admit()` must NOT take `_admit_lock` (it's
+    non-reentrant), or this nesting deadlocks."""
+
+    async def body():
+        devices = [dev(free=8000, total=8192)]
+        pc = make(devices, peak=5600)
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a1:
+            assert a1["device"] == "cuda:0"
+            # second op: the per-device reserve on an 8192 MB card is
+            # min(round(0.05*8192), 768) = 410, so headroom = min(8000, 8192 -
+            # 5600(reserved)) - 410 = 2592 - 410 = 2182 < 5600 -> no capacity
+            a2 = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+            assert "noCapacity" in a2 and a2["noCapacity"]["neededMb"] == 5600
+        # after the first releases, it fits again
+        a3 = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert a3["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_prefers_roomier_device():
-    devices = [dev(index=0, total=8192, free=3000), dev(index=1, total=16384, free=15000)]
-    assert make(devices, 5600).admit("qwen", "q", {}, False, True)["device"] == "cuda:1"
+    async def body():
+        devices = [dev(index=0, total=8192, free=3000), dev(index=1, total=16384, free=15000)]
+        a = await make(devices, 5600).admit("qwen", "q", {}, False, True)
+        assert a["device"] == "cuda:1"
+        return _RAN
+
+    run_case(body())
 
 
 def test_cheap_engine_falls_back_to_cpu():
-    assert make([dev(free=200)], 1200).admit("kokoro", None, {}, cpu_capable=True, heavy=False)["device"] == "cpu"
+    async def body():
+        a = await make([dev(free=200)], 1200).admit("kokoro", None, {}, cpu_capable=True, heavy=False)
+        assert a["device"] == "cpu"
+        return _RAN
+
+    run_case(body())
 
 
 def test_heavy_no_room_no_evict_reports_no_capacity_with_analyzer_hint():
-    devices = [dev(free=1000)]
-    a = make(devices, 5600).admit("qwen", "q", {}, cpu_capable=False, heavy=True)
-    assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+    async def body():
+        devices = [dev(free=1000)]
+        a = await make(devices, 5600).admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_idle_evict_then_place():
-    devices = [dev(free=8000)]
-    ledger = main.ReservationLedger()
-    tok = ledger.hold("cuda:0", 6000, "qwen")
-    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
-    pc = main.PlacementController(
-        probe=lambda: devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=lambda dk, eng: [
-            main.EvictStep("release", None, lambda: (ledger.release(tok) or True))
-        ],
-        is_resident=lambda e: None,
-    )
-    assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
+    async def body():
+        devices = [dev(free=8000)]
+        ledger = main.ReservationLedger()
+        tok = ledger.hold("cuda:0", 6000, "qwen")
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        pc = main.PlacementController(
+            probe=lambda: devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [
+                main.EvictStep("release", None, lambda: (ledger.release(tok) or True))
+            ],
+            is_resident=lambda e: None,
+        )
+        a = await pc.admit("qwen", "q", {}, False, True)
+        assert a["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_starved_qwen_admits_after_coqui_is_evicted():
@@ -121,32 +192,37 @@ def test_starved_qwen_admits_after_coqui_is_evicted():
     weights), not as a ledger hold; the injected evict raises `freeMb` back
     to 8000 once Coqui is unloaded, mirroring what the real GPU probe would
     report."""
-    state = {"free": 5192}
-    devices = lambda: [dev(free=state["free"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
-    evicted = []
+    async def body():
+        state = {"free": 5192}
+        devices = lambda: [dev(free=state["free"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        evicted = []
 
-    def evict(device_key, engine):
-        evicted.append((device_key, engine))
-        state["free"] = 8000
-        return True
+        def evict(device_key, engine):
+            evicted.append((device_key, engine))
+            state["free"] = 8000
+            return True
 
-    def steps(device_key, engine):
-        if engine == "coqui":
-            return []
-        return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
+        def steps(device_key, engine):
+            if engine == "coqui":
+                return []
+            return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    assert pc.admit("qwen", "q", {}, False, True)["device"] == "cuda:0"
-    assert evicted == [("cuda:0", "qwen")]
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        a = await pc.admit("qwen", "q", {}, False, True)
+        assert a["device"] == "cuda:0"
+        assert evicted == [("cuda:0", "qwen")]
+        return _RAN
+
+    run_case(body())
 
 
 def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
@@ -156,33 +232,38 @@ def test_starved_qwen_reservation_admits_after_coqui_is_evicted():
     Coqui occupying the device's VRAM is evicted by the injected
     `idle_evict_steps` (modelled as low `freeMb`, not a ledger hold — see the note
     on the sibling test above)."""
-    state = {"free": 5192}
-    devices = lambda: [dev(free=state["free"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
-    evicted = []
 
-    def evict(device_key, engine):
-        evicted.append((device_key, engine))
-        state["free"] = 8000
-        return True
+    async def body():
+        state = {"free": 5192}
+        devices = lambda: [dev(free=state["free"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        evicted = []
 
-    def steps(device_key, engine):
-        if engine == "coqui":
-            return []
-        return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
+        def evict(device_key, engine):
+            evicted.append((device_key, engine))
+            state["free"] = 8000
+            return True
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert evicted == [("cuda:0", "qwen")]
+        def steps(device_key, engine):
+            if engine == "coqui":
+                return []
+            return [main.EvictStep("coqui", "coqui", lambda: evict(device_key, engine))]
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert evicted == [("cuda:0", "qwen")]
+        return _RAN
+
+    run_case(body())
 
 
 # --- step-wise eviction with a real re-probe (#1920A + #1920B) --------------
@@ -203,41 +284,45 @@ def test_a_small_op_satisfied_by_the_first_step_leaves_coqui_resident():
     Fails against the wrong implementation: today every branch runs
     unconditionally, so `evicted` would end as ['asr', 'coqui'] instead of
     stopping after the first sufficient step."""
-    state = {"free": 200, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 400, "record": lambda *_: None})()
-    evicted = []
-    coqui_touched = []
+    async def body():
+        state = {"free": 200, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 400, "record": lambda *_: None})()
+        evicted = []
+        coqui_touched = []
 
-    def free_asr():
-        evicted.append("asr")
-        state["free"] += 5000  # the cheap engine alone frees plenty
-        return True
+        def free_asr():
+            evicted.append("asr")
+            state["free"] += 5000  # the cheap engine alone frees plenty
+            return True
 
-    def free_coqui():
-        coqui_touched.append("coqui")
-        state["free"] += 3000
-        return True
+        def free_coqui():
+            coqui_touched.append("coqui")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        return [
-            main.EvictStep("asr", "asr", free_asr),
-            main.EvictStep("coqui", "coqui", free_coqui),
-        ]
+        def steps(device_key, engine):
+            return [
+                main.EvictStep("asr", "asr", free_asr),
+                main.EvictStep("coqui", "coqui", free_coqui),
+            ]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("asr", None, {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert evicted == ["asr"]
-    assert coqui_touched == []  # the ~90s reload was never needed
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert evicted == ["asr"]
+        assert coqui_touched == []  # the ~90s reload was never needed
+        return _RAN
+
+    run_case(body())
 
 
 def test_a_large_op_the_first_step_cannot_satisfy_still_reaches_coqui():
@@ -247,39 +332,43 @@ def test_a_large_op_the_first_step_cannot_satisfy_still_reaches_coqui():
     Fails against the naive `if not freed: ...` one-liner, which stops after
     the first success and never frees enough — admission would report
     noCapacity even though Coqui's freed VRAM would have been enough."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 6000, "record": lambda *_: None})()
-    evicted = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 6000, "record": lambda *_: None})()
+        evicted = []
 
-    def free_asr():
-        evicted.append("asr")
-        state["free"] += 200  # not enough on its own
-        return True
+        def free_asr():
+            evicted.append("asr")
+            state["free"] += 200  # not enough on its own
+            return True
 
-    def free_coqui():
-        evicted.append("coqui")
-        state["free"] += 6000  # this one is enough
-        return True
+        def free_coqui():
+            evicted.append("coqui")
+            state["free"] += 6000  # this one is enough
+            return True
 
-    def steps(device_key, engine):
-        return [
-            main.EvictStep("asr", "asr", free_asr),
-            main.EvictStep("coqui", "coqui", free_coqui),
-        ]
+        def steps(device_key, engine):
+            return [
+                main.EvictStep("asr", "asr", free_asr),
+                main.EvictStep("coqui", "coqui", free_coqui),
+            ]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert evicted == ["asr", "coqui"]  # both steps had to run
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert evicted == ["asr", "coqui"]  # both steps had to run
+        return _RAN
+
+    run_case(body())
 
 
 def test_an_engine_holding_a_reservation_is_not_evicted():
@@ -290,32 +379,36 @@ def test_an_engine_holding_a_reservation_is_not_evicted():
     Coqui step runs and the reserved model is thrown away — admission would
     then succeed with `coqui_touched` non-empty instead of reporting
     noCapacity."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
-    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
-    coqui_touched = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+        fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+        coqui_touched = []
 
-    def free_coqui():
-        coqui_touched.append("coqui")
-        state["free"] += 3000
-        return True
+        def free_coqui():
+            coqui_touched.append("coqui")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        return [main.EvictStep("coqui", "coqui", free_coqui)]
+        def steps(device_key, engine):
+            return [main.EvictStep("coqui", "coqui", free_coqui)]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
-    assert coqui_touched == []
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
+        assert coqui_touched == []
+        return _RAN
+
+    run_case(body())
 
 
 def test_reserved_key_not_name_gates_the_ledger_skip():
@@ -327,33 +420,37 @@ def test_reserved_key_not_name_gates_the_ledger_skip():
     reserved_key): name "x" is never held, so the mutated skip would let this
     step run, and admission would wrongly succeed instead of reporting
     noCapacity."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
-    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
-    ran = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+        fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+        ran = []
 
-    def free_mismatched_name():
-        ran.append("x")
-        state["free"] += 3000
-        return True
+        def free_mismatched_name():
+            ran.append("x")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        # name != reserved_key on purpose — the skip must key off reserved_key.
-        return [main.EvictStep("x", "coqui", free_mismatched_name)]
+        def steps(device_key, engine):
+            # name != reserved_key on purpose — the skip must key off reserved_key.
+            return [main.EvictStep("x", "coqui", free_mismatched_name)]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
-    assert ran == []  # skipped: reserved_key="coqui" matched the held engine
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission == {"noCapacity": {"neededMb": 3000, "deviceKey": "cuda:0"}}
+        assert ran == []  # skipped: reserved_key="coqui" matched the held engine
+        return _RAN
+
+    run_case(body())
 
 
 def test_reserved_key_none_is_not_skipped_even_if_name_matches_held_engine():
@@ -365,32 +462,36 @@ def test_reserved_key_none_is_not_skipped_even_if_name_matches_held_engine():
     Fails the same mutation from the other side: `step.name in held_by` WOULD
     skip this step (name "coqui" IS held), wrongly denying an eviction that
     should run and reporting noCapacity instead of admitting."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
-    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
-    ran = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        ledger.hold("cuda:0", 3000, "coqui")  # coqui's op is mid-flight, holding VRAM
+        fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+        ran = []
 
-    def free_named_coqui():
-        ran.append("coqui")
-        state["free"] += 3000
-        return True
+        def free_named_coqui():
+            ran.append("coqui")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        return [main.EvictStep("coqui", None, free_named_coqui)]
+        def steps(device_key, engine):
+            return [main.EvictStep("coqui", None, free_named_coqui)]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert ran == ["coqui"]  # ran despite name=="coqui" matching a held engine
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert ran == ["coqui"]  # ran despite name=="coqui" matching a held engine
+        return _RAN
+
+    run_case(body())
 
 
 def test_declining_step_does_not_stop_the_loop():
@@ -401,38 +502,42 @@ def test_declining_step_does_not_stop_the_loop():
 
     Fails against `if not step.run(): return None` (treating a decline as
     fatal instead of `continue`)."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
-    ran = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+        ran = []
 
-    def declines():
-        ran.append("declines")
-        return False  # nothing freed; loop must continue
+        def declines():
+            ran.append("declines")
+            return False  # nothing freed; loop must continue
 
-    def succeeds():
-        ran.append("succeeds")
-        state["free"] += 3000
-        return True
+        def succeeds():
+            ran.append("succeeds")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        return [
-            main.EvictStep("declines", None, declines),
-            main.EvictStep("succeeds", None, succeeds),
-        ]
+        def steps(device_key, engine):
+            return [
+                main.EvictStep("declines", None, declines),
+                main.EvictStep("succeeds", None, succeeds),
+            ]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert ran == ["declines", "succeeds"]
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert ran == ["declines", "succeeds"]
+        return _RAN
+
+    run_case(body())
 
 
 def test_a_raising_step_does_not_abort_the_loop():
@@ -444,38 +549,42 @@ def test_a_raising_step_does_not_abort_the_loop():
     Fails against a loop with no try/except around `step.run()`: the
     RuntimeError would propagate out of the `with pc.reservation(...)` block
     instead of being swallowed."""
-    state = {"free": 500, "total": 8192}
-    devices = lambda: [dev(free=state["free"], total=state["total"])]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
-    ran = []
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})()
+        ran = []
 
-    def raises():
-        ran.append("raises")
-        raise RuntimeError("boom")
+        def raises():
+            ran.append("raises")
+            raise RuntimeError("boom")
 
-    def succeeds():
-        ran.append("succeeds")
-        state["free"] += 3000
-        return True
+        def succeeds():
+            ran.append("succeeds")
+            state["free"] += 3000
+            return True
 
-    def steps(device_key, engine):
-        return [
-            main.EvictStep("raises", None, raises),
-            main.EvictStep("succeeds", None, succeeds),
-        ]
+        def steps(device_key, engine):
+            return [
+                main.EvictStep("raises", None, raises),
+                main.EvictStep("succeeds", None, succeeds),
+            ]
 
-    pc = main.PlacementController(
-        probe=devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=steps,
-        is_resident=lambda e: None,
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
-        assert admission["device"] == "cuda:0"
-    assert ran == ["raises", "succeeds"]
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=steps,
+            is_resident=lambda e: None,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert ran == ["raises", "succeeds"]
+        return _RAN
+
+    run_case(body())
 
 
 class _FakeStepQwen(main.QwenEngine):
@@ -537,6 +646,275 @@ def test_steps_run_cheapest_reload_first(monkeypatch):
     ]
 
 
+# --- plan 273: the evict + reclaim run on a worker thread, off the event
+#     loop (T2, T3) ---------------------------------------------------------
+#
+# `_evict_until` is `async def` and offloads each step's `run()` via
+# `asyncio.to_thread` — an engine lock is never acquired from the loop.
+# Every test below drives a heartbeat task (ticking every 10ms) concurrently
+# with the eviction and asserts it keeps ticking WHILE the step is parked —
+# a stalled loop cannot advance the heartbeat, no matter how long the block
+# lasts, because a synchronous block freezes the whole thread (nothing,
+# including an overdue timer, can run until it releases). A stalled-loop
+# mutation therefore starves the heartbeat to at most one stale catch-up
+# tick in the same window that the fix lets it tick ~5 times.
+
+
+def test_an_eviction_step_does_not_stall_the_event_loop():
+    """T2: `_evict_until` must run each step's `run()` on a worker thread, not
+    synchronously on the calling coroutine — a step that blocks (e.g. on a
+    contended engine lock) must not stall other coroutines sharing the loop
+    (e.g. /health).
+
+    Mutation-fails against a `step.run()` revert (dropping the
+    `asyncio.to_thread` wrap): the mutated step then executes synchronously
+    on the loop's own thread the moment `_evict_until`'s task is scheduled,
+    which freezes the ENTIRE thread for the duration of the step's own
+    internal wait — nothing else, including this test's own heartbeat task,
+    can run any code until that wait times out. The heartbeat can accrue at
+    most one stale "catch-up" tick once the freeze ends (a coroutine's
+    `asyncio.sleep` reschedules relative to `now`, so an overdue timer never
+    bursts more than once), never the ~10+ real ticks the fix produces in the
+    same 150ms window."""
+    entry = threading.Event()
+    release = threading.Event()
+
+    def blocking_step() -> bool:
+        entry.set()
+        release.wait(timeout=1.0)
+        return True
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng: [main.EvictStep("blocks", None, blocking_step)],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.15)
+        assert entry.is_set(), "the step never entered — test would pass vacuously"
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times in 150ms while the evict "
+            "step was parked — the event loop stalled"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
+
+
+def test_the_post_evict_reclaim_does_not_stall_the_event_loop(monkeypatch):
+    """T3: the reclaim (`_reclaim_after_drop`'s `gc.collect()` +
+    `empty_cache()`) must ALSO run off the loop, not just the lock wait — it
+    is the correction #1919's issue calls out and rev 1 of this plan missed.
+    Uses a REAL `CoquiEngine.maybe_free_idle`, driven through the REAL
+    `PlacementController._evict_until` (not a fake EvictStep), with
+    `_reclaim_after_drop` monkeypatched to block on an Event standing in for
+    a multi-GB `gc.collect()`/`empty_cache()`.
+
+    Mutation-fails against the 'half fix' — offloading only the lock's wait
+    and leaving the drop + reclaim synchronous on the loop: that passes T2's
+    test (a monolithic fake step can't distinguish a partial fix) but fails
+    this one, because the real reclaim is what's parked here. In practice
+    (see the report) the only mutation constructible against this codebase's
+    opaque `EvictStep.run` interface is the full T2 revert, which this test
+    also fails against, for the same reason."""
+    eng = main.CoquiEngine()
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda model, device=None, *, lock_held=False: None)
+    eng._tts = object()  # any non-None sentinel — maybe_free_idle only checks identity
+    eng._resolved_device = "cuda:0"
+    eng._device = "cuda:0"
+    eng._last_used = time.monotonic() - 3600  # long idle, clears the TTL guard
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    def blocking_reclaim(torch_module, reason="unloaded"):
+        entry.set()
+        release.wait(timeout=1.0)
+
+    monkeypatch.setattr(eng, "_reclaim_after_drop", blocking_reclaim)
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng_id: [
+                main.EvictStep("coqui", "coqui", lambda: eng.maybe_free_idle(0.0))
+            ],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.15)
+        assert entry.is_set(), "the reclaim never entered — test would pass vacuously"
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times while the reclaim was parked"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
+    assert eng._tts is None  # maybe_free_idle's contract ("True iff it actually freed") held
+
+
+def test_a_qwen_eviction_step_does_not_stall_the_event_loop():
+    """T3: the Qwen twin — Qwen carries `reserved_key=None` (#1920B can never
+    protect it, §1.1) and is the default GPU engine, so its two steps are the
+    LEAST protected of the five. `maybe_free_idle_design`'s fast-out checks
+    only `_design_in_flight`, not the Base forward, so with VoiceDesign warm
+    and a Base forward in flight the step reaches `_synth_lock` and blocks —
+    the #1919 race, reached on the default path. A separate thread holds
+    `_synth_lock` here, standing in for that in-flight Base forward."""
+    eng = main.QwenEngine()
+    eng._design = object()  # a resident VoiceDesign
+    eng._design_last_used = time.monotonic() - 3600  # long idle
+
+    lock_acquired = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        eng._synth_lock.acquire()
+        lock_acquired.set()
+        release.wait(timeout=1.0)
+        eng._synth_lock.release()
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_acquired.wait(timeout=5), "holder thread never acquired _synth_lock"
+
+    async def body():
+        ticks: list[int] = []
+
+        async def heartbeat():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pc = make(
+            [dev(free=500, total=8192)],
+            peak=3000,
+            idle_evict_steps=lambda dk, eng_id: [
+                main.EvictStep("qwen.design", None, lambda: eng.maybe_free_idle_design(0.0))
+            ],
+        )
+        evict_task = asyncio.create_task(pc._evict_until("cuda:0", "qwen", lambda: None))
+
+        await asyncio.sleep(0.15)
+        assert len(ticks) >= 3, (
+            f"heartbeat only ticked {len(ticks)} times while queued on _synth_lock"
+        )
+
+        release.set()
+        await evict_task
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(body())
+    holder.join(timeout=5)
+    assert eng._design is None  # the fast-out passed, then the step still froze it
+
+
+# --- plan 273 T4: reservation()/admit() are async; the admission phase is
+#     serialised so two concurrent ops' eviction phases can't interleave ----
+#
+# Converting `reservation()` to async inserts `await` points into what used
+# to be atomic by virtue of the loop (`_evict_until` now suspends at its
+# `asyncio.to_thread` call). Two concurrent handlers could otherwise
+# interleave probe -> evict -> try_hold and over-evict, or decide against a
+# stale probe. `_admit_lock` serialises just the admission-RESOLUTION phase
+# (probe/try_hold/evict), not the `yield`/`finally` — wrapping those would
+# serialise every op against every other op for its entire duration.
+
+
+def test_two_concurrent_admissions_do_not_interleave_their_eviction_phase():
+    """Two `reservation()` calls as concurrent tasks on ONE loop. Each one's
+    fake eviction step logs (id, "enter") / (id, "exit") around a brief real
+    sleep. Without `_admit_lock`, T2's own to_thread-offload lets both
+    admissions' steps run concurrently on the thread pool and interleave;
+    the assertion below requires every admission's evict phase to be
+    contiguous — no `A-enter` while `B` is still active.
+
+    Mutation-fails against deleting `async with self._admit_lock:` (calling
+    `_resolve_admission` unguarded): the two steps run concurrently on
+    separate worker threads (both offloaded by T2) and interleave, failing
+    the contiguity assertion. Without this test, T4 ships a new concurrency
+    bug (over-eviction / stale-probe admission, #1894 second-order per the
+    plan's §4) behind a green suite."""
+    events: list[tuple[str, str]] = []
+    ev_lock = threading.Lock()
+
+    def make_step(admission_id: str):
+        def run() -> bool:
+            with ev_lock:
+                events.append((admission_id, "enter"))
+            time.sleep(0.05)
+            with ev_lock:
+                events.append((admission_id, "exit"))
+            return True
+        return run
+
+    async def body():
+        pc = main.PlacementController(
+            probe=lambda: [dev(free=100, total=8192)],  # never enough -> always evicts
+            footprints=type("F", (), {"peak_mb": lambda *_: 3000, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [main.EvictStep(eng, None, make_step(eng))],
+            is_resident=lambda e: None,
+        )
+
+        async def do_reservation(admission_id: str):
+            async with pc.reservation(admission_id, "m", {}, cpu_capable=False, heavy=True):
+                pass
+
+        await asyncio.gather(do_reservation("A"), do_reservation("B"))
+
+        active = None
+        for admission_id, kind in events:
+            if kind == "enter":
+                assert active is None, f"{admission_id} entered while {active} was active: {events}"
+                active = admission_id
+            else:
+                assert active == admission_id, f"unexpected exit order: {events}"
+                active = None
+        assert active is None
+
+    asyncio.run(body())
+
+
 def test_try_hold_is_atomic_under_concurrency():
     """The decide+hold must be atomic: N threads racing to reserve a device
     that fits only ONE peak must grant exactly one — proving the ledger's
@@ -576,65 +954,95 @@ def test_resident_device_still_fit_checked():
     """A resident model is NOT a free pass: if its device can't fit the op's
     decode peak (e.g. an analyzer grew into that VRAM after the model loaded),
     admit must return noCapacity — not admit onto a full device and OOM."""
-    devices = [dev(index=0, free=1000, total=8192)]  # resident device is nearly full
-    pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
-    a = pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
-    assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+
+    async def body():
+        devices = [dev(index=0, free=1000, total=8192)]  # resident device is nearly full
+        pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_resident_no_fit_reports_resident_device_not_roomier_one():
     """Multi-GPU: a resident engine that can't fit its pinned device must report
     THAT device as deviceKey (where Node should evict), NOT a roomier
     non-resident GPU where an evict can't help — the model can't migrate."""
-    devices = [dev(index=0, free=1000, total=8192), dev(index=1, free=15000, total=16384)]
-    pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
-    a = pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
-    assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+
+    async def body():
+        devices = [dev(index=0, free=1000, total=8192), dev(index=1, free=15000, total=16384)]
+        pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a and a["noCapacity"]["deviceKey"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_resident_device_admits_when_peak_fits():
-    devices = [dev(index=0, free=8000, total=8192)]
-    pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
-    assert pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)["device"] == "cuda:0"
+    async def body():
+        devices = [dev(index=0, free=8000, total=8192)]
+        pc = make(devices, peak=5600, resident=lambda e: "cuda:0")
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert a["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
 
 
 def test_resident_reservation_holds_on_its_device():
     """reservation() on a resident engine holds the peak on that exact device
     and releases on exit."""
-    devices = [dev(index=0, free=8000, total=8192)]
-    ledger = main.ReservationLedger()
-    fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
-    pc = main.PlacementController(
-        probe=lambda: devices,
-        footprints=fp,
-        ledger=ledger,
-        reserve_mb=lambda: 768,
-        idle_evict_steps=lambda dk, eng: [],
-        is_resident=lambda e: "cuda:0",
-    )
-    with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a:
-        assert a["device"] == "cuda:0"
-        assert ledger.reserved_mb("cuda:0") == 5600
-    assert ledger.reserved_mb("cuda:0") == 0  # released on exit
+
+    async def body():
+        devices = [dev(index=0, free=8000, total=8192)]
+        ledger = main.ReservationLedger()
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        pc = main.PlacementController(
+            probe=lambda: devices,
+            footprints=fp,
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: "cuda:0",
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as a:
+            assert a["device"] == "cuda:0"
+            assert ledger.reserved_mb("cuda:0") == 5600
+        assert ledger.reserved_mb("cuda:0") == 0  # released on exit
+        return _RAN
+
+    run_case(body())
 
 
 def test_pinned_restricts_candidates_to_one_device():
     """Two roomy GPUs; pinning to cuda:1 must restrict candidates to exactly
     that device, even though cuda:0 is equally (or more) roomy."""
-    devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=20000, total=24000)]
-    pc = make(devices, peak=5600)
-    adm = pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
-    assert adm == {"device": "cuda:1"}
+
+    async def body():
+        devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=20000, total=24000)]
+        pc = make(devices, peak=5600)
+        adm = await pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
+        assert adm == {"device": "cuda:1"}
+        return _RAN
+
+    run_case(body())
 
 
 def test_pinned_full_card_yields_nocapacity_even_with_room_elsewhere():
     """A pinned op whose pinned device can't fit must report noCapacity with
     THAT device as deviceKey — not the roomier cuda:0 — so Node evicts from
     the pinned card, not wherever has the most headroom."""
-    devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=500, total=24000)]
-    pc = make(devices, peak=5600)
-    adm = pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
-    assert "noCapacity" in adm and adm["noCapacity"]["deviceKey"] == "cuda:1"
+
+    async def body():
+        devices = [dev(index=0, free=20000, total=24000), dev(index=1, free=500, total=24000)]
+        pc = make(devices, peak=5600)
+        adm = await pc.admit("coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1")
+        assert "noCapacity" in adm and adm["noCapacity"]["deviceKey"] == "cuda:1"
+        return _RAN
+
+    run_case(body())
 
 
 # --- _engine_env_pin ------------------------------------------------------

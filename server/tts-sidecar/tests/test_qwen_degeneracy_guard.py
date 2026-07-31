@@ -221,6 +221,107 @@ def test_long_separator_line_does_not_trigger_guard_end_to_end(degen_runtime) ->
     assert not degen_runtime["recycles"], "a separator line must NOT self-recycle"
 
 
+def test_the_retry_reload_still_runs_outside_the_synth_lock(degen_runtime, monkeypatch) -> None:
+    """Plan 273 T8 guard: the degeneracy-guard's OWN retry-reload
+    (`_reclaim_host_and_vram()` + `ensure_loaded()` right after the degenerate
+    drop) was already outside `_synth_lock` before T8 and T8 does not touch
+    it — it only hoists the DIFFERENT per-attempt re-ensure at the top of
+    each loop iteration. This guards against T8 accidentally pulling the
+    already-compliant retry-reload into the lock while relocating the other
+    one.
+
+    Spies on `_ensure_base_loaded` for the SECOND time it actually reloads
+    (i.e. finds `_base` empty) — the first such reload is the very first
+    cold load; the second is the retry-reload — and, only then, tries a
+    non-blocking acquire of `_synth_lock`. Mirrors
+    `test_coqui_idle_evict.py::test_maybe_free_idle_runs_the_reclaim_outside_the_lock`.
+
+    Mutation that must fail it: wrap the retry-reload's drop + reclaim +
+    `ensure_loaded()` in `with self._synth_lock:` — the non-blocking acquire
+    then fails.
+    """
+    engine = degen_runtime["engine"]
+    state = degen_runtime["state"]
+    # Degenerate then healthy — exactly one retry-reload cycle.
+    state["audio_ms"] = [160.0, 1200.0]
+
+    reload_count = {"n": 0}
+    lock_was_held_during_retry_reload: list[bool] = []
+
+    def spy_ensure_base() -> None:
+        if engine._base is None:
+            reload_count["n"] += 1
+            if reload_count["n"] == 2:
+                acquired = engine._synth_lock.acquire(blocking=False)
+                lock_was_held_during_retry_reload.append(not acquired)
+                if acquired:
+                    engine._synth_lock.release()
+            engine._base = _ScriptedBase(state)
+            state["loads"] += 1
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", spy_ensure_base)
+
+    res = engine.synthesize("0.6b", "v", _SUBSTANTIAL)
+
+    assert reload_count["n"] == 2, "expected exactly two reloads (initial + retry)"
+    assert lock_was_held_during_retry_reload == [False], (
+        "the retry-reload's ensure_loaded() ran while _synth_lock was held"
+    )
+    healthy_frames = int(round(1200.0 / 1000.0 * state["sr"]))
+    assert len(res.pcm) // 2 == healthy_frames
+
+
+def test_each_retry_attempt_reloads_exactly_once(degen_runtime, monkeypatch) -> None:
+    """Plan 273 T8 §1.3.2 Q3 — the retry budget/reload cadence is unchanged
+    by T8: each attempt still gets its OWN re-ensure, not one ensure call
+    made once before the whole retry loop (a plausible over-eager
+    "simplification" of hoisting the per-attempt call out of the lock).
+
+    A plain reload-count assertion can't tell these two shapes apart on its
+    own here, because the degeneracy guard's retry-reload (untouched by T8,
+    always inside the loop) already reloads once between attempts regardless
+    of where the per-attempt call lives. So this test forces a THIRD reload
+    event — simulating an external unload()/idle-evict winning the gap
+    between the retry-reload's own ensure and attempt 2's own per-attempt
+    re-ensure — which only a build that re-ensures on EVERY attempt can
+    recover from.
+
+    Mutation that must fail it: hoist `ensure_loaded()` out of the `for`
+    loop entirely (called once, before the loop, rather than once per
+    attempt). Attempt 2 then has no re-ensure of its own, reads a `None`
+    model, and raises instead of completing — reload_count stays at 2
+    instead of 3.
+    """
+    engine = degen_runtime["engine"]
+    state = degen_runtime["state"]
+    state["audio_ms"] = [160.0, 1200.0]
+
+    reload_count = {"n": 0}
+
+    def spy_ensure_base() -> None:
+        if engine._base is None:
+            reload_count["n"] += 1
+            engine._base = _ScriptedBase(state)
+            state["loads"] += 1
+            if reload_count["n"] == 2:
+                # Force the model empty again right after the retry-reload
+                # loaded it — the only thing a PER-ATTEMPT re-ensure (as
+                # opposed to a once-before-the-loop one) can recover from.
+                engine._base = None
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", spy_ensure_base)
+
+    res = engine.synthesize("0.6b", "v", _SUBSTANTIAL)
+
+    assert reload_count["n"] == 3, (
+        "expected 3 reload events: the initial cold load, the degeneracy "
+        "guard's own retry-reload, and attempt 2's OWN per-attempt "
+        "re-ensure recovering from the externally-forced null"
+    )
+    healthy_frames = int(round(1200.0 / 1000.0 * state["sr"]))
+    assert len(res.pcm) // 2 == healthy_frames
+
+
 def test_guard_also_covers_the_1_7b_base_path(degen_runtime) -> None:
     """The 1.7B path shares the fault mode, so it routes through the same guard:
     a degenerate first forward reloads+retries once and returns the healthy retry."""
