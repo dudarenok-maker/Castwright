@@ -657,7 +657,7 @@ describe('resolveClonedVoicesForChapter', () => {
       thrown = e as UnresolvableClonedVoiceError;
     }
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
-    expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+    expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'qwen' }]);
 
     expect(deps.writeEntry).toHaveBeenCalledTimes(1);
     const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
@@ -989,7 +989,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       // I-1: a write that succeeded but whose canonical re-read comes back
       // null/undefined must still be reported — not silently dropped.
-      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'qwen' }]);
     });
 
     /* GATE 1 M-6 — the harder sibling: `updateEntry` ITSELF throws (disk
@@ -1049,7 +1049,7 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
       expect((thrown as UnresolvableClonedVoiceError).broken).toEqual([
         { name: 'Marlow', reason: 'revoked' },
-        { name: 'Reeve', reason: 'derive-failed' },
+        { name: 'Reeve', reason: 'derive-failed', engine: 'qwen' },
       ]);
     });
   });
@@ -1328,7 +1328,7 @@ describe('resolveClonedVoicesForChapter', () => {
         thrown = e as UnresolvableClonedVoiceError;
       }
 
-      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'coqui' }]);
       expect(deps.writeEntry).toHaveBeenCalledTimes(1);
       const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
       expect(written.engines.xtts?.status).toBe('failed');
@@ -2517,5 +2517,42 @@ describe('resolveDesignedVoicesForChapter — onVoicePrepare (#1813)', () => {
 
     expect(onVoicePrepare).not.toHaveBeenCalled();
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+});
+
+describe('#1967 — derive-failed remedy copy', () => {
+  it('a pure derive-failed list never says "Re-enable Qwen"', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Re-enable');
+    expect(e.message).toContain('Re-run the clone for Coqui');
+  });
+
+  it('a mixed [revoked, derive-failed] list still never says "Re-enable Qwen"', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'revoked' },
+      { name: 'Reeve', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Re-enable Qwen');
+    expect(e.message).toContain('Restore the missing voice(s)');
+    expect(e.message).toContain('Re-run the clone for Coqui');
+  });
+
+  it('an UNTAGGED derive-failed (the persisted-failed-slot path) never names Qwen', () => {
+    // clone-voice-resolver.ts:446-458 emits derive-failed with no engine unless
+    // Step 4(c) widens the spread gate. Without that widening this test prints
+    // "Re-run the clone for Qwen" — #1967's exact symptom, on every run after
+    // the first.
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Qwen');
+  });
+
+  it('the first remedy reads correctly in sentence-initial position', () => {
+    const e = UnresolvableClonedVoiceError.fromList([{ name: 'Marlow', reason: 'revoked' }]);
+    // `. ${remedies.join('; ')}.` — the first clause follows a full stop.
+    expect(e.message).toMatch(/\.\s+[A-Z]/);
   });
 });
