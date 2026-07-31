@@ -1143,33 +1143,55 @@ change the rendered identity.
 
 ---
 
-#### B-11 — Assigning an **un-derived** cloned voice 409s
+#### B-11 — Assigning a cloned voice gates on the ROUTED engine's own readiness (#1933)
 
-**Proves:** 267 Invariant 10 — the assign-readiness gate
-(`voice-library.ts`, the `/assign` handler, ~`:1094-1096`). Still gated
-purely on `engines.qwen.status` even after Wave 3c — a cloned entry whose
-Coqui side is broken/stale but whose Qwen side is `ready` still passes this
-specific gate; there is no equivalent Coqui-side readiness check here.
+**Proves:** the #1933 per-engine assign-readiness gate (`voice-library.ts`, the
+`/assign` handler, `clonedAssignBlock`) — superseding 267 Invariant 10's
+Qwen-only gate, which over-blocked a Coqui-routed assign whenever
+`engines.qwen.status !== 'ready'` even though that assign would never touch
+the Qwen slot. The gate now evaluates the engine the character actually
+routes to, and separately warns (200, not 409) when the OTHER clone-capable
+engine's slot is left unusable — both slots are always written for a cloned
+entry regardless of which one was routed. Case (iii) below is the part that
+genuinely needs the box: the two 409s are already provable in the automated
+route-test suite (T1-T10, `voice-library.test.ts`), but only a real render can
+confirm the resulting audio actually comes out in the cloned voice on Coqui.
 
-**Preconditions:** a cloned entry whose `engines.qwen.status !== 'ready'`. The
-wizard never produces one, so create it deliberately:
+**Preconditions:** a cloned entry with a retained reference clip. The wizard
+never produces a terminally-`failed` slot, so create one deliberately:
 
 ```powershell
 # Work on a THROWAWAY clone. Edit the manifest by hand:
 $p = "$WS\voice-library\$U\voice.json"
 $j = Get-Content $p -Raw | ConvertFrom-Json
-$j.engines.qwen.status = 'stale'
+$j.engines.xtts = @{ status = 'failed' }   # for case (i)
+# $j.engines.qwen.status = 'failed'        # for cases (ii)/(iii) instead
 $j | ConvertTo-Json -Depth 10 | Set-Content $p -Encoding utf8
 ```
 
 **Steps**
-1. Attempt to assign that entry to a Qwen-routed character (UI or API).
-2. Restore `status` to `ready` afterwards.
+1. **(i)** With `engines.xtts.status = 'failed'` (Qwen slot left `ready`),
+   attempt to assign that entry to a **Coqui-routed** character (UI or API).
+2. **(ii)** Restore `xtts`, instead set `engines.qwen.status = 'failed'`.
+   Attempt to assign the entry to a **Qwen-routed** character.
+3. **(iii)** Same `engines.qwen.status = 'failed'` entry. Assign it to a
+   **Coqui-routed** character instead, then generate a chapter in which that
+   character speaks and listen to the result.
+4. Restore the manifest to its original `ready` state afterwards.
 
 **Expected**
-- HTTP **409**, error `Cloned voice is not ready to assign yet.`
-- `cast.json` is **not** modified.
-- The UI surfaces the message rather than appearing to succeed.
+- (i) HTTP **409**, error names **Coqui XTTS v2** and the failed-to-derive
+  reason. `cast.json` is **not** modified.
+- (ii) HTTP **409**, error names **Qwen** and the failed-to-derive reason.
+  `cast.json` is **not** modified.
+- (iii) HTTP **200**. `written` is `['qwen', 'coqui']`. The response's
+  `warning` field names **Qwen** and the failed-to-derive reason (this is the
+  advisory the assign is happening despite the Qwen slot being unusable —
+  the character will only ever render on the routed Coqui engine unless
+  later switched). The generated chapter's audio for this character is
+  audibly the cloned voice, rendered on Coqui.
+- The UI surfaces each message rather than appearing to succeed/fail
+  silently.
 - Also confirm the revoked-entry guard on the same route: assigning a **revoked**
   cloned entry → **409** `Consent for this voice has been revoked.`
 
