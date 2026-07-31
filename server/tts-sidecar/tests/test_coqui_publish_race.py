@@ -240,8 +240,16 @@ def test_publish_loaded_locked_stamps_last_used_before_publishing_tts():
 
 
 def test_the_reensure_under_the_lock_does_not_deadlock(monkeypatch):
-    """`synthesize` calls `_ensure_loaded` while HOLDING `_synth_lock`; a publish
-    that unconditionally acquires that non-reentrant lock self-deadlocks.
+    """`lock_held=True` means the caller already holds `_synth_lock` while
+    calling `_ensure_loaded`; a publish that unconditionally acquires that
+    non-reentrant lock self-deadlocks.
+
+    No production caller passes `lock_held=True` any more — the fs-38 Wave 3c
+    merge (#1936) moved `synthesize`'s re-ensure outside the lock, and plan
+    273 confirmed it stays there (§1.2). This test is the only remaining
+    driver of the branch; it exists because the parameter itself is kept
+    deliberately (main.py's `_ensure_loaded` docstring) rather than deleted as
+    dead code, so it still needs a guard against self-deadlock.
 
     Drives `_ensure_loaded(..., lock_held=True)` DIRECTLY on a cold engine
     while holding `_synth_lock` — going through `synthesize` instead would
@@ -336,3 +344,132 @@ def test_a_second_concurrent_loader_does_not_overwrite_the_first():
         )
     assert published_c is False, "a stale loader published on top of an idle evict"
     assert eng._tts is None
+
+
+def test_a_second_stop_during_the_retry_reload_is_not_blocked_by_the_synth_lock(
+    monkeypatch, caplog
+):
+    """Pin for #1925 — plan 273 Task T1. **Not a fix**: the issue's reported
+    window was already closed by the fs-38 Wave 3c merge (PR #1936,
+    `6a2e4e17`), which landed after the evict-hardening PR (#1930) #1925 was
+    filed against. This test locks in that (already-correct, previously
+    unprotected) behaviour so it can't silently regress back to the
+    pre-Wave-3c shape.
+
+    Drives the exact interleaving #1925 describes, now re-derived against
+    current code (plan 273 §1.2):
+
+      1. `synthesize` (`:1971-2032`) on a cold engine starts the pre-lock
+         `_ensure_loaded` at `:1978` — epoch 0, load #1. `_synth_lock` is
+         free throughout; only `_cold_load_lock` is held.
+      2. Stop 1 (`unload()`) takes the free `_synth_lock`, bumps the epoch,
+         and returns FAST — `_tts` is still `None` so `_drop_model_locked`
+         early-outs before it can do any real teardown work.
+      3. Load #1 reaches its publish with a stale epoch snapshot, discards
+         (`"Coqui load discarded"`), and `_tts` stays `None`.
+      4. `synthesize`'s in-claim re-ensure at `:2029` starts load #2 — again
+         outside `_synth_lock` (only `_cold_load_lock`).
+      5. Stop 2, fired WHILE load #2 is still parked mid-construction, must
+         ALSO return FAST: `unload()` only ever contends on `_synth_lock`,
+         which nothing holds during either load's pull.
+
+    Both Stops run on their OWN daemon thread with a bounded `join(0.5)`
+    rather than being called inline on the test's main thread — that is what
+    lets the mutation below fail CLEANLY (a bounded, observable red) instead
+    of hanging the whole test run: the pre-Wave-3c shape holds `_synth_lock`
+    for the entire parked construction of load #2, and an inline call would
+    block until `release2` — which this test only sets AFTER asserting the
+    Stop already returned.
+
+    Mutation that must fail this test — the faithful #1925 reconstruction:
+    change `synthesize`'s in-claim `self._ensure_loaded(model)` (`:2029`) to
+    `with self._synth_lock: self._ensure_loaded(model, lock_held=True)` — the
+    exact pre-Wave-3c shape the issue reports. Stop 2 then queues behind the
+    parked load #2 and the 0.5 s bound trips.
+    """
+    _disable_deepspeed_and_half(monkeypatch)
+
+    eng = main.CoquiEngine()
+    eng._device = "cuda:0"
+    eng._requested_device = "cuda:0"
+
+    entry1, release1 = threading.Event(), threading.Event()
+    entry2, release2 = threading.Event(), threading.Event()
+    load_count = {"n": 0}
+
+    class _FakeTts:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            load_count["n"] += 1
+            n = load_count["n"]
+            if n == 1:
+                entry1.set()
+                release1.wait(5)
+            elif n == 2:
+                entry2.set()
+                release2.wait(5)
+            else:
+                raise AssertionError(
+                    f"unexpected {n}th Coqui load — this test expects exactly two"
+                )
+            self.synthesizer = _FakeSynthesizer()
+
+        def to(self, device: str) -> "_FakeTts":
+            return self
+
+    _install_fake_tts_torch(monkeypatch, _FakeTts)
+
+    synth_errors: list[BaseException] = []
+    stop_errors: list[BaseException] = []
+
+    def run_synthesize() -> None:
+        try:
+            eng.synthesize("xtts_v2", "Claribel Dervla", "hello")
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            synth_errors.append(e)
+
+    def run_stop() -> None:
+        try:
+            eng.unload()
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            stop_errors.append(e)
+
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        synth_thread = threading.Thread(target=run_synthesize, daemon=True)
+        synth_thread.start()
+
+        assert entry1.wait(5), "load #1 never entered TTS construction"
+        stop1 = threading.Thread(target=run_stop, daemon=True)
+        stop1.start()
+        stop1.join(0.5)
+        assert not stop1.is_alive(), "Stop 1 (unload) did not return within 0.5s"
+        release1.set()
+
+        assert entry2.wait(5), "load #2 never entered TTS construction"
+        stop2 = threading.Thread(target=run_stop, daemon=True)
+        stop2.start()
+        stop2.join(0.5)
+        assert not stop2.is_alive(), (
+            "Stop 2 (unload) during the retry reload was blocked behind the "
+            "parked load — the #1925 regression"
+        )
+        release2.set()
+
+        synth_thread.join(5)
+    assert not synth_thread.is_alive(), "synthesize thread did not finish within 5s"
+
+    assert stop_errors == [], f"unload() raised: {stop_errors!r}"
+    assert eng._tts is None
+    assert load_count["n"] == 2, "expected exactly two Coqui loads (both discarded)"
+
+    discard_count = sum(
+        1 for r in caplog.records if "Coqui load discarded" in r.getMessage()
+    )
+    assert discard_count == 2, (
+        "expected BOTH loads to take the discard branch — a load that took "
+        "some other path could make the Stop-2 assertion above pass vacuously"
+    )
+    assert len(synth_errors) == 1 and isinstance(synth_errors[0], RuntimeError), (
+        "expected synthesize() to raise exactly one RuntimeError (the model "
+        f"was unloaded before either load ever published); got {synth_errors!r}"
+    )
+    assert "unloaded before this render started" in str(synth_errors[0])

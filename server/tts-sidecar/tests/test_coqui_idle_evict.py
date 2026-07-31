@@ -269,10 +269,12 @@ def test_maybe_free_idle_runs_the_reclaim_outside_the_lock(monkeypatch):
     self._synth_lock:` block leaves every other test in this file green —
     it's a stated global constraint (`_reclaim_after_drop`'s own docstring:
     holding `_synth_lock` across the multi-second reclaim would block
-    concurrent synth calls that only need the lock briefly — NOT an
-    event-loop-stall argument, since `reservation()` runs the reclaim on the
-    event loop synchronously either way, lock held or not), not something
-    the other assertions catch. Spy on `_reclaim_after_drop` and try a
+    concurrent synth calls that only need the lock briefly — not an
+    event-loop-stall argument: since plan 273 T2/T4 every caller reaches this
+    via `asyncio.to_thread`, so the reclaim already runs off the event loop
+    regardless of the lock; the lock is released purely to avoid blocking
+    those concurrent synth calls), not something the other assertions catch.
+    Spy on `_reclaim_after_drop` and try a
     non-blocking acquire of the SAME lock from inside it: if
     `maybe_free_idle` still holds it, the acquire fails."""
     eng = _loaded_coqui(monkeypatch, _FakeTts())

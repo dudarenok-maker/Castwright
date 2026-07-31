@@ -1313,9 +1313,15 @@ class CoquiEngine(Engine):
         #     self._synth_lock:` block in the same thread WITHOUT
         #     `lock_held=True`; its publish takes this lock itself, so that
         #     deadlocks. This is why `synthesize`'s re-ensure sits immediately
-        #     BEFORE its acquire rather than inside it, unlike
-        #     QwenEngine/WhisperEngine whose `_ensure_loaded` is lock-free —
-        #     see `synthesize` for what that costs and why it is safe.
+        #     BEFORE its acquire rather than inside it — the same
+        #     outside-the-lock spot QwenEngine's and WhisperEngine's
+        #     re-ensures now use too (plan 273 T7/T8 moved both of theirs
+        #     there; see `synthesize`'s :2016-2021 comment for what that
+        #     costs and why it is safe). QwenEngine/WhisperEngine's
+        #     `_ensure_loaded` is lock-free internally (unlike this one,
+        #     whose publish takes `_synth_lock`), so the three engines land
+        #     in the same place for different reasons — that is NOT an
+        #     asymmetry to "fix".
         #   - a holder that needs to drop the model calls `_drop_model_locked()`
         #     (then `_reclaim_after_drop()` once released), never `unload()`.
         self._synth_lock = threading.Lock()
@@ -1784,12 +1790,12 @@ class CoquiEngine(Engine):
 
     def _reclaim_after_drop(self, torch_module: Any, reason: str = "unloaded") -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_synth_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        `gc.collect()`/`empty_cache()` runs on the event loop either way,
-        lock held or not); it's released because holding `_synth_lock` across
-        this multi-second reclaim would block concurrent synth calls that
-        only need the lock briefly, for no benefit.
+        `_synth_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_synth_lock` across this multi-second reclaim would
+        block concurrent synth calls that only need the lock briefly, for no
+        benefit.
 
         `reason` names what happened, for the closing log line only — a real
         `unload()` (the default) reads differently from a discarded cold load
@@ -2000,19 +2006,24 @@ class CoquiEngine(Engine):
                 # None. No-op on the warm path (`_ensure_loaded` early-returns
                 # when `_tts` is set).
                 #
-                # On `main` this call sits INSIDE `with self._synth_lock:` with
-                # `lock_held=True`. On THIS branch it cannot, for a structural
-                # reason: `_synthesize_claimed` below does not run under one
+                # This call sits OUTSIDE `with self._synth_lock:`. The fs-38
+                # Wave 3c merge (#1936) moved it here from inside the lock with
+                # `lock_held=True` — that was the last production caller of
+                # that path (plan 273 §1.2); only a test drives `lock_held=True`
+                # now. It cannot go back inside, for a structural reason:
+                # `_synthesize_claimed` below does not run under one
                 # enclosing acquisition — its cloned-voice branch must do
                 # seconds of latents disk I/O OFF the lock and take
                 # `_synth_lock` only around the GPU forward — so there is no
                 # single block to put a re-ensure inside. Pushing it into
                 # either branch's own block instead would DEADLOCK:
                 # `threading.Lock` is non-reentrant and `_ensure_loaded`'s
-                # publish acquires `_synth_lock` itself. Sibling engines whose
-                # `_ensure_loaded` is lock-free (QwenEngine, WhisperEngine)
-                # keep main's placement. Do NOT "fix" that inconsistency by
-                # moving this line under the lock.
+                # publish acquires `_synth_lock` itself. Sibling engines'
+                # `_ensure_loaded` is lock-free too (QwenEngine, WhisperEngine
+                # — the latter also moved its re-ensure outside its lock,
+                # plan 273 T7) and re-ensures at the same outside-the-lock
+                # spot. Do NOT "fix" this into looking asymmetric by moving
+                # this line under the lock.
                 #
                 # What that costs: a window between this line and each branch's
                 # `with self._synth_lock:` below. `maybe_free_idle` cannot use
@@ -2045,7 +2056,7 @@ class CoquiEngine(Engine):
         is the caller's `_in_flight` claim plus its re-ensure. Because the
         re-ensure sits OUTSIDE the lock here (see `synthesize`), an explicit
         `/unload` landing in the gap is reachable, so each capture is checked
-        with a loud `RuntimeError` rather than main's bare `assert`, which `-O`
+        with a loud `RuntimeError` rather than a bare `assert`, which `-O`
         strips.
         """
         effective_language = language or self._language
@@ -2250,13 +2261,12 @@ class CoquiEngine(Engine):
             # Bind `self._tts` to a local up front (#1894) so the forward — and
             # the `output_sample_rate` read after it — never re-reads an
             # attribute a concurrent unload could null. This is a LOUD guard,
-            # not `assert tts is not None` as on `main`: there the caller
-            # re-ensures INSIDE this lock so the model is guaranteed present,
-            # whereas here `synthesize`'s re-ensure sits just outside it (see
-            # its comment — `_ensure_loaded` self-locks and is non-reentrant),
-            # so an explicit `/unload` landing in that gap is reachable. Under
-            # `python -O` a bare assert is stripped and the next line would
-            # raise `AttributeError: 'NoneType' object has no attribute 'tts'`
+            # not a bare `assert tts is not None` — `synthesize`'s re-ensure
+            # sits just outside this lock (see its comment — `_ensure_loaded`
+            # self-locks and is non-reentrant), so an explicit `/unload`
+            # landing in that gap is reachable. Under `python -O` a bare
+            # assert is stripped and the next line would raise
+            # `AttributeError: 'NoneType' object has no attribute 'tts'`
             # — the same GATE 1 MIN-2 defect already fixed on the cloned-voice
             # branch above.
             tts = self._tts
@@ -3463,6 +3473,16 @@ class PlacementController:
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+        # Serialises the admission-RESOLUTION phase only (probe -> try_hold ->
+        # evict -> resolve) across concurrent `reservation()` calls (plan 273,
+        # T4) — NOT the `yield`/`finally` (that would serialise every op
+        # against every other op for its whole duration, not just admission).
+        # Needed because T2 made `_evict_until` suspend at its
+        # `asyncio.to_thread` call: two concurrent handlers could otherwise
+        # interleave probe -> evict -> try_hold and over-evict, or decide
+        # against a stale probe (§2.4). `admit()` deliberately does NOT take
+        # this lock — see its docstring.
+        self._admit_lock = asyncio.Lock()
 
     @staticmethod
     def _device_key(d: dict) -> str:
@@ -3505,7 +3525,7 @@ class PlacementController:
                 best_key, best_headroom = key, headroom
         return best_key
 
-    def _evict_until(
+    async def _evict_until(
         self, device_key: str, engine: str, fits: Callable[[], Any]
     ) -> Any:
         """Run eviction steps one at a time, re-probing after each, and stop the
@@ -3518,6 +3538,16 @@ class PlacementController:
 
         A step that raises is skipped, not fatal: eviction is best-effort, and
         one engine's teardown failing must not deny the whole admission.
+
+        `step.run()` runs on a worker thread via `asyncio.to_thread` (plan
+        273, T2/T3) — an engine lock is never acquired from the event loop.
+        Contention is resolved by *waiting*, but the wait — and everything
+        downstream of it, including a step's `gc.collect()`/`empty_cache()`
+        reclaim — happens off the loop. The `maybe_free_idle*` methods keep
+        their blocking `acquire()` and re-validate legs byte for byte; only
+        the CALLER of `step.run()` moved. This mirrors the idle watchdogs
+        (`:6703`, `:6706`, `:6764`, `:6840`), which already offload these
+        same methods so the event loop and /health stay live.
         """
         for step in self.idle_evict_steps(device_key, engine):
             # Re-read on every iteration, not once before the loop: nothing
@@ -3536,7 +3566,7 @@ class PlacementController:
                 # window before its worker thread claims the in-flight counter.
                 continue
             try:
-                if not step.run():
+                if not await asyncio.to_thread(step.run):
                     continue
             except Exception:
                 log.warning("evict step %s failed", step.name, exc_info=True)
@@ -3546,7 +3576,7 @@ class PlacementController:
                 return got
         return None
 
-    def admit(
+    async def admit(
         self,
         engine: str,
         model: Optional[str],
@@ -3565,7 +3595,16 @@ class PlacementController:
         `evictWouldHelp` from /api/ps. `pinned` is an operator-configured
         device key (e.g. from an engine's *_DEVICE env) restricting candidates
         to that one device when the engine isn't already resident — residency
-        always takes precedence since the model is already loaded there."""
+        always takes precedence since the model is already loaded there.
+
+        Deliberately does NOT take `_admit_lock` (plan 273, T4), unlike
+        `reservation()` — two reasons, not one:
+        (1) `asyncio.Lock` is non-reentrant, and `test_placement.py` calls
+        `admit()` from INSIDE an open `with pc.reservation(...)` block —
+        taking the lock here symmetrically would deadlock.
+        (2) It's unnecessary: `admit()` holds NO reservation (see above), so
+        it cannot double-book anything the lock would need to protect — it's
+        a pure decision, always re-checked live by its caller."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
@@ -3587,7 +3626,7 @@ class PlacementController:
                     self._gpu_candidates(probed, constraint), peak, reserve_cap
                 )
 
-            key = self._evict_until(worst, engine, _fits)
+            key = await self._evict_until(worst, engine, _fits)
             if key is not None:
                 return {"device": key}
             worst = self._worst_device_key(self.probe())
@@ -3631,24 +3670,21 @@ class PlacementController:
         except Exception:
             pass
 
-    @contextmanager
-    def reservation(
+    async def _resolve_admission(
         self,
         engine: str,
         model: Optional[str],
         cfg: Optional[dict],
-        cpu_capable: bool = False,
-        heavy: bool = False,
-        pinned: Optional[str] = None,
-    ):
-        """Atomically admits AND holds the peak reservation for the op, yields
-        the Admission, and on exit (success OR exception) releases the hold and
-        records the observed peak — VRAM bookkeeping only; callers still take
-        their own `_synth_lock`/`_infer_lock`/load lock around the actual
-        forward. Unlike `admit()`, this path performs the hold (via the ledger's
-        atomic `try_hold`), so two concurrent reservations can't double-book.
-        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
-        takes precedence)."""
+        cpu_capable: bool,
+        heavy: bool,
+        pinned: Optional[str],
+    ) -> tuple[dict, Optional[tuple]]:
+        """The probe -> try_hold -> evict -> resolve body of `reservation()`
+        (plan 273, T4) — extracted so `reservation()` can run it under
+        `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
+        the lock. Returns `(admission, held)`; `held` is the ledger token
+        `reservation()` must release on exit, or None (cpu / noCapacity —
+        nothing was held)."""
         peak = self.footprints.peak_mb(engine, model, cfg)
         resident = self.is_resident(engine)
         constraint = resident if resident is not None else pinned
@@ -3666,7 +3702,7 @@ class PlacementController:
                         self._gpu_candidates(probed, constraint), peak, reserve_cap, engine
                     )
 
-                held = self._evict_until(worst, engine, _fits)
+                held = await self._evict_until(worst, engine, _fits)
             if held is None:
                 devices = self.probe()
 
@@ -3682,7 +3718,47 @@ class PlacementController:
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
+        return admission, held
 
+    @asynccontextmanager
+    async def reservation(
+        self,
+        engine: str,
+        model: Optional[str],
+        cfg: Optional[dict],
+        cpu_capable: bool = False,
+        heavy: bool = False,
+        pinned: Optional[str] = None,
+    ):
+        """Atomically admits AND holds the peak reservation for the op, yields
+        the Admission, and on exit (success OR exception) releases the hold and
+        records the observed peak — VRAM bookkeeping only; callers still take
+        their own `_synth_lock`/`_infer_lock`/load lock around the actual
+        forward. Unlike `admit()`, this path performs the hold (via the ledger's
+        atomic `try_hold`), so two concurrent reservations can't double-book.
+        `pinned` mirrors `admit()`'s operator-pin constraint (residency still
+        takes precedence).
+
+        Async since plan 273 (T4): the admission-RESOLUTION phase
+        (`_resolve_admission` — probe/try_hold/evict) runs under
+        `_admit_lock` so two concurrent reservations' eviction phases can't
+        interleave (T2 made `_evict_until` suspend at its worker-thread hop,
+        which is what makes that interleaving possible in the first place —
+        see §2.4). The `yield` and the `finally` release are deliberately
+        OUTSIDE the lock: holding it across the caller's own forward would
+        serialise every admitted op against every other one, not just the
+        admission decision.
+
+        Hazard: `asyncio.Lock` binds to the first event loop that awaits it.
+        Reusing one `PlacementController` across two separate `asyncio.run()`
+        calls raises "bound to a different event loop" — not reachable in
+        production (uvicorn owns one loop for the process lifetime), but a
+        real hazard for tests, which must therefore each drive this
+        `PlacementController` under exactly one `asyncio.run()`."""
+        async with self._admit_lock:
+            admission, held = await self._resolve_admission(
+                engine, model, cfg, cpu_capable, heavy, pinned
+            )
         try:
             yield admission
         finally:
@@ -5696,19 +5772,34 @@ class QwenEngine(Engine):
 
         `base_attr` is the model member name (``'_base'`` / ``'_base17'``),
         `ensure_loaded` its `_ensure_*_loaded` method, `model_name` the HF id used
-        in the recycle log. Follows synthesize()'s lock discipline exactly:
-        re-ensure the model UNDER `_synth_lock` so a concurrent `/unload` can't null
-        it mid-forward, and drop the degenerate model under the same lock before the
-        reclaim+reload. Returns `(audio, sr, gen_ms, audio_ms)` for the caller's
-        perf log + result assembly."""
+        in the recycle log. Re-ensures the model BEFORE `_synth_lock` is taken
+        (plan 273 T8) — `ensure_loaded` can run a full cold load (unbounded: a
+        real weights pull), and `/unload` also takes `_synth_lock`, so doing that
+        pull INSIDE the lock would hold a Stop off for its whole duration. Each
+        attempt still gets its own re-ensure; only the LOCK's span moved. The
+        degeneracy-guard's own retry-reload below (drop under the lock, then
+        reclaim + `ensure_loaded()` OUTSIDE it) was already compliant and is
+        untouched. Returns `(audio, sr, gen_ms, audio_ms)` for the caller's perf
+        log + result assembly."""
         for attempt in range(1, _QWEN_DEGEN_SYNTH_ATTEMPTS + 1):
             gen_start = time.perf_counter()
+            # Re-ensure BEFORE the lock: an idle-evict/unload can free the
+            # model in the gap since the last check (the caller's own
+            # pre-ensure, or the previous attempt's forward), so one ensured
+            # earlier can be gone by now. No-op on the warm path.
+            ensure_loaded()
             with self._synth_lock:
-                # Re-ensure under the lock: a concurrent /unload (analyzer/XTTS
-                # evict) holds `_synth_lock` to null the model, so one ensured
-                # before the lock can be gone in the gap. No-op on the warm path.
-                ensure_loaded()
-                wavs, sr = getattr(self, base_attr).generate_voice_clone(
+                model = getattr(self, base_attr)
+                if model is None:
+                    # An explicit unload() (or, in principle, an idle-evict)
+                    # can still win the narrow gap between the re-ensure
+                    # above and this acquire — the only window left once the
+                    # cold load itself is out of the lock. Loud and typed.
+                    raise RuntimeError(
+                        f"Qwen {base_attr} model was unloaded before this "
+                        "render started — reload it and retry."
+                    )
+                wavs, sr = model.generate_voice_clone(
                     text=[text], language=[lang], voice_clone_prompt=prompt
                 )
             gen_ms = (time.perf_counter() - gen_start) * 1000.0
@@ -5792,8 +5883,9 @@ class QwenEngine(Engine):
                 lang = language or lang
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
-                # Guarded forward (re-ensures under `_synth_lock`; reloads+retries
-                # once, then self-recycles, on a silent degenerate-load).
+                # Guarded forward (re-ensures BEFORE `_synth_lock` is taken, each
+                # attempt; serialises the forward itself under the lock; reloads+
+                # retries once, then self-recycles, on a silent degenerate-load).
                 audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
                     "_base17", self._ensure_base17_loaded, self.BASE17_MODEL,
                     text, lang, prompt,
@@ -5827,8 +5919,9 @@ class QwenEngine(Engine):
         load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
-        # Guarded forward (serialises + re-ensures under `_synth_lock`; reloads and
-        # retries once, then self-recycles, on a silent degenerate-load).
+        # Guarded forward (re-ensures BEFORE `_synth_lock` is taken, each attempt;
+        # serialises the forward itself under the lock; reloads and retries once,
+        # then self-recycles, on a silent degenerate-load).
         audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
             "_base", self._ensure_base_loaded, self.BASE_MODEL, text, lang, prompt,
         )
@@ -6175,7 +6268,15 @@ class WhisperEngine:
 
         `device` (#1730 gap 2) threads an admitted card straight into the cold
         load, so nothing reads the shared `self._device` across the unlocked
-        route→load gap; `None` is the pre-admission path."""
+        route→load gap; `None` is the pre-admission path.
+
+        Plan 273 T7: the re-ensure below runs BEFORE `_infer_lock` is
+        acquired, not inside it. `_ensure_loaded` constructs `WhisperModel(...)`,
+        which downloads HF weights on first use — an unbounded network pull,
+        not the "~1s" warm-cache figure — and `unload()` also takes
+        `_infer_lock`, so a cold load performed INSIDE this lock would hold
+        `unload()` off for that whole pull. Mirrors `CoquiEngine.synthesize`'s
+        re-ensure-after-the-claim placement."""
         self._ensure_loaded(device=device)
         audio = self._pcm_to_float32_16k(pcm, sample_rate)
         with self._in_flight.claim():
@@ -6184,13 +6285,26 @@ class WhisperEngine:
             # own decrement runs (#1917) — see CoquiEngine.synthesize for why
             # the ordering matters.
             try:
+                # Re-ensure AFTER the claim, BEFORE the lock (plan 273 T7): an
+                # idle-evict/unload can free the model in the gap between the
+                # pre-claim ensure above and here, so one ensured before the
+                # claim can be gone by now. No-op on the warm path. Kept OUT
+                # of `_infer_lock` — see the docstring above for why a cold
+                # load must never run while that lock is held.
+                self._ensure_loaded(device=device)
                 with self._infer_lock:
-                    # Re-ensure under the lock: an idle-evict holds
-                    # `_infer_lock` to null the model, so one ensured before
-                    # the lock can be gone in the gap. No-op on the warm path.
-                    self._ensure_loaded(device=device)
                     model = self._model
-                    assert model is not None
+                    if model is None:
+                        # An explicit unload() (or, in principle, an
+                        # idle-evict) can still win the narrow gap between
+                        # the re-ensure above and this acquire — the only
+                        # window left once the cold load itself is out of
+                        # the lock. Loud and typed, not a bare `assert`
+                        # (`-O` strips those) and not a `None` deref.
+                        raise RuntimeError(
+                            "Whisper ASR model was unloaded before this "
+                            "transcribe started — reload it and retry."
+                        )
                     self._last_used = time.monotonic()
                     segments, info = model.transcribe(
                         audio,
@@ -6242,12 +6356,12 @@ class WhisperEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        the `gc.collect()`-scale work here runs on the event loop either way,
-        lock held or not); it's released because holding `_infer_lock` across
-        this multi-second reclaim would block concurrent transcribe calls
-        that only need the lock briefly, for no benefit."""
+        `_infer_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_infer_lock` across this multi-second reclaim would
+        block concurrent transcribe calls that only need the lock briefly,
+        for no benefit."""
         _reclaim_host_and_vram()
         log.info("Whisper ASR model unloaded.")
 
@@ -6433,10 +6547,17 @@ class SpeakerEngine:
             # the ordering matters.
             try:
                 with self._infer_lock, torch.no_grad():
-                    # `ensure_loaded` is async here, so unlike WhisperEngine we
-                    # cannot reload under the lock — re-check and surface the
-                    # documented precondition. The `_in_flight` claim above
-                    # is what actually stops an idle-evict getting here (#1894).
+                    # `ensure_loaded` is async here, so this method — sync,
+                    # already inside `_infer_lock` — cannot reload even if it
+                    # wanted to. WhisperEngine's `_ensure_loaded` is sync/
+                    # lock-free and COULD be called here, it just no longer is
+                    # (plan 273 T7 moved its re-ensure outside `_infer_lock`
+                    # too, to avoid holding the lock across an unbounded
+                    # weights pull) — so both engines now share the same
+                    # outside-the-lock re-ensure, for different reasons.
+                    # Re-check and surface the documented precondition here.
+                    # The `_in_flight` claim above is what actually stops an
+                    # idle-evict getting here (#1894).
                     model = self._model
                     if model is None:
                         raise RuntimeError("model was unloaded during embed()")
@@ -6463,12 +6584,12 @@ class SpeakerEngine:
 
     def _reclaim_after_drop(self) -> None:
         """Host-RAM + VRAM reclaim for a model just dropped. MUST run with
-        `_infer_lock` RELEASED — NOT because it protects the event loop
-        (`reservation()` is a plain @contextmanager entered synchronously, so
-        the `gc.collect()`-scale work here runs on the event loop either way,
-        lock held or not); it's released because holding `_infer_lock` across
-        this multi-second reclaim would block concurrent embed calls that
-        only need the lock briefly, for no benefit."""
+        `_infer_lock` RELEASED — not to protect the event loop (since plan
+        273 T2/T4, every caller reaches this via `asyncio.to_thread`, so it
+        already runs off the loop regardless of the lock); it's released
+        because holding `_infer_lock` across this multi-second reclaim would
+        block concurrent embed calls that only need the lock briefly, for no
+        benefit."""
         _reclaim_host_and_vram()
         log.info("ECAPA speaker model unloaded.")
 
@@ -8416,7 +8537,7 @@ async def load_model(req: Request) -> JSONResponse:
             try:
                 if _capacity_admission_enabled():
                     cap = _ENGINE_CAPACITY_PROFILE.get("kokoro", {"cpu_capable": True, "heavy": False})
-                    with _placement.reservation(
+                    async with _placement.reservation(
                         "kokoro", None, {},
                         cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                         pinned=_engine_env_pin("kokoro"),
@@ -8451,7 +8572,7 @@ async def load_model(req: Request) -> JSONResponse:
                 try:
                     if _capacity_admission_enabled():
                         cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
-                        with _placement.reservation(
+                        async with _placement.reservation(
                             "qwen", "1.7b", {},
                             cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                             pinned=_engine_env_pin("qwen"),
@@ -8476,7 +8597,7 @@ async def load_model(req: Request) -> JSONResponse:
             try:
                 if _capacity_admission_enabled():
                     cap = _ENGINE_CAPACITY_PROFILE.get("qwen", {"cpu_capable": False, "heavy": True})
-                    with _placement.reservation(
+                    async with _placement.reservation(
                         "qwen", None, {},
                         cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                         pinned=_engine_env_pin("qwen"),
@@ -8517,7 +8638,7 @@ async def load_model(req: Request) -> JSONResponse:
         try:
             if _capacity_admission_enabled():
                 cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
-                with _placement.reservation(
+                async with _placement.reservation(
                     "coqui", None, {},
                     cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                     pinned=_engine_env_pin("coqui"),
@@ -8695,7 +8816,7 @@ async def qwen_design_voice(req: Request) -> Response:
         # design forward, released on exit either way. Flag-OFF leaves the call
         # byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "1.7b", {"op": "design"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -8817,7 +8938,7 @@ async def qwen_clone_voice(req: Request) -> Response:
     _inflight_synth += 1
     try:
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "0.6b", {"op": "clone"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -8913,7 +9034,7 @@ async def qwen_mint_variant(req: Request) -> Response:
         # and being drowned in — the synth-dominated window (#1738). Flag-OFF
         # leaves the call byte-for-byte unchanged (no device arg).
         if _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "qwen", "1.7b", {"op": "mint"},
                 cpu_capable=False, heavy=True,
                 pinned=_engine_env_pin("qwen"),
@@ -9104,7 +9225,7 @@ async def xtts_clone_voice(req: Request) -> Response:
     try:
         if _capacity_admission_enabled():
             cap = _ENGINE_CAPACITY_PROFILE.get("coqui", {"cpu_capable": False, "heavy": True})
-            with _placement.reservation(
+            async with _placement.reservation(
                 "coqui", None, {},
                 cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
                 pinned=_engine_env_pin("coqui"),
@@ -9325,7 +9446,7 @@ async def synthesize(req: Request) -> Response:
         # held before the call starts. Off (the default): unchanged behaviour.
         if _capacity_admission_enabled():
             cap = _ENGINE_CAPACITY_PROFILE.get(engine_id, {"cpu_capable": False, "heavy": True})
-            with _placement.reservation(
+            async with _placement.reservation(
                 engine_id, model, {}, cpu_capable=cap["cpu_capable"], heavy=cap["heavy"]
             ) as adm:
                 if "noCapacity" in adm:
@@ -9478,7 +9599,7 @@ async def transcribe(req: Request) -> Response:
         # probe 503s before the (possibly cold) load ever runs.
         on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "asr", None, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("asr"),
@@ -9553,7 +9674,7 @@ async def embed(req: Request) -> Response:
         # embed call.
         on_gpu = _parse_device(SPK.device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
-            with _placement.reservation(
+            async with _placement.reservation(
                 "spk", None, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("spk"),

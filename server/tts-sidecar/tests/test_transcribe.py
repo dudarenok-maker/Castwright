@@ -18,6 +18,7 @@ Pins the load-bearing srv-31 invariants:
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from pathlib import Path
 from typing import Any, Optional
@@ -284,6 +285,133 @@ def test_maybe_free_idle_respects_ttl(fake_whisper_module, monkeypatch) -> None:
     clock["t"] = 1000.0 + 121.0
     assert engine.maybe_free_idle(120.0) is True
     assert engine._model is None
+
+
+# ── unload vs. a cold/racing load (plan 273 T7) ──────────────────────────
+
+
+def test_unload_is_not_blocked_by_a_cold_asr_load(monkeypatch) -> None:
+    """Plan 273 T7 — `unload()` must never queue behind a cold ASR load.
+
+    `_ensure_loaded` constructs `WhisperModel(...)`, which downloads
+    HuggingFace weights on first use — an unbounded network fetch, not the
+    "~1s" warm-cache figure. Pre-T7, the RE-ensure inside `transcribe`'s
+    `with self._infer_lock:` block meant a cold load triggered by that
+    in-lock call held `_infer_lock` for the whole (possibly unbounded) pull,
+    and `unload()` (which also takes `_infer_lock`) queued behind it.
+
+    Simulates the race that makes the in-lock call actually reconstruct:
+    the outer pre-ensure (load #1) warms the engine instantly, then a
+    `_pcm_to_float32_16k` override nulls the model as a side effect —
+    standing in for an idle-evict/unload winning the gap between the outer
+    pre-ensure and the claim, exactly as `transcribe`'s own (pre-T7)
+    comment described. The re-ensure therefore has to reload for real
+    (load #2), and THAT load is parked on an Event so the test can probe
+    whether `unload()` blocks behind it.
+
+    Mutation that must fail it — breaks the PRODUCER: move the re-ensure
+    call back inside `with self._infer_lock:` (the pre-T7 shape). Load #2
+    then runs while `_infer_lock` is held, so `unload()` queues behind the
+    parked construction and the 0.5s bound trips.
+    """
+    entry2 = threading.Event()
+    release2 = threading.Event()
+    load_count = {"n": 0}
+
+    class _FakeWhisperModel:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            load_count["n"] += 1
+            n = load_count["n"]
+            if n == 1:
+                pass  # outer pre-ensure: instant, warms the engine
+            elif n == 2:
+                entry2.set()
+                assert release2.wait(5), "release2 never set — test bug"
+            else:
+                raise AssertionError(f"unexpected {n}th Whisper load")
+
+        def transcribe(self, audio: Any, **kw: Any):
+            return iter([]), types.SimpleNamespace(language="en")
+
+    fake_mod = types.ModuleType("faster_whisper")
+    fake_mod.WhisperModel = _FakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_mod)
+
+    engine = main.WhisperEngine()
+
+    real_pcm_to_float32_16k = engine._pcm_to_float32_16k
+
+    def _pcm_then_simulate_racing_evict(pcm: bytes, sample_rate: int):
+        result = real_pcm_to_float32_16k(pcm, sample_rate)
+        engine._model = None  # the racing idle-evict/unload
+        return result
+
+    monkeypatch.setattr(engine, "_pcm_to_float32_16k", _pcm_then_simulate_racing_evict)
+
+    transcribe_errors: list[BaseException] = []
+
+    def run_transcribe() -> None:
+        try:
+            engine.transcribe(_pcm(), 24000)
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            transcribe_errors.append(e)
+
+    t = threading.Thread(target=run_transcribe, daemon=True)
+    t.start()
+
+    assert entry2.wait(5), "the re-ensure's cold load (load #2) never entered construction"
+
+    stop = threading.Thread(target=engine.unload, daemon=True)
+    stop.start()
+    stop.join(0.5)
+    assert not stop.is_alive(), (
+        "unload() was blocked behind the parked re-ensure load — the "
+        "relocated #1925 defect"
+    )
+
+    release2.set()
+    t.join(5)
+    assert not t.is_alive(), "transcribe thread did not finish within 5s"
+
+    assert transcribe_errors == [], f"transcribe raised: {transcribe_errors!r}"
+    assert load_count["n"] == 2, "expected exactly two WhisperModel constructions"
+
+
+def test_transcribe_raises_loudly_when_the_model_is_freed_in_the_ensure_gap(
+    fake_whisper_module,
+) -> None:
+    """Plan 273 T7 (incidental fix): if the model is gone by the time
+    `transcribe` captures it under `_infer_lock`, that must raise a loud
+    `RuntimeError` — not a bare `assert` (`-O` strips asserts in an
+    optimised run) and not an `AttributeError` from a `None` deref.
+
+    Mirrors `test_synthesize_survives_an_evict_that_wins_the_ensure_gap`
+    (test_coqui_idle_evict.py) — sequential, single-threaded, no real race
+    needed: `_ensure_loaded` is overridden so its SECOND call (the
+    re-ensure) nulls the model instead of reloading it, standing in for an
+    unload() that wins the gap between that call and the lock capture.
+
+    Mutation that must fail it: restore the bare `assert model is not
+    None` — the raised type becomes `AssertionError`, which
+    `pytest.raises(RuntimeError)` does not match, so the test errors out
+    instead of passing.
+    """
+    engine = main.WhisperEngine()
+    real_ensure_loaded = engine._ensure_loaded
+    call_count = {"n": 0}
+
+    def flaky_ensure_loaded(device: Optional[str] = None) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            real_ensure_loaded(device=device)
+        else:
+            engine._model = None  # the racing unload
+
+    engine._ensure_loaded = flaky_ensure_loaded  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="unloaded"):
+        engine.transcribe(_pcm(), 24000)
+    assert call_count["n"] == 2
 
 
 # ── HTTP /transcribe ─────────────────────────────────────────────────────
