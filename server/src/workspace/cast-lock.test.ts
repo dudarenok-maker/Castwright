@@ -5,6 +5,7 @@ import { withCastLock, withCastLocks } from './cast-lock.js';
    at call time. Do NOT reach for vi.mock('./file-lock.js') instead; that
    replaces the module and the spy stops observing real acquisition. */
 import * as fileLock from './file-lock.js';
+import { __chainsSizeForTest } from './file-lock.js';
 import { castJsonPath } from './paths.js';
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -96,5 +97,11 @@ describe('withCastLocks', () => {
     /* reduceRight over [] returns the initial value, so the critical section
        would run with no lock acquired at all. */
     await expect(withCastLocks([], async () => 'ran')).rejects.toThrow();
+  });
+
+  it('drops the map entry once the last holder settles', async () => {
+    const before = __chainsSizeForTest();
+    await withCastLock('/w/cleanup', async () => 'done');
+    expect(__chainsSizeForTest()).toBe(before);
   });
 });

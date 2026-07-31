@@ -31,18 +31,19 @@ export async function withDesignLock<T>(bookDir: string, fn: () => Promise<T>): 
   });
   /* The next waiter chains onto `gate` (resolved in our finally), so it can't
      start until we're done. Swallow prior rejections so one failed design
-     doesn't reject the whole chain. */
-  designChains.set(
-    bookDir,
-    prior.then(() => gate, () => gate),
-  );
+     doesn't reject the whole chain. `mine` is what actually goes in the map —
+     comparing the cleanup against `gate` (as before) compares against a
+     promise that was never stored, so the delete below never ran and the map
+     grew one entry per bookDir for the process lifetime. */
+  const mine = prior.then(() => gate, () => gate);
+  designChains.set(bookDir, mine);
   await prior.catch(() => undefined);
   try {
     return await fn();
   } finally {
     release();
     /* Tidy up when we're the chain tail, so the map doesn't grow unbounded. */
-    if (designChains.get(bookDir) === gate) designChains.delete(bookDir);
+    if (designChains.get(bookDir) === mine) designChains.delete(bookDir);
   }
 }
 
