@@ -15,8 +15,10 @@
 //                          Bare --bless records both baselines,
 //                          `--assembly-only --bless` records only Suite B's
 //                          golden-chapter.baseline.json + .decoded.pcm, and
-//                          `--sidecar-only --bless` records only Suite A's
-//                          kokoro-baseline.json. To re-capture the Suite B
+//                          `--sidecar-only --bless` records Suite A's
+//                          kokoro-baseline.json AND instruct-baseline.json
+//                          (test_instruct_golden.py honours the same
+//                          GOLDEN_BLESS env). To re-capture the Suite B
 //                          INPUT fixture (not its baseline), run
 //                          server/tts-sidecar/tests/golden/capture_assembly_fixture.py.
 //                          NOTE: `npm run test:golden-audio:assembly` bypasses
