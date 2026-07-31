@@ -129,7 +129,14 @@ pure-logic unit tests ride in the normal tiers.
 ## Out of scope
 
 - ASR content verification ("fluent but wrong words") — that's `srv-31` (#508),
-  building on plan 179's `segment-qa.ts`.
+  building on plan 179's `segment-qa.ts`. **Superseded on this point by ops-45
+  (#1911):** Suite A now also asserts per-line content drift, transcribing
+  each fixture line with the sidecar's own `WhisperEngine` and comparing
+  against a recorded baseline transcript at tolerance 0 (`kokoro-baseline.json`'s
+  `transcript` / `text_edits` fields, `tests/golden/compare.py`'s
+  `assert_content` / `bless_guard`). Production's per-sentence WER gate
+  (srv-31 / `segment-asr-qa.ts`) remains a separate policy, deliberately not
+  kept in sync — see #1911 §4.
 - A CI `workflow_dispatch` job that downloads Kokoro weights to run Suite A in the
   cloud — deliberately not built (the harness is run on demand on a dev box;
   Suite B already runs GPU-free wherever it's invoked).
