@@ -390,6 +390,34 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.vramTotalMb).toBe(8188);
   });
 
+  it('forwards vram_reserved_mb_by_device as vramReservedMbByDevice (#1993 review m8)', async () => {
+    /* The scalar vram_reserved_mb/vram_total_mb fields are current-device-only
+       (see SidecarHealthBody's doc) — this per-card breakdown is the field
+       that can't be misled by torch's current-device not being 0. Was
+       silently dropped by the proxy before this fix, making it invisible via
+       GET /api/sidecar/health despite the sidecar sending it. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          vram_reserved_mb_by_device: {
+            'cuda:0': { reserved_mb: 3587.0, total_mb: 8188.0 },
+            'cuda:1': { reserved_mb: 0.0, total_mb: 16302.0 },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.vramReservedMbByDevice).toEqual({
+      'cuda:0': { reserved_mb: 3587.0, total_mb: 8188.0 },
+      'cuda:1': { reserved_mb: 0.0, total_mb: 16302.0 },
+    });
+  });
+
   it('defaults recyclePending=false / committedMb=null / VRAM=null for an older sidecar', async () => {
     /* A pre-side-11 sidecar omits all of these. The proxy must coerce so the
        boundary check reads a definite `false` (never recycles on a stale
@@ -406,6 +434,7 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.committedMb).toBeNull();
     expect(res.body.vramReservedMb).toBeNull();
     expect(res.body.vramTotalMb).toBeNull();
+    expect(res.body.vramReservedMbByDevice).toBeUndefined();
   });
 
   it('returns unreachable when the sidecar responds non-2xx', async () => {

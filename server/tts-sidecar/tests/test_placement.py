@@ -1224,6 +1224,153 @@ def test_reclaim_still_insufficient_reports_nocapacity_and_runs_once():
     run_case(body())
 
 
+# --- #1993 review C1: two guards in front of the reclaim -------------------
+#
+# withCapacityRetry (server/src/gpu/capacity-retry.ts) retries a genuine
+# noCapacity 503 up to GPU_CAPACITY_MAX_ATTEMPTS (default 30) every
+# GPU_CAPACITY_POLL_MS (default 2s) — every retry re-enters admission, so
+# without these two guards a single refused op could fire ~30
+# gc.collect()+empty_cache() cycles into whatever else is running on the
+# card. Both guards live in `_reclaim_stranded_cache` itself, so both
+# `admit()` and `reservation()` get them for free — no duplication needed at
+# either call site.
+
+
+def test_reclaim_skipped_when_device_key_is_in_use():
+    """Guard 1: a STRANDED pool is by definition one nothing is using. If
+    another engine already holds a live reservation on `device_key`
+    (`ReservationLedger.engines_holding` — the same #1920B "don't touch
+    what's in flight" authority `_evict_until` already uses for this exact
+    reasoning), this isn't the stranded-pool case, and the reclaim must not
+    fire — it would instead race that op's own allocator."""
+
+    async def body():
+        devices = lambda: [dev(free=200, total=8192)]
+        reclaimed = []
+        ledger = main.ReservationLedger()
+        ledger.hold("cuda:0", 1000, "other-engine")  # simulates an in-flight op
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a
+        assert reclaimed == []
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_cooldown_skips_a_second_attempt_within_the_window(monkeypatch):
+    """Guard 2: two admission failures on the same device_key, close together
+    in time, must reclaim only once. Simulates the retry-loop shape
+    (withCapacityRetry re-entering admission every GPU_CAPACITY_POLL_MS) by
+    driving `time.monotonic()` directly rather than sleeping — the second
+    call lands 1s after the first, well inside the 30s cooldown."""
+
+    async def body():
+        state = {"free": 200, "total": 8192, "t": 0.0}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def reclaim(device_key):
+            # Deliberately does NOT raise state["free"] — stays insufficient
+            # either way, so the assertion is purely "was reclaim CALLED",
+            # not "did it help".
+            reclaimed.append(device_key)
+
+        monkeypatch.setattr(main.time, "monotonic", lambda: state["t"])
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=reclaim,
+        )
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        state["t"] = 1.0  # 1s later — inside the 30s cooldown
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert reclaimed == ["cuda:0"]  # second attempt skipped the reclaim
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_runs_again_once_the_cooldown_expires(monkeypatch):
+    """The cooldown skip is temporary, not permanent — a genuinely still-
+    stranded card must get another shot once GPU_CAPACITY_MAX_ATTEMPTS'
+    worth of polling has run past the cooldown window."""
+
+    async def body():
+        state = {"free": 200, "total": 8192, "t": 0.0}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        monkeypatch.setattr(main.time, "monotonic", lambda: state["t"])
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        state["t"] = 31.0  # past the 30s cooldown
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert reclaimed == ["cuda:0", "cuda:0"]
+        return _RAN
+
+    run_case(body())
+
+
+# --- #1993 review M3: `_worst_device_key` targets the wrong card -----------
+
+
+def test_reclaim_target_is_the_wrong_card_on_a_two_device_box():
+    """`_worst_device_key` picks the device with the MOST headroom — on a
+    two-device box, that is systematically NOT the device holding a
+    stranded pool (a stranded pool by definition REDUCES a device's
+    apparent headroom). Pins the current, known-imperfect behaviour rather
+    than silently relying on it: cuda:0 is the stranded card (low free),
+    cuda:1 has more free space, and the reclaim hook is called with cuda:1
+    — the wrong card, by name. This stays harmless only because
+    `_reclaim_device_cache` reclaims EVERY device's cache, never just the
+    passed-in `device_key` (#1993 review M2) — if a future change made the
+    reclaim device-scoped again without also fixing this selection, THAT
+    combination would silently stop fixing #1976 on any multi-GPU box."""
+
+    async def body():
+        devices = lambda: [dev(index=0, free=200, total=8192), dev(index=1, free=1000, total=8192)]
+        reclaimed = []
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a
+        assert reclaimed == ["cuda:1"]  # NOT cuda:0, the actually-stranded card
+        return _RAN
+
+    run_case(body())
+
+
 # --- _engine_env_pin ------------------------------------------------------
 #
 # `_engine_env_pin` is the seam PlacementController's callers use to derive

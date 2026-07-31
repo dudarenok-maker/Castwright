@@ -3456,9 +3456,20 @@ class ReservationLedger:
             return best_key
 
 
+# #1993 review (n11) — `gc.collect()` + `empty_cache()` failures are
+# best-effort and swallowed (see the docstring below), but a broken CUDA
+# context can make EVERY admission fail, and the retry loop
+# (`GPU_CAPACITY_MAX_ATTEMPTS`, up to 30 attempts) would otherwise log a full
+# traceback on each one. Latched module-level: the first failure logs
+# `exc_info=True`, every one after that in this process logs the message
+# only. Never resets — if CUDA is broken it stays broken until restart, so a
+# second full trace teaches nothing the first didn't already say.
+_reclaim_failure_traced = False
+
+
 def _reclaim_device_cache(device_key: str) -> None:
-    """Bare `gc.collect()` + `torch.cuda.empty_cache()` scoped to
-    `device_key`, with no target model to unload first (#1976).
+    """Bare `gc.collect()` + `torch.cuda.empty_cache()`, with no target model
+    to unload first (#1976).
 
     Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
     `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
@@ -3477,36 +3488,64 @@ def _reclaim_device_cache(device_key: str) -> None:
     own last-resort phase, once, only on the admission-failure path, rather
     than as another `_idle_evict_steps` entry.
 
-    `gc.collect()` first, same reasoning as `unload()`: dropped `nn.Module`
+    `device_key` does NOT scope which device's cache gets freed (#1993
+    review M2 — corrects this docstring's earlier, wrong claim). Verified
+    against the installed torch 2.11.0+cu128: `torch.cuda.empty_cache()`
+    takes no device argument, and neither does `torch._C._cuda_emptyCache()`
+    underneath it — `NativeCachingAllocator::emptyCache()` loops every
+    device's allocator internally. An earlier version of this function
+    wrapped the call in `with torch.cuda.device(idx):`, which did nothing to
+    scope it (the call ignores torch's "current device" concept entirely) —
+    removed rather than left in place implying a guarantee that was never
+    real. `device_key` is kept as the parameter only for the log message
+    below and as the seam the tests inject a fake `reclaim` hook through
+    (`PlacementController.__init__`'s `reclaim=`); see
+    `PlacementController._reclaim_stranded_cache` for the two guards
+    (in-use check + per-device cooldown) that exist BECAUSE this call is
+    global, not despite it — freeing another device's cache while a real op
+    is running there forces that op to pay a fresh `cudaMalloc`, and
+    `cudaFree` synchronises the whole device, not just one card.
+
+    `gc.collect()` first (but only once CUDA is confirmed available, #1993
+    review m9 — a CPU-only box shouldn't pay a full-heap collection on every
+    failed admission), same reasoning as `unload()`: dropped `nn.Module`
     reference cycles keep their tensors alive past a plain `del`/None
     assignment until the collector runs, which would otherwise make
     `empty_cache()` a no-op. Safe to run even when something else IS
-    resident on this card — `empty_cache()` only returns cache blocks the
+    resident on ANY device — `empty_cache()` only returns cache blocks the
     allocator holds but nothing currently references; it can never evict a
-    live model's own tensors, so this never competes with (or races) a real
-    resident model's memory.
+    live model's own tensors. That half of the old "never competes" claim
+    stays true; the "with a real resident model's memory" half does not (see
+    above) — it competes for cycles and for the freshly-emptied cache blocks
+    themselves, just never for a live tensor.
 
     Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
     swallowed here, matching every other reclaim path in this file — this is
     a last-resort cushion, not a step whose failure should propagate."""
-    gc.collect()
+    global _reclaim_failure_traced
     try:
         import torch  # type: ignore
 
         if not torch.cuda.is_available():
             return
-        idx: Optional[int] = None
-        if ":" in device_key:
-            _, _, idx_str = device_key.partition(":")
-            if idx_str.isdigit():
-                idx = int(idx_str)
-        if idx is not None:
-            with torch.cuda.device(idx):
-                torch.cuda.empty_cache()
-        else:
-            torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
     except Exception:
-        log.warning("stranded-cache reclaim failed for %s", device_key, exc_info=True)
+        log.warning(
+            "stranded-cache reclaim failed for %s",
+            device_key,
+            exc_info=not _reclaim_failure_traced,
+        )
+        _reclaim_failure_traced = True
+
+
+# #1993 review (C1) — the per-device reclaim cooldown. A module constant, not
+# an env knob: this isn't an operator-facing tunable (per CLAUDE.md, a new
+# knob needs a config-registry entry + wiki row; this doesn't rise to that —
+# there's one defensible value, not a tradeoff an operator would want to
+# make), just a guard against the retry-storm shape below. See
+# `PlacementController._reclaim_stranded_cache` for why it exists.
+_RECLAIM_COOLDOWN_SECONDS = 30.0
 
 
 class PlacementController:
@@ -3537,6 +3576,10 @@ class PlacementController:
         # #1976 — injectable so tests can assert call count / sequence a fake
         # probe against without a real allocator; see `_reclaim_stranded_cache`.
         self.reclaim = reclaim if reclaim is not None else _reclaim_device_cache
+        # #1993 review (C1) — last `time.monotonic()` a reclaim actually ran,
+        # per device_key. Read/written only by `_reclaim_stranded_cache`'s
+        # cooldown guard; see there for why.
+        self._last_reclaim: dict[str, float] = {}
         # Serialises the admission-RESOLUTION phase only (probe -> try_hold ->
         # evict -> resolve) across concurrent `reservation()` calls (plan 273,
         # T4) — NOT the `yield`/`finally` (that would serialise every op
@@ -3574,7 +3617,19 @@ class PlacementController:
         Node should try to free the analyzer's share from, since it's where an
         evict is likeliest to cross the threshold. None if the probe shows no
         GPU. (Diverges deliberately from an earlier 'largest shortfall' note:
-        max-headroom is the recoverable device, not the least-recoverable one.)"""
+        max-headroom is the recoverable device, not the least-recoverable one.)
+
+        #1993 review (M3) — on a multi-GPU box this is systematically the
+        WRONG card to target for `_reclaim_stranded_cache` (#1976): a
+        stranded caching-allocator pool REDUCES a device's apparent headroom,
+        so the device holding one is the one this function is least likely
+        to pick. Demonstrated on a two-device simulation
+        (`test_reclaim_target_is_the_wrong_card_on_a_two_device_box` in
+        test_placement.py): pool on cuda:0, this returns cuda:1. Harmless in
+        practice only because `_reclaim_device_cache` reclaims EVERY device's
+        cache, not just the passed-in one (#1993 review M2) — so the wrong
+        pick still frees the right pool as a side effect. Do not read
+        "reclaim target" as "the device whose cache gets freed"; it isn't."""
         reserve_cap = self.reserve_mb()
         best_key: Optional[str] = None
         best_headroom: Optional[int] = None
@@ -3642,9 +3697,9 @@ class PlacementController:
 
     async def _reclaim_stranded_cache(self, device_key: str) -> None:
         """The #1976 last-resort reclaim: a bare `gc.collect()` +
-        `torch.cuda.empty_cache()` on `device_key`, called by `admit()` /
-        `_resolve_admission()` exactly once, AFTER `_evict_until`'s residency
-        ladder has already run and failed — never in a loop, never retried.
+        `torch.cuda.empty_cache()`, called by `admit()` /
+        `_resolve_admission()` AFTER `_evict_until`'s residency ladder has
+        already run and failed.
 
         Deliberately NOT another `_idle_evict_steps` entry (see that
         function's own #1976 note for the full reasoning): this reclaim has
@@ -3653,10 +3708,41 @@ class PlacementController:
         outside that per-engine, cheapest-reload-first list, as its own
         unconditional final phase instead.
 
+        Two guards (#1993 review C1) sit in front of the actual reclaim —
+        each is a plain early return, so `admit()`/`_resolve_admission()`
+        need no changes of their own to get both:
+
+        1. **In use → skip.** `ledger.engines_holding(device_key)` is the
+           existing "don't touch what's in flight" authority (#1920B,
+           already used by `_evict_until` for the identical reasoning). A
+           STRANDED pool is by definition one nothing is using — if this
+           returns non-empty, `device_key` isn't stranded, it's live, and
+           reclaiming would instead be racing `_reclaim_device_cache`'s
+           process-wide `empty_cache()` (#1993 review M2) against that op's
+           own allocator.
+        2. **Cooldown → skip.** `_RECLAIM_COOLDOWN_SECONDS` per `device_key`.
+           Without this, a genuine `noCapacity` 503 gets retried by Node's
+           `withCapacityRetry` (`server/src/gpu/capacity-retry.ts`) up to
+           `GPU_CAPACITY_MAX_ATTEMPTS` (default 30) every
+           `GPU_CAPACITY_POLL_MS` (default 2000ms) — EVERY retry re-enters
+           here, so an unrelated refused op (an ASR transcribe, a voice
+           design) during a chapter render would fire up to 30
+           `gc.collect()` + `empty_cache()` cycles into the render's own
+           allocator, each one running under `reservation()`'s
+           `_admit_lock` and each one's `cudaFree` implicitly synchronising
+           the device.
+
         Runs on a worker thread via `asyncio.to_thread`, same reasoning as
         every `step.run()` in `_evict_until`: `empty_cache()` can block on
         the CUDA allocator's own lock, and this must not stall the event
         loop (`/health` etc.) any more than a real eviction step would."""
+        if self.ledger.engines_holding(device_key):
+            return
+        now = time.monotonic()
+        last = self._last_reclaim.get(device_key)
+        if last is not None and (now - last) < _RECLAIM_COOLDOWN_SECONDS:
+            return
+        self._last_reclaim[device_key] = now
         await asyncio.to_thread(self.reclaim, device_key)
 
     async def admit(

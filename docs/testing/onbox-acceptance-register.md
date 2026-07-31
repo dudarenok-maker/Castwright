@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 26 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 27 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**43 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**44 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -812,6 +812,42 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 - **4. Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` that `pinokio/install.js` provisions and record whether it succeeds or fails — genuinely unknown at design time (design spec §11): conda-forge's ffmpeg is built shared, but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to the conda env's `Library/bin` DLLs, so shared-ness there does not imply loadable here. #1967's fix makes the answer moot for *behaviour* either way — a Coqui clone derives correctly on Pinokio regardless — but the outcome itself is still owed as a recorded fact; see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. **Batch with E1**, which already owns the Pinokio box.
 
 *Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
+
+### A27 · Stranded VRAM pool reclaimed on the admission-failure path ([#1976](https://github.com/dudarenok-maker/Castwright/issues/1976), PR [#1993](https://github.com/dudarenok-maker/Castwright/pull/1993)) · **single 8 GB card**
+
+Unit tests inject a fake `probe()` and a fake `reclaim` hook, proving the CALL
+SEQUENCE (idle-evict first, reclaim once on failure, cooldown, the
+in-use skip) — none of them touch a real CUDA allocator, so whether an actual
+stranded `torch.cuda.empty_cache()` pool comes back on real hardware, and
+whether the two new guards (C1, PR #1993 review) behave under real timing,
+is unproven.
+
+- Render a chapter to completion, let the engine report unloaded, and confirm
+  (via `nvidia-smi` and `GET /api/sidecar/health`'s new
+  `vramReservedMbByDevice`) that a reserved-but-unallocated pool is left
+  behind on the render card, matching #1976's own measured shape (~3.9 GB on
+  an 8 GB card).
+- With that stranded pool present and nothing resident, issue an op that
+  would otherwise be refused (an ASR `/transcribe`, or a voice design). It
+  must be **admitted**, and `nvidia-smi` on that card must drop to
+  near-baseline afterward — the #1976 acceptance criterion this row exists
+  to close.
+- Confirm the two C1 guards don't misfire on real hardware: (a) start a
+  genuine render (so the render's engine holds a live reservation) and, from
+  a second client, issue a refused op on the SAME card — the reclaim must
+  NOT fire mid-render (watch for `stranded-cache reclaim` in the sidecar log;
+  it must not appear while the render is in flight); (b) issue two refused
+  ops on the same card within 30 s of each other and confirm the reclaim log
+  line appears only once, not twice.
+- This PR's `Closes #1976` was narrowed to `Refs #1976` in review (M5) — the
+  render/unload-completion reclaim (#1976's other acceptance criterion) is a
+  SEPARATE, not-yet-built lever tracked on its own follow-up issue. Do not
+  treat this row's discharge as closing #1976 itself.
+
+*Needs:* the 8 GB card only, a chapter render, and something to run past it
+(ASR or a design) once it finishes. *Criteria:* PR #1993's description +
+the C1/M3 review findings quoted above. *Cost:* short — rides along with A19
+and A20, which already stage a mixed-engine render on this same card.
 
 ---
 
