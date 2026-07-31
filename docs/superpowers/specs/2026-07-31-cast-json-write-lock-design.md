@@ -107,14 +107,19 @@ exports `withKeyLock(key, fn)`, a generic per-key promise-chain mutex — the sa
 idiom as `tts/design-lock.ts`'s `withDesignLock(bookDir, fn)` and
 `chapters-restructure.ts`'s `withBookLock`. Nothing new is invented here.
 
-### 3.1 The two exports
+### 3.1 The exports
 
 New file `server/src/workspace/cast-lock.ts`:
 
 ```ts
 withCastLock<T>(bookDir: string, fn: () => Promise<T>): Promise<T>
 withCastLocks<T>(bookDirs: string[], fn: () => Promise<T>): Promise<T>
+withLibraryVoiceLock<T>(voiceUuid: string, fn: () => Promise<T>): Promise<T>
 ```
+
+The third is §7's key class, named here rather than left as a raw
+`withKeyLock('library-voice:…')` at two call sites — same argument as below: key
+derivation lives in one place or it silently partitions.
 
 `withCastLock` delegates to `withKeyLock(castJsonPath(bookDir), fn)`.
 

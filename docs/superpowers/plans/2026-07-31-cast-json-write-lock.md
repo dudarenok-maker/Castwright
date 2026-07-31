@@ -19,8 +19,9 @@ integration tests.
 Read it before Task 1. Section references below (§3.1, §5, §10.2 …) point at it.
 
 **Tickets:** `Closes #1981`, `Closes #2000`, `Closes #2001`. `Refs #2006`,
-`Refs #2015` — the cross-scope staleness work is deliberately **not** in this PR;
-see "Why the staleness layer is not here" below.
+`Refs #2015` — the cross-scope staleness work is deliberately **not** in this PR.
+Four mechanisms were designed for it and none survived review; the design of
+record §13 has all four and why each failed.
 
 ## Global Constraints
 
@@ -71,7 +72,7 @@ see "Why the staleness layer is not here" below.
 | `server/src/workspace/file-lock.ts` | Modify — #2001 map-cleanup fix. |
 | `server/src/tts/design-lock.ts` | Modify — same fix, cleanup only. **Do not touch acquire/release/ordering**: `ensureCharacterVoiceUuid`'s series branch still depends on it (§5.1). |
 | `server/src/routes/chapters-restructure.ts` | Modify — same fix; re-derive the safety argument, its control flow differs. |
-| 14 route modules + `voice-library-usage.ts` | Modify — apply the lock per §5. |
+| 16 route modules + `voice-library-usage.ts` | Modify — apply the lock per §5. |
 | `server/src/workspace/cast-lock.guard.test.ts` | **New.** Static guard: no unlocked `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(`. |
 
 ---
@@ -410,7 +411,7 @@ export function withLibraryVoiceLock<T>(voiceUuid: string, fn: () => Promise<T>)
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd server && npx vitest run src/workspace/cast-lock.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Flip the race harness to the both-survive assertion**
 
@@ -1211,15 +1212,13 @@ unlocked occurrences everywhere else. Maintain an explicit allowlist with a
 reason per entry:
 
 ```ts
-/* Empty by design. Every cast.json write and delete in the tree is locked and
-   deferred to #2015, so the entry above is the only exemption.
+/* One entry by design: analysis.ts's five merge-base writes are deferred to
+   #2015 and stay unlocked in this PR.
 
-   An earlier draft carried an allowlist entry for analysis.ts's five deferred
-   writes. Keep this map empty rather than deleting the mechanism: if a future
-   change needs an exemption it must be keyed on file AND expected count, never
-   on file alone — a file-level exemption for analysis.ts would also have
-   blinded the guard to the one rm that IS locked, which is the exact hole spec
-   §5 class 6 exists to close. */
+   Keyed on file AND expected count, never on file alone. A file-level
+   exemption for analysis.ts would also blind the guard to the one rm that IS
+   locked (Task 11) — the exact hole spec §5 class 6 exists to close. A sixth
+   unlocked write in that file must fail the guard, not inherit the exemption. */
 const ALLOWED_UNLOCKED = new Map([
   ['routes/analysis.ts', { writes: 5, rms: 0, why: 'merge-base writes deferred to #2015; the rm IS locked (Task 11)' }],
 ]);
@@ -1353,8 +1352,10 @@ git commit -m "docs(docs): record the cast.json lock convention and release note
 - [ ] `npx madge --circular --extensions ts server/src` — still 15 cycles.
       `cast-lock.ts` is a leaf under `workspace/`; if the count moved, a route
       module was imported from it.
-- [ ] PR body: `Closes #1981`, `Closes #2000`, `Closes #2001`, `Closes #2006`,
-      `Closes #2015`. Declare Task 8's `library-cast-override` same-book fix and
+- [ ] PR body: `Closes #1981`, `Closes #2000`, `Closes #2001`, **`Refs #2006`,
+      `Refs #2015`** — those two stay OPEN. They carry the design history of the
+      four failed staleness mechanisms; auto-closing them discards the brief the
+      next attempt starts from. Declare Task 8's `library-cast-override` same-book fix and
       Task 3's #2001 fix under "Also fixed, found in passing".
 - [ ] Mandatory `code-review` pass at `high` effort — multi-scope, 17 modules.
 
