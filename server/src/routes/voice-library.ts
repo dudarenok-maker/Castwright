@@ -486,14 +486,24 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    fail-safe qwen's own '' (never-fetched) case already relies on, so a
    cold-started server can't flip every cloned coqui voice to 'stale' before
    the sidecar has answered even once. */
+/* Plan 276 Decision 2 [R3] — a persisted `status: 'failed'` must survive this
+   computation untouched. Before this fix, a failed-but-version-stale slot was
+   overwritten to `'stale'` here, so the client (which only ever sees the
+   post-this-function value) could never observe `derive-failed` — the render
+   still hard-fails on the raw on-disk status
+   (`clone-voice-resolver.ts:238` checks `'failed'` first), so the mismatch
+   was a false negative in the cast-time check, not a cosmetic one.
+   Staleness of a failed artifact is meaningless: nothing will re-derive it
+   until the failure itself is cleared (see the retry route), so there is
+   nothing to report as merely "stale" underneath it. */
 function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
   let result = entry;
   const qwen = entry.engines.qwen;
-  if (qwen && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
+  if (qwen && qwen.status !== 'failed' && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
     result = { ...result, engines: { ...result.engines, qwen: { ...qwen, status: 'stale' } } };
   }
   const xtts = entry.engines.xtts;
-  if (xtts && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
+  if (xtts && xtts.status !== 'failed' && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
     result = { ...result, engines: { ...result.engines, xtts: { ...xtts, status: 'stale' } } };
   }
   return result;

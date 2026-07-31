@@ -362,6 +362,88 @@ describe('GET /api/voice-library', () => {
     const onDisk = await vl.readEntry('live-oracle-mismatch');
     expect(onDisk?.engines.xtts?.status).toBe('ready');
   });
+
+  /* Plan 276, Task 3 (Decision 2 [R3]) — a persisted `failed` status must
+     survive this list-time computation UNTOUCHED, even when its version
+     stamp is outdated. Before the fix, `withComputedStaleness` rewrote a
+     failed-but-outdated slot to 'stale', so the client (which only ever
+     sees the post-transform value) could never observe `derive-failed`
+     even though the render's own raw-status check hard-fails on exactly
+     that class first (`clone-voice-resolver.ts:238`). Pinned on BOTH
+     engine branches — #1933 shipped ten instances of engine-parameterised
+     behaviour pinned in only one direction; mutation: drop either
+     `!== 'failed'` guard -> its own test reddens (and only its own). */
+  it('leaves a failed qwen slot as failed even when its baseModel is outdated', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'failed-qwen-1',
+        engines: { qwen: { status: 'failed', baseModel: 'some/other-model' } },
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (res.body.voices as Array<{ voiceUuid: string; engines: { qwen?: { status: string } } }>).map((v) => [
+        v.voiceUuid,
+        v,
+      ]),
+    );
+    expect(byId.get('failed-qwen-1')?.engines.qwen?.status).toBe('failed');
+  });
+
+  it('leaves a failed xtts slot as failed even when its coquiVersion is outdated', async () => {
+    coquiVersionState.setLastKnownCoquiVersion('0.28.0');
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'failed-xtts-1',
+        engines: { xtts: { status: 'failed', coquiVersion: '0.27.5' } },
+      }),
+    );
+
+    const res = await request(app).get('/api/voice-library');
+    const byId = new Map(
+      (res.body.voices as Array<{ voiceUuid: string; engines: { xtts?: { status: string } } }>).map((v) => [
+        v.voiceUuid,
+        v,
+      ]),
+    );
+    expect(byId.get('failed-xtts-1')?.engines.xtts?.status).toBe('failed');
+  });
+
+  /* The complement of the two tests above: the new `!== 'failed'` guard
+     must not accidentally narrow the override to only ONE other status
+     (e.g. a wrong fix reading `status === 'ready'` instead of
+     `!== 'failed'`) — 'deriving' and an already-'stale' persisted status
+     must still recompute to 'stale' on an outdated stamp, on both engine
+     branches. Mutation: narrow either guard to `=== 'ready'` -> the
+     'deriving'/'stale' cases redden; narrow it to `=== 'deriving'` -> the
+     'ready' case (covered by the pre-existing tests above) reddens too. */
+  it.each(['ready', 'deriving', 'stale'] as const)(
+    'still flips a %s qwen/xtts slot to stale when its version stamp is outdated',
+    async (status) => {
+      coquiVersionState.setLastKnownCoquiVersion('0.28.0');
+      await vl.writeEntry(
+        makeEntry({
+          voiceUuid: `other-status-${status}`,
+          engines: {
+            qwen: { status, baseModel: 'some/other-model' },
+            xtts: { status, coquiVersion: '0.27.5' },
+          },
+        }),
+      );
+
+      const res = await request(app).get('/api/voice-library');
+      const entry = (
+        res.body.voices as Array<{
+          voiceUuid: string;
+          engines: { qwen?: { status: string }; xtts?: { status: string } };
+        }>
+      ).find((v) => v.voiceUuid === `other-status-${status}`);
+
+      expect(entry?.engines.qwen?.status).toBe('stale');
+      expect(entry?.engines.xtts?.status).toBe('stale');
+    },
+  );
 });
 
 describe('PATCH /api/voice-library/:voiceUuid', () => {
