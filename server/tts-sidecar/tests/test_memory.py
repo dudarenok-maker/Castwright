@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -902,6 +903,73 @@ def test_health_reports_vram_fields(monkeypatch):
         body = client.get("/health").json()
     assert body["vram_reserved_mb"] == 7500.0
     assert body["vram_total_mb"] == 8188.0
+
+
+def test_health_reports_vram_by_device(monkeypatch):
+    """#1976 — `vram_reserved_mb`/`vram_total_mb` are current-device-only (see
+    `_cuda_vram_mb_per_device`'s docstring: measured reading `50` while
+    nvidia-smi showed 3587 MiB on cuda:0, because torch's current device
+    wasn't 0). `/health` additionally surfaces
+    `vram_reserved_mb_by_device`, a per-card breakdown that can't be misled
+    the same way — this pins the wiring without touching real CUDA."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (5000.0, 50.0, 8188.0))
+    monkeypatch.setattr(
+        main,
+        "_cuda_vram_mb_per_device",
+        lambda: {
+            "cuda:0": {"reserved_mb": 3587.0, "total_mb": 8188.0},
+            "cuda:1": {"reserved_mb": 0.0, "total_mb": 16302.0},
+        },
+    )
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    # The misleading current-device-only figure is still there (back-compat)...
+    assert body["vram_reserved_mb"] == 50.0
+    # ...but the per-device breakdown gives the unambiguous cuda:0 reading.
+    assert body["vram_reserved_mb_by_device"]["cuda:0"]["reserved_mb"] == 3587.0
+    assert body["vram_reserved_mb_by_device"]["cuda:1"]["reserved_mb"] == 0.0
+
+
+def test_cuda_vram_mb_per_device_empty_when_cuda_unavailable(monkeypatch):
+    """Fail-open contract, same as `_cuda_vram_mb`: no CUDA build / no visible
+    device -> {} rather than a raise. Patches the real `torch.cuda.is_
+    available` (never touches an allocator) so this stays a pure guard-clause
+    check with no real CUDA call underneath it."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert main._cuda_vram_mb_per_device() == {}
+
+
+def test_cuda_vram_mb_per_device_reads_per_index_reserved_and_properties(monkeypatch):
+    """#1993 review (m7) — every other test here monkeypatches the whole
+    function; this pins the LOOP BODY itself, same technique as the
+    fail-open test above (patch real `torch.cuda` attributes, never a fake
+    module — `_cuda_vram_mb_per_device` does its own `import torch` inside
+    the function, which resolves to the same `sys.modules` singleton these
+    monkeypatches mutate). Pins three things the loop body must get right:
+    the `cuda:{i}` key format, the PER-INDEX `memory_reserved(i)` call
+    (deliberately unlike `_cuda_vram_mb()`'s no-arg, current-device-only
+    form — the whole reason this function exists, per its own docstring),
+    and the `1_000_000.0` MB divisor."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    reserved_by_index = {0: 3_587_000_000, 1: 0}
+    total_by_index = {0: 8_188_000_000, 1: 16_302_000_000}
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda i: reserved_by_index[i])
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda i: types.SimpleNamespace(total_memory=total_by_index[i]),
+    )
+    assert main._cuda_vram_mb_per_device() == {
+        "cuda:0": {"reserved_mb": 3587.0, "total_mb": 8188.0},
+        "cuda:1": {"reserved_mb": 0.0, "total_mb": 16302.0},
+    }
 
 
 def test_qwen_unload_waits_for_synth_lock(monkeypatch):

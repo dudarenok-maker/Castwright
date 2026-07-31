@@ -46,8 +46,12 @@ vi.mock('../tts/transcribe-client.js', () => ({
   })),
 }));
 
+// C2 (#1972 follow-up) — characterId must agree with the 'amy' segment below,
+// or the shared findDivergentSentences guard treats this fixture's re-record
+// as attribution-diverged and diverts it to stillSuspect before synth ever
+// runs. A real analysis cache always carries characterId (schema-required).
 vi.mock('../store/analysis-cache.js', () => ({
-  loadAnalysisCache: vi.fn(async () => ({ chapters: { 1: [{ id: 1, text: TEXT }] } })),
+  loadAnalysisCache: vi.fn(async () => ({ chapters: { 1: [{ id: 1, characterId: 'amy', text: TEXT }] } })),
 }));
 
 /* The repair path's re-record synth call — mocked so attempt 1 renders dead

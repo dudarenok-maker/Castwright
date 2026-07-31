@@ -2683,7 +2683,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | | |
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
 | C-16 | Broken / Repairable card chip | | |
-| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **F** (run 2) | **See DEF-F / [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972).** Fresh designed voice `qwen-EFTYRmyFHpQrHr5iUfMwg` (retained clip present, 518,444 B) assigned to `maerin`; only the `.pt` deleted; chapter re-recorded twice, the second time after a sidecar restart so the prompt cache was cold. **The chapter completed but the `.pt` never reappeared** — and the sidecar log for that window names `qwen-fDtxqBAQEy9Os1LA5yVUo`, **the Narrator's** designed voice, on four synths whose durations match maerin's four segments one-for-one (4.24/4.32/1.28/1.44 s). `characterSnapshots.maerin.resolvedVoiceName` nonetheless recorded the assigned voice. The sidecar itself refuses cleanly when probed directly (409 `voice_not_designed`), so the substitution is Node-side, and nothing was logged. Steps 6–8 (manifest compare, persona box, re-design) were not reached — the self-heal they test never ran |
+| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | **RETRACTED — was recorded `F` in run 2; that was wrong.** The attempt used a splice re-record, which hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972): the chapter's `segments.json` attributed sentences 10/12/17/19 to `maerin`, but the analysis cache attributed all four to `narrator`, so the re-record rendered narrator lines in the narrator's voice and **never requested maerin's voice at all**. The `.pt` therefore never came back because the self-heal was never *reached* — not because it failed. **This test has not been exercised.** Re-run it after #1972 lands, on a book whose `segments.json` and analysis agree (or via a full chapter generation, which is unaffected) |
 | C-18 | §2.3 stale `.pt` deliberately left alone | | |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
 | C-20 | Pause during a repair derive → no failure/toast | | |
@@ -2702,7 +2702,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | **P** (run 2) | Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui` — no substitution. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** Not run: the no-re-derive-on-second-render half, and the by-ear check |
+| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | **P** (derive + language only) | Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check |
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
 | E-03 | Revoke lands during an in-flight Coqui derive | | |
 | E-04 | A long sentence on a cloned Coqui voice | | |
@@ -2764,15 +2764,60 @@ sheet has recorded.
 | E (3c) | 9 | **4** | 0 | 0 | **0** | **5** |
 | **All** | **60** | **20** | **1** | **8** | **1** | **30** |
 
-**The zero-failures streak is over, and that is the point of running these.**
-C-17 is a ⭐ test guarding a documented invariant (268 Invariant 8 / the
-plan-149 persona guard), and it failed in a way no automated suite was
-positioned to see — the chapter *completed*, every on-disk artifact claimed the
-right voice, and only the sidecar's own synth log disagreed.
+#### Corrected totals — Run 2, after the #1972 root cause was found
 
-Run 2 also discharged the **core** criterion of register row **A24** (a cloned
-voice renders a non-English book in the book's language) — not one of the 60,
-tracked separately on the register. Two of A24's sub-checks remain: the
+The table above was published before the cause of C-17's failure was understood.
+**C-17's `F` is withdrawn** (the test was never actually exercised — see its row)
+and **E-01 is downgraded to a partial pass** (its identity half is retracted).
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
+| B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
+| C (3b2) | 21 | 3 | **0** | 1 | 0 | **17** |
+| D (cross-cutting) | 4 | 1 | 0 | 1 | 0 | 2 |
+| E (3c) | 9 | 4 (one partial) | 0 | 0 | 0 | 5 |
+| **All** | **60** | **20** | **0** | **8** | **1** | **31** |
+
+**Three run-2 results were wrong, all from one defect.** A24's identity half,
+E-01's identity half, and C-17's `F` were each produced by a splice re-record
+that silently rendered other characters' lines ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)).
+Every one of them was recorded from `resolvedVoiceName` — **the field that
+defect falsifies**. The language claims survive because they were measured from
+the audio itself, by an instrument that does not consult the cast record.
+
+*The lesson is not "the sheet failed".* It is that a result read from
+provenance metadata is only as trustworthy as the code that writes it, and this
+sheet had no step that measured the rendered audio against the voice that was
+supposed to produce it. E-01's ECAPA reading (0.604 vs the narrator, 0.279 vs
+the audition) was the bug announcing itself in run 2, and it was filed under
+"ambiguous" rather than chased.
+
+**Reconciling "13 of 21" against the issue's earlier "10 attributed elsewhere +
+8 absent ids".** The two numbers describe different scopes, not a discrepancy:
+the "10 + 8" figure was the WHOLE-BOOK comparison (71 sentences vs 80 segments,
+sentence-by-sentence) between `segments.json` and the current analysis — "10
+attributed elsewhere" (a different `characterId` for the same id) plus "8
+absent" (an id the current analysis no longer has at all, from re-segmentation
+renumbering ids). "13 of 21" is the SAME defect measured only over `oduvan`'s
+21 targeted segments: 10 reattributed elsewhere, plus 3 of the book-wide 8
+absent ids that happen to fall inside those 21 — 10 + 3 = 13. The fix's shipped
+check (`findDivergentSentences`,
+[server/src/audio/build-synth-replacement.ts](../../server/src/audio/build-synth-replacement.ts))
+treats both shapes as divergent, and for good reason: an **absent** sentence id
+doesn't just get mis-voiced, it produces an EMPTY subset → zero synthesised
+groups → zero PCM for that slot, so the splice would have written **silence**
+over it — audio deletion, not merely re-voicing. That strengthens the case for
+refusing the whole splice rather than reconciling silently.
+
+Run 2 also touched register row **A24** (a cloned voice renders a non-English
+book in the book's language) — not one of the 60, tracked separately on the
+register. **A24 is NOT discharged**, for the same reason as above: its chapter
+render used the same splice re-record, so most of what it measured was
+narrator audio, not the clone (0.949 against the chapter's own narrator). What
+survives is the direct-`/synthesize` evidence, which never touches the splice
+path (German in, `de` out, identity 0.809 against the source clip) — see the
+register's A24 row for the full breakdown. Two of A24's sub-checks remain: the
 designed-self-heal-then-restart comparison, and the "no `voice-mismatch` rows"
 check, which **failed** for a reason unrelated to language — see **DEF-E**.
 
@@ -2780,8 +2825,9 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-**Zero failures** — but that is not an acceptance signal: 33 tests were never
-reached and 9 are blocked, including all of the highest-risk ⭐ set except C-10.
+**Zero failures** — but that is not an acceptance signal: 31 tests were never
+reached and 8 are blocked (the corrected totals above), including all of the
+highest-risk ⭐ set except C-10.
 The one Critical defect this run found (#1941) was discovered *outside* the
 scripted steps, while populating an artifact set for C-10.
 
@@ -2915,37 +2961,36 @@ against a ~0.03 different-speaker floor. The audio is fine; the reference is sta
 **Amplifier:** `SEG_SPK_AUTO_REPAIR=1` is a shipped default, so each affected
 line burns a re-render every pass and still ends up flagged.
 
-**DEF-F · HIGH · #1972 · open · C-17 fails on this**
-**What:** a **designed** voice whose `.pt` is missing does not self-heal from
-its retained clip, and the chapter then renders that character's lines **in the
-narrator's voice** while the snapshot records the *assigned* voice. Nothing is
-logged.
-**Test ID:** C-17 ⭐.
-**Repro:** 1. Design a voice so `qwen-<uuid>__master.wav` is written. 2. Assign
-it to a character with dialogue in a rendered chapter. 3. Delete **only** the
-`.pt`. 4. Restart the sidecar so the prompt cache is cold. 5. Re-record that
-character.
-**Expected:** one derive, `.pt` back on disk, manifest `instruct`
-byte-identical.
-**Actual:** chapter completes; `.pt` never returns; four sidecar synths on
-`qwen-fDtxqBAQEy9Os1LA5yVUo` (the **Narrator's** voice) whose durations match
-maerin's four segments exactly (4.24/4.32/1.28/1.44 s); yet
-`characterSnapshots.maerin.resolvedVoiceName` = `qwen-EFTYRmyFHpQrHr5iUfMwg`.
-**Not the sidecar.** Probed directly with the missing voice it returns a clean
-`409 voice_not_designed` — it refuses rather than substituting. The
-substitution is Node-side.
-**Unlogged.** No `[clone-voice-resolver]` self-heal warning and no
-`[synthesise-chapter] … falling back to the narrator voice` line in
-`server.err.log` for that window. That message exists and fired earlier the
-same session for a different cause, so the path works — this fallback simply
-does not announce itself. `synthesise-chapter.ts:274-277` records the same
-symptom occurring before ("*manifested as Oduvan and Ro speaking in the
-narrator's voice*").
-**Possible narrower repro:** `maerin` carries `modelKey: qwen3-tts-1.7b`, which
-overrode the `qwen3-tts-0.6b` requested in the splice body, and the voice was
-minted at 0.6B — so no `__1.7b.pt` ever existed. Whether the self-heal declines
-for a tier variant or ran and failed silently is not visible from outside.
-Check that first.
+**DEF-F · HIGH · #1972 · open · invalidates three run-2 results**
+**What:** a per-character re-record (splice) picks its target segments from the
+chapter's `segments.json` but resolves those segments' sentences — and therefore
+the voice — from the **analysis cache**, matching by sentence id. When analysis
+has run since the last render the two disagree, and the splice renders another
+character's line in the requested character's voice, into the requested
+character's time slot. `characterSnapshots.<id>.resolvedVoiceName` still reports
+the *assigned* voice, because `character-snapshots.ts` re-derived it from the
+cast record rather than recording what was sent.
+**Test IDs:** invalidated A24's identity half, E-01's identity half, and C-17
+(recorded `F`, actually never exercised).
+**Repro:** any book where analysis has run since the chapter was rendered.
+Re-record any character; compare the sidecar's `voice=` log line against
+`resolvedVoiceName`.
+**Measured:** maerin's rendered lines scored **0.888** against the narrator's
+rendered lines and **0.196** against her own assigned voice — same speaker as
+the narrator, different speaker from what was assigned. Reproduced with a
+*healthy* designed voice (`.pt` present), so nothing is missing or broken about
+the voice itself.
+**Not the sidecar.** Probed directly with a missing voice it returns a clean
+`409 voice_not_designed` — it refuses rather than substituting.
+**Two books, two unrelated causes.** *Der Auftrag von Coalfall* (de) diverged
+because a pre-#1598 analyzer collapsed its dialogue into the narrator;
+*Заказ Коалфолла* (ru) diverged from ordinary **re-segmentation** with no damage
+at all (80 segments vs 71 sentences, ids renumbered). **The precondition is just
+"analysis has run since the last render"** — a routine state, not an edge case.
+**Full chapter generation is unaffected** — it reads one source and is
+self-consistent.
+**Why no test caught it:** no test in the suite asserts *which* voice reached the
+provider. Every provider mock succeeds regardless of `voiceName`.
 
 ---
 

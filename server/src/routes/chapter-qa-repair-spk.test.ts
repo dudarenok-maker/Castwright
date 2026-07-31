@@ -66,9 +66,14 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
 });
 
 // Mock the analysis cache so the repair path finds sentences.
+// C2 (#1972 follow-up) — characterId must agree with the 'hero' segment
+// below, or the shared findDivergentSentences guard treats this fixture's
+// re-record as attribution-diverged and diverts it to stillSuspect before
+// synth ever runs. A real analysis cache always carries characterId
+// (schema-required).
 vi.mock('../store/analysis-cache.js', () => ({
   loadAnalysisCache: vi.fn(async () => ({
-    chapters: { 1: [{ id: 10, text: 'Hello world sentence.' }] },
+    chapters: { 1: [{ id: 10, characterId: 'hero', text: 'Hello world sentence.' }] },
   })),
 }));
 

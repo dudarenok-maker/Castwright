@@ -39,8 +39,16 @@ export interface SegmentReplacement {
       when the replacement's audio content actually changed (a re-record);
       a gain re-mix (same content, different volume) never sets this, so its
       segment keeps its prior verdict — the content didn't change, so the
-      prior verdict is still true. */
-  freshVerdict?: Pick<ChapterSegment, 'qa' | 'suspect' | 'asr' | 'asrSuspect' | 'qaRetries' | 'asrRetries'>;
+      prior verdict is still true.
+
+      #1972 — also carries `voiceName`, the voice ACTUALLY sent to the
+      provider for this re-record. Same reasoning as the QA fields: a gain
+      re-mix never synthesises, so it never sets this, and the segment keeps
+      whatever voiceName (if any) its last real render stamped. */
+  freshVerdict?: Pick<
+    ChapterSegment,
+    'qa' | 'suspect' | 'asr' | 'asrSuspect' | 'qaRetries' | 'asrRetries' | 'voiceName'
+  >;
 }
 
 export interface SpliceInput {
