@@ -42,9 +42,26 @@ const UTF8_STRICT_DECODER = new TextDecoder('utf-8', { fatal: true });
  * windows-1252 and re-encoded as UTF-8. Scans greedily, longest-match first
  * (up to 4 chars — the longest a UTF-8 sequence gets), and only accepts a
  * span whose windows-1252 byte values decode as *valid* UTF-8 starting with
- * a genuine multi-byte lead byte (0xC2-0xF4); ordinary ASCII or already-correct
- * Unicode text never satisfies that, so this doesn't false-positive on real
- * accented characters or emoji.
+ * a genuine multi-byte lead byte (0xC2-0xF4). Each hit carries `index` (its
+ * character offset into `text`) alongside `chunk` and `decoded`, so a caller
+ * can reason about WHERE a span sits and not only what it looks like.
+ *
+ * Two bounds on the heuristic, both measured in #1973. Neither is a defect in
+ * the reverse-decode approach, but do not over-trust a result in either
+ * direction:
+ *
+ * - **It false-positives on legitimate text.** The acceptance rule fires
+ *   whenever a Latin-1 letter mapping to 0xC2-0xF4 (`Â Ã Ä Å Æ Ç È É … ß à á
+ *   … ï ð ñ ò ó ô`) sits immediately adjacent — no space between — to one to
+ *   three characters mapping to 0x80-0xBF (`— – … ™ • ‘ ’ “ ” § ° © « » ¡ ¿ ±
+ *   µ ¶ ·`, and NBSP). Realistic shapes: `CAFÉ™`, a `groß—` construction,
+ *   `Ålesund` beside punctuation. That is what checkMojibake's in-file
+ *   allowlist marker exists for — see parseMojibakeAllowlist below.
+ * - **It silently misses a LOSSY double-encode.** If the corrupting round-trip
+ *   normalised a mojibake character away — `Â` + NBSP flattened to `Â` + a
+ *   plain space — the reverse bytes are `C2 20`, which is not valid UTF-8, so
+ *   the span never decodes and is never reported. A green gate is therefore
+ *   evidence, not proof, that a file is clean.
  */
 export function findMojibake(text) {
   const s = text ?? '';
@@ -67,7 +84,7 @@ export function findMojibake(text) {
       if (!ok || bytes[0] < 0xc2) continue;
       try {
         const decoded = UTF8_STRICT_DECODER.decode(Uint8Array.from(bytes));
-        hits.push({ chunk, decoded });
+        hits.push({ index: i, chunk, decoded });
         i += len;
         matched = true;
         break;
@@ -81,20 +98,94 @@ export function findMojibake(text) {
   return hits;
 }
 
-/** Check that `label`'s text contains no double-UTF-8-encoded mojibake. */
+/* #1973 — the allowlist marker. An HTML comment in the notes file itself names
+   the exact literal(s) to accept:
+
+     <!-- release-notes-gate: allow "CAFÉ™" -->
+
+   Chosen over an env-var kill switch because it is span-scoped (the gate stays
+   live everywhere else in the same file), it travels in the same commit as the
+   text that needs it, it self-expires when docs/release-notes-next.md is reset
+   at the next cut, and it is auditable in the diff. An HTML comment renders as
+   nothing on the releases page, which matters because that file ships verbatim
+   into the tag annotation. Literals are exact strings — no wildcards, no
+   regex. */
+const ALLOW_MARKER_RE = /<!--\s*release-notes-gate:\s*allow\b([\s\S]*?)-->/g;
+const ALLOW_LITERAL_RE = /"([^"]*)"/g;
+
+/** Collect every literal named by an allowlist marker in `text` (markers and
+    literals-per-marker are both many-per-file). */
+export function parseMojibakeAllowlist(text) {
+  const s = text ?? '';
+  const literals = [];
+  for (const marker of s.matchAll(ALLOW_MARKER_RE)) {
+    for (const lit of marker[1].matchAll(ALLOW_LITERAL_RE)) {
+      if (lit[1].length > 0) literals.push(lit[1]);
+    }
+  }
+  return literals;
+}
+
+/** Half-open [start, end) character ranges of every real occurrence of every
+    allowlisted literal. A literal naming text that isn't in the file yields no
+    range, and so suppresses nothing. */
+function allowedRanges(text, literals) {
+  const ranges = [];
+  for (const literal of literals) {
+    for (let at = text.indexOf(literal); at !== -1; at = text.indexOf(literal, at + 1)) {
+      ranges.push([at, at + literal.length]);
+    }
+  }
+  return ranges;
+}
+
+/** Characters of a hit that are actually the double-encoded sequence.
+    findMojibake matches greedily up to 4 characters, so a hit routinely carries
+    trailing single-byte characters (a space, a quote) that are mere context —
+    containment has to be judged on the sequence, not on that tail. Each chunk
+    character maps to exactly one windows-1252 byte, so the decoded lead code
+    point's UTF-8 byte length IS the sequence's length in characters. */
+function mojibakeCoreLength(hit) {
+  const lead = hit.decoded.codePointAt(0);
+  if (lead < 0x800) return 2;
+  if (lead < 0x10000) return 3;
+  return 4;
+}
+
+/**
+ * Check that `label`'s text contains no double-UTF-8-encoded mojibake.
+ *
+ * Suppression is POSITIONAL, not by substring (#1973): a span is dropped only
+ * when it sits wholly inside a real occurrence of an allowlisted literal in
+ * this same text. Suppressing every span whose characters merely appear
+ * somewhere in an allowlisted literal would let a genuinely corrupted `É™`
+ * elsewhere in the file go unreported — quietly reintroducing #1956, which is
+ * the whole reason this gate exists. The marker line contains the literal, so
+ * the marker's own occurrence suppresses itself; that falls out of the
+ * positional rule rather than being special-cased.
+ */
 export function checkMojibake(text, label) {
-  const hits = findMojibake(text);
+  const s = text ?? '';
+  const ranges = allowedRanges(s, parseMojibakeAllowlist(s));
+  const hits = findMojibake(s).filter((h) => {
+    const end = h.index + mojibakeCoreLength(h);
+    return !ranges.some(([from, to]) => h.index >= from && end <= to);
+  });
   if (hits.length === 0) return { ok: true, reason: '' };
   const sample = hits
     .slice(0, 5)
     .map((h) => `${JSON.stringify(h.chunk)} (should be ${JSON.stringify(h.decoded)})`)
     .join(', ');
   const more = hits.length > 5 ? `, +${hits.length - 5} more` : '';
+  const first = hits[0].chunk.slice(0, mojibakeCoreLength(hits[0]));
   return {
     ok: false,
     reason:
       `${label} contains ${hits.length} double-UTF-8-encoded mojibake span(s): ${sample}${more}. ` +
-      `Re-encode before tagging (see #1956).`,
+      `Re-encode before tagging (see #1956). If a span is legitimate text and not a mangle ` +
+      `(#1973), allow it by adding this line to ${label}: ` +
+      `<!-- release-notes-gate: allow "${first}" --> — widen the quoted literal to the ` +
+      `surrounding word (e.g. "CAFÉ™") so the gate stays live for that span elsewhere.`,
   };
 }
 

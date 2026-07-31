@@ -9,6 +9,7 @@ import {
   checkReleaseNotes,
   findMojibake,
   checkMojibake,
+  parseMojibakeAllowlist,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -74,6 +75,94 @@ test('checkMojibake reports a capped sample plus a remainder count', () => {
   assert.equal(res.ok, false);
   assert.match(res.reason, /8 double-UTF-8-encoded mojibake span\(s\)/);
   assert.match(res.reason, /\+3 more/);
+});
+
+// #1973 — the allowlist marker. The detector's acceptance rule ("cp1252-mappable
+// characters whose bytes form valid UTF-8 with a lead byte >= 0xC2") is satisfied
+// by some legitimate text, and release.yml's CLI path exits 1 with no --force, so
+// a false positive can block a publish outright. All four are from the issue's
+// measured table of legitimate strings the detector flags.
+const CAFE = 'CAFÉ™'; // "É™" reads as a mangled "ə"
+const GROSS = 'groß—'; // "ß—" reads as a mangled "ߗ"
+const TROLL = 'Å§'; // reads as a mangled "ŧ"
+const DEGREE = 'Ü°'; // reads as a mangled "ܰ"
+
+test('parseMojibakeAllowlist reads every literal of every marker', () => {
+  const text =
+    `<!-- release-notes-gate: allow "${CAFE}", "${GROSS}" -->\n` +
+    `<!-- release-notes-gate: allow "${TROLL}" -->\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [CAFE, GROSS, TROLL]);
+  assert.deepEqual(parseMojibakeAllowlist('no markers here'), []);
+});
+
+test('checkMojibake still fails on a legitimate-but-flagged span with no marker', () => {
+  const res = checkMojibake(`Order at ${CAFE} today.`, 'test.md');
+  assert.equal(res.ok, false); // the false positive #1973 documents, unsuppressed
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+});
+
+test('checkMojibake passes a flagged span named by an allowlist marker', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nOrder at ${CAFE} today.\n`;
+  assert.equal(checkMojibake(text, 'test.md').ok, true);
+});
+
+test('checkMojibake honours several literals per marker and several markers per file', () => {
+  const text =
+    `<!-- release-notes-gate: allow "${CAFE}", "${GROSS}" -->\n` +
+    `<!-- release-notes-gate: allow "${TROLL}" -->\n` +
+    `<!-- release-notes-gate: allow "${DEGREE}" -->\n\n` +
+    `${CAFE} serves ${GROSS} portions; ${TROLL} and ${DEGREE} follow.\n`;
+  assert.equal(findMojibake(text).length > 4, true); // every one of them IS flagged
+  assert.equal(checkMojibake(text, 'test.md').ok, true); // and every one is allowed
+});
+
+test('an allowlisted literal that appears nowhere else suppresses nothing', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nCorrupted: ${MOJIBAKE_EM_DASH} dash.\n`;
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+});
+
+// LOAD-BEARING: suppression is positional, not by substring. The span the
+// detector reports for "CAFÉ™" is "É™" — so a by-substring allowlist would also
+// swallow a genuinely corrupted "É™" elsewhere in the same file, silently
+// reintroducing #1956. This is the test that tells the two implementations apart.
+test('an allowlisted span does not suppress the same characters corrupted elsewhere', () => {
+  const marker = `<!-- release-notes-gate: allow "${CAFE}" -->`;
+  const body = `We reopened ${CAFE} downtown.\nzzÉ™zz was mangled.\n`;
+
+  // Without the marker both spans are flagged — neither is invisible to start with.
+  assert.equal(checkMojibake(body, 'test.md').reason.match(/2 double-UTF-8/) !== null, true);
+
+  const res = checkMojibake(`${marker}\n\n${body}`, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+  // The survivor is the corrupted one, identified by its own surrounding context.
+  assert.ok(res.reason.includes(JSON.stringify('É™zz')), res.reason);
+  assert.equal(res.reason.includes(JSON.stringify('É™ d')), false, res.reason);
+});
+
+test('a failing reason names the offending literal and a paste-able marker line', () => {
+  const res = checkMojibake(`Order at ${CAFE} today.`, 'docs/release-notes-next.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /docs\/release-notes-next\.md/);
+  assert.ok(res.reason.includes('É™'), res.reason); // the offending literal
+  assert.ok(
+    res.reason.includes(`<!-- release-notes-gate: allow "É™" -->`),
+    res.reason, // the exact line to paste
+  );
+});
+
+test('hits still carry chunk/decoded verbatim, so split/join repair works, plus index', () => {
+  const corrupt = `dash: ${MOJIBAKE_EM_DASH} and arrow: ${MOJIBAKE_ARROW} end`;
+  const hits = findMojibake(corrupt);
+  let repaired = corrupt;
+  for (const h of hits) repaired = repaired.split(h.chunk).join(h.decoded);
+  assert.equal(repaired, 'dash: — and arrow: → end');
+  for (const h of hits) {
+    assert.equal(typeof h.index, 'number');
+    assert.equal(corrupt.slice(h.index, h.index + h.chunk.length), h.chunk);
+  }
 });
 
 // Regression: this must FAIL against the pre-#1956-fix content of

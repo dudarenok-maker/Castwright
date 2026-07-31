@@ -707,6 +707,14 @@ the last release, then head a fresh top section in `RELEASE_NOTES.md` with
 that same new version — before appending its own entry to each. Any later PR
 in the same release cycle finds both drafts already open and just appends.
 
+Both files are gated against **double-UTF-8 mojibake** — correct UTF-8 read back as windows-1252 and re-encoded, the mangle that once queued 242 corrupted spans to publish as the release body (#1956). The check runs in `bump-version.mjs`'s pre-flight and again in `release.yml`, and the detector is a heuristic: a handful of legitimate strings satisfy it — `CAFÉ™`, a `groß—` construction, `Ålesund` beside punctuation (#1973). When one of those is genuinely the text you meant to ship, name it in an HTML comment in the file itself:
+
+```
+<!-- release-notes-gate: allow "CAFÉ™" -->
+```
+
+The marker is **span-scoped and positional**: it excuses only the occurrences of that exact literal in that same file, so a genuinely corrupted `É™` elsewhere in the same file still fails the gate. Literals are exact strings (no wildcards); one marker can name several, comma-separated, and a file can carry several markers. The comment is invisible in the rendered release body, and it self-expires when the next cut resets `docs/release-notes-next.md`. Reach for it only when you have satisfied yourself the text is legitimate — the ordinary answer to a mojibake failure is to re-encode the file, not to allow the span. A green gate is also not a proof of cleanliness: a lossy double-encode (`Â` + NBSP flattened to `Â` + a plain space) does not decode back and so is never reported.
+
 A release describes what shipped, diffed against the **previous public
 release**, and is organised as a **headline block + emoji-themed sections**
 (the anatomy below). Fixes still lead with the user-visible symptom in plain
