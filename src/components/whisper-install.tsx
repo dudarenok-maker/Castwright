@@ -35,6 +35,10 @@ export function WhisperInstall({ onInstalled }: { onInstalled?: () => void } = {
   const [job, setJob] = useState<WhisperInstallJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* Registry default until /api/config answers — matches qa.asr.model's own
+     default (registry.ts), so a failed/slow config fetch never shows a wrong
+     model name, only a possibly-stale one. */
+  const [asrModel, setAsrModel] = useState<string>('base');
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doDetect = useCallback(async () => {
@@ -50,6 +54,21 @@ export function WhisperInstall({ onInstalled }: { onInstalled?: () => void } = {
   useEffect(() => {
     void doDetect();
   }, [doDetect]);
+
+  useEffect(() => {
+    /* PR #2008 review (m1): this card used to hard-code "the `base` model",
+       which the Major-1 fix made outright wrong for anyone who overrides
+       qa.asr.model — the installer now fetches the CONFIGURED model, not
+       base. Best-effort: a failed/mocked-empty fetch just keeps the
+       registry-default label above instead of erroring the whole card. */
+    void fetch('/api/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { values?: Record<string, { effective?: unknown }> } | null) => {
+        const effective = body?.values?.['qa.asr.model']?.effective;
+        if (typeof effective === 'string' && effective.trim()) setAsrModel(effective);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!job) return;
@@ -161,8 +180,9 @@ export function WhisperInstall({ onInstalled }: { onInstalled?: () => void } = {
         <p className="mt-1 text-xs text-ink/55">
           The ASR content-QA gate transcribes each sentence and re-records "fluent but wrong words"
           generations the signal checks can't catch. Installing downloads faster-whisper + the{' '}
-          <code className="font-mono">base</code> model (~150 MB) into the Hugging Face cache; it
-          runs in the background. Then enable it with <code className="font-mono">SEG_ASR_ENABLED=1</code>.
+          <code className="font-mono">{asrModel}</code> model (the one configured for Content-QA;
+          size varies by model) into the Hugging Face cache; it runs in the background. Then enable
+          it with <code className="font-mono">SEG_ASR_ENABLED=1</code>.
         </p>
       </div>
       <PrimaryButton variant="dark" onClick={startInstall} disabled={busy} icon={false}>

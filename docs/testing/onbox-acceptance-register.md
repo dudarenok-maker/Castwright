@@ -986,6 +986,12 @@ paired tests go red — see the PR's mutation-verification comment — but the
 full failure mode needs the real sidecar + a real Hugging Face download to
 observe end to end, which no unit test can substitute for.
 
+- **Prerequisite:** comment out `ASR_MODEL` in `server/.env` first, if it's
+  set. `server/.env.example`'s generated block ships `ASR_MODEL=base`
+  uncommented; on a box seeded from that file, the value is present as a real
+  env var, and `resolver.ts` gives env unconditional precedence with
+  `locked: true` — Advanced Configuration would show the knob disabled with
+  an env pill, making step 1 below unperformable.
 - Set **Content-QA (Whisper) model** to a non-default value (e.g. `small`) in
   Advanced Configuration and let the sidecar restart. Confirm from the sidecar
   log / `/health` that `faster-whisper` actually loaded `small`, not `base`.
@@ -999,7 +1005,15 @@ observe end to end, which no unit test can substitute for.
   `[install-whisper]` step lines / the resulting HF cache snapshot name), not
   `base` — pinning that the installer spawn now receives an explicit
   `--model` flag carrying the live value rather than falling back to its own
-  `process.env.ASR_MODEL || 'base'` default.
+  `process.env.ASR_MODEL || 'base'` default. Confirm the install card's own
+  copy also names `small`, not a hard-coded `base` (m1 fix).
+- **Separately**, confirm the documented CLI path
+  (`node server/tts-sidecar/scripts/install-whisper.mjs`, no flags) fetches
+  `base` in this scenario, not `small` — it has no access to
+  `user-settings.json`, so it cannot see the UI override; only the in-app
+  installer (which always passes `--model`) reflects the configured model.
+  This is expected, not a defect — it's why the script's usage comment now
+  says to pass `--model` explicitly for a UI-configured, non-default model.
 
 *Needs:* the sidecar venv with `faster-whisper` installable, network access
 for the HF download of a second model size, and write access to the HF hub

@@ -18,6 +18,14 @@
 // Usage:
 //   node server/tts-sidecar/scripts/install-whisper.mjs [--model base]
 //
+// PR #2008: if the model is configured only via Advanced Configuration's
+// registry override (user-settings.json) rather than an ASR_MODEL env var,
+// pass --model explicitly when invoking this script directly from the CLI —
+// this script has no access to user-settings.json and falls back to
+// ASR_MODEL/'base' otherwise, so a CLI-run install can silently fetch the
+// wrong model even though the sidecar itself loads the configured one. The
+// in-app installer (Account -> Models) always passes --model and is unaffected.
+//
 // Idempotent: pip is a no-op when satisfied; the model download is a no-op when
 // the HF cache already has the snapshot.
 
