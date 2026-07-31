@@ -48,3 +48,16 @@ faster-whisper>=1.0,<2.0
 # keeps the OPT-IN Coqui (installed later via the Model Manager) on a compatible
 # transformers — coqui-tts imports a 4.x-only private util (isin_mps_friendly).
 transformers>=4.45,<5.0
+
+# spacy — sentence splitting for Coqui/XTTS's `enable_text_splitting=True`
+# (#2017). `CoquiEngine._infer_from_latents` passes enable_text_splitting=True
+# (config-faithful, mirrors `Xtts.synthesize`'s own build) so a cloned-voice
+# render at/above `tokenizer.char_limits[lang]` doesn't hard-crash the bare
+# low-level `Xtts.inference()` assert; that path reaches upstream's
+# `get_spacy_lang`, which raises ImportError without spacy installed. Plain
+# `spacy`, NOT `spacy[ja]` — measured 22.3 MB / 16 packages vs. 92.5 MB / 18
+# packages, of which 68.9 MB is `sudachidict-core` alone (needed only for
+# Japanese). Plain spacy covers ar/en/es/hi/zh (zh confirmed working here,
+# despite the upstream error message naming `spacy[ja]` generically);
+# Japanese stays broken on purpose — tracked as #2038 (fs-59's call).
+spacy>=3.8,<4.0

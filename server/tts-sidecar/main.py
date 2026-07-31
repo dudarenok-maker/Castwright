@@ -2394,6 +2394,14 @@ class CoquiEngine(Engine):
         identically instead of one path hitting XTTS's low-fidelity
         low-level-API defaults.
 
+        `enable_text_splitting=True` needs spacy (`requirements/base.txt`
+        declares plain `spacy`, #2017) — `get_spacy_lang` raises `ImportError`
+        without it. Belt-and-braces: an `ImportError` from the inference call
+        is caught and retried with `enable_text_splitting=False`, logged
+        loudly rather than silently, so a stale/broken venv degrades instead
+        of 500ing outright. Do NOT flip the primary `True` above to `False`
+        — this catch is a fallback, not the fix.
+
         Returns (audio, sample_rate).
         """
         # A loud guard, not `assert self._tts is not None` (GATE 1 MIN-2):
@@ -2419,14 +2427,40 @@ class CoquiEngine(Engine):
                 ("top_p", 0.85),
             )
         }
-        result = tts_model.inference(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-            enable_text_splitting=True,
-            **inference_settings,
-        )
+        try:
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=True,
+                **inference_settings,
+            )
+        except ImportError as e:
+            # Belt-and-braces (#2017): `enable_text_splitting=True` reaches
+            # upstream's `get_spacy_lang`, which raises ImportError if spacy
+            # isn't installed. `requirements/base.txt` now declares `spacy`,
+            # so this should never fire in a properly-provisioned venv — but
+            # if it does (a stale/broken install), degrade LOUDLY rather than
+            # 500ing outright. `enable_text_splitting=False` skips sentence
+            # splitting entirely, which risks the `assert text_tokens.shape[-1]
+            # < gpt_max_text_tokens` in `xtts.py:516` on very long input — a
+            # real but rarer failure than every cloned-voice render 500ing.
+            log.error(
+                "Coqui text-splitting import failed (%s) — spacy missing or "
+                "broken in the sidecar venv; retrying WITHOUT sentence "
+                "splitting (enable_text_splitting=False). Reinstall the "
+                "sidecar requirements to restore text-splitting.",
+                e,
+            )
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=False,
+                **inference_settings,
+            )
         sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         return result["wav"], sample_rate
 
