@@ -1063,6 +1063,19 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
         voiceUuid: 'assign-3',
         provenance: 'cloned',
         engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        // #1933 — a realistic cloned entry always carries `master` (the
+        // `/clone` route writes it unconditionally); without it, the new
+        // per-engine readiness gate correctly finds the OTHER (coqui) slot
+        // undeliverable — no `master` to derive from — and attaches the
+        // #1933 advisory to this 200, which this test doesn't exercise.
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
         consent: {
           personName: 'Test',
           relationship: 'family-with-permission',
@@ -1072,6 +1085,7 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
         },
       }),
     );
+    writeFileSync(join(vl.entryDir('assign-3'), 'master.wav'), 'fake-wav-bytes');
     const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-four', [
       {
         id: 'char-marlow',
@@ -1517,12 +1531,25 @@ describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => 
       voiceUuid: 'clone-unready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
       consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal',
                  attestedAt: '2026-07-25T00:00:00Z', attestedBy: 'Mum' },
+      // #1933 — no `master`, so under rule 3 (nothing derivable) this still
+      // 409s, but for a DIFFERENT reason than the retired "not ready to
+      // assign yet" gate: there's nothing to derive from.
       engines: { qwen: { status: 'stale' } },
       createdAt: '2026-07-25T00:00:00Z', updatedAt: '2026-07-25T00:00:00Z',
     });
+    // #1933 — the gate moved BELOW the cast read (findBookByBookId/readJson),
+    // so this now needs a real, resolvable book + character — a nonexistent
+    // book 404s before the gate ever runs.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-unready', [
+      { id: 'char-marcus', name: 'Marcus', ttsEngine: 'qwen' },
+    ]);
     const res = await request(app).post('/api/voice-library/clone-unready/assign')
-      .send({ bookId: 'ns', characterId: 'marcus' });
+      .send({ bookId: 'book-clone-unready', characterId: 'char-marcus' });
     expect(res.status).toBe(409);
+    // #1933 — tighten past a bare status check: without this, the assertion
+    // passes on both the old (retired-string) and new gate and stops proving
+    // anything.
+    expect(res.body.error).toMatch(/no retained reference clip/);
   });
 
   it('allows assigning a ready cloned voice (200)', async () => {
@@ -1624,6 +1651,19 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
         voiceUuid: 'clone-coqui-route',
         provenance: 'cloned',
         engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        // #1933 — a realistic cloned entry always carries `master` (the
+        // `/clone` route writes it unconditionally); without it, the new
+        // per-engine readiness gate correctly finds the ROUTED (coqui) slot
+        // has nothing to derive from and 409s, which this test doesn't
+        // exercise (it proves the both-slots WRITE, not the readiness gate).
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
         consent: {
           personName: 'Test',
           relationship: 'family-with-permission',
@@ -1633,6 +1673,7 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
         },
       }),
     );
+    writeFileSync(join(vl.entryDir('clone-coqui-route'), 'master.wav'), 'fake-wav-bytes');
     const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-coqui-route', [
       {
         id: 'char-marlow',
@@ -1671,6 +1712,286 @@ describe('POST /:uuid/assign — wrong-engine guard (fs-38 Wave 3b2, Task 6b)', 
       libraryUuid: 'clone-coqui-route',
       provenance: 'cloned',
     });
+  });
+});
+
+/* #1933 — the per-engine assign readiness gate. See the implementation
+   brief on GitHub issue #1933 for the full rule table and rationale; this
+   suite is T1-T10 from that brief's §4, each pinned to the EXACT mutation
+   that must turn it red (watched red under each mutation before landing —
+   see the PR/commit description for the observed failure per mutation). */
+describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
+  const baseConsent = {
+    personName: 'Test',
+    relationship: 'family-with-permission' as const,
+    permittedUse: 'personal' as const,
+    attestedAt: '2026-01-01T00:00:00Z',
+    attestedBy: 'test',
+  };
+
+  /* A realistic cloned entry always carries `master` (the `/clone` route
+     writes it unconditionally) — mirrors every other fixture in this file
+     that exercises the readiness gate. */
+  function masterWith(transcript: string) {
+    return {
+      clipFile: 'master.wav',
+      sampleRate: 24_000,
+      durationSeconds: 5,
+      transcript,
+      transcriptSource: 'whisper' as const,
+      captureMethod: 'record' as const,
+    };
+  }
+
+  function writeMasterClip(voiceUuid: string) {
+    writeFileSync(join(vl.entryDir(voiceUuid), 'master.wav'), 'fake-wav-bytes');
+  }
+
+  it('T1 — 200s a coqui-routed assign despite a terminally failed qwen slot, with a Qwen advisory', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't1-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: { qwen: { status: 'failed' } },
+        consent: baseConsent,
+      }),
+    );
+    writeMasterClip('t1-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t1', [
+      { id: 'char-t1', name: 'CharT1', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t1-voice/assign')
+      .send({ bookId: 'book-t1', characterId: 'char-t1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
+    expect(res.body.warning).toMatch(/Qwen/);
+    expect(res.body.warning).toMatch(/failed to derive/);
+  });
+
+  it('T2 — 409s a qwen-routed assign of the SAME terminally failed qwen slot', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't2-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: { qwen: { status: 'failed' } },
+        consent: baseConsent,
+      }),
+    );
+    writeMasterClip('t2-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t2', [
+      { id: 'char-t2', name: 'CharT2', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t2-voice/assign')
+      .send({ bookId: 'book-t2', characterId: 'char-t2' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Qwen/);
+    expect(res.body.error).toMatch(/failed to derive/);
+  });
+
+  it('T3 — 409s a coqui-routed assign of a failed xtts slot even though qwen is ready (load-bearing: engine-blind slot read must fail this)', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't3-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: { qwen: { status: 'ready', baseModel: 'x' }, xtts: { status: 'failed' } },
+        consent: baseConsent,
+      }),
+    );
+    writeMasterClip('t3-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t3', [
+      { id: 'char-t3', name: 'CharT3', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t3-voice/assign')
+      .send({ bookId: 'book-t3', characterId: 'char-t3' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Coqui XTTS v2/);
+  });
+
+  it('T4 — 409s with "no retained reference clip" for a cloned entry with no master at all', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't4-voice',
+        provenance: 'cloned',
+        engines: {},
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t4', [
+      { id: 'char-t4', name: 'CharT4', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t4-voice/assign')
+      .send({ bookId: 'book-t4', characterId: 'char-t4' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no retained reference clip/);
+  });
+
+  it('T5 — 200s a qwen-routed assign of a merely stale (repairable) qwen slot — the deliberate Qwen loosening', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't5-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: { qwen: { status: 'stale' } },
+        consent: baseConsent,
+      }),
+    );
+    writeMasterClip('t5-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t5', [
+      { id: 'char-t5', name: 'CharT5', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t5-voice/assign')
+      .send({ bookId: 'book-t5', characterId: 'char-t5' });
+
+    expect(res.status).toBe(200);
+  });
+
+  /* T6a/T6b — the ONLY pair that can distinguish a genuinely per-engine rule
+     from a symmetric one: one identical entry (an empty-transcript clip, no
+     qwen slot at all), differing only in which engine the character routes
+     to. Kept adjacent, fixture literally shared. */
+  const t6Entry = {
+    voiceUuid: 't6-voice',
+    provenance: 'cloned' as const,
+    master: masterWith(''),
+    engines: {},
+    consent: baseConsent,
+  };
+
+  it('T6a — 409s a qwen-routed assign of a clip with no transcript', async () => {
+    await vl.writeEntry(makeEntry(t6Entry));
+    writeMasterClip('t6-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t6a', [
+      { id: 'char-t6a', name: 'CharT6a', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t6-voice/assign')
+      .send({ bookId: 'book-t6a', characterId: 'char-t6a' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/transcript/);
+  });
+
+  it('T6b — 200s a coqui-routed assign of the SAME transcript-less clip, with a Qwen transcript advisory', async () => {
+    await vl.writeEntry(makeEntry(t6Entry));
+    writeMasterClip('t6-voice');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t6b', [
+      { id: 'char-t6b', name: 'CharT6b', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t6-voice/assign')
+      .send({ bookId: 'book-t6b', characterId: 'char-t6b' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Qwen/);
+    expect(res.body.warning).toMatch(/transcript/);
+  });
+
+  it('T7 — the wrong-engine 409 wins over readiness when the character routes to neither clone engine', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't7-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: { qwen: { status: 'failed' } },
+        consent: baseConsent,
+      }),
+    );
+    writeMasterClip('t7-voice');
+    // No `ttsEngine` override, and this test environment's process-wide
+    // Qwen install-state default is "not installed" -> routes to kokoro.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t7', [
+      { id: 'char-t7', name: 'CharT7' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t7-voice/assign')
+      .send({ bookId: 'book-t7', characterId: 'char-t7' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/Cloned voices render on Qwen or Coqui XTTS v2/);
+    expect(res.body.error).not.toMatch(/failed to derive/);
+  });
+
+  it('T8 — a DESIGNED entry is untouched by the cloned-only readiness gate, even with a failed qwen slot and no master', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't8-voice',
+        provenance: 'designed',
+        engines: { qwen: { status: 'failed' } },
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t8', [
+      { id: 'char-t8', name: 'CharT8', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t8-voice/assign')
+      .send({ bookId: 'book-t8', characterId: 'char-t8' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('T9 — closes the engine-blind hole T1-T8 leave open: a coqui-routed assign with no master still 409s even though qwen is (irrelevantly) failed and xtts is ready', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't9-voice',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'failed' }, xtts: { status: 'ready', coquiVersion: 'x' } },
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t9', [
+      { id: 'char-t9', name: 'CharT9', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t9-voice/assign')
+      .send({ bookId: 'book-t9', characterId: 'char-t9' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Qwen/);
+  });
+
+  it('T10 — 409s "no retained reference clip" when `master` is declared but its clip file was never written to disk', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't10-voice',
+        provenance: 'cloned',
+        master: masterWith('hello there'),
+        engines: {},
+        consent: baseConsent,
+      }),
+    );
+    // Deliberately do NOT write master.wav to disk.
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t10', [
+      { id: 'char-t10', name: 'CharT10', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t10-voice/assign')
+      .send({ bookId: 'book-t10', characterId: 'char-t10' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no retained reference clip/);
   });
 });
 
@@ -1819,6 +2140,19 @@ describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953
         voiceUuid: 'clone-lang-1',
         provenance: 'cloned',
         engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+        // #1933 — same fixture-realism fix as the "stamps the qwen slot…"
+        // test above: without a `master`, the new gate correctly flags the
+        // OTHER (coqui) slot as undeliverable and attaches the #1933
+        // advisory, which is a DIFFERENT warning than the one (#1953,
+        // design-language) this test exists to rule out.
+        master: {
+          clipFile: 'master.wav',
+          sampleRate: 24_000,
+          durationSeconds: 5,
+          transcript: 'hello there',
+          transcriptSource: 'whisper',
+          captureMethod: 'record',
+        },
         consent: {
           personName: 'Test',
           relationship: 'family-with-permission',
@@ -1828,6 +2162,7 @@ describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953
         },
       }),
     );
+    writeFileSync(join(vl.entryDir('clone-lang-1'), 'master.wav'), 'fake-wav-bytes');
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-lang', [
       { id: 'char-marlow', name: 'Marlow', ttsEngine: 'qwen' },
     ]);

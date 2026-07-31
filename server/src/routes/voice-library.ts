@@ -32,11 +32,11 @@ import {
 import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import {
-  CLONE_CAPABLE_ENGINES,
   CLONE_ENGINE_LIST,
   cloneStorageKey,
   isArtifactVersionStale,
   isCloneEngine,
+  manifestSlotFor,
   type CloneEngine,
 } from '../tts/clone-engines.js';
 import { runVoiceDesign } from '../tts/design-voice-core.js';
@@ -77,6 +77,7 @@ import { isTransient } from '../tts/retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { purgeCloneArtifacts } from '../workspace/purge-clone-artifacts.js';
 import { httpStatusForSidecarError } from './sidecar-error-status.js';
+import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 
 export const voiceLibraryRouter = Router();
 
@@ -1187,6 +1188,139 @@ async function hasRetainedDesignedClip(voiceUuid: string): Promise<boolean> {
   }
 }
 
+/* #1933 — does a CLONED voice's retained reference clip (`entry.master`)
+   still exist on disk? `entry.master` is only a *declaration*; the clip it
+   names can be gone (purged, moved, whatever) — and if it is, the render
+   path finds out the hard way: `readMasterPcmDefault`
+   (synthesise-chapter.ts) throws a status-less error that
+   `isTransientDeriveFailure` classifies as TRANSIENT, so the chapter
+   hard-fails and the engine slot never even gets stamped. Catching it here,
+   at assign time, is the whole point of the #1933 gate. Mirrors that
+   function's path hardening verbatim — `safeSegment` (THROWS on a bad
+   segment) -> `sanitizeIdSegment` -> `assertContained` against
+   `entryDir(voiceUuid)` — wrapped in try/catch because a clip path we can't
+   even safely resolve is a clip we can't derive from either: return `false`,
+   never let it escape as a 500 on a route that works today. Engine-agnostic
+   (one `master.wav` per entry), so a single stat serves both evaluations of
+   `clonedAssignBlock` below. */
+async function clonedMasterClipExists(voiceUuid: string, master: VoiceMaster): Promise<boolean> {
+  try {
+    const dir = entryDir(voiceUuid);
+    const clipPath = join(dir, sanitizeIdSegment(safeSegment(master.clipFile)));
+    assertContained(dir, clipPath);
+    await stat(clipPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const CLONE_ENGINE_LABELS: Record<CloneEngine, string> = { qwen: 'Qwen', coqui: 'Coqui XTTS v2' };
+
+function otherCloneEngine(engine: CloneEngine): CloneEngine {
+  return engine === 'qwen' ? 'coqui' : 'qwen';
+}
+
+type CloneAssignBlock = 'failed' | 'no-clip' | 'no-transcript';
+
+/** #1933 — the per-engine assign readiness rule for a CLONED library entry
+    being assigned onto routed engine `engine`. Reads only `entry.engines`,
+    `entry.master`, `entry.master.transcript`, plus the pre-computed
+    `clipOnDisk` boolean (`clonedMasterClipExists`, above — one stat covers
+    both engines, since the clip is engine-agnostic).
+
+    | # | Condition                                   | Outcome | Why |
+    |---|----------------------------------------------|---------|-----|
+    | 1 | `slot?.status === 'failed'`                   | blocked | `classifyClonedVoice` (clone-voice-resolver.ts) makes `'failed'` terminal at render time — nothing in `server/src` ever clears it, so render never retries. |
+    | 2 | `slot?.status === 'ready'`                    | OK      | Healthy. If the `.pt` was purged since, render-time repair handles it — same as today. |
+    | 3 | otherwise (`'stale'`, `'deriving'`, or absent) | OK iff derivable | Render will need a derive. Allow only if that derive can actually run: |
+
+    "Derivable" in case 3, for either engine, requires the clip to still be
+    on disk (`clipOnDisk`) — without it `classifyClonedVoice` reports
+    `missing-master` -> Broken -> the chapter hard-fails. For QWEN
+    additionally, `entry.master.transcript` must be a non-empty string — a
+    Qwen derive needs a `refText` (`derive-engine-artifact.ts`) and a 400
+    from a transcript-less derive is classified PERMANENT, which persists a
+    terminal `'failed'` status forever (see rule 1). Coqui's derive is
+    purely acoustic and has no such requirement.
+
+    Deliberately symmetric on the artifact axis, asymmetric on the
+    transcript axis — see #1933's implementation-brief §0/§1 for the full
+    render-time citations. Case 2 does NOT also require `master`: today's
+    gate already allows `ready` + no `master` (repair falls back to the
+    render-time pre-pass), and requiring it here would be a NEW block, not a
+    fix. Case 3 deliberately loosens Qwen too — keeping Qwen strict while
+    loosening Coqui would just move the same over-block bug onto Coqui.
+    `'deriving'` needs no special branch: nothing in `server/src` ever
+    persists it, so it falls through to case 3 exactly like `'stale'`/absent
+    would, structurally.
+
+    Pure and synchronous — evaluated TWICE per cloned assign (once against
+    the routed engine, once against the other clone-capable engine, see the
+    call site) from one predicate, so the two can never drift. */
+function clonedAssignBlock(
+  entry: VoiceLibraryEntry,
+  engine: CloneEngine,
+  clipOnDisk: boolean,
+): CloneAssignBlock | null {
+  const slot = entry.engines[manifestSlotFor(engine)];
+  if (slot?.status === 'failed') return 'failed';
+  if (slot?.status === 'ready') return null;
+  if (!entry.master || !clipOnDisk) return 'no-clip';
+  if (engine === 'qwen' && (typeof entry.master.transcript !== 'string' || !entry.master.transcript.trim())) {
+    return 'no-transcript';
+  }
+  return null;
+}
+
+/** #1933 — the 409 the ROUTED engine's own readiness failure produces. */
+function blockMessage(block: CloneAssignBlock, engine: CloneEngine, voiceName: string, charName: string): string {
+  const label = CLONE_ENGINE_LABELS[engine];
+  switch (block) {
+    case 'failed':
+      return (
+        `"${voiceName}"'s ${label} voice failed to derive, so "${charName}" would fail to render on ${label}. ` +
+        `Re-clone the voice, or cast "${charName}" on ${CLONE_ENGINE_LABELS[otherCloneEngine(engine)]} instead.`
+      );
+    case 'no-clip':
+      return (
+        `"${voiceName}" has no retained reference clip and its ${label} voice is not ready, so there is ` +
+        `nothing to derive it from. Re-clone the voice before assigning it to "${charName}".`
+      );
+    case 'no-transcript':
+      return (
+        `"${voiceName}"'s Qwen voice is not ready and its reference clip has no transcript, which a Qwen ` +
+        `clone needs. Re-clone the voice with a transcript. Casting "${charName}" on Coqui XTTS v2 would let ` +
+        `the assign through — Coqui needs no transcript — but the Qwen slot this also writes would stay unusable.`
+      );
+  }
+}
+
+/** #1933 — the 200 advisory (`warning` field) when the OTHER clone-capable
+    engine (not the routed one) is unusable. Reuses the existing `warning`
+    field on the assign response — see the call site's comment for why. */
+function advisoryMessage(block: CloneAssignBlock, engine: CloneEngine, voiceName: string, charName: string): string {
+  const label = CLONE_ENGINE_LABELS[engine];
+  switch (block) {
+    case 'failed':
+      return (
+        `Assigned. Note: "${voiceName}"'s ${label} voice failed to derive, so if "${charName}" is ever ` +
+        `switched to ${label} it will fail to render. Re-clone the voice to fix it.`
+      );
+    case 'no-clip':
+      return (
+        `Assigned. Note: "${voiceName}" has no retained reference clip, so its ${label} voice can never be ` +
+        `derived — if "${charName}" is ever switched to ${label} it will fail to render.`
+      );
+    case 'no-transcript':
+      return (
+        `Assigned. Note: "${voiceName}"'s reference clip has no transcript, which a Qwen clone needs — its ` +
+        `Qwen voice can't be derived, so if "${charName}" is ever switched to Qwen it will fail to render. ` +
+        `Re-clone the voice with a transcript to fix it.`
+      );
+  }
+}
+
 /* POST /api/voice-library/:voiceUuid/assign
 
    Assigns a library voice to ONE character in ONE book — a bespoke,
@@ -1215,13 +1349,6 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     }
     if (entry.consent?.revokedAt) {
       return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
-    }
-    /* fs-38 Wave 3b1 — never assign an un-derived cloned voice (would produce a
-       broken slot the moment it's synthesised). The wizard only ever creates
-       ready entries; this stops a stale/never-derived cloned entry (or the mock
-       demo) from being assigned. */
-    if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
-      return res.status(409).json({ error: 'Cloned voice is not ready to assign yet.' });
     }
 
     /* fs-38 Wave 3c, Task 24 (fix round 1, review) — write BOTH the qwen and
@@ -1262,6 +1389,17 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
       entry.provenance === 'cloned' ||
       (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
 
+    /* #1933 — same placement rationale as `shouldWriteCoquiSlot` immediately
+       above: real filesystem I/O, computed here (depends only on `entry` and
+       `voiceUuid`, both already in hand) so it stays OUTSIDE the cast.json
+       read-modify-write window below. Only a CLONED entry with a `master`
+       declaration can even have a clip to check; anything else short-
+       circuits to `false` without the `stat`. */
+    const clonedClipOnDisk =
+      entry.provenance === 'cloned' && entry.master
+        ? await clonedMasterClipExists(voiceUuid, entry.master)
+        : false;
+
     const body = (req.body ?? {}) as AssignBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
     const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
@@ -1284,6 +1422,16 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
     }
 
     const character = characters[charIndex];
+
+    /* #1933 — `clonedAdvisory` and `languageWarning` (declared together,
+       set inside their own respective provenance-scoped blocks below) are
+       mutually exclusive by construction: `clonedAdvisory` is only ever set
+       inside a `provenance === 'cloned'` branch, `languageWarning` only
+       inside a `provenance === 'designed'` one — an entry is never both —
+       so the two can share the single `warning` response field with no
+       collision to disambiguate. */
+    let clonedAdvisory: string | undefined;
+    let languageWarning: string | undefined;
 
     /* Task 6b, widened by fs-38 Wave 3c Task 24 — a cloned voice renders on
        a clone-capable engine ONLY (Qwen or Coqui XTTS v2 —
@@ -1312,12 +1460,23 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        back to the persisted default. A character's own `ttsEngine` override
        (if any) still wins via `resolveCharacterEngine`, so a character
        explicitly cast on Qwen or Coqui is unaffected by the book/session
-       default sitting elsewhere. */
+       default sitting elsewhere.
+
+       #1933 — order matters: this wrong-engine check runs FIRST, the
+       per-engine readiness gate SECOND. Mirrors `classifyClonedVoice`'s own
+       precedence (`wrongEngine` beats every artifact concern) — a character
+       not even routed to a clone engine should hear about THAT, not about a
+       slot it will never use. `isCloneEngine` (tts/clone-engines.js) is
+       `CLONE_CAPABLE_ENGINES.has(e)` verbatim, so this 409 is
+       behaviour-identical to before — but as a real type guard, the early
+       return below narrows `routedEngine` to `CloneEngine` for everything
+       that follows, so `manifestSlotFor`/`clonedAssignBlock` type-check with
+       no cast. */
     if (entry.provenance === 'cloned') {
       const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
       const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
       const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
-      if (!CLONE_CAPABLE_ENGINES.has(routedEngine)) {
+      if (!isCloneEngine(routedEngine)) {
         /* I-2 — name the ACTUAL cause. When the character carries its own
            `ttsEngine` override, THAT is why it's not routing to a
            clone-capable engine — the book/session default is irrelevant,
@@ -1334,6 +1493,26 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
         return res.status(409).json({
           error: `Cloned voices render on Qwen or Coqui XTTS v2, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
         });
+      }
+
+      /* #1933 — readiness of the engine this assign will ACTUALLY render
+         on. Blocks the assign outright when the routed engine's own slot
+         can't back it (see `clonedAssignBlock`'s doc comment for the rule). */
+      const charName = character.name ?? characterId;
+      const block = clonedAssignBlock(entry, routedEngine, clonedClipOnDisk);
+      if (block) {
+        return res.status(409).json({ error: blockMessage(block, routedEngine, entry.name, charName) });
+      }
+
+      /* #1933 — the write below persists BOTH slots unconditionally for a
+         cloned entry (`shouldWriteCoquiSlot` above), regardless of which
+         engine this assign was routed for — so warn now if the OTHER
+         clone-capable engine's slot is unusable, rather than letting the
+         user discover it only when they later switch engines. */
+      const otherEngine = otherCloneEngine(routedEngine);
+      const otherBlock = clonedAssignBlock(entry, otherEngine, clonedClipOnDisk);
+      if (otherBlock) {
+        clonedAdvisory = advisoryMessage(otherBlock, otherEngine, entry.name, charName);
       }
     }
 
@@ -1374,7 +1553,6 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        route. With no registry entry there is no sidecar word to compare
        the manifest against, so there is no mismatch to assert either way:
        skip the warning, exactly like the pre-#1953 behaviour, never 500. */
-    let languageWarning: string | undefined;
     if (entry.provenance === 'designed') {
       const bookLanguage = bookStateLanguage(located.state);
       let expectedSidecarLang: string | undefined;
@@ -1444,9 +1622,11 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
        disagree. Order mirrors the write: qwen is unconditional, coqui is
        conditional. */
     const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
-    res
-      .status(200)
-      .json({ updated: 1, written, ...(languageWarning ? { warning: languageWarning } : {}) });
+    /* #1933 — `clonedAdvisory` and `languageWarning` are mutually exclusive
+       by construction (see their shared declaration comment above), so
+       there is no collision picking one over the other here. */
+    const warning = clonedAdvisory ?? languageWarning;
+    res.status(200).json({ updated: 1, written, ...(warning ? { warning } : {}) });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
