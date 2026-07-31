@@ -639,12 +639,16 @@ CLAUDE.md's Before-shipping checklist step 3.
   would reintroduce — and consolidation is filed separately as
   [#1932](https://github.com/dudarenok-maker/Castwright/issues/1932)
   (`side-18`, `type:chore`).
-- **(m) A fourth inline copy of the `['narrator', 'char-narrator']` pair.**
+- **(m) A fourth inline copy of the `['narrator', 'char-narrator']` pair — closed.**
   Already duplicated across `tts-voice-mapping.ts`, `routes/voices.ts`
   (`isNarratorId`), and `voice-style.ts` before this wave; Task 23's
   narrator-retarget fix is a fourth. None of the four are exported, so
   centralising means a cross-module export — a wider refactor than this
-  wave's surgical-changes scope allows. Filed as [#1895](https://github.com/dudarenok-maker/Castwright/issues/1895).
+  wave's surgical-changes scope allows. Filed as [#1895](https://github.com/dudarenok-maker/Castwright/issues/1895)
+  and closed by PR [#2009](https://github.com/dudarenok-maker/Castwright/pull/2009)
+  (`b913d842`, "centralise the narrator/char-narrator id pair"), which
+  exported one shared constant per side (`NARRATOR_CHARACTER_IDS`) and
+  converged every site onto it.
 - **(n) `voice-library-panel.tsx`'s fire-and-forget `assignVoice` dispatch
   now surfaces a server rejection — closed.** (`3ae7074f`, "surface a
   rejected library assign from the voices panel".) The profile drawer's

@@ -1,10 +1,13 @@
 /* #1895 — NARRATOR_CHARACTER_IDS is the single frontend home for "which
    character ids mean the narrator". Guards two things:
-     1. The constant's own contents.
+     1. The constant's own (real, unmocked) contents.
      2. That principal-cast.ts and tts-voice-mapping.ts both consult the
         SAME imported binding rather than each carrying its own inline
         copy of the pair — proven by swapping the constant via vi.mock and
-        checking both consumers react in lockstep. */
+        checking both consumers react in lockstep.
+   vi.mock is file-scoped and hoisted, so every other `NARRATOR_CHARACTER_IDS`
+   import in this file below resolves to the sentinel mock, not the real
+   module — guard 1 uses vi.importActual specifically to read past that. */
 
 import { describe, it, expect, vi } from 'vitest';
 
@@ -17,7 +20,13 @@ import { selectPrincipalCast } from './principal-cast';
 import { inferProfile } from './tts-voice-mapping';
 
 describe('NARRATOR_CHARACTER_IDS', () => {
-  it('is the narrator / char-narrator pair (mocked to a single sentinel id above)', () => {
+  it('the real constant (bypassing the file-scoped mock via importActual) is the narrator / char-narrator pair', async () => {
+    const real =
+      await vi.importActual<typeof import('./narrator-ids')>('./narrator-ids');
+    expect(real.NARRATOR_CHARACTER_IDS).toEqual(['narrator', 'char-narrator']);
+  });
+
+  it('the mocked import above resolves to the sentinel id, not the real pair (sanity-checks the mock wiring the next test depends on)', () => {
     expect(NARRATOR_CHARACTER_IDS).toEqual(['story-teller']);
   });
 
