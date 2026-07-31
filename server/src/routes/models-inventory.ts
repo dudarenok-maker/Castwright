@@ -142,13 +142,30 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   const pkgInstalled = (sidecarVal: boolean | undefined, nodeProbe: boolean): boolean =>
     sidecarVal === undefined ? nodeProbe : sidecarVal;
 
+  /* #1965 — the ONE composition every engine row uses, so the preference is
+     spelled once instead of six times. A REAL import attempt in the sidecar
+     (importOk) is the strongest evidence and wins outright; `null`/absent means
+     no attempt to trust (the common case for every engine but coqui — they have
+     no startup pin) and falls back to the find_spec probe, then to the Node disk
+     probe. find_spec alone can say "installed" for a package that genuinely
+     cannot import — that gap is #1944. */
+  const pkgUsable = (
+    importOk: boolean | null | undefined,
+    sidecarSpec: boolean | undefined,
+    nodeProbe: boolean,
+  ): boolean => importOk ?? pkgInstalled(sidecarSpec, nodeProbe);
+
   /* ── Kokoro (TTS, fallback engine) ─────────────────────────────────── */
   const kokoroPaths = kokoroWeightPaths(repoRoot);
   const kokoroSize = totalSizeBytes(kokoroPaths);
   {
     const weightsPresent = kokoroSize.fileCount > 0;
     const loaded = sidecar.kokoroLoaded === true;
-    const packageInstalled = pkgInstalled(sidecar.kokoroPackageInstalled, kokoroPackageInstalled(repoRoot));
+    const packageInstalled = pkgUsable(
+      sidecar.kokoroImportOk,
+      sidecar.kokoroPackageInstalled,
+      kokoroPackageInstalled(repoRoot),
+    );
     items.push({
       id: 'kokoro',
       kind: 'tts',
@@ -174,7 +191,11 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenBasePresent;
     const loaded = sidecar.qwenLoaded === true;
-    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    const packageInstalled = pkgUsable(
+      sidecar.qwenImportOk,
+      sidecar.qwenPackageInstalled,
+      qwenPackageInstalled(repoRoot),
+    );
     items.push({
       id: 'qwen-base',
       kind: 'tts',
@@ -200,7 +221,11 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenDesignPresent;
     const loaded = false; /* Design model loads transiently and isn't surfaced on /health. */
-    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    const packageInstalled = pkgUsable(
+      sidecar.qwenImportOk,
+      sidecar.qwenPackageInstalled,
+      qwenPackageInstalled(repoRoot),
+    );
     items.push({
       id: 'qwen-design',
       kind: 'tts',
@@ -226,7 +251,11 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = qwenBase17Present;
     const loaded = sidecar.qwenBase17Loaded === true;
-    const packageInstalled = pkgInstalled(sidecar.qwenPackageInstalled, qwenPackageInstalled(repoRoot));
+    const packageInstalled = pkgUsable(
+      sidecar.qwenImportOk,
+      sidecar.qwenPackageInstalled,
+      qwenPackageInstalled(repoRoot),
+    );
     items.push({
       id: 'qwen-base17',
       kind: 'tts',
@@ -256,12 +285,14 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
     const weightsPresent = coquiPresent;
     const loaded = sidecar.modelLoaded === true;
     /* #1963 — prefer the sticky real-import-attempt signal over the
-       find_spec-only pkgInstalled() fallback below, same preference/fallback
-       shape as voice-engine-registry's livePackageImportable: non-null
-       coquiImportOk wins, null/absent (older sidecar) leaves today's
-       behaviour unchanged. */
-    const packageInstalled =
-      sidecar.coquiImportOk ?? pkgInstalled(sidecar.coquiPackageInstalled, coquiPackageInstalled(repoRoot));
+       find_spec-only probe: non-null coquiImportOk wins, null/absent (older
+       sidecar) leaves today's behaviour unchanged. #1965 folded this into the
+       shared pkgUsable helper so all six rows compose it identically. */
+    const packageInstalled = pkgUsable(
+      sidecar.coquiImportOk,
+      sidecar.coquiPackageInstalled,
+      coquiPackageInstalled(repoRoot),
+    );
     items.push({
       id: 'coqui',
       kind: 'tts',
@@ -287,7 +318,11 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   {
     const weightsPresent = whisperPresent;
     const loaded = sidecar.asrLoaded === true;
-    const packageInstalled = pkgInstalled(sidecar.whisperPackageInstalled, fasterWhisperInstalled(repoRoot));
+    const packageInstalled = pkgUsable(
+      sidecar.whisperImportOk,
+      sidecar.whisperPackageInstalled,
+      fasterWhisperInstalled(repoRoot),
+    );
     items.push({
       id: 'whisper',
       kind: 'asr',

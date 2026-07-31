@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 25 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 26 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**42 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**43 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -790,6 +790,59 @@ Run sheet: [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-o
 *Needs:* the 8 GB card only, pinned via `CUDA_VISIBLE_DEVICES=0`, a book with a
 designed Qwen voice in progress plus a second admission target (a Coqui `/load` or
 an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
+
+---
+
+### A26 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1971) · **no GPU needed, sidecar venv only**
+
+The whole point of `*_import_ok` is a package that `find_spec` finds and a real
+`import` cannot load — the #1944 speechbrain shape. **That state cannot be
+manufactured in CI**: every test here injects the flag, so what is proven is the
+plumbing from `/health` to the badge, not that a genuinely broken install
+actually produces `false` rather than an uncaught crash, a hang, or a sidecar
+that never reaches `/health` at all. Criteria live in this row; there is no
+separate run sheet (the ticket body plus the paired tests are the spec).
+
+- **Break the import, don't delete the package.** In the sidecar venv, leave
+  `site-packages/kokoro_onnx/` in place — `find_spec` must keep succeeding — and
+  make importing it raise: e.g. append `raise RuntimeError('onbox #1965')` to its
+  `__init__.py`. A `RuntimeError` rather than an `ImportError` is deliberate: it
+  is the second documented shape of the #1944 collision and the reason the
+  recording catches `BaseException`. Keep a copy of the original file.
+- **Confirm the null baseline first, before touching anything.** On a freshly
+  started sidecar, `GET /health` must show `kokoro_import_ok: null` — not
+  `false`. Null is the common value and must never read as broken: Model Manager
+  should show Kokoro exactly as it does today, and `GET /api/diagnostics`' Voice
+  engine row must be `ok`. A `false` here would mean the recording is firing
+  without a real attempt.
+- **Then force a load** (a one-line Kokoro render, or the Model Manager's own
+  load control) so the import chokepoint actually runs. It must fail *and* be
+  recorded: re-poll `/health` and observe `kokoro_import_ok: false` while
+  `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
+- **Observe the two user-facing surfaces.** Model Manager's Kokoro card must
+  offer **Repair** (not "install", and not a silent healthy row —
+  `installState: 'package-missing'` off a `true` find_spec is the tell), and the
+  Admin console's **Voice engine** row must read
+  `reachable · Kokoro package will not import — repair in Model Manager`. Note
+  the wording: a *missing* package must say "package missing" instead, so check
+  that variant too by pointing the sidecar at a venv without `kokoro_onnx`.
+- **Confirm Coqui stays out of the diagnostics row.** On a box with Coqui
+  deliberately not installed, the Voice engine row must remain `ok` — Coqui is
+  opt-in and its absence is not a fault.
+- **Repeat the same five steps for `qwen_tts`** (break `qwen_tts/__init__.py`,
+  force a Qwen load). Qwen is the one to watch: `qwen_import_ok` means only that
+  `from qwen_tts import Qwen3TTSModel` returned — the load continues into
+  `from_pretrained` and a `.to(device)` retry loop, so a failure *after* the
+  import must leave the flag `true` and must **not** produce a Repair prompt.
+  That over-claim case is the specific thing this row exists to catch.
+- **Restore both `__init__.py` files and restart the sidecar**, then confirm
+  `/health` reports `true` for each engine after a successful load.
+
+*Needs:* the sidecar venv with `kokoro_onnx` and `qwen_tts` installed, write
+access to it, and a sidecar restart between passes (the flags are sticky per
+process). No GPU is required for the Kokoro half — the import fails long before
+any device work — so this can ride along with any other Group A session, or run
+alone on a CPU-only box. *Criteria:* this row. *Cost:* short.
 
 ---
 

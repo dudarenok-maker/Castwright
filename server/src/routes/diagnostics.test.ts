@@ -313,6 +313,83 @@ describe('GET /api/diagnostics', () => {
       expect(sidecar.status).toBe('ok');
       expect(res.body.overall).toBe('ok');
     });
+
+    describe('real-import signal + honest copy (#1965)', () => {
+      /* This row used to read sidecar.<engine>PackageInstalled DIRECTLY,
+         bypassing the voice-engine registry — so it was the one surface a
+         registry-level honesty fix could never reach. It now goes through the
+         same accessors models-status uses. */
+      const reachable = (over: Record<string, unknown>) => ({
+        status: 'reachable',
+        url: 'http://localhost:9000',
+        proxy: 'sidecar',
+        device: 'cuda',
+        vramReservedMb: 1024,
+        vramTotalMb: 8192,
+        qwenPackageInstalled: true,
+        kokoroPackageInstalled: true,
+        ...over,
+      });
+
+      it('kokoroImportOk false is reported even though find_spec says installed', async () => {
+        // The #1944 shape: on the path this row reads, it was invisible before.
+        probeSidecarHealth.mockResolvedValue(reachable({ kokoroImportOk: false }));
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.status).toBe('fail');
+        expect(sidecar.detail).toMatch(/kokoro/i);
+        expect(sidecar.detail).toMatch(/will not import/i);
+      });
+
+      it('qwenImportOk false is reported even though find_spec says installed', async () => {
+        probeSidecarHealth.mockResolvedValue(reachable({ qwenImportOk: false }));
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.status).toBe('fail');
+        expect(sidecar.detail).toMatch(/qwen/i);
+        expect(sidecar.detail).toMatch(/will not import/i);
+      });
+
+      it('a MISSING package says "missing", not "not importable" — the copy matches what is detected', async () => {
+        /* The old string claimed "package not importable" for a state the
+           filter only ever reached via find_spec === false, i.e. the package
+           was simply absent. Two different faults, two different remedies. */
+        probeSidecarHealth.mockResolvedValue(reachable({ qwenPackageInstalled: false }));
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.detail).toMatch(/Qwen package missing/i);
+        expect(sidecar.detail).not.toMatch(/importable/i);
+      });
+
+      it('importOk true outranks a find_spec false — a real import beats the probe', async () => {
+        probeSidecarHealth.mockResolvedValue(
+          reachable({ kokoroPackageInstalled: false, kokoroImportOk: true }),
+        );
+        const res = await request(makeApp()).get('/api/diagnostics');
+        expect(byId(res.body.checks, 'sidecar').status).toBe('ok');
+      });
+
+      it('importOk null (the common value — nothing loaded that engine yet) is never a fault on its own', async () => {
+        probeSidecarHealth.mockResolvedValue(
+          reachable({ kokoroImportOk: null, qwenImportOk: null }),
+        );
+        const res = await request(makeApp()).get('/api/diagnostics');
+        expect(byId(res.body.checks, 'sidecar').status).toBe('ok');
+      });
+
+      it('Coqui stays OUT of this row — it is opt-in, so an uninstalled Coqui is not a fault', async () => {
+        /* requirements/nvidia-cuda.txt:4 and amd-rocm.txt:7 both say Coqui is
+           installed from the Model Manager, so including it here would fire on
+           every install that deliberately never installed it. */
+        probeSidecarHealth.mockResolvedValue(
+          reachable({ coquiPackageInstalled: false, coquiImportOk: false }),
+        );
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.status).toBe('ok');
+        expect(sidecar.detail).not.toMatch(/coqui/i);
+      });
+    });
   });
 
   describe('ASR (Whisper) row (srv-31)', () => {
