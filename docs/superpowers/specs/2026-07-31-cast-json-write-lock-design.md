@@ -1,13 +1,19 @@
 # cast.json write lock — design
 
 **Status:** approved
-**Closes:** #1981 (the filed defect), #2000 (the sweep), #2001 (§11)
-**Defers:** #2006 (three clone-consent gates + two writers a per-RMW lock cannot
-reach), #2015 (`analysis.ts`'s five writes)
+**Closes:** #1981 (the filed defect), #2000 (the sweep), #2001 (§11),
+#2006 (§14, §15), #2015 (§14.2) — **nothing is deferred out of this change**
 **Sequencing:** implementation bases on / rebases onto `fix/server-1933-assign-readiness`
 
-**Review:** four adversarial passes — 3C/8M/3m, 4C/6M/8m, 1C/5M/5m, then
-0C/4M/4m. Each round's worst findings landed in whatever the *previous* round had
+**Scope note (post-review):** §14 and §15 were added after five review rounds,
+on a decision to fold every residual rather than ship a cleanup lane behind this
+PR. They close #2006 and #2015, which earlier drafts deferred. Sections 6, 7 and
+12 are written against the pre-fold scope and are annotated where the fold
+supersedes them — read §14–§16 as the current position.
+
+**Review:** four adversarial passes on the pre-fold scope — 3C/8M/3m, 4C/6M/8m,
+1C/5M/5m, then 0C/4M/4m; a fifth reviewed the plan (2C/8M/6m, all in the plan).
+§14 and §15 postdate all of them and have not yet been through a round. Each round's worst findings landed in whatever the *previous* round had
 just rewritten, which is the main thing to know when reading this document: the
 parts revised most recently are the parts least proven. Round 3 verified ~60
 citations clean; round 4 confirmed the three-class lock order holds across every
@@ -209,11 +215,16 @@ CLAUDE.md's *Conventions worth preserving*:
    written down, is rule 2's failure mode and not a narrowing.** A reviewer who
    cannot tell which they are looking at should treat it as the failure mode.
 3. **Two or more books → `withCastLocks`, never nested `withCastLock`s.**
-4. **Global lock order: `design` → `library-voice` → `cast`.** Every acquisition
-   site names where it sits in that order. Never acquire a lock from an earlier
-   class while holding one from a later class.
+4. **Global lock order: `design` → `series` → `library-voice` → `cast`.** Every
+   acquisition site names where it sits in that order. Never acquire a lock from
+   an earlier class while holding one from a later class.
 
-Rule 4 covers **three** lock classes, not two. The first rewrite stated it over
+Rule 4 covers **four** lock classes. `series:<author>/<series>` is added by §15;
+the existing `design → cast` path (`qwen-voice.ts:193` → `:203`) becomes
+`design → series → cast`, which is consistent with the order rather than a new
+constraint on it.
+
+It covers more than two. The first rewrite stated it over
 `design` and `cast` only, and §7 then introduced `library-voice:<uuid>` four
 sections later — leaving a rule that would read as satisfied by an ordering it
 had never considered. Concretely, the `DELETE /voice-library/:voiceUuid` path
@@ -483,8 +494,15 @@ interim cast iteration N−1 wrote, so `mergeAnalysisResultWithExistingCast` wou
 no longer merge against the pre-run cast and srv-13's voice/reuse carry-forward
 would silently degrade.
 
-**Decision: `analysis.ts` is out of scope for this PR. Its five writes stay
-unprotected, and that is recorded as a named residual (§12) and filed as #2015.**
+> **Superseded by §14.2.** This section records why the two *lock-based*
+> mitigations were rejected, which is still the reasoning that rules them out.
+> The conclusion — that `analysis.ts` ships unprotected — no longer holds: §14's
+> revision counter closes it without either mitigation, by checking the merge
+> base at each write instead of trying to keep it valid across the run. #2015 is
+> closed by this PR.
+
+**Decision at the time: `analysis.ts` is out of scope. Its five writes stay
+unprotected, recorded as a named residual and filed as #2015.**
 
 Two mitigations were designed and both rejected. They are recorded because each
 looked obviously right at the time, and the second survived a full review round
@@ -593,7 +611,14 @@ This also sequences `voice-library-usage.ts:113` (§5 class 1), since
 `walkConfirmedCasts` is shared between `clearLibraryVoiceReferences` and this
 gate's `scanLibraryVoiceUsage`.
 
-**Gates 1, 3 and 4 are filed as #2006** — one issue, not three. They are the
+> **Superseded by §14.** Gates 1, 3 and 4 were filed rather than fixed because
+> the open question was what a refusal *means* for a partially-applied cross-book
+> propagation and for a detached job. §14.2 answers exactly that, generically:
+> recompute where you can, 409 where you can, report-and-skip where you can do
+> neither. #2006 is closed by this PR. The analysis below stands — it is why a
+> per-book cast lock alone was never going to be the mechanism.
+
+**Filed at the time as #2006** — one issue, not three. They are the
 fs-38 Wave 3c clone-consent guards, added because "Phase 0 fixed seven live bugs
 that all had the same shape — a guard-less write erasing a clone marker upstream
 of a resolver" (`voices.ts:888-893`). The real work in each is deciding what a
@@ -807,6 +832,11 @@ the code.
 
 ## 12. Residual risks, accepted
 
+> **Re-scoped by §16.** With §14 and §15 folded in, the items below that were
+> *outstanding work* are closed. What remains is a description of the design's
+> **properties** — things that would need a different approach to change, not a
+> queue. Entries superseded by the fold are marked inline.
+
 - **No bound on hold time or wait time.** `withKeyLock` (`file-lock.ts:7-19`) has
   no timeout, no queue cap and no diagnostic for a long-held key. (It *is* FIFO by
   construction — a promise chain — so waiters are ordered fairly; the first
@@ -826,20 +856,21 @@ the code.
   event loop open on what is about to become the hottest lock in the product —
   in a repo whose flake register already tracks tinypool worker-exit failures.
   Speculative diagnostics on a shared primitive are not worth that.
-- **`analysis.ts`'s five writes are not protected by this PR at all.** Not
-  serialised, not gated — §6 rejected both mitigations it tried. This is the
-  largest unprotected writer left standing, and it is filed as **#2015**. Named
-  bluntly here because two successive drafts of §6 claimed otherwise, each in a
-  way that read as coverage.
-- **`cast-link-prior.ts:239-241` plants `libraryUuid` references it never names**,
-  so §7's `library-voice` key cannot reach it. Fourth entry on **#2006**.
-- **Cross-book concurrent series designs can double-mint a `voiceUuid`.**
-  Pre-existing (every design gate keys on `bookDir` while the propagation is
-  series-wide), and this sweep makes the resulting damage finer-grained — a split
-  uuid across the series rather than last-writer-wins. §5.1 has the mechanism;
-  added to **#2006**.
-- **Three cross-book check-then-act consultations survive**, not one. Earlier
-  drafts named only the smallest:
+- ~~**`analysis.ts`'s five writes are not protected.**~~ **Closed by §14.2** —
+  the merge base is now revision-checked at each write and rebuilt when it has
+  moved, rather than replayed. #2015 closed.
+- ~~**`cast-link-prior.ts:239-241` plants `libraryUuid` references it never
+  names.**~~ **Closed by §14** — it records the target's revision at read and
+  asserts it at write, so a reference planted from a snapshot that has since
+  moved is detected rather than written blind.
+- ~~**Cross-book concurrent series designs can double-mint a `voiceUuid`.**~~
+  **Closed by §15** — the mint decision moves under a `series:<author>/<series>`
+  key. This is the one item the revision counter provably could not reach, since
+  the staleness is in a decision taken before any file is read.
+- ~~**Three cross-book check-then-act consultations survive.**~~ **Closed by
+  §14** — each records the revision of every book it consulted and asserts it at
+  write time. Retained here because the three sites are where the counter has to
+  be threaded, and they are easy to miss:
   - `cast-add-from-roster.ts` reads the target book to decide a source write;
   - `voice-override-linked.ts` reads the **source** cast and derives
     `canonicalVoiceId`, `sourceTokens`, the `inGroup` predicate and the entire
@@ -874,17 +905,140 @@ the code.
   the diff looks locked and is not. Only review catches this, which is why rule 2
   is stated in the code and not only here.
 
-## 13. Ticketing
+## 14. The cast.json revision counter — closing check-then-act
+
+§7 and §12 between them named six places where a decision is derived from a
+cast.json snapshot and the write that depends on it lands in a *different* lock
+scope. The per-book lock cannot reach any of them: it makes each read-modify-write
+atomic, and every one of these is a read in one scope and a write in another.
+
+They are not six defects. They are one defect six times:
+
+| Site | Decision | Write |
+|---|---|---|
+| `analysis.ts` | `priorCastForMerge`, read once at `:2797` | `:3558`, `:3763`, `:4774`, `:5422`, `:5927`, minutes later |
+| `voices.ts` `PUT /:voiceId/override` | `hasClonedSlotAmongMatches` cross-book veto | `applyOverrideToCastFiles`, per book |
+| `single-design.ts` | `characterHasClonedSlot` 409 at `:254` | `:178`, detached after `res.flushHeaders()` |
+| `qwen-voice.ts` | `characterHasClonedSlot` 409 at `:552` | `:623` via `persistEmotionVariant` |
+| `cast-link-prior.ts` | target's `overrideTtsVoices`, read at `:105` | source, at `:248` |
+| `voice-override-linked.ts` / `cast-series-patch.ts` | source snapshot → `writes` list / `targets` list | other books |
+
+**Decision: cast.json carries a revision, and a write that depends on an earlier
+read asserts the revision has not moved.** Optimistic concurrency, not a longer
+lock — a longer lock is what §3.2 and §6 both rejected, for good reasons that
+have not changed.
+
+This is deliberately *one* mechanism rather than six bespoke fixes. Six fixes
+would each be locally obvious and collectively unenforceable: nothing would stop
+a seventh instance, and each would invent its own failure semantics. A revision
+makes staleness **detectable**, which is the property all six actually need.
+
+### 14.1 The shape
+
+`cast.json` gains a top-level `rev: number`. Absent means `0` — a read-path
+default, so no migration script and no compatibility break with an existing
+workspace.
+
+Two helpers, in `workspace/cast-io.ts`, both of which assume the caller holds the
+cast lock:
+
+```ts
+readCastForUpdate(bookDir): Promise<{ cast: CastJson; rev: number }>
+writeCastChecked(bookDir, next: CastJson, expectedRev: number): Promise<void>
+```
+
+`writeCastChecked` re-reads, compares `rev` against `expectedRev`, and throws
+`CastRevConflictError` if it moved. On success it writes `rev: expectedRev + 1`.
+
+**The helper owns the increment, and that matters beyond bookkeeping.** At least
+**20 of the 35** current writers construct a fresh payload (`{ characters:
+nextCharacters }`) rather than passing back the object they read — a shape that
+drops every other top-level field. Left alone they would silently erase `rev` on
+every write and the counter would never advance. Routing writes through one
+helper is what stops that, and it is the same argument as §3.1's for key
+derivation.
+
+### 14.2 What a conflict means, per caller shape
+
+This is the "refusal semantics" question #2006 was filed to answer. One rule,
+three shapes:
+
+- **Can recompute → recompute.** `analysis.ts` re-derives its merge against the
+  fresh cast rather than replaying `priorCastForMerge`. Its run must not fail
+  because a user renamed a character mid-analysis. This also answers #2015: the
+  merge base does not need to *survive* the run, it needs to be *checked* at each
+  write and rebuilt when it has moved.
+- **Can refuse → 409.** The HTTP gates (`voices.ts`, `cast-link-prior`,
+  `voice-override-linked`, `cast-series-patch`) return
+  `409 { code: 'cast-changed' }`. The caller retries against fresh state. This is
+  expressible because these handlers have not yet responded.
+- **Can neither → report and skip.** The detached SSE jobs (`single-design.ts`,
+  `qwen-voice.ts`'s bulk path) log the conflict, skip that book, and surface it in
+  the job's completion payload. §6 established these cannot 409; a revision
+  conflict does not change that, but it does make the skip *deliberate and
+  reported* rather than a silent overwrite.
+
+### 14.3 What this does not do
+
+It does not make a multi-book propagation atomic. A conflict on book 7 of 12
+still leaves 6 books written. What changes is that the operation **knows** and
+says so, instead of overwriting a decision it never saw. Genuine cross-book
+atomicity needs the workspace-scoped lock §3.2 rejected, and that rejection
+stands.
+
+## 15. The series lock — closing the cross-book double-mint
+
+The one foldable residual a revision counter provably cannot reach.
+
+`ensureCharacterVoiceUuid` mints a `voiceUuid` for a linked cast identity, then
+propagates it across the series. Two bulk designs on **two different books of one
+series** each read their *own* book, each see no `voiceUuid`, each mint, and each
+propagate. Every design gate keys on `bookDir` — `withDesignLock`
+(`design-lock.ts:26-27`), `isDesignBusy`, `cast-design.ts:648`'s `inFlightByBook`
+— while the propagation is series-wide.
+
+A revision counter does not help, and the reason is worth stating because it is
+counter-intuitive: the propagation **re-reads every book under its own lock**, so
+each write is against a current revision and is therefore "valid". The staleness
+is in the *mint decision*, which happens before either book is read. There is no
+file whose revision encodes it.
+
+**Decision: a fourth key class, `series:<author>/<series>`**, held across
+read → decide → mint → propagate in `ensureCharacterVoiceUuid`'s series branch.
+Standalone books keep the book-scoped branch and need no series key.
+
+**Global lock order becomes `design` → `series` → `library-voice` → `cast`**
+(§4 rule 4). The existing `design → cast` path (`qwen-voice.ts:193` → `:203`)
+becomes `design → series → cast`, which is consistent. No path takes them in any
+other order; that is verified per §4, not assumed.
+
+## 16. Scope, restated
+
+With §14 and §15 folded in, this PR closes the residual set rather than filing
+it. **#2006 and #2015 are closed here, not deferred.**
+
+What remains in §12 is no longer debt. It is a list of **properties of the
+design** — things that are true of the chosen approach and would require a
+different approach to change:
+
+- The lock is in-process. Two server processes against one workspace defeat it.
+- `promote-voice`'s `realVoiceId` is pinned to its pre-lock read *because the
+  artifacts have already been renamed to it* by the time the lock is taken.
+  Re-deriving it would name files that do not exist.
+- A multi-book propagation is per-book atomic, not atomic as a whole (§3.2,
+  §14.3) — now detected and reported rather than silent.
+- `cast-design.ts`'s idempotency guards are evaluated before an LLM call and the
+  lock covers only the write; a duplicate persona generation is possible.
+
+Each is stated at its site in the code, not only here. The distinction matters:
+a reader who finds "residual risks" reads a to-do list, and a to-do list that
+nobody is going to do is worse than an honest description of what the design is.
+
+## 17. Ticketing
 
 `Closes #1981` (the filed defect), `Closes #2000` (the sweep), `Closes #2001`
-(§11). One PR, per the delivery decision.
+(§11), `Closes #2006` (§14, §15), `Closes #2015` (§14.2). One PR.
 
-`Refs #2015` — `analysis.ts`'s five writes, per §6.
-
-`Refs #2006` — the three clone-consent gates §7 established a per-RMW lock cannot
-reach, plus `cast-link-prior`'s unnamed `libraryUuid` references and the
-cross-book double-mint. Filed, not folded, because the work in each is deciding
-what a refusal *means* for a partially-applied cross-book propagation and for a
-detached job. That is a behaviour decision needing its own design pass, not a
-locking one, and it is the one place in this spec where deferral is the honest
-call rather than a scope dodge.
+Nothing is deferred out of this change. #2006 and #2015 were filed as follow-ups
+during design and are folded back in by §14 and §15 — the residual list in §12 is
+now a description of the design's properties, not a queue of work.
