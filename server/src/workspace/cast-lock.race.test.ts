@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { castJsonPath } from './paths.js';
+import { withCastLock } from './cast-lock.js';
 
 interface Cast {
   characters: Array<{ id: string; voice?: string }>;
@@ -64,5 +65,15 @@ describe('cast.json concurrent read-modify-write', () => {
        red — the correct response is to update THIS test, never to reintroduce
        an unlocked write path. */
     expect(v.alice === 'a' && v.bob === 'b').toBe(false);
+  });
+
+  it('keeps both mutations when the writers hold the cast lock', async () => {
+    const bookDir = dir; // castPath was built as castJsonPath(dir) in beforeEach
+    await Promise.all([
+      withCastLock(bookDir, () => assignVoice(castPath, 'alice', 'a')),
+      withCastLock(bookDir, () => assignVoice(castPath, 'bob', 'b')),
+    ]);
+    const v = await readVoices(castPath);
+    expect(v).toEqual({ alice: 'a', bob: 'b' });
   });
 });
