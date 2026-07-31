@@ -161,3 +161,28 @@ def test_qwen_absent_from_cpu_overlay():
     lines = _overlay_lines("cpu.txt")
     assert not any(_pkg(l) == "qwen-tts" for l in lines), \
         "qwen-tts must not be in cpu.txt (Qwen is GPU-only standard)"
+
+
+def test_spacy_is_explicit_and_not_the_ja_extra():
+    """spacy must be an explicit requirement (#2017): `CoquiEngine._infer_from_latents`
+    passes `enable_text_splitting=True` (config-faithful, mirrors `Xtts.synthesize`'s
+    own build), and that path reaches upstream's `get_spacy_lang`, which raises
+    `ImportError` without spacy installed — a cloned Coqui voice rendering a line at
+    or above `tokenizer.char_limits[lang]` would 500 outright without this line, same
+    shape as `test_torch_is_explicit` above guards for torch.
+
+    It must also stay PLAIN `spacy`, never `spacy[ja]` — the upstream error message
+    literally instructs `pip install spacy[ja]`, but the owner's measured decision
+    against it (22.3 MB / 16 packages plain vs. 92.5 MB / 18 with the extra, of which
+    68.9 MB is `sudachidict-core` alone) currently survives only as a
+    `requirements/base.txt` comment. Japanese cloned-voice text-splitting stays
+    broken on purpose, tracked as #2038 (fs-59's call) — this guard stops a later
+    blind `pip install spacy[ja]` "fix" from silently re-adding the 70 MB dependency
+    the owner already declined."""
+    lines = _lines()
+    assert any(_pkg(l) == "spacy" for l in lines), \
+        "expected an explicit spacy requirement (#2017) — CoquiEngine._infer_from_latents " \
+        "needs it for enable_text_splitting=True"
+    assert not any(l.startswith("spacy[ja]") for l in lines), \
+        "spacy must NOT use the [ja] extra — SudachiPy/sudachidict-core (68.9 MB) was a " \
+        "deliberate opt-out (#2038), not an oversight to silently re-add"

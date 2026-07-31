@@ -774,7 +774,7 @@ def test_synthesize_cloned_voice_long_sentence_renders(monkeypatch, tmp_path) ->
     assert tts_model.infer_calls[-1]["text"] == long_text
 
 
-class _SpacyMissingXttsModel(_FakeXttsModel):
+class _ImportFailingXttsModel(_FakeXttsModel):
     """Reproduces the real upstream shape (#2017): `enable_text_splitting=True`
     reaches `TTS.tts.layers.xtts.tokenizer.get_spacy_lang`, which raises
     `ImportError` when spacy is missing/broken — regardless of how long
@@ -824,7 +824,7 @@ def test_synthesize_cloned_voice_recovers_when_spacy_import_fails(
     the fix (ImportError propagates, no retry) and passes after (caught,
     logged loudly, retried with enable_text_splitting=False)."""
     config = _FakeXttsConfig(languages=["en", "es", "fr", "de", "it", "ru"])
-    tts_model = _SpacyMissingXttsModel(config=config)
+    tts_model = _ImportFailingXttsModel(config=config)
     tts_instance = _FakeTTS(
         "tts_models/multilingual/multi-dataset/xtts_v2",
         synthesizer=_FakeSynthesizer(tts_model=tts_model),
@@ -836,6 +836,7 @@ def test_synthesize_cloned_voice_recovers_when_spacy_import_fails(
     long_ru_text = "Съешь ещё этих мягких французских булок, да выпей же чаю. " * 5
     assert len(long_ru_text) > 182, "must exceed char_limits['ru'] to match the reported repro"
 
+    caplog.clear()  # drop clone_voice's own `_ensure_loaded` speaker-enumeration WARNING
     with caplog.at_level(logging.ERROR, logger="sidecar"):
         result = eng.synthesize("xtts_v2", "xtts-spacy-missing", long_ru_text, language="ru")
 
@@ -845,9 +846,51 @@ def test_synthesize_cloned_voice_recovers_when_spacy_import_fails(
     assert tts_model.infer_calls[1]["enable_text_splitting"] is False
     assert tts_model.infer_calls[1]["text"] == long_ru_text
     assert any(
-        "spacy" in r.getMessage().lower() or "text-splitting" in r.getMessage().lower()
+        r.levelno >= logging.ERROR and "retrying WITHOUT sentence splitting" in r.getMessage()
         for r in caplog.records
     ), "the ImportError fallback must log loudly, not silently degrade"
+
+
+def test_synthesize_cloned_voice_japanese_import_failure_names_sudachi(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """A Japanese line hitting the same `ImportError` fallback must NOT get
+    the generic "spacy missing or broken … reinstall the sidecar
+    requirements" message — for `ja` specifically, plain `spacy` (what
+    `requirements/base.txt` declares) is neither missing nor broken; it is
+    working exactly as decided (#2038): the `[ja]` extra (SudachiPy +
+    sudachidict-core) is deliberately NOT installed. "Reinstall" would send
+    an operator in a circle. The `ja` branch must instead name SudachiPy and
+    reference #2038, while every other language keeps the original message
+    (pinned by `test_synthesize_cloned_voice_recovers_when_spacy_import_fails`
+    above)."""
+    config = _FakeXttsConfig(languages=["en", "ja"])
+    tts_model = _ImportFailingXttsModel(config=config)
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    _clone(eng, "xtts-ja-spacy-missing")
+    tts_model.infer_calls.clear()  # drop clone_voice's own audition call
+
+    ja_text = "これは長い日本語の文章です。" * 10  # well past char_limits['ja'] = 71
+
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="sidecar"):
+        result = eng.synthesize("xtts_v2", "xtts-ja-spacy-missing", ja_text, language="ja")
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert len(tts_model.infer_calls) == 2, "expected the True attempt AND the False retry"
+    assert tts_model.infer_calls[1]["enable_text_splitting"] is False
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("Sudachi" in r.getMessage() for r in error_records), \
+        "the ja fallback must name SudachiPy/sudachidict-core, not blame a generic spacy install"
+    assert any("2038" in r.getMessage() for r in error_records), \
+        "the ja fallback must reference #2038, the tracked decision"
+    assert not any("reinstall" in r.getMessage().lower() for r in error_records), \
+        "the ja fallback must NOT tell the operator to reinstall — that would not fix anything"
 
 
 def test_synthesize_cloned_voice_unsupported_language_raises(monkeypatch, tmp_path) -> None:

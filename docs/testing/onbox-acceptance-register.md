@@ -218,7 +218,10 @@ asserts which voice reached the provider.
   behind it — the clone **derive** failed without shared FFmpeg libraries
   (#1967) — and that is now fixed and merged (PR #1978, 2026-07-31), so
   E-03…E-07 are runnable on a stock static-FFmpeg box without any hot patch.
-  Their first run doubles as A26 item 1. History of the
+  **E-04 specifically is no longer blocked on a fix** — the code-level fix for
+  its `ImportError` shape (#2017) landed in PR #2039 — so what remains of its
+  debt is a re-run of the reproduction (46-char control, 245-char Russian
+  line) on real Coqui weights, not an outstanding bug. Their first run doubles as A26 item 1. History of the
   first blocker follows, kept because it is what the run-2 result confirms:
   Coqui/XTTS could not load in a
   sidecar that had already served ECAPA `/embed`, and cloning always calls

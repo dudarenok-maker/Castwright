@@ -2446,13 +2446,31 @@ class CoquiEngine(Engine):
             # splitting entirely, which risks the `assert text_tokens.shape[-1]
             # < gpt_max_text_tokens` in `xtts.py:516` on very long input — a
             # real but rarer failure than every cloned-voice render 500ing.
-            log.error(
-                "Coqui text-splitting import failed (%s) — spacy missing or "
-                "broken in the sidecar venv; retrying WITHOUT sentence "
-                "splitting (enable_text_splitting=False). Reinstall the "
-                "sidecar requirements to restore text-splitting.",
-                e,
-            )
+            #
+            # `ja` is a known-and-tracked exception to "reinstall fixes it"
+            # (#2038): plain `spacy` deliberately excludes the `[ja]` extra
+            # (SudachiPy + sudachidict-core, 68.9 MB of the 92.5 MB total),
+            # so a Japanese line hitting this path has spacy installed and
+            # working — the "missing or broken" / "reinstall" message is
+            # simply wrong for this one language, and would send an operator
+            # in a circle. Name the real cause instead.
+            if language == "ja":
+                log.error(
+                    "Coqui text-splitting import failed for a Japanese line "
+                    "(%s) — spacy is installed, but SudachiPy/sudachidict-core "
+                    "(the `spacy[ja]` extra) is deliberately not, per #2038; "
+                    "retrying WITHOUT sentence splitting "
+                    "(enable_text_splitting=False).",
+                    e,
+                )
+            else:
+                log.error(
+                    "Coqui text-splitting import failed (%s) — spacy missing or "
+                    "broken in the sidecar venv; retrying WITHOUT sentence "
+                    "splitting (enable_text_splitting=False). Reinstall the "
+                    "sidecar requirements to restore text-splitting.",
+                    e,
+                )
             result = tts_model.inference(
                 text=text,
                 language=language,
