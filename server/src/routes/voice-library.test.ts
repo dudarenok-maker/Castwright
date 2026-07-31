@@ -1524,8 +1524,8 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
   });
 });
 
-describe('POST /:uuid/assign — cloned readiness gate (fs-38 Wave 3b1)', () => {
-  it('409s assigning a cloned voice whose qwen engine is not ready', async () => {
+describe('POST /:uuid/assign — cloned readiness gate (#1933, formerly the fs-38 Wave 3b1 Qwen-only gate)', () => {
+  it('409s a stale-qwen cloned entry with no retained reference clip (stale status alone would NOT block under #1933 — see T5)', async () => {
     const { writeEntry } = await import('../workspace/voice-library.js');
     await writeEntry({
       voiceUuid: 'clone-unready', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,
@@ -1794,6 +1794,13 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/Qwen/);
     expect(res.body.error).toMatch(/failed to derive/);
+    // Also pin the "or cast ... on X instead" alternative-engine suggestion:
+    // its correct value (Coqui XTTS v2) happens to coincide with what a
+    // hardcoded-wrong alternative would ALSO produce for the qwen-routed
+    // direction, so only T3's symmetric assertion (below) can catch that
+    // specific mutation — this one exists so the OTHER wrong-direction
+    // mutation (hardcoding the alternative to "Qwen") is caught here.
+    expect(res.body.error).toMatch(/Coqui XTTS v2/);
   });
 
   it('T3 — 409s a coqui-routed assign of a failed xtts slot even though qwen is ready (load-bearing: engine-blind slot read must fail this)', async () => {
@@ -1817,6 +1824,11 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/Coqui XTTS v2/);
+    // Also pin the "or cast ... on X instead" alternative-engine suggestion
+    // in the OTHER direction from T2's — "Qwen" appears in this message
+    // ONLY as that alternative, so this specifically catches a hardcoded
+    // (wrong) alternative-engine label that T2's own assertions cannot.
+    expect(res.body.error).toMatch(/Qwen/);
   });
 
   it('T4 — 409s with "no retained reference clip" for a cloned entry with no master at all', async () => {
@@ -1838,6 +1850,11 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no retained reference clip/);
+    // Also pin the ROUTED engine's own label here — T11 proves the same
+    // 'no-clip' blockMessage arm names Coqui correctly, but nothing before
+    // this proved it names QWEN correctly; the two labels are independent
+    // interpolations of the same template.
+    expect(res.body.error).toMatch(/Qwen/);
   });
 
   it('T5 — 200s a qwen-routed assign of a merely stale (repairable) qwen slot — the deliberate Qwen loosening', async () => {
@@ -1950,7 +1967,7 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
     expect(res.status).toBe(200);
   });
 
-  it('T9 — closes the engine-blind hole T1-T8 leave open: a coqui-routed assign with no master still 409s even though qwen is (irrelevantly) failed and xtts is ready', async () => {
+  it('T9 — closes the engine-blind hole T1-T8 leave open: a coqui-routed assign is ALLOWED (200) on its own ready xtts slot, even with no master and an irrelevantly-failed qwen slot', async () => {
     await vl.writeEntry(
       makeEntry({
         voiceUuid: 't9-voice',
@@ -1992,6 +2009,123 @@ describe('POST /:uuid/assign — per-engine readiness gate (#1933)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no retained reference clip/);
+  });
+
+  /* T11 — closes a hole T4/T10 leave open: both of THOSE cases route to
+     Qwen, so an implementation that scoped the "no master / clip gone"
+     check to `engine === 'qwen'` (mirroring the transcript clause's own
+     qwen-only scoping one line down) would pass both while silently
+     letting a master-less cloned entry through on a COQUI-routed
+     character — exactly the missing-master hazard this gate exists to
+     catch, just reachable from the other engine. */
+  it('T11 — 409s "no retained reference clip" for a coqui-routed assign of a cloned entry with no master at all', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't11-voice',
+        provenance: 'cloned',
+        engines: {},
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t11', [
+      { id: 'char-t11', name: 'CharT11', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t11-voice/assign')
+      .send({ bookId: 'book-t11', characterId: 'char-t11' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/no retained reference clip/);
+    expect(res.body.error).toMatch(/Coqui XTTS v2/);
+  });
+
+  /* T12 — pins `advisoryMessage`'s `'no-clip'` arm, which none of T1-T11
+     reach: T9 (the other case with an irrelevant qwen problem) sets
+     `qwen: { status: 'failed' }`, so its OTHER-engine evaluation takes the
+     `'failed'` arm, not `'no-clip'`. Here the routed (qwen) slot is
+     healthy — the assign succeeds — and the OTHER (coqui) slot is simply
+     absent with no master to derive from, so the advisory must name the
+     'no-clip' reason specifically. */
+  it('T12 — pins the no-clip advisory string when a qwen-routed assign\'s OTHER (coqui) slot has no master to derive from', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't12-voice',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'x' } },
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t12', [
+      { id: 'char-t12', name: 'CharT12', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t12-voice/assign')
+      .send({ bookId: 'book-t12', characterId: 'char-t12' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
+    expect(res.body.warning).toMatch(/Coqui XTTS v2/);
+    expect(res.body.warning).toMatch(/has no retained reference clip/);
+    expect(res.body.warning).toMatch(/can never be derived/);
+  });
+
+  /* T13 — pins `advisoryMessage`'s `'failed'` arm for the OTHER-COQUI
+     case, the mirror image of T1 (which only ever exercises this arm with
+     the OTHER engine being Qwen). Every 'failed'-reason advisory test up
+     to T12 has `otherEngine === 'qwen'`; this is the first to have
+     `otherEngine === 'coqui'`, so a `${label}` substitution hardcoded to
+     "Qwen" in this arm would pass T1/T9/T12 undetected. */
+  it('T13 — pins the failed advisory string naming Coqui when a qwen-routed assign\'s OTHER (coqui) slot is terminally failed', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't13-voice',
+        provenance: 'cloned',
+        engines: { qwen: { status: 'ready', baseModel: 'x' }, xtts: { status: 'failed' } },
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t13', [
+      { id: 'char-t13', name: 'CharT13', ttsEngine: 'qwen' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t13-voice/assign')
+      .send({ bookId: 'book-t13', characterId: 'char-t13' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
+    expect(res.body.warning).toMatch(/Coqui XTTS v2/);
+    expect(res.body.warning).toMatch(/failed to derive/);
+  });
+
+  /* T14 — pins `advisoryMessage`'s `'no-clip'` arm for the OTHER-QWEN
+     case, the mirror image of T12 (which only ever exercises this arm
+     with the OTHER engine being Coqui). A `${label}` substitution
+     hardcoded to "Coqui XTTS v2" in this arm would pass T12 undetected. */
+  it('T14 — pins the no-clip advisory string naming Qwen when a coqui-routed assign\'s OTHER (qwen) slot has no master to derive from', async () => {
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 't14-voice',
+        provenance: 'cloned',
+        engines: { xtts: { status: 'ready', coquiVersion: 'x' } },
+        consent: baseConsent,
+      }),
+    );
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-t14', [
+      { id: 'char-t14', name: 'CharT14', ttsEngine: 'coqui' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/voice-library/t14-voice/assign')
+      .send({ bookId: 'book-t14', characterId: 'char-t14' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.written).toEqual(['qwen', 'coqui']);
+    expect(res.body.warning).toMatch(/Qwen/);
+    expect(res.body.warning).toMatch(/has no retained reference clip/);
+    expect(res.body.warning).toMatch(/can never be derived/);
   });
 });
 

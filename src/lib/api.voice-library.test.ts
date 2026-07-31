@@ -197,11 +197,33 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       expect(advisory).toMatch(/failed to derive/);
     });
 
+    /* T2-mirror — the mock had NO test at all exercising `_mockBlockMessage`'s
+       `'failed'` arm for a QWEN-routed assign (every prior mock test with a
+       failed qwen slot only ever reached it via the ADVISORY path, routed
+       to coqui). Confirmed by mutation: hardcoding this arm's routed AND
+       alternative-engine labels to fixed (wrong) values left all prior
+       mock tests green. */
+    it('T2-mirror — 409s a qwen-routed assign of the same terminally failed qwen slot', () => {
+      const entry = makeCloned({ engines: { qwen: { status: 'failed' } } });
+      const error = _mockAssignGuardError(entry, 'qwen3-tts-0.6b');
+      expect(error).toMatch(/Qwen/);
+      expect(error).toMatch(/failed to derive/);
+      // The alternative-engine suggestion ("or cast ... on X instead") is
+      // the OTHER label direction from T3-mirror's — pin it here too.
+      expect(error).toMatch(/Coqui XTTS v2/);
+    });
+
     it('T3-mirror — 409s a coqui-routed assign of a failed xtts slot even though qwen is ready', () => {
       const entry = makeCloned({
         engines: { qwen: { status: 'ready', baseModel: 'x' }, xtts: { status: 'failed' } },
       });
-      expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toMatch(/Coqui XTTS v2/);
+      const error = _mockAssignGuardError(entry, 'coqui-xtts-v2');
+      expect(error).toMatch(/Coqui XTTS v2/);
+      // Alternative-engine suggestion in the OTHER direction from
+      // T2-mirror's — "Qwen" appears in this message ONLY as that
+      // alternative, so this specifically catches a hardcoded (wrong)
+      // alternative-engine label that T2-mirror's assertions cannot.
+      expect(error).toMatch(/Qwen/);
     });
 
     it('T6b-mirror — allows a coqui-routed assign of a transcript-less clip, with a Qwen transcript advisory', () => {
@@ -235,6 +257,66 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toBeNull();
       const advisory = _mockAssignAdvisory(entry, 'coqui-xtts-v2');
       expect(advisory).toMatch(/Qwen/);
+    });
+
+    /* T11-mirror — closes a hole in the OTHER arm: a mirror that scoped
+       the "no master / clip gone" check to `engine === 'qwen'` (mirroring
+       the transcript clause's own qwen-only scoping one line down) would
+       let a master-less cloned entry through on a COQUI-routed character.
+       Neither the "no engines[]" guard test above nor T1/T3/T6b/T9-mirror
+       covers this — all of them either route to Qwen or have a master. */
+    it('T11-mirror — 409s a coqui-routed assign of a cloned entry with no master at all', () => {
+      const entry = makeCloned({ engines: {} });
+      expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toMatch(/no retained reference clip/);
+      expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toMatch(/Coqui XTTS v2/);
+    });
+
+    /* T12-mirror — pins `_mockAdvisoryMessage`'s `'no-clip'` arm, which none
+       of T1/T3/T6b/T9/T11-mirror reach: T9-mirror (the other case with an
+       irrelevant qwen problem) sets `qwen: { status: 'failed' }`, so its
+       OTHER-engine evaluation takes the `'failed'` arm, not `'no-clip'`.
+       Here the routed (qwen, default via `makeCloned`) slot is healthy —
+       the assign succeeds — and the OTHER (coqui) slot is simply absent
+       with no master to derive from, so the advisory must name the
+       'no-clip' reason specifically. */
+    it('T12-mirror — pins the no-clip advisory string when a qwen-routed assign\'s OTHER (coqui) slot has no master to derive from', () => {
+      const entry = makeCloned(); // default engines: { qwen: { status: 'ready', ... } }, no master, no xtts
+      expect(_mockAssignGuardError(entry, 'qwen3-tts-0.6b')).toBeNull();
+      const advisory = _mockAssignAdvisory(entry, 'qwen3-tts-0.6b');
+      expect(advisory).toMatch(/Coqui XTTS v2/);
+      expect(advisory).toMatch(/has no retained reference clip/);
+      expect(advisory).toMatch(/can never be derived/);
+    });
+
+    /* T13-mirror — pins `_mockAdvisoryMessage`'s `'failed'` arm for the
+       OTHER-COQUI case, the mirror image of T1-mirror/T9-mirror (both of
+       which only ever exercise this arm with the OTHER engine being
+       Qwen). A `${label}` substitution hardcoded to "Qwen" in this arm
+       would pass every prior mock test undetected. */
+    it('T13-mirror — pins the failed advisory string naming Coqui when a qwen-routed assign\'s OTHER (coqui) slot is terminally failed', () => {
+      const entry = makeCloned({
+        engines: { qwen: { status: 'ready', baseModel: 'x' }, xtts: { status: 'failed' } },
+      });
+      expect(_mockAssignGuardError(entry, 'qwen3-tts-0.6b')).toBeNull();
+      const advisory = _mockAssignAdvisory(entry, 'qwen3-tts-0.6b');
+      expect(advisory).toMatch(/Coqui XTTS v2/);
+      expect(advisory).toMatch(/failed to derive/);
+    });
+
+    /* T14-mirror — pins `_mockAdvisoryMessage`'s `'no-clip'` arm for the
+       OTHER-QWEN case, the mirror image of T12-mirror (which only ever
+       exercises this arm with the OTHER engine being Coqui). A `${label}`
+       substitution hardcoded to "Coqui XTTS v2" in this arm would pass
+       T12-mirror undetected. */
+    it('T14-mirror — pins the no-clip advisory string naming Qwen when a coqui-routed assign\'s OTHER (qwen) slot has no master to derive from', () => {
+      const entry = makeCloned({
+        engines: { xtts: { status: 'ready', coquiVersion: 'x' } },
+      });
+      expect(_mockAssignGuardError(entry, 'coqui-xtts-v2')).toBeNull();
+      const advisory = _mockAssignAdvisory(entry, 'coqui-xtts-v2');
+      expect(advisory).toMatch(/Qwen/);
+      expect(advisory).toMatch(/has no retained reference clip/);
+      expect(advisory).toMatch(/can never be derived/);
     });
   });
 
