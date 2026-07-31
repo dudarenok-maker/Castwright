@@ -99,11 +99,14 @@ export async function scanLibraryVoiceUsage(voiceUuid: string): Promise<LibraryV
     which shares the same walker) and is stale by the time this function's
     write lands — a concurrent write to the SAME book (e.g. an overlapping
     `/assign`) between the walker's read and this write would otherwise be
-    silently replayed over. The DELETE route (`routes/voice-library.ts`)
-    holds `library-voice:<uuid>` across this whole call, which is why this
-    only ever needs a PER-BOOK cast lock, not a `withCastLocks` across every
-    book at once — rule 1 (one level of locking) still holds because nothing
-    else in this call chain also takes a cast lock. */
+    silently replayed over. A single per-book `withCastLock` per iteration
+    suffices — never `withCastLocks` across every book at once — because the
+    books are independent and this loop holds at most ONE cast lock at a
+    time, releasing book A's before acquiring book B's; `withCastLocks`
+    exists for the different case of needing several books' locks held
+    atomically TOGETHER, which nothing here does. Rule 1 (one level of
+    locking) still holds because nothing else in this call chain also takes
+    a cast lock. */
 export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<void> {
   for await (const { bookDir } of walkConfirmedCasts()) {
     await withCastLock(bookDir, async () => {

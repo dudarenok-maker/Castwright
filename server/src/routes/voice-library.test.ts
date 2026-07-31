@@ -716,13 +716,30 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
      inverted either side, the two would deadlock on cast-lock.ts's
      no-timeout mutex with no diagnostic (see its header, rule 4). Race
      against a timeout sentinel, mirroring cast-lock.test.ts's own AB/BA
-     test, so a regression fails fast in CI instead of hanging the run. */
+     test, so a regression fails fast in CI instead of hanging the run.
+
+     Review round 2 (#1981) — `alice` MUST already reference `uuid` (same
+     `overrideTtsVoices.qwen.libraryUuid` shape the 409 test above uses), not
+     start unassigned. `library-voice` fully serialises the two requests, so
+     with an unassigned `alice` the DELETE-first interleaving finds
+     `scanLibraryVoiceUsage` empty and never calls
+     `clearLibraryVoiceReferences` — meaning the DELETE never takes a cast
+     lock at all, and this test would still pass even with `/assign`'s
+     acquisition order inverted (proven: see the mutation-verification in
+     task-5-report.md). Seeding an existing reference forces
+     `usage.length > 0` on every interleaving, so `clearLibraryVoiceReferences`
+     — and its nested `withCastLock` — always actually runs, which is what
+     makes this test capable of catching an inverted order at all. */
   it('#1981 — a DELETE and an assign contending on the same uuid never deadlock', async () => {
     const uuid = 'race-lock-order';
     await seedFullVoiceArtifacts(uuid);
     const bookId = 'book-lock-order';
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
-      { id: 'alice', name: 'Alice' },
+      {
+        id: 'alice',
+        name: 'Alice',
+        overrideTtsVoices: { qwen: { name: `qwen-${uuid}`, libraryUuid: uuid } },
+      },
     ]);
 
     const result = await Promise.race([
