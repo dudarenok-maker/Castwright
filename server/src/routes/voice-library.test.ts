@@ -2620,7 +2620,14 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       .post('/api/voice-library/clone')
       .send({
         candidateId: 'cand-1',
-        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+        /* #1959 — family-with-permission now requires attestedBy up front
+           (falling back to personName is only for `self`). */
+        consent: {
+          personName: 'Mum',
+          relationship: 'family-with-permission',
+          permittedUse: 'personal',
+          attestedBy: 'Mum',
+        },
       });
 
     expect(res.status).toBe(200);
@@ -2670,12 +2677,43 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.consent.attestedBy).toBe('Dana');
   });
 
-  /* Existing callers that never send attestedBy must be unchanged — the
-     fallback keeps today's behaviour. */
-  it('falls back to personName when attestedBy is omitted', async () => {
+  /* #1959 — a guardian-of-minor clone can no longer fall back to
+     personName: that would persist a record asserting the minor attested
+     to their own voice being cloned, the exact defect #1943 fixed. Checked
+     before any candidate/GPU work (no writeCandidate needed — this never
+     reaches the candidate lookup). */
+  it('rejects a guardian-of-minor clone with attestedBy omitted (400)', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-no-attester',
+        consent: { personName: 'Ana', relationship: 'guardian-of-minor', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/attestedBy/);
+  });
+
+  /* Same rule for the other non-self relationship. */
+  it('rejects a family-with-permission clone with attestedBy omitted (400)', async () => {
+    const res = await request(app)
+      .post('/api/voice-library/clone')
+      .send({
+        candidateId: 'cand-no-attester-2',
+        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/attestedBy/);
+  });
+
+  /* `self` is unaffected: personName IS the attester there, and the wizard
+     deliberately omits attestedBy for that relationship. Must keep
+     succeeding and persisting personName as the fallback. */
+  it('self clone with attestedBy omitted still succeeds and persists personName', async () => {
     const { writeCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(
-      'cand-no-attester',
+      'cand-self-no-attester',
       {
         sampleRate: 24000,
         durationSeconds: 12,
@@ -2690,8 +2728,8 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     const res = await request(app)
       .post('/api/voice-library/clone')
       .send({
-        candidateId: 'cand-no-attester',
-        consent: { personName: 'Ana', relationship: 'guardian-of-minor', permittedUse: 'personal' },
+        candidateId: 'cand-self-no-attester',
+        consent: { personName: 'Ana', relationship: 'self', permittedUse: 'personal' },
       });
 
     expect(res.status).toBe(200);
@@ -2734,23 +2772,11 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.body.consent.attestedBy).toBe('Dana');
   });
 
-  /* A blank/whitespace attestedBy must not persist an empty attester —
-     falls back to personName the same as an omitted field. */
-  it('falls back to personName when attestedBy is blank/whitespace', async () => {
-    const { writeCandidate } = await import('../workspace/clone-candidate.js');
-    await writeCandidate(
-      'cand-blank-attester',
-      {
-        sampleRate: 24000,
-        durationSeconds: 12,
-        transcript: 'my own voice sample',
-        transcriptSource: 'whisper',
-        captureMethod: 'upload',
-      },
-      Buffer.from('RIFF'),
-    );
-    decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
-
+  /* #1959 — a blank/whitespace attestedBy must be treated the same as
+     omitted: for a non-self relationship that means REJECTED (400), not a
+     fallback to personName — otherwise whitespace would be a bypass for
+     the omitted-field rule above. */
+  it('rejects a guardian-of-minor clone with a blank/whitespace attestedBy (treated as absent)', async () => {
     const res = await request(app)
       .post('/api/voice-library/clone')
       .send({
@@ -2763,8 +2789,8 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
         },
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.consent.attestedBy).toBe('Ana');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/attestedBy/);
   });
 
   /* #1836 — the wizard's transcript box is editable, so a correction must
@@ -2794,7 +2820,9 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       .send({
         candidateId: 'cand-edit',
         transcript: 'my own voice sample',
-        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+        /* #1959 — relationship is incidental to this test; `self` needs no
+           attestedBy. */
+        consent: { personName: 'Mum', relationship: 'self', permittedUse: 'personal' },
       });
 
     expect(res.status).toBe(200);
@@ -2835,7 +2863,9 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       .post('/api/voice-library/clone')
       .send({
         candidateId: 'cand-de',
-        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+        /* #1959 — relationship is incidental to this test; `self` needs no
+           attestedBy. */
+        consent: { personName: 'Mum', relationship: 'self', permittedUse: 'personal' },
       });
 
     expect(res.status).toBe(200);
@@ -2873,7 +2903,9 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
       .post('/api/voice-library/clone')
       .send({
         candidateId: 'cand-kl',
-        consent: { personName: 'Mum', relationship: 'family-with-permission', permittedUse: 'personal' },
+        /* #1959 — relationship is incidental to this test; `self` needs no
+           attestedBy. */
+        consent: { personName: 'Mum', relationship: 'self', permittedUse: 'personal' },
       });
 
     expect(res.status).toBe(200);

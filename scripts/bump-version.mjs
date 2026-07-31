@@ -24,7 +24,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkReleaseNotes } from './release-notes-gate.mjs';
+import { checkReleaseNotes, checkMojibake } from './release-notes-gate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -444,11 +444,24 @@ async function main() {
     else die(msg);
   }
 
+  // Pre-flight 5c (#1956): RELEASE_NOTES.md must be free of double-UTF-8
+  // mojibake — a corrupted file would otherwise ship the mangle straight to
+  // users. --force downgrades to a warning; --dry-run only reports.
+  if (existsSync(notesPath)) {
+    const mojibakeCheck = checkMojibake(readFileSync(notesPath, 'utf8'), 'RELEASE_NOTES.md');
+    if (!mojibakeCheck.ok) {
+      if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
+      else die(`Mojibake gate: ${mojibakeCheck.reason}`);
+    }
+  }
+
   // Pre-flight 6: the technical notes file must be current for THIS version.
   // Catches the "release-notes-next.md still holds the last release" trap —
   // a stale marker would otherwise become the GitHub release body verbatim.
   if (args.notesFile) {
-    const stale = staleNotesVersion(readFileSync(resolve(args.notesFile), 'utf8'), newVersion);
+    const notesFileText = readFileSync(resolve(args.notesFile), 'utf8');
+    const stale = staleNotesVersion(notesFileText, newVersion);
     if (stale) {
       if (args.force) info(`[WARN] notes-file gate (--force): ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
       else if (args.dryRun) info(`[DRY-RUN][WARN] notes-file gate: ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
@@ -457,6 +470,16 @@ async function main() {
           `${args.notesFile} declares release-notes-next-version: ${stale} but you're ` +
             `cutting ${newVersion}. Refresh it for this release (or pass --force).`,
         );
+    }
+
+    // Pre-flight 6b (#1956): the technical notes are fed verbatim into the
+    // tag annotation / GitHub release body — a mojibake mangle here ships
+    // straight to the public releases page.
+    const mojibakeCheck = checkMojibake(notesFileText, args.notesFile);
+    if (!mojibakeCheck.ok) {
+      if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
+      else die(`Mojibake gate: ${mojibakeCheck.reason}`);
     }
   }
 

@@ -55,8 +55,20 @@ export const STEPS = [
          Same #1847 trap test:pinokio's comment below documents. */
       globs: ['scripts/tests/*.test.mjs', 'scripts/tests/fixtures/**'],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
-         requires it — a diff that breaks the parser must run its own test. */
-      extraFiles: ['scripts/validate-commit-msg.mjs', 'scripts/preflight-ffmpeg.cjs'],
+         requires it — a diff that breaks the parser must run its own test.
+         RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs
+         are inputs because release-notes-gate.test.mjs asserts the mojibake
+         gate against those real committed files at RUNTIME (#1956) — same
+         #1847 trap as fixtures/** above: without them, a notes-only diff
+         (exactly the shape that would reintroduce the corruption) never
+         busts this step's input hash and the assertion sits stale-green. */
+      extraFiles: [
+        'scripts/validate-commit-msg.mjs',
+        'scripts/preflight-ffmpeg.cjs',
+        'RELEASE_NOTES.md',
+        'docs/release-notes-next.md',
+        'scripts/release-notes-gate.mjs',
+      ],
       includeLockfiles: ['root'],
     },
   },

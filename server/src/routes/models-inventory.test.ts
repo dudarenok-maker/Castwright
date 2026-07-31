@@ -251,6 +251,46 @@ describe('buildModelInventory', () => {
     expect(row.tier).toBe('secondary');
   });
 
+  describe('coqui import honesty (#1963)', () => {
+    beforeEach(() => {
+      // Weights present so installState differs by packageInstalled alone.
+      writeFile(join(ttsHome, 'tts', XTTS_DIR, 'model.pth'), 4096);
+    });
+
+    it('coqui_import_ok: false downgrades installState to package-missing even though find_spec (coquiPackageInstalled) says true', () => {
+      /* THE DEFECT: before the fix, pkgInstalled() read coquiPackageInstalled
+         (find_spec) alone, so a package that cannot actually import (#1944's
+         speechbrain lazy-proxy collision) reported installState: 'ready'. */
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, coquiPackageInstalled: true, coquiImportOk: false },
+        }),
+      );
+      const coqui = inv.items.find((i) => i.id === 'coqui')!;
+      expect(coqui.installState).toBe('package-missing');
+    });
+
+    it('coqui_import_ok: null falls back to coquiPackageInstalled — installState stays ready, unchanged from today', () => {
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, coquiPackageInstalled: true, coquiImportOk: null },
+        }),
+      );
+      const coqui = inv.items.find((i) => i.id === 'coqui')!;
+      expect(coqui.installState).toBe('ready');
+    });
+
+    it('coqui_import_ok: true reports installState ready', () => {
+      const inv = buildModelInventory(
+        baseDeps({
+          sidecar: { ...reachableSidecar, coquiPackageInstalled: true, coquiImportOk: true },
+        }),
+      );
+      const coqui = inv.items.find((i) => i.id === 'coqui')!;
+      expect(coqui.installState).toBe('ready');
+    });
+  });
+
   it('every TTS + whisper row carries an integrity verdict', () => {
     const inv = buildModelInventory(baseDeps());
     for (const id of ['kokoro', 'qwen-base', 'coqui', 'whisper'])
