@@ -1045,6 +1045,332 @@ def test_pinned_full_card_yields_nocapacity_even_with_room_elsewhere():
     run_case(body())
 
 
+# --- stranded-cache reclaim on the admission-failure path (#1976) -----------
+#
+# After a chapter render, torch's caching allocator can leave a reserved pool
+# behind on the render card even once the engine reports unloaded — no model
+# is resident to key an eviction step off, so `_evict_until`'s whole ladder
+# (every test above) yields nothing and admission would otherwise refuse on a
+# driver-truth probe that is honestly reading a stale reservation.
+# `_reclaim_stranded_cache` is the last-resort phase that runs exactly once,
+# only after that ladder has already run and failed, and re-probes once more
+# before giving up. Every test below drives it via the injectable `reclaim=`
+# constructor hook, never real torch/CUDA — the "injected probe + a fake
+# reclaim hook that changes it" seam the issue's own coverage-gap note calls
+# out as unit-testable, with the real allocator behaviour staying on-box.
+
+
+def test_stranded_cache_reclaim_lets_a_starved_admit_succeed():
+    """No engine is resident (`idle_evict_steps` yields nothing at all — the
+    exact #1976 scenario: a render finished, the model unloaded, and nothing
+    is left for the residency ladder to evict) and the probe starts starved.
+    The injected `reclaim` hook is the only thing that raises `freeMb` back
+    up; without the #1976 fallback this would report noCapacity forever."""
+
+    async def body():
+        state = {"free": 200, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def reclaim(device_key):
+            reclaimed.append(device_key)
+            state["free"] = 8000  # the stranded pool comes back, as in #1976's table
+
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],  # nothing resident — the bug's premise
+            is_resident=lambda e: None,
+            reclaim=reclaim,
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert a["device"] == "cuda:0"
+        assert reclaimed == ["cuda:0"]  # called, and called exactly once
+        return _RAN
+
+    run_case(body())
+
+
+def test_stranded_cache_reclaim_lets_a_starved_reservation_succeed():
+    """The real production seam, and #1976's acceptance criterion verbatim:
+    with no engine resident and a non-empty reserved pool, an admission that
+    would fail on the stale figure succeeds after the reclaim — driven
+    through `reservation()`, not `admit()` (every real call site uses
+    `reservation()`; see the note on
+    `test_starved_qwen_reservation_admits_after_coqui_is_evicted` above)."""
+
+    async def body():
+        state = {"free": 200, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def reclaim(device_key):
+            reclaimed.append(device_key)
+            state["free"] = 8000
+
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=reclaim,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert reclaimed == ["cuda:0"]
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_is_not_called_on_the_happy_path():
+    """The reclaim hook must stay off the hot path: a build that calls it
+    unconditionally (e.g. before the first `best_fit`/`try_hold` attempt, or
+    even after a SUCCESSFUL one) would pay a `gc.collect()` + CUDA call on
+    every single admission, resident or not — exactly the cost #1976 asks to
+    avoid ("Cheap: only on the failure path")."""
+
+    async def body():
+        devices = [dev(free=8000, total=8192)]
+        reclaimed = []
+        pc = main.PlacementController(
+            probe=lambda: devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert a["device"] == "cuda:0"
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission["device"] == "cuda:0"
+        assert reclaimed == []
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_runs_after_idle_evict_not_instead_of_it():
+    """Ordering: idle-evict (resident engines) gets first crack; reclaim
+    (stranded cache) is the fallback, not a replacement for it. If a
+    resident engine's own eviction already frees enough, the reclaim hook
+    must never fire at all — `_evict_until` returns before the #1976 fallback
+    is ever reached, so a resident-model reload that was already going to
+    happen isn't joined by a redundant reclaim on top of it."""
+
+    async def body():
+        state = {"free": 500, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def free_asr():
+            state["free"] = 8000
+            return True
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [main.EvictStep("asr", "asr", free_asr)],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert a["device"] == "cuda:0"
+        assert reclaimed == []  # idle-evict alone was enough — reclaim never needed
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_still_insufficient_reports_nocapacity_and_runs_once():
+    """The reclaim hook fires exactly once even when it does NOT free enough
+    — no loop, no retry storm. Admission correctly falls through to
+    noCapacity once the single reclaim attempt fails to help."""
+
+    async def body():
+        state = {"free": 200, "total": 8192}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def reclaim(device_key):
+            reclaimed.append(device_key)
+            state["free"] = 300  # some, but nowhere near the 5600 needed
+
+        fp = type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})()
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=fp,
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=reclaim,
+        )
+        async with pc.reservation("qwen", "q", {}, cpu_capable=False, heavy=True) as admission:
+            assert admission == {"noCapacity": {"neededMb": 5600, "deviceKey": "cuda:0"}}
+        assert reclaimed == ["cuda:0"]  # tried exactly once, not looped
+        return _RAN
+
+    run_case(body())
+
+
+# --- #1993 review C1: two guards in front of the reclaim -------------------
+#
+# withCapacityRetry (server/src/gpu/capacity-retry.ts) retries a genuine
+# noCapacity 503 up to GPU_CAPACITY_MAX_ATTEMPTS (default 30) every
+# GPU_CAPACITY_POLL_MS (default 2s) — every retry re-enters admission, so
+# without these two guards a single refused op could fire ~30
+# gc.collect()+empty_cache() cycles into whatever else is running on the
+# card. Both guards live in `_reclaim_stranded_cache` itself, so both
+# `admit()` and `reservation()` get them for free — no duplication needed at
+# either call site.
+
+
+def test_reclaim_skipped_when_device_key_is_in_use():
+    """Guard 1: a STRANDED pool is by definition one nothing is using. If
+    another engine already holds a live reservation on `device_key`
+    (`ReservationLedger.engines_holding` — the same #1920B "don't touch
+    what's in flight" authority `_evict_until` already uses for this exact
+    reasoning), this isn't the stranded-pool case, and the reclaim must not
+    fire — it would instead race that op's own allocator."""
+
+    async def body():
+        devices = lambda: [dev(free=200, total=8192)]
+        reclaimed = []
+        ledger = main.ReservationLedger()
+        ledger.hold("cuda:0", 1000, "other-engine")  # simulates an in-flight op
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=ledger,
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a
+        assert reclaimed == []
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_cooldown_skips_a_second_attempt_within_the_window(monkeypatch):
+    """Guard 2: two admission failures on the same device_key, close together
+    in time, must reclaim only once. Simulates the retry-loop shape
+    (withCapacityRetry re-entering admission every GPU_CAPACITY_POLL_MS) by
+    driving `time.monotonic()` directly rather than sleeping — the second
+    call lands 1s after the first, well inside the 30s cooldown."""
+
+    async def body():
+        state = {"free": 200, "total": 8192, "t": 0.0}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        def reclaim(device_key):
+            # Deliberately does NOT raise state["free"] — stays insufficient
+            # either way, so the assertion is purely "was reclaim CALLED",
+            # not "did it help".
+            reclaimed.append(device_key)
+
+        monkeypatch.setattr(main.time, "monotonic", lambda: state["t"])
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=reclaim,
+        )
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        state["t"] = 1.0  # 1s later — inside the 30s cooldown
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert reclaimed == ["cuda:0"]  # second attempt skipped the reclaim
+        return _RAN
+
+    run_case(body())
+
+
+def test_reclaim_runs_again_once_the_cooldown_expires(monkeypatch):
+    """The cooldown skip is temporary, not permanent — a genuinely still-
+    stranded card must get another shot once GPU_CAPACITY_MAX_ATTEMPTS'
+    worth of polling has run past the cooldown window."""
+
+    async def body():
+        state = {"free": 200, "total": 8192, "t": 0.0}
+        devices = lambda: [dev(free=state["free"], total=state["total"])]
+        reclaimed = []
+
+        monkeypatch.setattr(main.time, "monotonic", lambda: state["t"])
+
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        state["t"] = 31.0  # past the 30s cooldown
+        await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert reclaimed == ["cuda:0", "cuda:0"]
+        return _RAN
+
+    run_case(body())
+
+
+# --- #1993 review M3: `_worst_device_key` targets the wrong card -----------
+
+
+def test_reclaim_target_is_the_wrong_card_on_a_two_device_box():
+    """`_worst_device_key` picks the device with the MOST headroom — on a
+    two-device box, that is systematically NOT the device holding a
+    stranded pool (a stranded pool by definition REDUCES a device's
+    apparent headroom). Pins the current, known-imperfect behaviour rather
+    than silently relying on it: cuda:0 is the stranded card (low free),
+    cuda:1 has more free space, and the reclaim hook is called with cuda:1
+    — the wrong card, by name. This stays harmless only because
+    `_reclaim_device_cache` reclaims EVERY device's cache, never just the
+    passed-in `device_key` (#1993 review M2) — if a future change made the
+    reclaim device-scoped again without also fixing this selection, THAT
+    combination would silently stop fixing #1976 on any multi-GPU box."""
+
+    async def body():
+        devices = lambda: [dev(index=0, free=200, total=8192), dev(index=1, free=1000, total=8192)]
+        reclaimed = []
+        pc = main.PlacementController(
+            probe=devices,
+            footprints=type("F", (), {"peak_mb": lambda *_: 5600, "record": lambda *_: None})(),
+            ledger=main.ReservationLedger(),
+            reserve_mb=lambda: 768,
+            idle_evict_steps=lambda dk, eng: [],
+            is_resident=lambda e: None,
+            reclaim=lambda dk: reclaimed.append(dk),
+        )
+        a = await pc.admit("qwen", "q", {}, cpu_capable=False, heavy=True)
+        assert "noCapacity" in a
+        assert reclaimed == ["cuda:1"]  # NOT cuda:0, the actually-stranded card
+        return _RAN
+
+    run_case(body())
+
+
 # --- _engine_env_pin ------------------------------------------------------
 #
 # `_engine_env_pin` is the seam PlacementController's callers use to derive
