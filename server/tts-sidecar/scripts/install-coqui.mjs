@@ -66,6 +66,24 @@ function run(python, pyArgs, env) {
   return res.status ?? 1;
 }
 
+// Like run(), but pipes stdout instead of inheriting it, so the caller can
+// inspect what printed (the COQUI_VERIFY_MARKER check below) while still
+// echoing everything to the user exactly as run() would.
+function runCapture(python, pyArgs, env) {
+  const res = spawnSync(python, pyArgs, {
+    cwd: SIDECAR_DIR,
+    stdio: ['inherit', 'pipe', 'pipe'],
+    env: { ...process.env, ...env },
+    windowsHide: true,
+  });
+  if (res.error) throw new Error(`spawn failed: ${res.error.message}`);
+  const stdout = res.stdout ? res.stdout.toString() : '';
+  const stderr = res.stderr ? res.stderr.toString() : '';
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  return { status: res.status ?? 1, stdout };
+}
+
 /**
  * The ordered pip-install steps the installer runs, before the XTTS prefetch.
  * Exported (pure) so the sequence — coqui-tts, then torchcodec, then the CJK
@@ -77,12 +95,16 @@ function run(python, pyArgs, env) {
  * via transformers' is_torchcodec_available() (a bare `find_spec("torchcodec")`,
  * NOT a functional import). The sidecar venv pins torch 2.11 (CVE bump), so
  * without this `import TTS` (and the prefetch below) fails and Coqui can't load.
- * torchcodec only needs to be PRESENT, never functional: the sidecar never calls
- * torchaudio.load and XTTS inference uses precomputed manifest-speaker latents, so
- * torchcodec's FFmpeg decode path — which can't even load its shared libs against a
- * static FFmpeg 8 build — is never reached. `--no-deps` installs just the wheel so
- * torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
- * where torch<2.9 doesn't even need torchcodec).
+ * torchcodec only needs to be PRESENT, never functional: stock XTTS inference uses
+ * precomputed manifest-speaker latents, and the one call path that WOULD have
+ * reached torchcodec's FFmpeg decode — the XTTS clone path's reference-audio
+ * loader, `TTS.tts.models.xtts.load_audio` — is patched out at derive time
+ * (`xtts_audio_io.py`, #1967), so it stays unreached in practice. Without that
+ * patch it would fail here: torchcodec's FFmpeg decode path can't even load its
+ * shared libs against a static FFmpeg 8 build. `--no-deps` installs just the wheel
+ * so torchcodec can never perturb the pinned torch (protects the ROCm-2.8 profile,
+ * where torch<2.9 doesn't even need torchcodec). See also COQUI_VERIFY_CODE below,
+ * which fails the install outright if the patch can no longer apply.
  *
  * Why the CJK phonemizers (pypinyin / cutlet / unidic-lite): XTTS v2 needs
  * language-specific text frontends that coqui-tts doesn't pull. Chinese (zh-cn)
@@ -119,6 +141,45 @@ export function coquiPipInstallSteps(constraints) {
   ];
 }
 
+// Printed by COQUI_VERIFY_CODE immediately before it enters
+// patched_xtts_load_audio() — the last checkpoint before the code that can
+// actually detect loader drift. main() greps captured stdout for this line
+// to tell "the patch itself failed to apply" apart from any earlier, unrelated
+// crash (a numpy import error, a tempdir permission failure, `import TTS`
+// itself failing) that never reached the patch at all.
+export const COQUI_VERIFY_MARKER = '[install-coqui] entering clone-path patch';
+
+/**
+ * #1967 — verify the clone path can actually decode reference audio before we
+ * spend 1.8 GB on weights. coqui-tts is NOT pinned (base.txt carries no
+ * coqui-tts line), so an upstream release that renames or re-signatures XTTS's
+ * reference loader would otherwise install cleanly and fail at first derive,
+ * on every new install, with nobody able to reproduce it locally. Exported as
+ * a string so it is unit-testable; kept OUT of coquiPipInstallSteps because
+ * that array is asserted by exact equality.
+ */
+export const COQUI_VERIFY_CODE = [
+  'import os, sys, tempfile, wave',
+  'import numpy as np',
+  'from xtts_audio_io import patched_xtts_load_audio',
+  'import TTS.tts.models.xtts as _x',
+  'd = tempfile.mkdtemp()',
+  'p = os.path.join(d, "verify.wav")',
+  // A real waveform, NOT np.zeros: XTTS's own range guard logs "Error with
+  // <path>. Max=0.00 min=0.00" for an all-zero buffer (`not torch.any(audio < 0)`),
+  // and run() uses stdio:'inherit', so the user would see a line starting
+  // "Error with" immediately before "verify ok" in the installer output.
+  'pcm = (np.sin(np.linspace(0, 6.28 * 220, 2400)) * 16000).astype("<i2")',
+  'w = wave.open(p, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)',
+  'w.writeframes(pcm.tobytes()); w.close()',
+  `print(${JSON.stringify(COQUI_VERIFY_MARKER)})`,
+  'with patched_xtts_load_audio():',
+  '    a = _x.load_audio(p, 22050)',
+  'assert a.shape[0] == 1, a.shape',
+  'os.remove(p); os.rmdir(d)',
+  'print("[install-coqui] clone-path verify ok")',
+].join('\n');
+
 function main() {
   const python = findVenvPython();
   if (!python) {
@@ -154,6 +215,20 @@ function main() {
       step(failMsg);
       process.exit(1);
     }
+  }
+
+  step('Verifying the clone path can decode reference audio (#1967)...');
+  const verify = runCapture(python, ['-c', COQUI_VERIFY_CODE], env);
+  if (verify.status !== 0) {
+    if (verify.stdout.includes(COQUI_VERIFY_MARKER)) {
+      step('FAIL: the XTTS reference-audio patch could not be applied.');
+      step("      This coqui-tts release has moved or reshaped XTTS's reference loader,");
+      step('      so cloned-voice derives would fail. Report the version above on');
+      step('      https://github.com/dudarenok-maker/Castwright/issues/1967');
+    } else {
+      step('FAIL: the clone-path verification could not run; check that coqui-tts imported cleanly.');
+    }
+    process.exit(1);
   }
 
   step('Pre-fetching XTTS v2 into the default TTS cache (~1.8 GB; expect 2-5 min on a fast link)...');

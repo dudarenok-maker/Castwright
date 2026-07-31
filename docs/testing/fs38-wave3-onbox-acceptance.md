@@ -1371,7 +1371,7 @@ wastes zero GPU. Discharges 268's owed item (a).
   - `generationState: "failed"`
   - `generationErrorCode: "cloned-voice-broken"`
   - `generationError` **names the character** and the reason, in the shape
-    `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: "<Character>" (revoked). Re-enable Qwen or restore the missing voice(s); reassign the character(s).`
+    `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: "<Character>" (revoked). Restore the missing voice(s); reassign the character(s).` (pre-#1967 this read "Re-enable Qwen or restore the missing voice(s)" — a plain `revoked` entry never implies an engine is unavailable, so #1967 dropped the invented "Re-enable Qwen" clause; see clone-voice-resolver.ts.)
   - `generationRemediation` is non-empty.
 
 **Record:** elapsed to failure = ______ s · `tts.log` grew by ______ bytes
@@ -1794,20 +1794,7 @@ whole point.
 - The chapter fails with `generationErrorCode: cloned-voice-broken`.
 - `generationError` names the character with reason **`(wrong-engine)`** and the
   remedy sentence includes **`switch the book to Qwen`**.
-- It must **NOT** say `Re-enable Qwen` as the only remedy, and must not claim Qwen
-  is unavailable — Qwen is up. (`UnresolvableClonedVoiceError.fromList`,
-  `clone-voice-resolver.ts:101-147`: `wrong-engine` gets its own clause; the shared
-  tail is `reassign the character(s)`. Wave 3c widened the `engine-unavailable`
-  clause to name whichever engine(s) were actually reported unavailable —
-  `Re-enable Qwen or Coqui` when both are, falling back to the literal `Qwen`
-  wording for a pre-3c/qwen-only report like this one — but the `wrong-engine`
-  clause itself is still hardcoded to `switch the book to Qwen` regardless of
-  which engine the voice is actually cloned on; this test's own setup is a
-  Qwen-cloned voice, so that wording is correct here. There is no
-  Coqui-equivalent of this test in Section E — if a coqui-cloned voice hits
-  `wrong-engine`, the remedy would still say "switch the book to Qwen", which
-  would misdiagnose the fix; worth a follow-up test/fix if you want the Coqui
-  side covered.)
+- It must **NOT** say `Re-enable Qwen` as the only remedy, and must not claim Qwen is unavailable — Qwen is up. (`UnresolvableClonedVoiceError.fromList`, `clone-voice-resolver.ts:126-179`: `wrong-engine` gets its own clause; the shared tail is `reassign the character(s)`. Wave 3c widened the `engine-unavailable` clause to name whichever engine(s) were actually reported unavailable — `Re-enable Qwen or Coqui` when both are, falling back to the literal `Qwen` wording for a pre-3c/qwen-only report like this one — and (GATE 1 I-2) the `wrong-engine` clause itself names whichever engine the voice is actually cloned on (`switch the book to ${engineLabelFor(...)}`), not a hardcoded `Qwen`; this test's own setup is a Qwen-cloned voice, so `switch the book to Qwen` is correct here for that reason, not because the clause is hardcoded. #1967 separately gave `derive-failed` its own clause, unexercised by this test — see Section E's Coqui-clone tests for that path.)
 - Contrast case: put the book back on Qwen, **stop the sidecar**, and generate.
   Now the reason should read **`(engine-unavailable)`** with the
   `Re-enable Qwen or restore the missing voice(s)` remedy — the two diagnoses must
@@ -2589,6 +2576,21 @@ surface does that) is also gone.
 
 ---
 
+#### #1967 — additional acceptance criteria, on top of the nine E-tests above
+
+Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A26. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
+
+**Preconditions — the hot patch was REVERTED on 2026-07-31.** The 25 copied FFmpeg DLLs are gone from `site-packages/torchcodec/` and the box is a genuine static-FFmpeg box again (`ffmpeg 8.1.1-full_build-www.gyan.dev`). Reverting no longer costs you Section E: #1967 is merged, so the fix — not the hot patch — is what makes a derive work. **The revert is not "delete every non-hash-suffixed `*.dll`"**: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's own extensions and must stay. The copied set is exactly the non-hash-suffixed files that also have a hash-suffixed twin.
+
+1. **Static-FFmpeg derive — STILL OWED.** The mechanism was verified on 2026-07-31 on the reverted box: `import torchcodec` fails, torchaudio's loader fails, and **the real installed `TTS.tts.models.xtts.load_audio` fails unpatched but returns `(1, 22050)` under `patched_xtts_load_audio()`**. What has *not* run is the full path — re-run E-01 from a sidecar started on post-merge code (the sidecar up on 2026-07-31 predated the merge). It must complete and write `voices/xtts/xtts-<uuid>.{pt,json}`, and the sidecar log must show the derive was actually reached rather than short-circuited by a cached `.pt`.
+2. **Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was measured during PR #1978's review, both decoders run side by side on the same WAV: **max difference 0.0**, mono and stereo-downmix. Bit-identical, not merely similar. Still owed is the audible half — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the renders match.
+3. **Install-time verification — HALF RUN.** The healthy direction is done: `COQUI_VERIFY_CODE` executed against the real venv with the installer's own `cwd`, printing `[install-coqui] entering clone-path patch` then `[install-coqui] clone-path verify ok`, exit 0. Still owed is the failure direction, **both ways**: corrupt the installed `TTS.tts.models.xtts.load_audio` signature and confirm the installer exits 1 with the *drift* message naming the `coqui-tts` version; then break something *before* the patch is entered (e.g. an unimportable `TTS`) and confirm it gets the neutral "could not run" message instead. That two-way split is what the marker line exists for and it has never been exercised on a real install.
+4. **Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` `pinokio/install.js` provisions and record whether it succeeds or fails, either way — see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. #1967's fix makes the answer moot for behaviour either way; this is a recorded fact, not a pass/fail gate.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A (four sub-items — record each)  **Notes:**
+
+---
+
 ## 6. Known limitations — verify as EXPECTED, do not file as defects
 
 Everything in this table is a **documented, accepted** limitation of the shipped
@@ -2858,7 +2860,7 @@ briefly produced a false "silent substitution" reading during this run.
 
 #### Run 2 — 2026-07-31
 
-**DEF-D · HIGH · #1967 · open · blocks all of Section E on a stock box**
+**DEF-D · HIGH · #1967 · FIXED (PR #1978, merged 2026-07-31) · was blocking all of Section E on a stock box**
 **What:** every cloned-voice derive on Coqui/XTTS fails on a box whose FFmpeg is
 a **static** build — which is the normal Windows install, and the one the
 project's own docs steer you to (`winget install Gyan.FFmpeg`).
@@ -2991,7 +2993,7 @@ loaded, preferences toggled) — and whether you **restored** it:
 
 | # | What changed | Why | Restored? |
 |---|---|---|---|
-| 1 | FFmpeg shared libraries staged into `…/.venv/Lib/site-packages/torchcodec/` — copies of PyAV's own bundled FFmpeg 8 set from `site-packages/av.libs`, given canonical names alongside the hash-suffixed originals | **DEF-D / #1967.** Without it `import torchcodec` fails and every XTTS clone derive returns `derive-failed`, making all nine Section E tests unrunnable | ☒ **left in place deliberately** — reverting it re-blocks Section E. Undo by deleting the non-hash-suffixed `*.dll` from that directory |
+| 1 | FFmpeg shared libraries staged into `…/.venv/Lib/site-packages/torchcodec/` — copies of PyAV's own bundled FFmpeg 8 set from `site-packages/av.libs`, given canonical names alongside the hash-suffixed originals | **DEF-D / #1967.** Without it `import torchcodec` failed and every XTTS clone derive returned `derive-failed`, making all nine Section E tests unrunnable | ☒ **REVERTED 2026-07-31** — no longer needed, since PR #1978 fixed the underlying bug. The 25 copied DLLs were removed; `libtorchcodec_core*`/`libtorchcodec_custom_ops*` are torchcodec's own and were kept. Copies are backed up outside the repo |
 | 2 | `oduvan` reassigned to cloned voice `563501c7-…` in the German **and** Russian Coalfall books; the Russian one's `ttsEngine` set to `coqui` | A24 needed a cloned character in a non-English book; E-01 needed one that actually routes to Coqui rather than being overridden by the character's own engine | ☒ both books restored from `C:\fixtures\fs38\_run2_backup\`; `cast.json` **MD5 matches the pre-run file** for both, and every chapter-2 audio artifact was restored |
 | 3 | Cloned voice `563501c7-…` revoked | E-02 / E-09 are revoke tests | ☒ n/a — revocation is the test's outcome, and it is deliberately irreversible. Two healthy clones (`0abceba4-…`, `e530d3ae-…`) remain for later runs |
 | 4 | Sidecar restarted 3× mid-run | Each render leaves ~3.9 GB reserved on `cuda:0`, after which an out-of-band `/transcribe` is refused `503 {"noCapacity":…}` even though ASR is already loaded and `cuda:1` has 15 GB free. A restart clears the pool. In-band QA ASR *during* a render was unaffected; not filed (#1720 already records that ASR is not capacity-wrapped) | ☒ stack left healthy |

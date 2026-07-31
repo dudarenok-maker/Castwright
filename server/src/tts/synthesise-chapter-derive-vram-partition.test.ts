@@ -500,7 +500,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 1 
 
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
     expect((thrown as InstanceType<typeof UnresolvableClonedVoiceError>).broken).toEqual([
-      { name: 'Nova', reason: 'derive-failed' },
+      { name: 'Nova', reason: 'derive-failed', engine: 'coqui' },
     ]);
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
     expect(provider.calls).toHaveLength(0);
@@ -829,7 +829,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass, fix round 2 
     expect(deriveEngineArtifact).toHaveBeenCalledWith('lib-mira', 'coqui', expect.anything(), expect.anything());
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
     expect((thrown as InstanceType<typeof UnresolvableClonedVoiceError>).broken).toEqual([
-      { name: 'Nova', reason: 'derive-failed' },
+      { name: 'Nova', reason: 'derive-failed', engine: 'qwen' },
     ]);
     expect(deriveEngineArtifact).not.toHaveBeenCalledWith('lib-nova', 'qwen', expect.anything(), expect.anything());
   });

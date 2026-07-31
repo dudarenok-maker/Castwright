@@ -80,8 +80,11 @@ unset.
    isolated env carrying `python=3.12` and `ffmpeg` (conda-forge). Pinokio's bundled
    `node`/`npm` are already on PATH. *Plan verifies Pinokio's bundled Node ≥ 20.19
    (Vite 8 floor); if it is older, `conda install -c conda-forge nodejs` into the same
-   env.* ffmpeg version is unconstrained — torchcodec was dropped (torch 2.8 < 2.9), so
-   the server's ffmpeg-CLI use (`server/src/tts/mp3.ts`) is version-agnostic. *(Apple
+   env.* ffmpeg version is unconstrained — torchcodec was dropped (torch 2.8 < 2.9), so the server's ffmpeg-CLI use (`server/src/tts/mp3.ts`) is version-agnostic.
+
+   **Correction (2026-07-31, #1967):** this premise is stale — the June torch-CVE bump moved the sidecar's pin to torch/torchaudio 2.11, and torchcodec is now installed (opt-in, `--no-deps`) by `install-coqui.mjs` for the Coqui add-on. Whether `import torchcodec` succeeds inside the nested `.venv` this step provisions was genuinely unknown at #1967 design time — conda-forge's ffmpeg is built shared (unlike the static `gyan.dev` Windows build #1967 was found against), but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to `env/Library/bin`'s DLLs, so shared-ness there does not imply loadable here. #1967's fix (patching XTTS's own reference loader out of the clone derive, `xtts_audio_io.py`) makes the answer moot for *behaviour* — a Coqui clone now derives correctly on Pinokio whether or not `import torchcodec` succeeds — but the on-box acceptance item recording which way it actually goes is still owed; see `docs/testing/onbox-acceptance-register.md`.
+
+   *(Apple
    Silicon, adversarial m6: the conda env must be **arm64**, not x86/Rosetta, or torch
    `mps` won't engage — Pinokio's bundled conda is arm64 on Apple Silicon; acceptance
    confirms.)*

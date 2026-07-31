@@ -1,13 +1,21 @@
 """Forward guardrail (fs-38 voice cloning): the sidecar's OWN source must never
-call torchaudio.load / .save / .info. torchaudio 2.9+ removed the soundfile/sox
-backends, so those calls hard-require torchcodec (uninstalled) and raise
-ImportError. The sidecar avoids them entirely — Kokoro is ONNX, Qwen reads audio
-via soundfile (sf.read), and Coqui is driven with manifest speakers (pre-computed
-latents), never a speaker_wav path. When fs-38 adds reference-clip cloning it MUST
-load the reference WAV via soundfile, not torchaudio.load.
+call torchaudio's loader (`.load` / `.save` / `.info`). torchaudio 2.9+ removed
+the soundfile/sox backends, so those calls now dispatch to torchcodec, which
+needs FFmpeg's SHARED libraries and fails outright against a static build
+(#1967). Kokoro is ONNX; Qwen and the XTTS clone path read and write PCM
+directly via the stdlib `wave` module + NumPy (see `xtts_audio_io.py`).
 
-This test is EXPECTED to be vacuously green today (the sidecar contains no such
-call) — it exists to fail loudly if that ever changes."""
+This test can only see the sidecar's OWN top-level source — it CANNOT see a
+call made from inside a third-party package the sidecar invokes. That is
+exactly how #1967 got past it: XTTS's own reference loader
+(`TTS/tts/models/xtts.py`, installed under site-packages) called torchaudio's
+loader internally, on the cloned-voice derive path, and this scan has no
+visibility into installed packages. The regression coverage for that call path
+— the poison test and the patched-loader mechanism tests — lives in
+`tests/test_xtts_audio_io.py`, not here.
+
+This test is EXPECTED to be vacuously green today (the sidecar's own source
+contains no such call) — it exists to fail loudly if that ever changes."""
 import re
 from pathlib import Path
 
@@ -43,6 +51,8 @@ def test_sidecar_source_never_calls_torchaudio_io():
             offenders.append(path.name)
     assert not offenders, (
         f"{offenders} call torchaudio.load/save/info — forbidden under torch >=2.9 "
-        "(no soundfile backend; would need torchcodec). Load audio via soundfile "
-        "(sf.read) instead. See the fs-38 voice-cloning guardrail."
+        "(no soundfile backend; dispatches to torchcodec, which fails on a static "
+        "FFmpeg build). Decode/encode audio via the stdlib wave module + NumPy "
+        "instead (see xtts_audio_io.py). See the fs-38 voice-cloning guardrail "
+        "and #1967."
     )

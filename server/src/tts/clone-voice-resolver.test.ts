@@ -657,7 +657,7 @@ describe('resolveClonedVoicesForChapter', () => {
       thrown = e as UnresolvableClonedVoiceError;
     }
     expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
-    expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+    expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'qwen' }]);
 
     expect(deps.writeEntry).toHaveBeenCalledTimes(1);
     const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
@@ -989,7 +989,7 @@ describe('resolveClonedVoicesForChapter', () => {
 
       // I-1: a write that succeeded but whose canonical re-read comes back
       // null/undefined must still be reported — not silently dropped.
-      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'qwen' }]);
     });
 
     /* GATE 1 M-6 — the harder sibling: `updateEntry` ITSELF throws (disk
@@ -1049,7 +1049,7 @@ describe('resolveClonedVoicesForChapter', () => {
       expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
       expect((thrown as UnresolvableClonedVoiceError).broken).toEqual([
         { name: 'Marlow', reason: 'revoked' },
-        { name: 'Reeve', reason: 'derive-failed' },
+        { name: 'Reeve', reason: 'derive-failed', engine: 'qwen' },
       ]);
     });
   });
@@ -1328,12 +1328,41 @@ describe('resolveClonedVoicesForChapter', () => {
         thrown = e as UnresolvableClonedVoiceError;
       }
 
-      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed' }]);
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'coqui' }]);
       expect(deps.writeEntry).toHaveBeenCalledTimes(1);
       const written = deps.writeEntry.mock.calls[0][0] as VoiceLibraryEntry;
       expect(written.engines.xtts?.status).toBe('failed');
       // The sibling qwen slot is untouched by the coqui failure stamp.
       expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-0.6b' });
+    });
+
+    it('a persisted xtts failed status (second run onward) is tagged engine: coqui via the classifier path, not just the catch path — #1967', async () => {
+      // Unlike the "permanent (4xx) derive failure" test above, which derives
+      // and only THEN persists failed, this fixture starts with the slot
+      // already stamped failed — the shape every run after the first
+      // actually hits. classifyClonedVoice (clone-voice-resolver.ts:235)
+      // returns broken/derive-failed straight from the manifest slot,
+      // WITHOUT ever calling deriveEngineArtifact, so the `engine` tag can
+      // only come from the classifier-path spread (clone-voice-resolver.ts
+      // :469-473) — the catch-path test above can't exercise that spread at
+      // all. Losing that widening resolves the tag through `engineLabelFor`'s
+      // `?? 'qwen'` fallback and prints "Re-run the clone for Qwen" on a
+      // Coqui book — #1967's exact symptom.
+      const entry = baseEntry({ engines: { xtts: { status: 'failed' } } });
+      const deps = makeDeps({ readEntry: vi.fn(async () => entry) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'coqui' }]);
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
     });
   });
 
@@ -2517,5 +2546,40 @@ describe('resolveDesignedVoicesForChapter — onVoicePrepare (#1813)', () => {
 
     expect(onVoicePrepare).not.toHaveBeenCalled();
     expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+});
+
+describe('#1967 — derive-failed remedy copy', () => {
+  it('a pure derive-failed list never says "Re-enable Qwen"', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Re-enable');
+    expect(e.message).toContain('Re-run the clone for Coqui');
+  });
+
+  it('a mixed [revoked, derive-failed] list still never says "Re-enable Qwen"', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'revoked' },
+      { name: 'Reeve', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).not.toContain('Re-enable Qwen');
+    expect(e.message).toContain('Restore the missing voice(s)');
+    expect(e.message).toContain('re-run the clone for Coqui');
+  });
+
+  it('in a mixed list, the derive-failed remedy is lowercase (not sentence-initial)', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Marlow', reason: 'revoked' },
+      { name: 'Reeve', reason: 'derive-failed', engine: 'coqui' },
+    ]);
+    expect(e.message).toContain('re-run the clone for Coqui');
+    expect(e.message).not.toContain('; Re-run');
+  });
+
+  it('the first remedy reads correctly in sentence-initial position', () => {
+    const e = UnresolvableClonedVoiceError.fromList([{ name: 'Marlow', reason: 'revoked' }]);
+    // `. ${remedies.join('; ')}.` — the first clause follows a full stop.
+    expect(e.message).toMatch(/\.\s+[A-Z]/);
   });
 });
