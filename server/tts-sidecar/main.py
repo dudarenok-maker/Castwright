@@ -4606,8 +4606,13 @@ class QwenEngine(Engine):
         # bails while `.busy`. Thread-safe (#1917) — see `InFlightCounter`: a
         # plain int here can silently lose a decrement and disable this
         # engine's eviction for the rest of the process lifetime. The
-        # airtight backstop is still the re-ensure under `_synth_lock` inside
-        # design_voice — this guard just stops the wasteful, racy free.
+        # airtight backstop is still the re-ensure under `_synth_lock` guarding
+        # design_voice's DESIGN forward (the `_ensure_design_loaded()` +
+        # `_ensure_base_loaded()` pair inside that `with self._synth_lock:`
+        # block) — this guard just stops the wasteful, racy free there. The
+        # AUDITION forward's re-ensure moved OUTSIDE `_synth_lock` (#1975, plan
+        # 273 T7/T8): a concurrent /unload winning that narrow gap now raises
+        # loudly instead of being silently absorbed by an in-lock re-ensure.
         self._design_in_flight = InFlightCounter()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
@@ -5660,9 +5665,21 @@ class QwenEngine(Engine):
                 # preview is re-run by clicking re-audition — no silent bad ship.
                 _phase("rendering")
                 _t = time.perf_counter()
+                # Re-ensure BEFORE the lock (plan 273 T7/T8, #1975): `_ensure_base_loaded`
+                # can run a full cold load (unbounded — a real weights pull), and
+                # `/unload` also takes `_synth_lock`, so doing that pull INSIDE the lock
+                # would hold a Stop off for its whole duration. Capture the model under
+                # the lock and raise loud if a concurrent /unload won the narrow gap
+                # between this ensure and the acquire below.
+                self._ensure_base_loaded()
                 with self._synth_lock:
-                    self._ensure_base_loaded()  # re-ensure under the lock — see above
-                    wavs, sr = self._base.generate_voice_clone(
+                    base = self._base
+                    if base is None:
+                        raise RuntimeError(
+                            "Qwen Base model was unloaded before the design audition "
+                            "could render — reload it and retry."
+                        )
+                    wavs, sr = base.generate_voice_clone(
                         text=[audition_text], language=[lang], voice_clone_prompt=prompt
                     )
                 audition_ms = (time.perf_counter() - _t) * 1000.0
@@ -6354,10 +6371,25 @@ class QwenEngine(Engine):
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
                 gen_start = time.perf_counter()
+                # Re-ensure BEFORE the lock (plan 273 T7/T8, #1975) — same rationale
+                # as synthesize(): `_ensure_base17_loaded` can run a full cold load
+                # (unbounded — a real weights pull), and `unload_base17()` also
+                # takes `_synth_lock`, so doing that pull INSIDE the lock would hold
+                # a Stop off for its whole duration. NOTE: this is the MAIN
+                # chapter-render path and does not route through
+                # `_guarded_base_synth`'s retry wrapper (see the NOTE #1593
+                # comment above), so a raise here fails the WHOLE batch, not
+                # one sentence — still the right fix; the alternative is the
+                # defect.
+                self._ensure_base17_loaded()
                 with self._synth_lock:
-                    # Re-ensure under the lock (same rationale as synthesize()).
-                    self._ensure_base17_loaded()
-                    with _codec_compiled_for_batch(self._base17):
+                    base17 = self._base17
+                    if base17 is None:
+                        raise RuntimeError(
+                            "Qwen 1.7B-Base model was unloaded before this batch "
+                            "render started — reload it and retry."
+                        )
+                    with _codec_compiled_for_batch(base17):
                         if live_instruct:
                             # P-C1: EVERY item runs the raw instruct bypass in ONE
                             # batched forward — heterogeneous per-item instruct_ids.
@@ -6365,7 +6397,7 @@ class QwenEngine(Engine):
                                 prompt_lists, texts, instructs, langs
                             )
                         else:
-                            wavs, sr = self._base17.generate_voice_clone(
+                            wavs, sr = base17.generate_voice_clone(
                                 text=texts, language=langs, voice_clone_prompt=prompts
                             )
                 gen_ms = (time.perf_counter() - gen_start) * 1000.0
@@ -6416,6 +6448,16 @@ class QwenEngine(Engine):
                 prompts.extend(prompt if isinstance(prompt, list) else [prompt])
             load_ms = (time.perf_counter() - load_start) * 1000.0
 
+            # Ensure BEFORE the lock (plan 273 T7/T8, #1975) — a concurrent /unload
+            # holds `_synth_lock` to null `_base` (see synthesize()), and
+            # `_ensure_base_loaded` can run a full cold load (unbounded — a real
+            # weights pull); doing that pull INSIDE the lock would hold a Stop off
+            # for its whole duration. NOTE: this is the MAIN chapter-render path
+            # (see the "THIS is the path that matters for a book" comment in the
+            # loop above) and does not route through `_guarded_base_synth`'s
+            # retry wrapper (see the NOTE #1593 comment near the top of this
+            # method), so a raise here fails the WHOLE batch, not one sentence —
+            # still the right fix; the alternative is the defect.
             self._ensure_base_loaded()
             # Serialise the forward — see `_synth_lock` in __init__. Without this,
             # two concurrent batches of different sizes (e.g. a full 8 overlapping a
@@ -6423,11 +6465,14 @@ class QwenEngine(Engine):
             # on shared model state → "size of tensor a (8) must match tensor b (7)".
             gen_start = time.perf_counter()
             with self._synth_lock:
-                # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
-                # to null `_base`; see synthesize(). No-op on the warm path.
-                self._ensure_base_loaded()
-                with _codec_compiled_for_batch(self._base):
-                    wavs, sr = self._base.generate_voice_clone(
+                base = self._base
+                if base is None:
+                    raise RuntimeError(
+                        "Qwen Base model was unloaded before this batch render "
+                        "started — reload it and retry."
+                    )
+                with _codec_compiled_for_batch(base):
+                    wavs, sr = base.generate_voice_clone(
                         text=texts, language=langs, voice_clone_prompt=prompts
                     )
             gen_ms = (time.perf_counter() - gen_start) * 1000.0

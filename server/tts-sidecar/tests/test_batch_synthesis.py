@@ -719,6 +719,179 @@ def test_ensure_base_loaded_single_flights_concurrent_cold_loads(
     assert engine._base is not None
 
 
+def test_unload_is_not_blocked_by_a_cold_base_load_during_batch_synth(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """#1975 (plan 273 T7/T8 shape, site 3) — synthesize_batch's 0.6B branch
+    must run `_ensure_base_loaded()` BEFORE `_synth_lock` is taken, mirroring
+    `_guarded_base_synth` (T8) and `synthesize()`'s own 0.6B path. Pre-fix,
+    the re-ensure inside `with self._synth_lock:` ran INSIDE the lock —
+    normally a warm no-op, but an `/unload` that wins the narrow gap between
+    the per-item prompt-loading loop's pre-ensure and this lock acquire turns
+    it into a full cold load that holds a Stop off for its whole duration.
+
+    Unlike the single-utterance `synthesize` path, `synthesize_batch` does
+    NOT route through `_guarded_base_synth`'s retry wrapper — it's the MAIN
+    chapter-render path (QWEN_BATCH_SIZE-sized sentence batches) — so a raise
+    here fails the WHOLE batch, not one sentence. Still the right fix; the
+    alternative is the defect.
+
+    Simulates the race deterministically: `_base` is nulled right before
+    calling `synthesize_batch`, standing in for a concurrent `/unload`
+    landing in the gap. The ensure immediately before the lock then has to
+    cold-reload — modelled as an event-gated block standing in for a real
+    multi-second weights pull. While parked, a second thread calls
+    `engine.unload()` and must return within a bound, proving `_synth_lock`
+    isn't held across the (simulated) cold load.
+
+    Mutation that must fail it — breaks the PRODUCER: move the pre-lock
+    `self._ensure_base_loaded()` back inside `with self._synth_lock:`.
+    `unload()` then queues behind the parked load and the 0.5s bound trips.
+    """
+    import threading
+
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+    orig_base = engine._base
+    engine._base = None  # force the pre-lock ensure to (simulate a) cold load
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    def fake_ensure_base(device=None) -> None:
+        if engine._base is not None:
+            return
+        entry.set()
+        assert release.wait(5), "release never set — test bug"
+        engine._base = orig_base
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", fake_ensure_base)
+
+    items = [{"voice": "a", "text": "Hello there."}]
+    batch_errors: list[BaseException] = []
+    batch_result: list[Any] = []
+
+    def run_batch() -> None:
+        try:
+            batch_result.append(engine.synthesize_batch("0.6b", items))
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            batch_errors.append(e)
+
+    t = threading.Thread(target=run_batch, daemon=True)
+    t.start()
+
+    assert entry.wait(5), "the (simulated) cold Base load never started"
+
+    stop = threading.Thread(target=engine.unload, daemon=True)
+    stop.start()
+    stop.join(0.5)
+    assert not stop.is_alive(), (
+        "unload() was blocked behind the parked cold Base load during a batch synth"
+    )
+
+    release.set()
+    t.join(5)
+    assert not t.is_alive(), "synthesize_batch thread did not finish within 5s"
+    assert batch_errors == [], f"synthesize_batch raised: {batch_errors!r}"
+    assert len(batch_result) == 1
+    assert len(batch_result[0].pcms) == 1
+
+
+def test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """#1975 (plan 273 T7/T8 shape, site 2) — synthesize_batch's 1.7B branch
+    must run `_ensure_base17_loaded()` BEFORE `_synth_lock` is taken for EACH
+    call, mirroring `_guarded_base_synth` (T8). This is the SECOND ensure
+    call in the branch — the first (pre-existing, `:6343`, immediately
+    inside `_base17_activity()`) is untouched and stays a warm no-op here;
+    this test targets the one immediately before the lock, added by #1975.
+    Pre-fix, that re-ensure ran INSIDE `with self._synth_lock:` — normally a
+    warm no-op, but an `unload_base17()` (POST /qwen/unload {model:'1.7b'})
+    that wins the narrow gap between the per-item prompt-loading loop and the
+    lock acquire turns it into a full cold load that holds a Stop off for its
+    whole duration. As with site 3, `synthesize_batch` does not route through
+    `_guarded_base_synth`'s retry wrapper — a raise here fails the WHOLE
+    batch — still the right fix.
+
+    Simulates the race deterministically: `_base17` starts WARM (so the
+    pre-existing top-of-branch ensure at `:6343` is a fast no-op) and is
+    nulled by the LAST item's `_load_voice_prompt_17b` call, standing in for
+    a concurrent `unload_base17()` landing in the gap between the loop
+    finishing and the lock acquire. The ensure immediately before the lock
+    then has to cold-reload — modelled as an event-gated block. While parked,
+    a second thread calls `engine.unload_base17()` and must return within a
+    bound, proving `_synth_lock` isn't held across the (simulated) cold load.
+
+    Mutation that must fail it — breaks the PRODUCER: move the pre-lock
+    `self._ensure_base17_loaded()` back inside `with self._synth_lock:`.
+    `unload_base17()` then queues behind the parked load and the 0.5s bound
+    trips.
+    """
+    import threading
+
+    engine = qwen_batch_runtime["engine"]
+    markers = {v: _design(engine, v) for v in ("p", "q")}
+
+    fake17 = _BatchFakeQwen("qwen3-1.7b-fake")
+    # monkeypatch.setattr (not a raw assignment) so `_base17` is restored to its
+    # pre-test value at teardown regardless of the mutations further below —
+    # `qwen_batch_runtime` doesn't reset `_base17` itself, so a raw assignment
+    # here would leak this test's fake model into later tests sharing the
+    # global ENGINES["qwen"] singleton.
+    monkeypatch.setattr(engine, "_base17", fake17)  # warm — the pre-existing top-of-branch ensure (:6343) no-ops
+
+    def _fake_prompt_17b(voice: str):
+        marker = markers.get(voice, 0)
+        if voice == "q":  # last item — a concurrent unload_base17() lands right here
+            engine._base17 = None
+        return [_FakePromptItem(marker + 1000, "pangram")], "English", False
+
+    monkeypatch.setattr(engine, "_load_voice_prompt_17b", _fake_prompt_17b)
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    def fake_ensure_base17(device=None) -> None:
+        if engine._base17 is not None:
+            return
+        entry.set()
+        assert release.wait(5), "release never set — test bug"
+        engine._base17 = fake17
+
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", fake_ensure_base17)
+
+    items = [{"voice": "p", "text": "Hello."}, {"voice": "q", "text": "World."}]
+    batch_errors: list[BaseException] = []
+    batch_result: list[Any] = []
+
+    def run_batch() -> None:
+        try:
+            batch_result.append(engine.synthesize_batch("1.7b", items))
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            batch_errors.append(e)
+
+    t = threading.Thread(target=run_batch, daemon=True)
+    t.start()
+
+    assert entry.wait(5), "the (simulated) cold 1.7B-Base load never started"
+
+    stop = threading.Thread(target=engine.unload_base17, daemon=True)
+    stop.start()
+    stop.join(0.5)
+    assert not stop.is_alive(), (
+        "unload_base17() was blocked behind the parked cold 1.7B-Base load"
+    )
+
+    release.set()
+    t.join(5)
+    assert not t.is_alive(), "synthesize_batch thread did not finish within 5s"
+    assert batch_errors == [], f"synthesize_batch raised: {batch_errors!r}"
+    assert len(batch_result) == 1
+    assert len(fake17.clone_calls) == 1
+    assert len(batch_result[0].pcms) == 2
+
+
 def test_route_batch_cuda_error_poisons_and_503s(qwen_batch_runtime, monkeypatch) -> None:
     """Regression (sidecar-poison-fence-all-engines): a CUDA error inside the
     batched forward must flag process poison, return 503 (not a plain 500), and
