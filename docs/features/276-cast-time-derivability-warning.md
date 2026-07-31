@@ -87,7 +87,7 @@ all its force from unactionability. Decisions 6 and 7 remove that.
 |---|---|---|
 | `no-transcript` | **Add transcript** | Decision 6 — sets `master.transcript`, clears the failed slot, voice becomes derivable |
 | `derive-failed` | **Retry derive** | Decision 7 — clears the terminal stamp; the predicate then re-evaluates the *underlying* cause |
-| `wrong-engine` | **Cast on _other engine_** | sets `character.ttsEngine`; offered only when Decision 5's `otherEngineOk` holds |
+| `wrong-engine` | **Cast on _<engine>_** | sets `character.ttsEngine`; offered only when Decision 5's `castOnEngine` **[R4]** is non-null, and it names the engine |
 | `missing-entry` **[R3]** | **Assign a different voice** | opens the cast profile drawer — the library entry is gone, so re-assignment is the only repair |
 | `revoked`, `missing-master` | *(none)* | explanatory copy only — consent withdrawal and a discarded clip have no in-app repair |
 
@@ -282,7 +282,7 @@ reading the same session value the generation POST will send. The verdict and th
 render therefore cannot disagree about routing, which is what "survives a
 book-level engine switch" reduces to.
 
-## Decision 5 — entry condition, `otherEngineOk`, and its own modal
+## Decision 5 — entry condition, `castOnEngine`, and its own modal
 
 **Entry condition: any character carrying a cloned slot**, via
 `characterHasClonedSlot(character)` (`clone-engines.ts:77-94`) — *not* "any cloned
@@ -311,8 +311,36 @@ its warn set. Routing is what the check *evaluates*, never what gates it.
 early return; the tier prompt keeps `castRendersOnQwen`. A Coqui-only cast must
 reach the clone gate and must **not** see a tier chooser.
 
-**`otherEngineOk`** — whether the "Cast on other engine" CTA appears — is
-`cloneReadiness({...input, engine: otherEngine, characterHasSlot: hasClonedProvenance(character, otherEngine)}) === null`.
+**[R4] `otherEngineOk` became `castOnEngine: CloneEngine | null`.** The formula
+below is kept for its reasoning, but "the other engine" is not well defined and
+the boolean was not sufficient:
+
+- **Not well defined.** A blind binary swap (`engine === 'qwen' ? 'coqui' :
+  'qwen'`) lands on `'qwen'` for *any* non-qwen engine. So a character routed to
+  **Kokoro** whose voice is cloned only on **Coqui** scored `false` and got a
+  `wrong-engine` verdict with **no CTA** — even though re-casting to Coqui works.
+  Decision 1 says a gate with no fix must fail review, and Decision 5
+  *deliberately* admits the Kokoro-routed character, so the formula failed a case
+  this very decision includes on purpose.
+- **Not sufficient.** Decision 1's CTA is labelled "Cast on _<engine>_". A boolean
+  cannot supply that name when the routed engine is Kokoro. The shape had to
+  change for the modal regardless of the bug.
+
+Now: scan `CLONE_ENGINE_LIST`, **excluding the character's routed engine**, and
+take the first candidate for which the formula below returns `null`.
+`CLONE_ENGINE_LIST` order is the deterministic tie-break when a character carries
+both cloned slots — arbitrary but stable, not accidental. This **subsumes** the
+binary case exactly: a qwen-routed character has only `coqui` as a candidate.
+
+The routed-engine exclusion is **semantically right but not currently
+distinguishable by any test**, and that was verified rather than assumed:
+re-including the routed engine recomputes `characterHasSlot` to the same value
+that produced the `wrong-engine` verdict, so it always self-rejects on rule 3.
+It is kept as defence against a third clone-capable engine or a relaxed rule 3.
+Do not delete it as dead, and do not write a test that pretends to cover it.
+
+The per-candidate formula is unchanged:
+`cloneReadiness({...input, engine: candidate, characterHasSlot: hasClonedProvenance(character, candidate)}) === null`.
 **[R3]** Note the exact helper and arity: rev 3 wrote
 `characterHasClonedSlot(character, otherEngine)`, which takes one argument and is
 engine-agnostic — written literally it does not compile, and "fixed" by dropping
