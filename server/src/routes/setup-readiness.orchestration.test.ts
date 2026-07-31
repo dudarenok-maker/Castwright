@@ -204,6 +204,36 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     expect(res.body.blockers.tts.cause).toBe('package-broken');
   });
 
+  /* #1999 review — a state this route COULD reach before this PR but silently
+     mis-reported: packageBroken is gated on packageOnDisk (state === 'ready'),
+     so an engine in 'package-missing' state (disk says package absent, weights
+     present) always had packageBroken === false, no matter what the LIVE
+     signals said — the boolean literally cannot fire outside 'ready'.
+     packageFault has no such gate: it reads importOk/specPresent directly, so
+     a live-confirmed import failure on a disk-absent package now surfaces
+     here too. Before this PR, this exact input (no engine not-installed, no
+     engine weights-missing, nothing usable, nothing live-CONFIRMED-broken by
+     the old boolean) fell through every branch to the generic 'pass' —
+     claiming a voice engine was ready when none was. This is a genuine,
+     deliberate widening: the two package-missing-with-a-real-import-failure
+     surfaces (this one and the Admin console's diagnostics row, which never
+     gated on disk at all) can no longer disagree. */
+  it('a package-missing engine that is ALSO live-confirmed broken now fails tts, instead of silently passing', async () => {
+    computeModelsStatus.mockResolvedValue(modelsStatus({
+      engines: {
+        kokoro: engineStatus('package-missing', false, 'broken'), // packageBroken false (disk-gated); packageFault broken (live-confirmed)
+        qwen: engineStatus('not-installed'),
+        coqui: engineStatus('not-installed'),
+      },
+    }));
+
+    const res = await request(makeApp()).get('/api/setup/readiness');
+
+    expect(res.body.blockers.tts.status).toBe('fail');
+    expect(res.body.blockers.tts.cause).toBe('package-broken');
+    expect(res.body.blockers.tts.message).toMatch(/Kokoro/i);
+  });
+
   it('derives weightsMissingEngine from models.engines — a weights-missing kokoro with nothing else usable surfaces as tts:weights-missing', async () => {
     computeModelsStatus.mockResolvedValue(modelsStatus({
       engines: {
