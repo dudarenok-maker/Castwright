@@ -400,6 +400,12 @@ def test_synthesize_batch_live_instruct_gain_drives_real_method(monkeypatch) -> 
     monkeypatch.setattr(engine, "_design", None, raising=False)
     monkeypatch.setattr(engine, "_base17_activity", lambda: contextlib.nullcontext())
     monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda: None)
+    # #1975: synthesize_batch now captures `_base17` under `_synth_lock` and
+    # raises if it's None (a concurrent-unload guard) — so the no-op ensure
+    # above must leave a stand-in resident, mirroring the sibling variant-path
+    # test's `_base` stub below. The stand-in is never touched for real: the
+    # inner forward is fully replaced by `_icl_instruct_synth_batch` below.
+    monkeypatch.setattr(engine, "_base17", object(), raising=False)
     monkeypatch.setattr(engine, "_load_voice_prompt_17b", lambda voice: (object(), "English", True))
     # The inner batched forward returns one fake wav per text and NO gain — the
     # real synthesize_batch must add the per-emotion gain on top.
