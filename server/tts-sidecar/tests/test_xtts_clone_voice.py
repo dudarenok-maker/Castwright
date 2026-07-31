@@ -234,13 +234,34 @@ def _fake_torch_module() -> types.ModuleType:
     return fake_torch
 
 
+def _default_fake_load_audio(audiopath: Any, sampling_rate: int) -> None:
+    """Stand-in for `TTS.tts.models.xtts.load_audio`. Never actually called
+    by these tests (the fake `get_conditioning_latents` doesn't invoke it) —
+    it only needs to exist with `patched_xtts_load_audio`'s expected
+    `(audiopath, sampling_rate)` signature so that #1967's `with
+    patched_xtts_load_audio():` wrap around `clone_voice`'s derive call
+    doesn't raise `RuntimeError` (missing/drifted loader) on every one of
+    this file's ~30 clone_voice-driving tests."""
+    return None
+
+
 def _install_fake_coqui_runtime(
     monkeypatch, tts_instance: _FakeTTS | None = None, coqui_version: str = "9.9.9-test"
 ) -> _FakeTTS:
     """Install a fake `TTS`/`TTS.api`/`torch` triple into sys.modules and
     force COQUI_DEVICE=cpu so `_ensure_loaded` resolves without touching a
     real CUDA/DeepSpeed path (fp16/DeepSpeed stay off on cpu — see
-    `_resolve_runtime_options`)."""
+    `_resolve_runtime_options`).
+
+    Also seeds `TTS.tts`/`TTS.tts.models`/`TTS.tts.models.xtts` (#1967) —
+    `clone_voice` now wraps its derive call in `patched_xtts_load_audio()`,
+    which does `import TTS.tts.models.xtts` and reads its `load_audio`.
+    Without this, every test here that reaches `clone_voice` would fail with
+    `ModuleNotFoundError: No module named 'TTS.tts'; 'TTS' is not a package`
+    — the fake `TTS` module above has no `__path__`, so Python's import
+    machinery can only resolve the dotted chain by finding each segment
+    already cached in `sys.modules`, never by real submodule import.
+    """
     monkeypatch.setenv("COQUI_DEVICE", "cpu")
     monkeypatch.delenv("COQUI_HALF", raising=False)
     monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
@@ -251,8 +272,13 @@ def _install_fake_coqui_runtime(
     fake_tts_pkg.__version__ = coqui_version  # type: ignore[attr-defined]
     fake_tts_api = types.ModuleType("TTS.api")
     fake_tts_api.TTS = lambda model_id, *a, **k: tts_instance  # type: ignore[attr-defined]
+    fake_xtts_leaf = types.ModuleType("TTS.tts.models.xtts")
+    fake_xtts_leaf.load_audio = _default_fake_load_audio  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "TTS", fake_tts_pkg)
     monkeypatch.setitem(sys.modules, "TTS.api", fake_tts_api)
+    monkeypatch.setitem(sys.modules, "TTS.tts", types.ModuleType("TTS.tts"))
+    monkeypatch.setitem(sys.modules, "TTS.tts.models", types.ModuleType("TTS.tts.models"))
+    monkeypatch.setitem(sys.modules, "TTS.tts.models.xtts", fake_xtts_leaf)
     monkeypatch.setitem(sys.modules, "torch", _fake_torch_module())
     return tts_instance
 
@@ -2129,3 +2155,91 @@ def test_clone_voice_route_rejects_a_case_varied_prefix(monkeypatch, tmp_path) -
     assert resp.status_code == 400
     pt_path, _json_path = eng._voice_paths("XTTS-case-write1")
     assert not os.path.isfile(pt_path)
+
+
+class _LoaderSpyXttsModel(_FakeXttsModel):
+    """Records the live TTS.tts.models.xtts.load_audio at derive time, and
+    whether CoquiEngine._synth_lock was already held when the derive ran.
+
+    Subclassed rather than hooked into the shared fake: ~30 tests use
+    _FakeXttsModel and none of them want this.
+
+    Mirrors the base class's full named-parameter list (not `*a, **kw`) --
+    same reason `_DistinctLatentsXttsModel` above does: `clone_voice`
+    introspects `inspect.signature(tts_model.get_conditioning_latents)` to
+    read each named keyword's default, and a `**kwargs`-only override hides
+    them from that introspection.
+    """
+
+    def __init__(self, *a, **kw) -> None:
+        super().__init__(*a, **kw)
+        self.loader_during_derive = None
+        self.lock_was_held: bool | None = None
+        # Filled by the test after `_make_engine` returns -- the engine
+        # doesn't exist yet when this fake is constructed.
+        self.engine_ref: list[Any] = [None]
+
+    def get_conditioning_latents(
+        self,
+        audio_path: Any,
+        max_ref_length: int = 30,
+        gpt_cond_len: int = 6,
+        gpt_cond_chunk_len: int = 6,
+        librosa_trim_db: Any = None,
+        sound_norm_refs: bool = False,
+        load_sr: int = 22050,
+    ) -> tuple[str, str]:
+        import sys
+
+        self.loader_during_derive = sys.modules["TTS.tts.models.xtts"].load_audio
+
+        # The lock must ALREADY be held when the derive runs, or the module-global
+        # swap is racing every concurrent synth.
+        acquired = self.engine_ref[0]._synth_lock.acquire(blocking=False)
+        self.lock_was_held = not acquired
+        if acquired:
+            self.engine_ref[0]._synth_lock.release()
+
+        return super().get_conditioning_latents(
+            audio_path,
+            max_ref_length=max_ref_length,
+            gpt_cond_len=gpt_cond_len,
+            gpt_cond_chunk_len=gpt_cond_chunk_len,
+            librosa_trim_db=librosa_trim_db,
+            sound_norm_refs=sound_norm_refs,
+            load_sr=load_sr,
+        )
+
+
+def test_derive_runs_with_the_patched_loader_installed(monkeypatch, tmp_path) -> None:
+    """#1967 -- the reference decode must be OURS during the derive call, and
+    the module-global swap must happen while `_synth_lock` is held.
+
+    Asserting only that clone_voice succeeds would pass with no patch at all
+    on a box with shared FFmpeg. Assert the module attribute from inside the
+    fake get_conditioning_latents instead.
+    """
+    import sys
+
+    import xtts_audio_io
+
+    tts_model = _LoaderSpyXttsModel()
+    tts_instance = _FakeTTS(
+        "tts_models/multilingual/multi-dataset/xtts_v2",
+        synthesizer=_FakeSynthesizer(tts_model=tts_model),
+    )
+    eng, _voices_dir, _tts = _make_engine(monkeypatch, tmp_path, tts_instance=tts_instance)
+    tts_model.engine_ref[0] = eng
+
+    # `_install_fake_coqui_runtime` (via `_make_engine`) seeds
+    # `TTS.tts.models.xtts.load_audio` with `_default_fake_load_audio` —
+    # capture it so we can prove `patched_xtts_load_audio()` restores it
+    # afterwards, without hardcoding that fixture's private function name.
+    xtts_mod = sys.modules["TTS.tts.models.xtts"]
+    original_load_audio = xtts_mod.load_audio
+
+    eng.clone_voice("voice-1", _ref_audio(), 24000, "hello")
+
+    assert tts_model.loader_during_derive is xtts_audio_io.wave_load_audio
+    assert xtts_mod.load_audio is original_load_audio  # restored afterwards
+    assert tts_model.lock_was_held

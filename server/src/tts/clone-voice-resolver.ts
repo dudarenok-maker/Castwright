@@ -59,16 +59,18 @@ export interface BrokenClonedVoice {
     | 'misconfigured'
     | 'wrong-engine';
   /** fs-38 Wave 3c, Task 18 — which engine this voice was being resolved on,
-      set for the two reasons whose remedy text below actually names an
-      engine: `engine-unavailable` (Task 18) and `wrong-engine` (GATE 1 I-2).
-      Left unset for every other reason so `toEqual` against a pre-3c literal
-      (no `engine` key) still matches — `toEqual` treats a missing key and an
-      explicit `undefined` the same way.
+      set for the three reasons whose remedy text below actually names an
+      engine: `engine-unavailable` (Task 18), `wrong-engine` (GATE 1 I-2),
+      and `derive-failed` (#1967). Left unset for every other reason so
+      `toEqual` against a pre-3c literal (no `engine` key) still matches —
+      `toEqual` treats a missing key and an explicit `undefined` the same way.
 
-      The two reasons name the engine for OPPOSITE purposes, and conflating
-      them is the I-2 defect: for `engine-unavailable` the engine is the one
-      to RE-ENABLE; for `wrong-engine` it is the one the cloned voice
-      actually lives on, i.e. the one to SWITCH THE BOOK TO. */
+      The three reasons name the engine for DIFFERENT purposes, and
+      conflating `engine-unavailable`/`wrong-engine` was the I-2 defect: for
+      `engine-unavailable` the engine is the one to RE-ENABLE; for
+      `wrong-engine` it is the one the cloned voice actually lives on, i.e.
+      the one to SWITCH THE BOOK TO; for `derive-failed` it is the one to
+      RE-RUN THE CLONE FOR. */
   engine?: CloneEngine;
 }
 
@@ -82,16 +84,15 @@ export interface BrokenClonedVoice {
     `CLONE_ENGINE_LIST`'s canonical order instead, so the copy is stable
     regardless of report order.
 
-    Falls back to 'Qwen' when no entry of that reason carries an `engine` at
-    all — the pre-3c shape, and the shape the legacy single-name constructor
-    produces — so that copy stays byte-identical to the old hardcoded text. */
+    Each entry missing its own `engine` falls back to 'qwen' individually (the
+    `?? 'qwen'` in the map below) — the pre-3c shape, and the shape the legacy
+    single-name constructor produces — so that copy stays byte-identical to
+    the old hardcoded text for an untagged entry. */
 function engineLabelFor(broken: BrokenClonedVoice[], reason: BrokenClonedVoice['reason']): string {
   const engines = new Set(broken.filter((b) => b.reason === reason).map((b) => b.engine ?? 'qwen'));
-  return (
-    CLONE_ENGINE_LIST.filter((e) => engines.has(e))
-      .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
-      .join(' or ') || 'Qwen'
-  );
+  return CLONE_ENGINE_LIST.filter((e) => engines.has(e))
+    .map((e) => (e === 'coqui' ? 'Coqui' : 'Qwen'))
+    .join(' or ');
 }
 
 /* fs-38 Wave 3b1 (C1) — a cloned-provenance Qwen group must never be silently
@@ -135,19 +136,29 @@ export class UnresolvableClonedVoiceError extends Error {
       });
     }
     const hasWrongEngine = broken.some((b) => b.reason === 'wrong-engine');
-    const hasOtherReason = broken.some((b) => b.reason !== 'wrong-engine');
+    // `hasWrongEngine` is already declared above — do not repeat it.
+    const hasDeriveFailed = broken.some((b) => b.reason === 'derive-failed');
+    const hasEngineUnavailable = broken.some((b) => b.reason === 'engine-unavailable');
+    /* #1967 — `derive-failed` gets its own clause below, so it must NOT also
+       trigger the availability catch-all; and the catch-all only names an
+       engine to re-enable when one was actually reported unavailable. Before
+       this, a derive failure on Coqui printed "Re-enable Qwen" — naming a
+       perfectly healthy engine, because engineLabelFor filters on REASON and
+       fell back to 'Qwen' when it matched nothing. */
+    const hasOtherReason = broken.some(
+      (b) => b.reason !== 'wrong-engine' && b.reason !== 'derive-failed',
+    );
     const remedies: string[] = [];
     if (hasOtherReason) {
-      /* Task 18 — engine-aware remedy: name whichever engine(s) were
-         actually reported unavailable instead of hardcoding "Qwen", which
-         misdiagnoses a broken-on-coqui voice. Falls back to 'Qwen' when no
-         `engine`-carrying entry is present (the pre-3c shape:
-         revoked/missing-master/etc. with no engine-unavailable entries at
-         all, or the legacy single-name constructor's un-engine-tagged item)
-         — byte-identical to the old hardcoded text for that case. */
       remedies.push(
-        `Re-enable ${engineLabelFor(broken, 'engine-unavailable')} or restore the missing voice(s)`,
+        hasEngineUnavailable
+          ? `Re-enable ${engineLabelFor(broken, 'engine-unavailable')} or restore the missing voice(s)`
+          : 'Restore the missing voice(s)',
       );
+    }
+    if (hasDeriveFailed) {
+      const clause = `re-run the clone for ${engineLabelFor(broken, 'derive-failed')} and check the sidecar log`;
+      remedies.push(remedies.length === 0 ? clause.charAt(0).toUpperCase() + clause.slice(1) : clause);
     }
     if (hasWrongEngine) {
       /* GATE 1 I-2 — this remedy used to be hardcoded to "switch the book to
@@ -447,12 +458,20 @@ export async function resolveClonedVoicesForChapter(
       broken.push({
         name: characterName,
         reason: classification.reason!,
-        // Task 18 + GATE 1 I-2 — 'engine-unavailable' and 'wrong-engine' are
-        // the two reasons that name an engine in their remedy text
-        // (UnresolvableClonedVoiceError.fromList); every other reason leaves
-        // `engine` unset so pre-3c `.broken` assertions keep matching.
+        // Task 18 + GATE 1 I-2 + #1967 — 'engine-unavailable', 'wrong-engine',
+        // and 'derive-failed' are the three reasons that name an engine in
+        // their remedy text (UnresolvableClonedVoiceError.fromList); every
+        // other reason leaves `engine` unset so pre-3c `.broken` assertions
+        // keep matching. This classifier path is the DOMINANT `derive-failed`
+        // producer in production: a permanent derive failure persists
+        // `status: 'failed'` on the manifest slot, so every run after the
+        // first classifies from that stamp (here) rather than reaching the
+        // catch-path pushes below — an untagged entry here resolves through
+        // `engineLabelFor`'s `?? 'qwen'` fallback to "Re-run the clone for
+        // Qwen" even on a Coqui book, #1967's exact symptom.
         ...(classification.reason === 'engine-unavailable' ||
-        classification.reason === 'wrong-engine'
+        classification.reason === 'wrong-engine' ||
+        classification.reason === 'derive-failed'
           ? { engine }
           : {}),
       });
@@ -528,7 +547,7 @@ export async function resolveClonedVoicesForChapter(
         // Transient (unreachable / 5xx) — do NOT persist 'failed'; a retry
         // must be able to re-attempt (classify rule 3 makes 'failed'
         // terminal, so persisting here would brick the voice on a hiccup).
-        broken.push({ name: characterName, reason: 'derive-failed' });
+        broken.push({ name: characterName, reason: 'derive-failed', engine });
       } else {
         // Permanent (4xx) — the sidecar rejected the clip itself. Same
         // locked re-read as the success path (Task 14 / review C-1): a
@@ -563,11 +582,11 @@ export async function resolveClonedVoicesForChapter(
               `(4xx) derive AND its 'failed' status stamp could not be persisted:`,
             stampErr,
           );
-          broken.push({ name: characterName, reason: 'derive-failed' });
+          broken.push({ name: characterName, reason: 'derive-failed', engine });
           continue;
         }
         if (written) {
-          broken.push({ name: characterName, reason: 'derive-failed' });
+          broken.push({ name: characterName, reason: 'derive-failed', engine });
         }
       }
     }

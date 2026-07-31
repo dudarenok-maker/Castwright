@@ -10,9 +10,10 @@
    in-list order below is exactly the runtime order. The script ships no .d.ts;
    the guard runs only when invoked directly, so importing the helper is inert. */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install helper ships no .d.ts; plain JS.
-import { coquiPipInstallSteps } from '../../tts-sidecar/scripts/install-coqui.mjs';
+import { coquiPipInstallSteps, COQUI_VERIFY_CODE } from '../../tts-sidecar/scripts/install-coqui.mjs';
 
 const CONSTRAINTS = '/tmp/base-constraints.txt';
 
@@ -60,5 +61,38 @@ describe('coquiPipInstallSteps', () => {
     const coqui = steps.find((s: { args: string[] }) => s.args.includes('coqui-tts'))!;
     expect(coqui.args).toContain('-c');
     expect(coqui.args).toContain(CONSTRAINTS);
+  });
+});
+
+describe('COQUI_VERIFY_CODE', () => {
+  it('exercises the real patch rather than merely importing TTS', () => {
+    expect(COQUI_VERIFY_CODE).toContain('patched_xtts_load_audio');
+    expect(COQUI_VERIFY_CODE).toContain('xtts_audio_io');
+  });
+
+  it('round-trips a generated WAV, so a silently-broken decode fails the install', () => {
+    expect(COQUI_VERIFY_CODE).toContain('wave');
+    expect(COQUI_VERIFY_CODE).toMatch(/get_conditioning_latents|load_audio/);
+  });
+
+  it('needs no model weights, so it can run before the prefetch', () => {
+    expect(COQUI_VERIFY_CODE).not.toContain('xtts_v2');
+  });
+
+  it('uses a non-silent buffer, so XTTS\'s range guard does not log "Error with" at the user', () => {
+    expect(COQUI_VERIFY_CODE).not.toContain('np.zeros');
+  });
+
+  it('is actually wired into the installer, not merely exported', () => {
+    // Without this, COQUI_VERIFY_CODE could be exported and never invoked and
+    // every other assertion here would still pass.
+    const src = readFileSync(
+      new URL('../../tts-sidecar/scripts/install-coqui.mjs', import.meta.url),
+      'utf8',
+    );
+    const verifyAt = src.indexOf('COQUI_VERIFY_CODE]');
+    const prefetchAt = src.indexOf('Pre-fetching XTTS v2');
+    expect(verifyAt, 'verification step must be invoked').toBeGreaterThan(-1);
+    expect(verifyAt, 'must run BEFORE the 1.8 GB prefetch').toBeLessThan(prefetchAt);
   });
 });

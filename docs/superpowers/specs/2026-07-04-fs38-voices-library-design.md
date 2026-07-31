@@ -208,6 +208,8 @@ param`. This seam is what makes engine #3 cheap. In v1:
   of manifest validation; a sidecar test pins that a clone key never yields
   `voiceSubstitutedFrom`. Real Wave-3 work, not a cache add-on.
 
+  > **Correction (2026-07-31, #1967):** Wave 3c did not ship the `soundfile`-based load specified above. It shipped a path handoff instead — `clone_voice` writes the decoded reference PCM to a temp WAV and hands XTTS the *path*, which XTTS's own `load_audio` then re-decodes via torchaudio's loader — and the "a guardrail test forbids it" claim was itself wrong: `test_audio_io_invariant.py` only scans the sidecar's own top-level source, so a call inside the installed `TTS` package was invisible to it. Nobody reconciled the divergence between this spec and the shipped implementation, and on a static-FFmpeg box (the normal Windows install) that torchaudio-routed decode fails outright, because torchaudio 2.9+ dispatches `.load` to torchcodec, which needs FFmpeg's *shared* libraries. Fixed by patching XTTS's reference loader out for the duration of the derive rather than by switching to `soundfile` — see [`2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §3 and §6. This note is left in place rather than rewriting the sentence above; the divergence between what was specified and what shipped is the record.
+
 **Library-scoped design flow = an extraction, not a wrap.** Every layer of today's design
 machinery hard-requires a book/character: `withDesignLock` keys on `bookDir`,
 `ensureCharacterVoiceUuid` requires a cast.json row, routes mount under

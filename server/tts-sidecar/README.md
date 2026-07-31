@@ -9,11 +9,11 @@ torch dependency tree doesn't leak into Node tooling.
 | Component | Version | Notes |
 |---|---|---|
 | **Python** | **3.12** (exactly) | bootstrap probes for 3.12 and refuses anything else; venv stamped `cp312` |
-| **PyTorch** | **`torch==2.11.0` + `torchaudio==2.11.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | needed by Coqui + Qwen (Kokoro doesn't use torch); the sidecar does all audio I/O via soundfile + ffmpeg and never calls `torchaudio.load`, so torchaudio's 2.9 backend removal doesn't affect it (no torchcodec) |
+| **PyTorch** | **`torch==2.11.0` + `torchaudio==2.11.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | needed by Coqui + Qwen (Kokoro doesn't use torch); the sidecar does its audio I/O with the stdlib `wave` module and NumPy and never calls `torchaudio`'s loader, so torchaudio's 2.9 backend removal doesn't affect it (no torchcodec) |
 | → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or pre-install `--index-url https://download.pytorch.org/whl/cu128` for **CUDA 12.8** | ~2.5 GB |
 | → CPU / macOS | PyPI default = CPU / MPS build | |
-| coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit). `[codec]` is avoided in the manifest, but torchcodec is still installed by `install-coqui.mjs` (next row) |
-| **torchcodec** | **not in the manifest; installed by `install-coqui.mjs`** (opt-in Coqui only, `--no-deps`) | coqui-tts 0.27.5 presence-checks torchcodec at **import** on torch≥2.9 (`find_spec`, not a functional import) and raises `ImportError` without it. It need only be PRESENT: the sidecar never calls `torchaudio.load` and XTTS inference uses manifest-speaker latents, so torchcodec's FFmpeg decode path (which can't load its shared libs against a static FFmpeg 8 build) is never reached. Standard engines (Kokoro/Qwen) don't get it. See #1586 |
+| coqui-tts | **unpinned** (`base.txt` carries no `coqui-tts` line; resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit). `[codec]` is avoided in the manifest, but torchcodec is still installed by `install-coqui.mjs` (next row). No version pin — an upstream release that moves the XTTS reference loader is instead caught by `install-coqui.mjs`'s post-install verification step (#1967) and, failing that, by a raise at derive time |
+| **torchcodec** | **not in the manifest; installed by `install-coqui.mjs`** (opt-in Coqui only, `--no-deps`) | coqui-tts 0.27.5 presence-checks torchcodec at **import** on torch≥2.9 (`find_spec`, not a functional import) and raises `ImportError` without it. It need only be PRESENT: XTTS's own reference loader — the one thing in this codebase that would otherwise reach `torchaudio.load` — is patched out on the clone path (`xtts_audio_io.py`, #1967), and stock inference uses manifest-speaker latents, so torchcodec's FFmpeg decode path (which can't load its shared libs against a static FFmpeg 8 build) is never actually invoked. Standard engines (Kokoro/Qwen) don't get it. See #1586, #1967 |
 | kokoro-onnx | `>=0.4.0,<0.5.0` (plain, **no `[gpu]`**) | overlay lands core `onnxruntime` (CPU); `install-ort.mjs` swaps in `onnxruntime-gpu` on the nvidia profile. `[gpu]` is avoided — it coexists with the core dep and can silently leave CPU onnxruntime winning. No torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
@@ -74,8 +74,9 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 # Install everything, including PyTorch. torch + torchaudio are now EXPLICIT,
 # pinned to the matched 2.11.0 pair (recent coqui-tts no longer pulls torch
-# transitively; the sidecar does all audio I/O via soundfile + ffmpeg and never
-# calls torchaudio.load, so torchaudio's 2.9 backend removal doesn't affect it —
+# transitively; the sidecar does its audio I/O with the stdlib wave module and
+# NumPy and never calls torchaudio's loader, so torchaudio's 2.9 backend removal
+# doesn't affect it —
 # no torchcodec in this base install; opt-in Coqui installs it separately, see the
 # deps table above). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
 # the CPU/MPS build. No separate torch step is needed for the common case.
@@ -623,7 +624,7 @@ install prefetch subprocess, in `scripts/install-qwen3.mjs`.
 | Warning | Why it's benign | How it's suppressed |
 |---|---|---|
 | HF Hub `...cache-system uses symlinks...` | Windows without Developer Mode can't create cache symlinks; HF Hub transparently falls back to file copies. | `HF_HUB_DISABLE_SYMLINKS_WARNING=1` — set in both the install subprocess env and the sidecar runtime env. We do **not** set `HF_HOME`/`HF_HUB_CACHE` (the engine ignores them, so the cache stays at its default location). |
-| `SoX could not be found!` | A transitive torchaudio/coqui probe for the optional SoX backend. We do all audio I/O via soundfile + ffmpeg, so SoX is never used. | Message-scoped `warnings.filterwarnings` (narrowest scope — other `UserWarning`s still surface). |
+| `SoX could not be found!` | A transitive torchaudio/coqui probe for the optional SoX backend. The sidecar does its own audio I/O with the stdlib `wave` module and NumPy, never through torchaudio's loader, so SoX is never used. | Message-scoped `warnings.filterwarnings` (narrowest scope — other `UserWarning`s still surface). |
 | transformers `flash-attn is not installed` banner | SDPA is the correct default attention impl (see **FlashAttention-2** above); FA2 is an opt-in accelerator, not a missing requirement. | Message-scoped `warnings.filterwarnings`. Deployers who install the FA2 wheel silence it the upstream way regardless. |
 | Qwen `code_predictor_config is None. Initializing code_predictor model with default values` | HuggingFace config-defaulting inside `qwen_tts`'s `Qwen3TTSTalkerConfig.__init__` at `from_pretrained` — a one-time load-time `logging.info`, **not** a per-sentence recompute (the design-time slowness that once drew the eye was generation-length-bound, fixed separately). | A logging filter (`_DropSubstringLogFilter`), not a warnings filter: `_suppress_code_predictor_log()` in `main.py` adds it to the root handlers only around the Qwen `from_pretrained` calls and removes it after (load-scoped, zero leak). Pinned by `tests/test_log_filter.py`. |
 

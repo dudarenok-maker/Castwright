@@ -88,13 +88,17 @@ def test_torch_is_explicit():
 def test_torch_and_torchaudio_are_a_matched_pair():
     """torchaudio is tightly coupled to torch's exact version, so both must be
     pinned to the SAME version. The old 2.8.0 "<2.9 keeps in-core I/O" rationale
-    no longer applies: the sidecar never calls torchaudio.load (Kokoro is ONNX,
-    Qwen uses soundfile, Coqui uses pre-computed manifest-speaker latents), so
-    torchaudio's 2.9 backend removal doesn't touch us. We assert a matched pair
-    at or above the CVE-patched floor — torch >=2.10 clears CVE-2025-2999
-    (unpack_sequence) and CVE-2025-3001 (lstm_cell). The "we never call
+    no longer applies: the sidecar never calls torchaudio's loader (Kokoro is
+    ONNX; Qwen and the XTTS clone path read and write PCM directly via the
+    stdlib `wave` module + NumPy — see `xtts_audio_io.py`, #1967 — and stock
+    XTTS inference uses pre-computed manifest-speaker latents), so torchaudio's
+    2.9 backend removal doesn't touch us. We assert a matched pair at or above
+    the CVE-patched floor — torch >=2.10 clears CVE-2025-2999 (unpack_sequence)
+    and CVE-2025-3001 (lstm_cell). The "sidecar's own source never calls
     torchaudio.load" invariant is enforced separately in
-    test_audio_io_invariant.py."""
+    test_audio_io_invariant.py; that guard can't see into third-party packages,
+    which is why the XTTS clone path needed its own patch and its own test
+    (test_xtts_audio_io.py)."""
     lines = _lines()
     torch_pin = next((_pin(l) for l in lines if _pkg(l) == "torch"), None)
     audio_pin = next((_pin(l) for l in lines if _pkg(l) == "torchaudio"), None)
@@ -117,10 +121,12 @@ def test_no_torchcodec():
     needs it. coqui-tts 0.27.5 presence-checks torchcodec at IMPORT on torch>=2.9
     (`is_torchcodec_available()` → `find_spec("torchcodec")`, NOT a functional
     import), and raises ImportError without it — so install-coqui.mjs installs it
-    (#1586). It need only be PRESENT, never functional: the sidecar never calls
-    torchaudio.load (test_audio_io_invariant.py) and XTTS inference uses precomputed
-    manifest-speaker latents, so torchcodec's FFmpeg decode path — which on a static
-    FFmpeg build can't even load its shared libs — is never reached. That runtime
+    (#1586). It need only be PRESENT, never functional: stock XTTS inference uses
+    precomputed manifest-speaker latents, and the XTTS clone path's own reference
+    loader — the one call that would otherwise reach torchcodec's FFmpeg decode —
+    is patched out at derive time (`xtts_audio_io.py`, #1967; poison-tested in
+    test_xtts_audio_io.py). Without that patch it would fail here: on a static
+    FFmpeg build torchcodec can't even load its shared libs. That runtime
     install is the OPT-IN installer's job, never the manifest's; hence this stays a
     manifest-only guard."""
     assert not any(_pkg(l) == "torchcodec" for l in _lines()), \

@@ -2420,6 +2420,7 @@ class CoquiEngine(Engine):
         """
         import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
         import TTS as _tts_pkg  # noqa: PLC0415
+        from xtts_audio_io import patched_xtts_load_audio  # noqa: PLC0415
 
         self._ensure_loaded(model, device=device)
         # Claim BEFORE the acquire -- mirrors `synthesize()`'s TOCTOU guard
@@ -2509,9 +2510,15 @@ class CoquiEngine(Engine):
                     tmp_wav_path = os.path.splitext(pt_path)[0] + ".derive-src.tmp.wav"
                     _atomic_wav_save(_float_audio_to_int16_le(ref_audio), int(ref_sr), tmp_wav_path)
                     try:
-                        gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
-                            audio_path=tmp_wav_path, **derive_kwargs
-                        )
+                        # #1967 — XTTS's own reference loader goes through torchaudio's
+                        # loader, which needs FFmpeg's shared libs and so fails on a
+                        # static ffmpeg build. Decode the WAV we just wrote ourselves.
+                        # This `with` sits inside `self._synth_lock` (taken above), which
+                        # is what makes mutating a third-party module global safe here.
+                        with patched_xtts_load_audio():
+                            gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
+                                audio_path=tmp_wav_path, **derive_kwargs
+                            )
                     finally:
                         try:
                             os.remove(tmp_wav_path)
