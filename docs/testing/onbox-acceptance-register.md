@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 28 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 29 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**45 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**46 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1062,6 +1062,59 @@ is unproven.
 (ASR or a design) once it finishes. *Criteria:* PR #1993's description +
 the C1/M3 review findings quoted above. *Cost:* short — rides along with A19
 and A20, which already stage a mixed-engine render on this same card.
+
+---
+
+### A29 · `qa.asr.model` reaches the sidecar AND every server-side reader (PR #2008, closes [#1988](https://github.com/dudarenok-maker/Castwright/issues/1988), [#1989](https://github.com/dudarenok-maker/Castwright/issues/1989)) · **no GPU needed, sidecar venv only**
+
+Registering `ASR_MODEL` as the `qa.asr.model` registry knob made a UI-set
+override reach the sidecar via the generic restart-sidecar env-injection loop,
+but the PR's own independent review found it did **not** reach the server's
+own Node-side Whisper-model readers — `whisperRepoDir()` / `whisperModelPresent()`
+/ `detectWhisperInstallStateOnDisk()` (`model-paths.ts`, `whisper-install-detect.ts`)
+cached `process.env.ASR_MODEL` in a module-load-time constant, so Model
+Manager's sizing, install-state, and **Remove** all still targeted `base`
+regardless of what was actually configured and loaded. This was verified as a
+real defect (not just a review claim) by reverting the fix and watching the
+paired tests go red — see the PR's mutation-verification comment — but the
+full failure mode needs the real sidecar + a real Hugging Face download to
+observe end to end, which no unit test can substitute for.
+
+- **Prerequisite:** comment out `ASR_MODEL` in `server/.env` first, if it's
+  set. `server/.env.example`'s generated block ships `ASR_MODEL=base`
+  uncommented; on a box seeded from that file, the value is present as a real
+  env var, and `resolver.ts` gives env unconditional precedence with
+  `locked: true` — Advanced Configuration would show the knob disabled with
+  an env pill, making step 1 below unperformable.
+- Set **Content-QA (Whisper) model** to a non-default value (e.g. `small`) in
+  Advanced Configuration and let the sidecar restart. Confirm from the sidecar
+  log / `/health` that `faster-whisper` actually loaded `small`, not `base`.
+- Open Model Manager: the Whisper row must report `small`'s on-disk size and
+  path, not `base`'s.
+- Click **Remove**. It must delete the `small` snapshot directory and leave
+  any pre-existing `base` snapshot untouched — the inverse of the pre-fix
+  behaviour, which deleted `base` and left the model actually in use on disk.
+- Run the in-app installer (Account → Models → Whisper → Install) with
+  `small` configured and confirm `install-whisper.mjs` fetches `small` (its
+  `[install-whisper]` step lines / the resulting HF cache snapshot name), not
+  `base` — pinning that the installer spawn now receives an explicit
+  `--model` flag carrying the live value rather than falling back to its own
+  `process.env.ASR_MODEL || 'base'` default. Confirm the install card's own
+  copy also names `small`, not a hard-coded `base` (m1 fix).
+- **Separately**, confirm the documented CLI path
+  (`node server/tts-sidecar/scripts/install-whisper.mjs`, no flags) fetches
+  `base` in this scenario, not `small` — it has no access to
+  `user-settings.json`, so it cannot see the UI override; only the in-app
+  installer (which always passes `--model`) reflects the configured model.
+  This is expected, not a defect — it's why the script's usage comment now
+  says to pass `--model` explicitly for a UI-configured, non-default model.
+
+*Needs:* the sidecar venv with `faster-whisper` installable, network access
+for the HF download of a second model size, and write access to the HF hub
+cache to seed/inspect both `base` and the configured model's snapshots. No GPU
+required. *Criteria:* this row plus PR #2008's description of the failure
+scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
+Remove click.
 
 ---
 

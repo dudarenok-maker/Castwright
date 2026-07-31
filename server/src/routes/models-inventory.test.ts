@@ -362,6 +362,22 @@ describe('buildModelInventory', () => {
       );
       expect(inv.items.find((i) => i.id === 'whisper')!.installState).toBe('package-missing');
     });
+
+    it('whisper: sizes/paths the CONFIGURED qa.asr.model, not base (PR #2008 review, Major 1)', () => {
+      /* Before the fix this row always sized 'base', regardless of an
+         overridden qa.asr.model — the inventory disagreed with what the
+         sidecar had actually loaded. */
+      _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+      writeFile(
+        join(hfCache, 'models--Systran--faster-whisper-small', 'snapshots', 'abc', 'model.bin'),
+        321,
+      );
+      const inv = buildModelInventory(baseDeps());
+      const row = inv.items.find((i) => i.id === 'whisper')!;
+      expect(row.present).toBe(true);
+      expect(row.sizeBytes).toBe(321);
+      expect(row.diskPath).toContain('faster-whisper-small');
+    });
   });
 
   it('every TTS + whisper row carries an integrity verdict', () => {
@@ -553,6 +569,38 @@ describe('performRemoval', () => {
     expect(
       dirSizeBytes(join(hfCache, 'models--Qwen--Qwen3-TTS-12Hz-1.7B-Base')).bytes,
     ).toBe(0);
+  });
+
+  describe('whisper: removalPaths honours an overridden qa.asr.model (PR #2008 review, Major 1)', () => {
+    afterEach(() => _resetUserSettingsCache()); // don't leak the seeded override into later cases
+
+    it('removes the CONFIGURED model directory, not the default base, and leaves base untouched', async () => {
+      /* Before the fix, whisperRepoDir() (and therefore removalPaths) always
+         read a module-load-time `process.env.ASR_MODEL` const and never saw a
+         registry override — so Remove deleted 'base' regardless of what was
+         actually configured/loaded, and freed the wrong model's bytes while
+         leaving the model actually in use on disk. */
+      _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+      writeFile(
+        join(hfCache, 'models--Systran--faster-whisper-small', 'snapshots', 'abc', 'model.bin'),
+        300,
+      );
+      writeFile(
+        join(hfCache, 'models--Systran--faster-whisper-base', 'snapshots', 'abc', 'model.bin'),
+        999,
+      );
+
+      const res = await performRemoval('whisper', repoRoot);
+
+      expect(res.removed).toBe(true);
+      expect(res.freedBytes).toBe(300); // the configured model's size, not base's
+      expect(
+        dirSizeBytes(join(hfCache, 'models--Systran--faster-whisper-small')).bytes,
+      ).toBe(0); // configured model actually removed
+      expect(
+        dirSizeBytes(join(hfCache, 'models--Systran--faster-whisper-base')).bytes,
+      ).toBe(999); // base, which is NOT in use, is left alone
+    });
   });
 });
 

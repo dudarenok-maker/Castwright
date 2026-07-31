@@ -14,6 +14,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { coquiModelDir } from './coqui-install-detect.js';
+import { configValue } from '../config/resolver.js';
 
 /* Same repo ids the sidecar engines resolve (main.py), env-overridable in
    lockstep so a relocated model is sized/removed where it actually lives. */
@@ -21,7 +22,19 @@ const QWEN_BASE_MODEL = process.env.QWEN_BASE_MODEL || 'Qwen/Qwen3-TTS-12Hz-0.6B
 const QWEN_BASE17_MODEL = process.env.QWEN_BASE_17B_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
 const QWEN_DESIGN_MODEL =
   process.env.QWEN_VOICEDESIGN_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
-const ASR_MODEL = process.env.ASR_MODEL || 'base';
+/* Unlike the Qwen consts above, ASR_MODEL is a registered registry knob
+   (`qa.asr.model`, registry.ts) reachable via Advanced Configuration, not just
+   `server/.env` — so it must be resolved PER CALL through configValue(), never
+   cached in a module-level const. The resolver still honours the env var at
+   the same precedence (env > override > default), so `.env`-only deployments
+   are unaffected; what changes is that a UI override now actually reaches
+   this file too, instead of only the sidecar. See PR #2008 review (Major 1):
+   before this, whisperRepoDir() always pointed at Systran/faster-whisper-base
+   regardless of the model actually configured, so Model Manager sized/removed
+   the wrong model whenever qa.asr.model was overridden. */
+function currentAsrModel(): string {
+  return configValue<string>('qa.asr.model');
+}
 
 export interface DirSize {
   bytes: number;
@@ -91,8 +104,10 @@ export function qwenDesignRepoDir(): string {
 }
 
 /** Whisper (faster-whisper) CTranslate2 HF snapshot repo dir. A bare size name
-    maps to Systran/faster-whisper-<size>; a full owner/repo is used as-is. */
-export function whisperRepoDir(model: string = ASR_MODEL): string {
+    maps to Systran/faster-whisper-<size>; a full owner/repo is used as-is.
+    Default is resolved fresh per call (see currentAsrModel() above) — not a
+    module-load-time constant. */
+export function whisperRepoDir(model: string = currentAsrModel()): string {
   const repo = model.includes('/') ? model : `Systran/faster-whisper-${model}`;
   return hfRepoDir(repo);
 }

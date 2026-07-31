@@ -48,6 +48,40 @@ describe('WhisperInstall', () => {
     expect(screen.getByRole('button', { name: /install whisper asr/i })).toBeInTheDocument();
   });
 
+  it('names the CONFIGURED qa.asr.model, not a hard-coded "base" (PR #2008 re-review, m1)', async () => {
+    /* Before this fix the card unconditionally said "the `base` model" —
+       wrong as soon as the Major-1 fix made the installer actually fetch a
+       UI-configured, non-default model. */
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/detect')) {
+        return Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }));
+      }
+      if (url.includes('/api/config')) {
+        return Promise.resolve(jsonResponse({ values: { 'qa.asr.model': { effective: 'small' } } }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(<WhisperInstall />);
+    await waitFor(() =>
+      expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
+    );
+    await waitFor(() => expect(screen.getByText('small')).toBeInTheDocument());
+    expect(screen.queryByText('base')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the registry default "base" when /api/config has no qa.asr.model value', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      url.includes('/detect')
+        ? Promise.resolve(jsonResponse({ state: 'not-installed', installed: false }))
+        : Promise.resolve(jsonResponse({})), // /api/config falls through here too
+    );
+    render(<WhisperInstall />);
+    await waitFor(() =>
+      expect(screen.getByTestId('whisper-install-not-detected')).toBeInTheDocument(),
+    );
+    expect(screen.getByText('base')).toBeInTheDocument();
+  });
+
   it('clicking Install POSTs /install and renders the job card with the step text', async () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (url.endsWith('/detect')) {

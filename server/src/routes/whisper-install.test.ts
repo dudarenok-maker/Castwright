@@ -16,6 +16,7 @@ import {
   type WhisperInstallJobStatus,
 } from '../tts/whisper-install-bootstrap.js';
 import type { WhisperInstallState } from '../tts/whisper-install-detect.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 
 function makeApp() {
   const app = express();
@@ -101,6 +102,59 @@ describe('POST /api/whisper/install + poll', () => {
     setWhisperInstallBootstrap(new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready' }));
     const res = await request(makeApp()).get('/api/whisper/install/nope');
     expect(res.status).toBe(404);
+  });
+
+  it('re-resolves --model at SPAWN time, not construction time, from the LIVE qa.asr.model override (PR #2008 re-review, M1)', async () => {
+    /* Before the Major-1 fix, no installArgs were passed at all, so
+       install-whisper.mjs fell back to `process.env.ASR_MODEL || 'base'` —
+       the in-app installer could never fetch a model configured only via
+       Advanced Configuration.
+
+       The FIRST version of this test constructed the bootstrap AFTER seeding
+       the override, so a construction-time-frozen `--model` (the exact
+       regression the docblock at whisper-install-bootstrap.ts warns against)
+       would have produced an identical answer and passed anyway — a placebo
+       for the specific "resolved per call, not cached" property being
+       pinned. This version constructs the bootstrap FIRST, runs an install
+       with the override still at its default, THEN changes the override and
+       runs a second install — so a construction-time freeze and a spawn-time
+       resolution provably diverge: freezing would spawn 'base' both times;
+       resolving per call spawns 'base' then 'small'. */
+    _resetUserSettingsCache(); // ensure no override is seeded yet
+    const capturedArgs: (readonly string[])[] = [];
+    const bootstrap = new WhisperInstallBootstrap({
+      repoRoot: '/repo',
+      detectFn: () => 'not-installed',
+      spawnFn: (_cmd, args) => {
+        capturedArgs.push(args);
+        return fakeChild(0) as never;
+      },
+    });
+    setWhisperInstallBootstrap(bootstrap);
+    const app = makeApp();
+
+    try {
+      // Run 1: no override yet → the registry default ('base').
+      const start1 = await request(app).post('/api/whisper/install');
+      await poll(app, start1.body.id, (s) => s === 'installed' || s === 'error');
+
+      // Change the LIVE override, then run a second, independent install job
+      // against the SAME already-constructed bootstrap instance.
+      _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+      const start2 = await request(app).post('/api/whisper/install');
+      await poll(app, start2.body.id, (s) => s === 'installed' || s === 'error');
+
+      expect(start1.body.id).not.toBe(start2.body.id); // genuinely two separate runs
+      expect(capturedArgs).toHaveLength(2);
+      expect(capturedArgs[0].slice(-2)).toEqual(['--model', 'base']);
+      expect(capturedArgs[1].slice(-2)).toEqual(['--model', 'small']); // proves per-call resolution
+    } finally {
+      // try/finally, not an inline reset — a poll() timeout must not leak
+      // the 'small' override into later tests in this file (PR #2008
+      // re-review, m3; matches the pattern already used in
+      // whisper-install-detect.test.ts).
+      _resetUserSettingsCache();
+    }
   });
 });
 

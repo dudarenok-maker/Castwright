@@ -18,6 +18,7 @@ import {
   detectWhisperInstallStateOnDisk,
   type WhisperInstallState,
 } from './whisper-install-detect.js';
+import { configValue } from '../config/resolver.js';
 
 export type WhisperInstallJobStatus = 'detecting' | 'installing' | 'installed' | 'error';
 
@@ -42,7 +43,9 @@ export interface WhisperInstallOptions {
   spawnFn?: WhisperSpawnFn;
   /** Stubbable install-state probe (offline tests). */
   detectFn?: () => WhisperInstallState | Promise<WhisperInstallState>;
-  /** Install flags forwarded to install-whisper.mjs (e.g. ['--model', 'base']). */
+  /** Install flags forwarded to install-whisper.mjs (e.g. ['--model', 'base']).
+      Explicit override for tests; production leaves this unset so the model
+      flag is resolved fresh at spawn time — see resolveInstallArgs(). */
   installArgs?: readonly string[];
 }
 
@@ -54,13 +57,24 @@ export class WhisperInstallBootstrap {
   private readonly repoRoot: string;
   private readonly spawnFn: WhisperSpawnFn;
   private readonly detectFn: () => WhisperInstallState | Promise<WhisperInstallState>;
-  private readonly installArgs: readonly string[];
+  private readonly installArgsOverride: readonly string[] | undefined;
 
   constructor(opts: WhisperInstallOptions) {
     this.repoRoot = opts.repoRoot;
     this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as WhisperSpawnFn);
     this.detectFn = opts.detectFn ?? (() => detectWhisperInstallStateOnDisk(this.repoRoot));
-    this.installArgs = opts.installArgs ?? [];
+    this.installArgsOverride = opts.installArgs;
+  }
+
+  /* PR #2008 review (Major 1): the constructor runs once at server boot
+     (whisper-install.ts's `defaultBootstrap`), while `qa.asr.model` can
+     change at any time via Advanced Configuration with no restart of the
+     SERVER (only the sidecar restarts). Freezing `--model` at construction
+     would just move the same module-load-time-const bug here, so the flag
+     is resolved fresh on every install run instead. Tests can still pin an
+     explicit installArgs to bypass config resolution entirely. */
+  private resolveInstallArgs(): readonly string[] {
+    return this.installArgsOverride ?? ['--model', configValue<string>('qa.asr.model')];
   }
 
   /** Probe install-state without kicking off a job. Used by GET /detect. */
@@ -142,7 +156,7 @@ export class WhisperInstallBootstrap {
     return new Promise((resolve, reject) => {
       let proc: ChildProcess;
       try {
-        proc = this.spawnFn('node', [script, ...this.installArgs], {
+        proc = this.spawnFn('node', [script, ...this.resolveInstallArgs()], {
           cwd: this.repoRoot,
           windowsHide: true,
         });
