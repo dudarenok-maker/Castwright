@@ -205,6 +205,33 @@ describe('RebaselineModal — default selection', () => {
     expect(maerinRow.checked).toBe(true);
   });
 
+  it('excludes a char-narrator id — the promoted-cast-row twin of "narrator" (#1895)', async () => {
+    // Name deliberately does NOT literal-match "Narrator" — isolates the
+    // id-based branch of isNarrator from its by-name fallback.
+    const charNarratorCast = [
+      char('char-narrator', 'The Storyteller', 500),
+      char('maerin', 'Maerin', 80),
+      char('marlow', 'Marlow', 60),
+    ];
+    const store = makeStore(charNarratorCast, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitFor(() => {
+      const sel = store.getState().rebaseline.selectedCharacterIds;
+      expect(sel).toContain('maerin');
+      expect(sel).not.toContain('char-narrator');
+    });
+    // The char-narrator row renders with the "Narrator" badge — proof this
+    // modal's OWN isNarrator (used for row grouping, not the selection
+    // above) also recognises the id via the shared constant, not just
+    // principal-cast.ts's copy.
+    const narratorRow = screen.getByTestId('rebaseline-row-char-narrator');
+    expect(within(narratorRow).getByText('Narrator')).toBeInTheDocument();
+  });
+
   it('renders nothing without a bookId (global voices tab)', () => {
     const store = makeStore(CHARACTERS, VOICES);
     const { container } = render(

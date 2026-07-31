@@ -101,6 +101,22 @@ describe('classifyDrift — measurementSource provenance (plan 274 T6)', () => {
       'on-target',
     );
   });
+
+  it('#1949 — treats an unrecognised future measurementSource as no-data, NOT as the grandfathered legacy case', () => {
+    /* An unknown provenance value must be untrusted, not delegated to the
+       twoPass-only rule — even when twoPass is true, which would otherwise
+       render it as ground truth. Cast is deliberate: this value doesn't
+       exist in today's closed enum, which is exactly the scenario being
+       guarded against. */
+    expect(
+      classifyDrift(
+        lufs(0.1, {
+          measurementSource: 'some-future-source' as unknown as ChapterLoudness['measurementSource'],
+          twoPass: true,
+        }),
+      ),
+    ).toBe('no-data');
+  });
 });
 
 describe('LoudnessReport — summary + sparkline', () => {

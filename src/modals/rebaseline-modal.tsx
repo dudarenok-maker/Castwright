@@ -43,6 +43,7 @@ import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { rebaselineActions, includedProposals, type Proposal } from '../store/rebaseline-slice';
 import { selectPrincipalCast } from '../lib/principal-cast';
+import { NARRATOR_CHARACTER_IDS } from '../lib/narrator-ids';
 import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -52,9 +53,8 @@ import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import type { Character, CharColor, Voice } from '../lib/types';
 
-const NARRATOR_IDS = new Set(['narrator', 'char-narrator']);
 function isNarrator(c: Character): boolean {
-  if (NARRATOR_IDS.has(c.id.toLowerCase())) return true;
+  if (NARRATOR_CHARACTER_IDS.includes(c.id.toLowerCase())) return true;
   return (c.name ?? '').toLowerCase() === 'narrator';
 }
 

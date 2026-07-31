@@ -13,7 +13,17 @@
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { getLanguageEntry, isDefaultNarratorName } from '../tts/language-registry.js';
 
-const NARRATOR_IDS = new Set(['narrator', 'char-narrator']);
+/* #1895 — the two character-id shapes that mean "this is the narrator":
+   the synthetic id assigned when a book has no separate narrator character
+   ('narrator'), and the id used once the narrator is promoted to a
+   first-class cast row ('char-narrator'). Was independently inline-copied
+   across several server modules; centralised here (this file is already
+   the narrator-identity home) so a future change to what counts as "the
+   narrator" only needs to happen in one place per side of the
+   frontend/server boundary. Twin on the frontend side:
+   `src/lib/narrator-ids.ts` (`NARRATOR_CHARACTER_IDS`) — keep both in sync
+   if a new synthetic-id shape is ever added. */
+export const NARRATOR_CHARACTER_IDS: readonly string[] = ['narrator', 'char-narrator'];
 export const NARRATOR_DEFAULT_NAME = 'Narrator';
 
 /** The one fixed folkloric narrator persona, verbatim from the accepted Coalfall
@@ -40,7 +50,7 @@ export function applyNarratorIdentity(
 ): CharacterOutput[] {
   const localized = getLanguageEntry(language)?.narratorName ?? NARRATOR_DEFAULT_NAME;
   return characters.map((c) => {
-    if (!NARRATOR_IDS.has(c.id)) return c;
+    if (!NARRATOR_CHARACTER_IDS.includes(c.id)) return c;
     const next: CharacterOutput = { ...c };
 
     // Name: replace only when the current name is still a default (English

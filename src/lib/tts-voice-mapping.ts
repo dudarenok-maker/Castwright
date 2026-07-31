@@ -10,6 +10,7 @@
    prefer reading `voice.ttsVoice` when it's available. */
 
 import type { Character, Voice, TtsEngine } from './types';
+import { NARRATOR_CHARACTER_IDS } from './narrator-ids';
 
 /* Single source of truth for the engine union: the OpenAPI-derived type in
    ./types (BaseVoice.engine). Re-exported here so the many
@@ -270,9 +271,7 @@ export interface PickInput {
 export function inferProfile(input: PickInput): VoiceProfile {
   const lid = input.id.toLowerCase();
   const isNarrator =
-    lid === 'narrator' ||
-    lid === 'char-narrator' ||
-    (input.name ?? '').toLowerCase() === 'narrator';
+    NARRATOR_CHARACTER_IDS.includes(lid) || (input.name ?? '').toLowerCase() === 'narrator';
   /* Narrator only short-circuits to the warm/cool buckets when the user
      hasn't explicitly chosen a gender. Once Male or Female is set, fall
      through to the regular gender×register pipeline so the dropdown

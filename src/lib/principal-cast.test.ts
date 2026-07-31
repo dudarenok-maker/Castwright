@@ -16,6 +16,19 @@ describe('selectPrincipalCast', () => {
     expect(result.has('b')).toBe(false);
   });
 
+  it('excludes a char-narrator id — the promoted-cast-row twin of "narrator" (#1895)', () => {
+    // Name deliberately does NOT literal-match "Narrator" — isolates the
+    // id-based branch of isNarrator from its by-name fallback.
+    const chars = [
+      { id: 'char-narrator', name: 'The Storyteller' },
+      { id: 'a', name: 'Alice' },
+    ];
+    const lines = { 'char-narrator': 1000, a: 100 };
+    const result = selectPrincipalCast(chars, lines);
+    expect(result.has('char-narrator')).toBe(false);
+    expect(result.has('a')).toBe(true);
+  });
+
   it('excludes a narrator detected by name (non-canonical id)', () => {
     const chars = [
       { id: 'char-99', name: 'Narrator' },

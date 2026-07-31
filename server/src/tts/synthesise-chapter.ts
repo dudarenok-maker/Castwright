@@ -18,6 +18,7 @@ import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from 
 import { resolveCharacterEngine, resolveCharacterQwenTier } from './per-character-engine.js';
 import { normaliseForTts, stripAudioTags } from './text-normalize.js';
 import { normaliseBookLanguage } from './language.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
@@ -1447,7 +1448,7 @@ export async function synthesiseChapter(
      its own choice untouched. */
   const resolvedNarratorCharacterId = castById.has(narratorCharacterId)
     ? narratorCharacterId
-    : (['narrator', 'char-narrator'].find((id) => castById.has(id)) ?? narratorCharacterId);
+    : (NARRATOR_CHARACTER_IDS.find((id) => castById.has(id)) ?? narratorCharacterId);
 
   const groups = buildSentenceGroups(sentences);
 

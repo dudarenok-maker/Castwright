@@ -4208,24 +4208,25 @@ export interface components {
         ChapterLoudness: {
             /**
              * @description Integrated loudness (LUFS) of the finished chapter, measured by a
-             *     real `ebur128` pass over the encoded file after it lands on disk
-             *     (`server/src/audio/measure-loudness.ts`). If that post-write
+             *     real `ebur128` pass over the encoded file at the temp path,
+             *     before the atomic rename to the chapter's final name
+             *     (`server/src/audio/measure-loudness.ts`). If that
              *     measurement fails, falls back to loudnorm's self-reported
              *     `output_i`, which is NOT a measurement of the finished file.
              */
             i: number;
             /**
-             * @description Loudness range (LU), measured by the same post-write `ebur128`
-             *     pass as `i`. Falls back to loudnorm's self-reported `output_lra`
-             *     on measurement failure.
+             * @description Loudness range (LU), measured by the same `ebur128` pass as `i`
+             *     (at the temp path, before the atomic rename). Falls back to
+             *     loudnorm's self-reported `output_lra` on measurement failure.
              */
             lra: number;
             /**
-             * @description True peak (dBTP), measured by the same post-write `ebur128` pass
-             *     as `i`. Falls back to loudnorm's self-reported `output_tp` on
-             *     measurement failure — that fallback is the ceiling loudnorm was
-             *     ASKED to hit, not what the audio measured, and can read below the
-             *     true sample peak.
+             * @description True peak (dBTP), measured by the same `ebur128` pass as `i` (at
+             *     the temp path, before the atomic rename). Falls back to
+             *     loudnorm's self-reported `output_tp` on measurement failure —
+             *     that fallback is the ceiling loudnorm was ASKED to hit, not what
+             *     the audio measured, and can read below the true sample peak.
              */
             tp: number;
             /**

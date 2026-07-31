@@ -65,10 +65,18 @@ export function classifyDrift(
          twoPass-only rule, unchanged, so no existing chapter's badge moves.
          Do NOT collapse this to an unconditional render — that would also
          start rendering legacy single-pass (`twoPass: false`) rows, which
-         the pre-plan-274 gate was right to hide. */
+         the pre-plan-274 gate was right to hide.
+       - any other value (a future enum member this switch hasn't been
+         updated for): untrusted, not grandfathered (#1949) — only a
+         genuinely ABSENT field gets the legacy delegation above. */
   if (lufs.measurementSource === 'ebur128') {
     // fall through to the drift computation below
   } else if (lufs.measurementSource === 'loudnorm') {
+    return 'no-data';
+  } else if (lufs.measurementSource !== undefined) {
+    // #1949 — an unrecognised future provenance value is untrusted, not
+    // grandfathered: only a genuinely ABSENT field falls through to the
+    // legacy twoPass-only rule below.
     return 'no-data';
   } else if (lufs.twoPass !== true) {
     return 'no-data';
