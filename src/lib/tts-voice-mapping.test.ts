@@ -48,10 +48,14 @@ describe('inferProfile', () => {
   });
 
   it('routes the char-narrator id with high warmth to narrator-warm — the promoted-cast-row twin of "narrator" (#1895)', () => {
+    // warmth:56 is deliberately BELOW the non-narrator fallback's own
+    // warm/cool split (>= 60, tts-voice-mapping.ts:302) but still within the
+    // narrator branch's (>= 55, :283) — so the two branches disagree unless
+    // the narrator check itself is what recognises the id.
     expect(
       inferProfile({
         id: 'char-narrator',
-        tone: { warmth: 70, pace: 50, authority: 40, emotion: 50 },
+        tone: { warmth: 56, pace: 50, authority: 40, emotion: 50 },
       }),
     ).toBe('narrator-warm');
   });

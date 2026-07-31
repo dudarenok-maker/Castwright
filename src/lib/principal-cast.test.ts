@@ -17,8 +17,10 @@ describe('selectPrincipalCast', () => {
   });
 
   it('excludes a char-narrator id — the promoted-cast-row twin of "narrator" (#1895)', () => {
+    // Name deliberately does NOT literal-match "Narrator" — isolates the
+    // id-based branch of isNarrator from its by-name fallback.
     const chars = [
-      { id: 'char-narrator', name: 'Narrator' },
+      { id: 'char-narrator', name: 'The Storyteller' },
       { id: 'a', name: 'Alice' },
     ];
     const lines = { 'char-narrator': 1000, a: 100 };
