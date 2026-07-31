@@ -1,11 +1,14 @@
 # cast.json write lock — design
 
 **Status:** approved
-**Issues:** #1981 (the filed defect), #2000 (the sweep), #2001 (incidental, §11)
+**Issues:** #1981 (the filed defect), #2000 (the sweep), #2001 (incidental, §11);
+#2006 filed for the three clone-consent gates a per-RMW lock cannot reach (§7)
 **Sequencing:** implementation bases on / rebases onto `fix/server-1933-assign-readiness`
-**Review:** revised after an adversarial pass found 3 Critical / 8 Major / 3 Minor
-against the first draft. All 14 folded; §5, §5.1, §6 and §8 are substantially
-rewritten as a result.
+**Review:** two adversarial passes. Round 1 found 3 Critical / 8 Major / 3 Minor;
+round 2, against the rewrite, found a further 4 Critical / 6 Major / 8 Minor —
+mostly in the sections the first rewrite had just changed. All folded. §6 and §7
+were re-decided outright after round 2 showed both had been designed against a
+wrong map of where the writes are.
 
 ## 1. What was filed, and what is actually wrong
 
@@ -34,7 +37,7 @@ B: read resolves → runs synchronously → writeJsonAtomic starts
 Both writes land. `writeJsonAtomic`'s rename makes each write individually
 non-torn, but the later rename wins outright, and A's mutation is gone.
 
-This is not theoretical. Measured (§7.1): two concurrent read-modify-writes
+This is not theoretical. Measured (§10.1): two concurrent read-modify-writes
 against one cast.json, issued from a bare `Promise.all`, lost a mutation in
 **200 of 200 trials**.
 
@@ -56,12 +59,12 @@ Two further sites *delete* it. Measured read→write spans:
 
 | Site | Span | inside the window |
 |---|---|---|
-| `qwen-voice.ts` `promote-voice` | `:692` → `:793` | `copyFile`, two `rm`s, and a **sidecar `fetch`** at `:768` |
+| `qwen-voice.ts` `promote-voice` | `:692` → `:793` | a `stat`, **four `rm`s**, **three `rename`s**, a `copyFile`, and a **sidecar `fetch`** at `:768` |
 | `cast-merge.ts` | `:77` → `:197` | writes *manuscript-edits.json* at `:171` |
 | `voice-override-linked.ts` | `:235` → `:364` | `await`s |
 | `library-cast-override.ts` | `:88`/`:89` → `:152`/`:153` | `await`s, **two books** |
 | `voice-library.ts` `/assign` | `:1277` → `:1434` | one (`:1386`) — the filed issue |
-| `analysis.ts` | `:2797` → `:3559`/`:3764`/`:4774` | **an entire analysis run** — see §6 |
+| `analysis.ts` | `:2797` → `:3558`/`:3763`/`:4774` | **an entire analysis run** — see §6 |
 | `cast-design.ts` | `:289`→`:293`, `:448`→`:452` | already re-reads `fresh` before writing |
 
 `promote-voice` — not `/assign` — holds the longest window in the codebase, and
@@ -165,9 +168,10 @@ two-lock AB/BA deadlock possible. A **design → cast** path is already live:
 `forEachMatchingCastCharacter`, which under this design takes a cast lock per
 matching book. No **cast → design** path exists today, so the design is not
 deadlocked — but the rule set is what future contributors read, and without rule 4
-it actively teaches them that cross-lock nesting is free. Wrapping
-`single-design.ts:110` or `qwen-voice.ts:532` in a cast lock would deadlock with
-no timeout and no diagnostic.
+it actively teaches them that cross-lock nesting is free. Any future change that
+wraps a `withDesignLock` call in a cast lock — for instance around
+`qwen-voice.ts:193` itself, or around `single-design.ts`'s design invocation —
+creates the opposite order and deadlocks with no timeout and no diagnostic.
 
 **What the lock does not cover.** It protects one read-modify-write. It does not
 make a *validate-then-write* safe when the validation and the write are in
@@ -179,7 +183,7 @@ The first draft's class table summed to 29 and switched counting units mid-table
 This one enumerates every site, counts sites throughout, and must sum to 35. The
 plan carries an arithmetic check on that.
 
-### Class 1 — mechanical: wrap the existing read..write span (17 sites)
+### Class 1 — mechanical: wrap the existing read..write span (18 sites)
 
 | Module | Sites |
 |---|---|
@@ -193,38 +197,57 @@ plan carries an arithmetic check on that.
 | `book-state.ts` | `:634` |
 | `voice-library.ts` | `:1434` (`POST /assign`), `:1536` (`DELETE /assign`) |
 | `qwen-voice.ts` | `:793` (`promote-voice`), `:893` (`DELETE emotion-variant`) |
-| `voice-library-usage.ts` | `:113` |
+| `cast-add-from-roster.ts` | `:147` |
+| `voice-library-usage.ts` | `:113` — **not mechanical, see below** |
 
-`qwen-voice.ts:793` and `:893` were missing from the first draft entirely.
-`:793`'s span covers a sidecar `fetch` and two `rm`s, and it writes the `cast`
-object read at `:692` — the longest and most exposed window in the sweep, not a
-routine wrap. `voice-library-usage.ts:113` is class 1 rather than a fan-out
-because `clearLibraryVoiceReferences` writes one book per iteration; the read
-must move inside the lock, since `walkConfirmedCasts()` (`:43`) *yields* an
-already-read `cast`.
+Three of these are not routine wraps despite sitting in this class:
 
-### Class 2 — multi-book: `withCastLocks` (9 sites)
+- **`qwen-voice.ts:793`** (`promote-voice`) was missing from the first draft
+  entirely. Its span covers a `stat`, four `rm`s, three `rename`s, a `copyFile`
+  and a sidecar `fetch`, and it writes the `cast` object read at `:692` — the
+  longest and most exposed window in the sweep.
+- **`cast-add-from-roster.ts:147`** moved here from class 2 after round 2: it
+  reads *both* books (`:104`, `:105`) but writes **only the source** (`:147`), and
+  `:79` already 400s same-book. A single-book lock on the source is correct;
+  `withCastLocks` across both would widen a lock over a second book for a
+  read-only consultation. Note the target read still feeds the decision, so it is
+  a check-then-act — accepted per §12, not closed here.
+- **`voice-library-usage.ts:113`** needs its read moved inside the lock, because
+  `walkConfirmedCasts()` (`:43`) *yields* an already-read `cast`. But that walker
+  is **shared** with `scanLibraryVoiceUsage` (`:71-85`) — §7's gate 2 — so
+  changing what it yields reaches into a consent gate. It is a shared-seam
+  restructure, sequenced with §7's library-voice lock rather than done blind.
+
+### Class 2 — multi-book: `withCastLocks` (8 sites)
 
 | Module | Sites |
 |---|---|
 | `cast-link-prior.ts` | `:142`, `:248` |
 | `cast-not-linked-to.ts` | `:106`, `:109`, `:202`, `:207` |
 | `library-cast-override.ts` | `:152`, `:153` — plus the §8 fix |
-| `cast-add-from-roster.ts` | `:147` |
 
 ### Class 3 — `voices.ts` fan-out: two branches, two write sites (2 sites)
 
 `forEachMatchingCastCharacter` (`voices.ts:771-834`) has its **own inline walk**;
-it does not use `walkConfirmedCasts` at all, which the first draft got wrong. Two
-distinct branches:
+it does not use `walkConfirmedCasts` at all. Two branches:
 
-- **`:788-803`, the `onlyBookDir` fast path**, writing at `:801`. This is the
-  branch every real call site takes — `cast-design.ts:514` and
-  `single-design.ts:182` both pass `job.bookDir`, and the fs-61 comment at
-  `voices.ts:783` says so explicitly. It carries production traffic and the first
-  draft's class-3 text did not describe it.
-- **`:816-829`, the workspace/series walk**, writing at `:828` — per-book lock
-  inside the loop, read moved in with it.
+- **`:816-829`, the workspace/series walk**, writing at `:828`. **This is the
+  primary production path**, and the first draft claimed the opposite. The fast
+  path is gated on `if (!seriesFilter && onlyBookDir)` (`:788`), and both cited
+  callers pass `seriesFilter` *as well as* `job.bookDir` (`cast-design.ts:510-515`,
+  `single-design.ts:176-183`) — so for any book in a real series the walk runs.
+  Three further callers never pass `onlyBookDir` at all: `applyTierToCastFiles`
+  (`voices.ts:938`, from `cast-tier.ts:38`), `persistEmotionVariant`
+  (`qwen-voice.ts:170`), and `ensureCharacterVoiceUuid` (`qwen-voice.ts:203`).
+  Per-book lock inside the loop, read moved in with it.
+- **`:788-803`, the `onlyBookDir` fast path**, writing at `:801` — taken only when
+  there is no `seriesFilter`, i.e. standalone books.
+
+This correction matters beyond the table: §3.2's granularity trade was originally
+reasoned as though the workspace walk were near-dead. It is not. The trade still
+stands — holding N locks across a full directory walk is still the worse option —
+but it is now a trade against a live path, and §12 records the resulting
+half-old/half-new exposure as a real accepted risk rather than a theoretical one.
 
 ### Class 4 — re-entrancy restructure (2 sites)
 
@@ -236,7 +259,7 @@ distinct branches:
 `:3558`, `:3763`, `:4774`, `:5422`, `:5927`. These do **not** take a cast lock.
 See §6.
 
-**17 + 9 + 2 + 2 + 5 = 35.** ✓
+**18 + 8 + 2 + 2 + 5 = 35.** ✓
 
 ### Class 6 — deletions (2 sites, not counted in the 35)
 
@@ -272,31 +295,60 @@ wrong. It has *no* design lock: `cast-design.ts:521` and `qwen-voice.ts:623` bot
 call it *after* `designQwenVoiceForCharacter` has released the lock
 (`qwen-voice.ts:384-471`). And its outer read is not merely a decision — `:152`
 computes `baseVoiceId = qwenStorageKey(character, characterId)` from the stale
-character, and bakes that value into the write payload at `:162`.
-`qwenStorageKey` reads `voiceUuid`, so a `voiceUuid` that changed between the
-outer read and the lock anchors the variant slot on a base that never existed —
-the #1057 orphaned-base shape, surfacing as a silent Kokoro fallback on
-re-render.
+character, and that value enters the write payload at `:158`/`:161` as the
+default `name` when the qwen slot has none. `qwenStorageKey` reads `voiceUuid`,
+so a `voiceUuid` that changed between the outer read and the lock anchors the
+variant slot on a base that never existed — the #1057 orphaned-base shape,
+surfacing as a silent Kokoro fallback on re-render. (Narrower than the first
+rewrite implied: it bites only when the slot has no existing `name`.)
 
-**The rule for both:** the re-read inside the lock must **re-evaluate every
-decision and re-derive every value** that feeds the write — re-check `voiceUuid`,
-re-derive `qwenStorageKey`. The outer read is an early-out optimisation and is
-never authoritative. The design lock is not part of the guarantee and must not be
-relied on.
+**The rule:** the re-read inside the lock must **re-evaluate every decision and
+re-derive every value** that feeds the write — re-check `voiceUuid`, re-derive
+`qwenStorageKey`. The outer read is an early-out optimisation, never
+authoritative.
 
-Both functions keep the two-branch structure: the book-scoped branch takes the
-cast lock and re-reads inside it; the series branch stays unlocked and delegates
-to `forEachMatchingCastCharacter`, which locks per book itself. That satisfies
-rule 1 and rule 4.
+### The branch this rule cannot cover, stated plainly
+
+Round 2 established that the rule above is satisfiable for the **book-scoped**
+branch of both functions and **not** for `ensureCharacterVoiceUuid`'s **series**
+branch. In that function the `voiceUuid` check (`:197`) and the mint (`:199`) sit
+*above* the branch; the series branch (`:202-205`) then delegates to
+`forEachMatchingCastCharacter`, which re-reads each book but is handed an
+already-decided uuid. There is no cast-lock scope in which the decision could be
+re-evaluated, because the decision precedes the branch.
+
+Two concurrent series-scoped calls therefore both read "no uuid", both mint, and
+both propagate. **That is prevented today, and only, by `withDesignLock(bookDir)`
+at `:193`** — exactly as the function's own docstring claims (`:182-184`).
+
+So the honest position, replacing the first rewrite's "the design lock is not
+part of the guarantee and must not be relied on":
+
+- For the **book-scoped** branch, the cast lock is the guarantee and the design
+  lock is not relied on.
+- For the **series** branch, **the design lock remains load-bearing.** This spec
+  does not change that and does not weaken it. Moving the decision under a cast
+  lock would require `ensureCharacterVoiceUuid` to hold a cast lock across
+  `forEachMatchingCastCharacter`, which violates rule 1 — genuine design work,
+  and out of scope here.
+- §11 edits `design-lock.ts`'s map cleanup **only**. It does not touch
+  acquisition, release, or ordering, so the series branch's existing guarantee is
+  unaffected. The implementation brief calls this out so nobody "simplifies" the
+  design lock away while touching that file.
+
+`persistEmotionVariant` has no design lock to lean on, so its book-scoped branch
+must take the cast lock and re-derive `qwenStorageKey` inside it; its series
+branch inherits `forEachMatchingCastCharacter`'s per-book locking and the same
+residual exposure.
 
 ## 6. `analysis.ts` — ownership, not a mutex
 
 `analysis.ts` is 5 of the 35 sites and the module that writes cast.json most
 often. It is **not a wrappable read-modify-write**: `priorCastForMerge` is read
 once at `:2797`, reconciled at `:2823`, and is then the merge base for writes at
-`:3559`, `:3764` and `:4774` — spread across the whole Phase 0/1 pipeline, with
+`:3558`, `:3763` and `:4774` — spread across the whole Phase 0/1 pipeline, with
 the interim writes *inside* the chapter loop. The subset route has the identical
-shape (read `:5206`, writes `:5423`, `:5927`).
+shape (read `:5206`, writes `:5422`, `:5927`).
 
 Neither available lock strategy works. Holding a cast lock for the run would
 block every other cast write on that book for minutes with no timeout. Re-reading
@@ -305,19 +357,48 @@ interim cast iteration N−1 wrote, so `mergeAnalysisResultWithExistingCast` wou
 no longer merge against the pre-run cast and srv-13's voice/reuse carry-forward
 would silently degrade.
 
-**Decision: analysis owns cast.json for the duration of its run**, expressed
-through the existing `markAnalysisBusy` / `isAnalysisBusy` registry
-(`tts/design-lock.ts:55-65`) rather than the mutex. That registry already exists
-for precisely this reason — it was built so a re-analysis (which rewrites the
-whole cast.json) cannot overlap a bulk design (which writes per-character
-overrides), and it ref-counts so a main plus a subset job can coexist.
+**Decision: a route-level admission gate, and nothing stronger — stated as
+admission control, not as a correctness guarantee.**
 
-Concretely: cast writers consult the registry and refuse with a clear 409 —
-*"analysis is rewriting this book's cast; try again when it finishes"* — rather
-than queueing behind an unbounded lock. That is a better user-visible failure than
-a request that hangs for minutes, and it is the behaviour the registry was
-designed to express. `analysis.ts`'s own five writes stay as they are; ownership,
-not serialisation, is what makes them safe.
+The first rewrite said cast writers would "consult the registry and refuse with a
+clear 409", and that "ownership, not serialisation, is what makes them safe".
+Round 2 showed both halves are wrong, and they are worth recording because the
+failure is instructive:
+
+- **Consulting `isAnalysisBusy` from an unlocked writer is itself check-then-act
+  — the exact defect class this spec exists to close.** `isAnalysisBusy` is a bare
+  `Map` read (`tts/design-lock.ts:63-65`) with no coupling to the cast mutex. A
+  writer that reads `false`, then `await`s its cast read — the very yield §1
+  identifies as the race — then writes, races a run that marks busy
+  (`analysis.ts:2572`, `:5109`) and writes at any of its five sites. The
+  consultation's window is *wider* than the one #1981 filed.
+- **A 409 is not expressible at most sites.** Of the 30 non-analysis sites, at
+  least eight have no status-code channel: `cast-design.ts:293`/`:452` and
+  `single-design.ts:178` run detached after `res.flushHeaders()` and report via
+  SSE `endJob`; `qwen-voice.ts:177`/`:215`, `voices.ts:801`/`:828` and
+  `voice-library-usage.ts:113` are shared helpers with multiple callers, for which
+  "refuse" is undefined — particularly when book 7 of 12 is busy and six are
+  already written.
+
+What actually works is the precedent already in the codebase: `cast-design.ts:655`
+checks busy **at route entry, before flushing SSE headers**, and refuses there.
+That is a route-level admission gate, and it is expressible precisely because
+nothing has been written or sent yet.
+
+So: **HTTP handlers that write cast.json check `isAnalysisBusy` at request entry,
+before any work, and 409 early.** Internal helpers and detached jobs do not check
+— they are downstream of a handler that already did.
+
+**This is admission control, not a lock.** It reduces the collision rate; it does
+not eliminate it, because an analysis run can begin after a handler is admitted.
+The spec says so in `cast-lock.ts`'s header and the code comment says so at each
+gate, in those words. Overstating it is how the next contributor concludes the
+book is covered.
+
+`analysis.ts`'s five writes are therefore **not protected by this PR**. That is
+recorded in §12 as an accepted, named residual rather than dressed up as
+ownership. Making them safe requires either a cast-lock-scoped busy check or a
+restructure of `priorCastForMerge`'s merge base, and both are their own design.
 
 The two deletion sites (§5 class 6) still take the cast lock — a delete is
 instantaneous and does not own the book.
@@ -325,26 +406,56 @@ instantaneous and does not own the book.
 ## 7. Check-then-act: the clone-consent gates, folded in
 
 A per-RMW lock does not close a *validate-then-write* that spans two scopes. Four
-gates read cast.json, decide, and then write elsewhere:
+gates read cast.json, decide, and then write elsewhere. **The first rewrite's
+table had three of these four rows wrong** — it printed the `readJson` line as the
+gate and the gate line as the write, because the citations were regenerated by
+pattern-matching nearby lines rather than re-derived. Corrected, with the function
+each write lives in:
 
-| Gate | Reads / decides | Writes |
-|---|---|---|
-| `voices.ts` `PUT /:voiceId/override` | `:709`/`:720` `hasClonedSlotAmongMatches` → 409 | `:728` `applyOverrideToCastFiles` |
-| `voice-library.ts` `DELETE /:voiceUuid` | `:1683` `scanLibraryVoiceUsage` → 409 usage report | `:1686` `clearLibraryVoiceReferences` |
-| `single-design.ts` | `:235` `characterHasClonedSlot` → 409 | `:254` |
-| `qwen-voice.ts` | `:532` `characterHasClonedSlot` → 409 | `:552` |
+| Gate | Reads | Decides (409) | Writes |
+|---|---|---|---|
+| `voices.ts` `PUT /:voiceId/override` | `:612-642` walk | `:709`/`:720` `hasClonedSlotAmongMatches` | `:728` `applyOverrideToCastFiles`, per book inside `forEachMatchingCastCharacter` |
+| `voice-library.ts` `DELETE /:voiceUuid` | `:1680` `scanLibraryVoiceUsage` | `:1682` (`usage.length > 0 && !confirmed`) | `:1686` `clearLibraryVoiceReferences`, then `eraseLibraryVoiceArtifacts` |
+| `single-design.ts` | `:235` | `:254` `characterHasClonedSlot` | `:178` `applyOverrideToCastFiles`, in `runSingleDesign`, detached after `res.flushHeaders()` (`:266`) |
+| `qwen-voice.ts` | `:532` | `:552` `characterHasClonedSlot` | `:623` `persistEmotionVariant` |
 
-These are the fs-38 Wave 3c GATE 2 clone-consent guards — the ones added because
-"Phase 0 fixed seven live bugs that all had the same shape — a guard-less write
-erasing a clone marker upstream of a resolver" (`voices.ts:888-893`). Shipping a
-lock that *reads as* "cast.json RMW is now safe" while these stay open is how the
-eighth gets missed.
+Against the corrected map, "each gate re-validates inside the lock scope that
+performs its write" is **not achievable for three of the four**:
 
-**Decision: folded into this PR.** Each gate re-validates inside the lock scope
-that performs its write, so the 409 decision and the write it guards are one
-critical section. The `voice-library.ts` delete is the one with real data loss —
-a reference acquired in the gap is left dangling at a `libraryUuid` whose
-artifacts `eraseLibraryVoiceArtifacts` is about to delete.
+- **`voices.ts` is a cross-book veto.** `hasClonedSlotAmongMatches` walks the
+  whole workspace or series and blocks the entire operation if any matching
+  character anywhere carries a cloned slot; the write is per-book. Re-validating
+  inside a per-book lock demotes a workspace veto to a per-book one, and honouring
+  it mid-walk means a 409 on a partially-applied propagation. Fixing it properly
+  means reopening §3.2.
+- **`single-design.ts` and `qwen-voice.ts` write from contexts that cannot
+  refuse** — one detached after header flush, one a helper shared between an SSE
+  bulk job and a JSON route.
+
+**Decision: fix gate 2 here; file the other three.**
+
+**Gate 2 is fixed, and its fix is not a cast lock.** The data loss is real —
+a reference written after the scan passed a book is left dangling at a
+`libraryUuid` whose artifacts `eraseLibraryVoiceArtifacts` is about to erase —
+and it is cross-book by construction, so no per-book cast lock can reach it. The
+fix is a lock on a **different key**: `withKeyLock('library-voice:<uuid>')` held
+across scan → clear → erase, so a concurrent assign of that voice cannot land
+mid-delete. Note also that with `?confirm=1` the user has already consented, so
+there is nothing to re-validate — the lock is protecting the *artifact erasure*,
+not re-deciding the 409.
+
+This also sequences `voice-library-usage.ts:113` (§5 class 1), since
+`walkConfirmedCasts` is shared between `clearLibraryVoiceReferences` and this
+gate's `scanLibraryVoiceUsage`.
+
+**Gates 1, 3 and 4 are filed as #2006** — one issue, not three. They are the
+fs-38 Wave 3c clone-consent guards, added because "Phase 0 fixed seven live bugs
+that all had the same shape — a guard-less write erasing a clone marker upstream
+of a resolver" (`voices.ts:888-893`). The real work in each is deciding what a
+refusal *means* for a partially-applied cross-book propagation and for a detached
+job — a behaviour decision, not a locking one. Shipping a lock that reads as
+"cast.json writes are safe now" while they stay open is how the eighth gets
+missed, which is what #2006 exists to keep visible.
 
 ## 8. `library-cast-override.ts` same-book: folded in
 
@@ -411,7 +522,7 @@ test that is green because the lock partitioned rather than because it held.
 ### 10.1 The interleave mechanism — settled, with evidence
 
 The first draft deferred this to the plan as "an open risk". It is now measured.
-A spike (`server/src/workspace/`, run against real files, single import graph)
+A spike run in this worktree against real files, in a single import graph,
 compared two candidate harnesses:
 
 | Mechanism | Unlocked | Locked |
@@ -426,6 +537,14 @@ needed, and the simpler harness is also the deterministic one.
 **Decision: bare `Promise.all`, used uniformly at every site.** The barrier
 mechanism is not used anywhere — a second mechanism would let a site that fails
 under one be quietly rewritten to the other.
+
+**The spike is task 1 of the implementation plan, not an artifact of this spec.**
+Round 2 correctly objected that these numbers were unreproducible: the spike file
+was written, run, and then moved out of the repo, so the evidentiary spine of §1,
+§3 and §10.2 existed only as a quoted figure. It lands as a real committed test
+(`server/src/workspace/cast-lock.race.test.ts`) **before any site is converted**,
+proving red on the unlocked path first. Its single-import-graph property is not
+incidental — see §10.3.
 
 ### 10.2 The outcome test
 
@@ -444,11 +563,27 @@ as a required step with recorded output.
 ### 10.3 The partition assertion — mandatory, and it comes first
 
 Because a partitioned lock passes both the outcome test and the revert
-verification, **each outcome spec must first assert that the two writers share
-one lock instance.** `cast-lock.ts` exposes a test-only accessor (an instance
-token, or `chains.size`) and the spec asserts contention actually occurred before
-asserting the outcome. Alternatively the spec pins a single import graph and
-states that it does. Without this, §10.2 proves nothing.
+verification, each outcome spec must establish that the two writers actually
+share one lock instance.
+
+The first rewrite made a test-only `chains.size` accessor the mandatory
+countermeasure and a pinned import graph the fallback. **That is backwards, and
+the accessor does not work.** It is imported into the *spec file*, so it resolves
+through the spec file's registry — which in the failure mode being detected is
+neither writer's. Worse, in the half-partitioned case the observed size is `1`,
+indistinguishable from a correctly shared lock with one queued waiter, because
+`file-lock.ts:11` overwrites the same key rather than adding an entry per waiter.
+An instance token would only help if each *writer* reported which instance it
+used, and nothing in this design plumbs that.
+
+**Inverted: pinning a single import graph is the mandatory requirement.** Every
+outcome spec drives both writers through one module registry and states in a
+comment that it does; specs in this set do not call `vi.resetModules()` between
+the two writers. No test-only accessor is added — a countermeasure that cannot
+detect the failure it targets is worse than none, because it looks like coverage.
+
+This is also why §10.1's spike lands as a committed test rather than a quoted
+number: it is the reference for what a correctly-pinned harness looks like.
 
 ### 10.4 Guard test
 
@@ -464,7 +599,7 @@ inside a lock scope* — is preferred if it can be written without false positiv
 
 No `verify-cache.mjs` `extraFiles` entry is needed. The #1847 trap applies to
 files read at runtime from *outside* a step's globs; this guard reads
-`server/src/**`, which `test:server` already globs (`verify-cache.mjs:108`) and
+`server/src/**`, which `test:server` already globs (`verify-cache.mjs:113`) and
 `verify.yml:152` already matches. Any diff adding an unlocked write site
 necessarily busts both. Adding an entry would be a no-op and a cargo-culted
 precedent.
@@ -509,20 +644,42 @@ Tail-detection is then correct, and there is no losing interleave: a waiter's
 read of `prior` and its `chains.set` are in one synchronous block with no `await`
 between (`file-lock.ts:8-11`), as are `release()` and the `delete`. So a waiter
 either registered before the delete (entry ≠ `mine`, no delete) or starts fresh
-from `Promise.resolve()` after `fn()` has already returned. Applied identically
-to all three, with the three comments corrected to match.
+from `Promise.resolve()` after `fn()` has already returned.
+
+The same change applies to all three, but **the safety argument above is derived
+against `file-lock.ts`'s structure and must be re-stated for
+`chapters-restructure.ts`, not assumed.** That copy puts `await prev` *inside*
+its `try` and omits the `.catch()` swallow, so its control flow differs. (In
+practice its chain can never reject — every gate resolves in a `finally` — which
+makes adding the rejection arm semantically inert there; the point is that this
+was checked rather than carried over.) All three comments are corrected to match
+the code.
 
 ## 12. Residual risks, accepted
 
 - **No bound on hold time or wait time.** `withKeyLock` (`file-lock.ts:7-19`) has
-  no timeout, no queue cap, no fairness guarantee and no diagnostic for a
-  long-held key. A slow or wedged holder turns every cast write on that book into
-  an unbounded hang. Today those requests race and one loses a mutation; after
-  this change they wait. That is a real trade, and it is why §6 routes analysis —
-  the only multi-minute holder — to ownership rather than to the mutex. The
-  primitive gains a warn-after-N-seconds log so a wedged key is diagnosable
-  rather than silent. Expected hold time for every other class is one file read
-  plus one file write.
+  no timeout, no queue cap and no diagnostic for a long-held key. (It *is* FIFO by
+  construction — a promise chain — so waiters are ordered fairly; the first
+  rewrite's "no fairness guarantee" was wrong and contradicted §10.5's own
+  waiter-ordering test.) A slow or wedged holder turns every cast write on that
+  book into an unbounded hang. Today those requests race and one loses a
+  mutation; after this change they wait. That trade is why §6 keeps analysis —
+  the only multi-minute writer — off the mutex entirely. Expected hold time for
+  every other class is one file read plus one file write.
+
+  A warn-after-N-seconds log was considered and **dropped**. `withKeyLock` has
+  five existing non-cast callers (`book-state.ts:1588`,
+  `script-review-ledger.ts:83`/`:105`/`:131`/`:143`), so a timer per acquisition
+  is a behaviour change to all of them, and a non-`unref()`d one would hold the
+  event loop open on what is about to become the hottest lock in the product —
+  in a repo whose flake register already tracks tinypool worker-exit failures.
+  Speculative diagnostics on a shared primitive are not worth that.
+- **`analysis.ts`'s five writes are not protected by this PR.** §6's admission
+  gate reduces collisions; it does not serialise them. Named here rather than
+  implied, because §6's first draft claimed otherwise.
+- **`cast-add-from-roster.ts` reads the target book to decide a source write.**
+  That consultation is check-then-act and is not closed by a single-book lock on
+  the source.
 - **In-process only.** Two server processes against one workspace would defeat
   this entirely. The product runs one server; verified that `server/src` has no
   `worker_threads` and no cast.json writer in a child process.
@@ -540,3 +697,10 @@ to all three, with the three comments corrected to match.
 
 `Closes #1981` (the filed defect), `Closes #2000` (the sweep), `Closes #2001`
 (§11). One PR, per the delivery decision.
+
+`Refs #2006` — the three clone-consent gates §7 established a per-RMW lock cannot
+reach. Filed, not folded, because the work in each is deciding what a refusal
+*means* for a partially-applied cross-book propagation and for a detached job.
+That is a behaviour decision needing its own design pass, not a locking one, and
+it is the one place in this spec where deferral is the honest call rather than a
+scope dodge.
