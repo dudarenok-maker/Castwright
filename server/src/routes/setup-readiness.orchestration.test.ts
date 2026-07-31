@@ -21,6 +21,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import type { PackageFault } from '../tts/models-status.js';
 
 const computeModelsStatus = vi.fn();
 const venvCorePackageInstalled = vi.fn();
@@ -59,8 +60,8 @@ function makeApp() {
 
 type EngineState = 'not-installed' | 'package-missing' | 'weights-missing' | 'ready' | 'loaded';
 
-function engineStatus(state: EngineState, packageBroken = false) {
-  return { state, packageBroken };
+function engineStatus(state: EngineState, packageBroken = false, packageFault: PackageFault = 'ok') {
+  return { state, packageBroken, packageFault };
 }
 
 /* Builds a controlled computeModelsStatus() return value. Defaults to an
@@ -189,7 +190,7 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     computeModelsStatus.mockResolvedValue(modelsStatus({
       runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
       engines: {
-        kokoro: engineStatus('ready', true), // disk-ready but live-confirmed broken
+        kokoro: engineStatus('ready', true, 'broken'), // disk-ready but live-confirmed broken
         qwen: engineStatus('not-installed'),
         coqui: engineStatus('not-installed'),
       },

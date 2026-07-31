@@ -21,9 +21,9 @@ const { MODELS_STATUS } = vi.hoisted(() => ({
   MODELS_STATUS: {
     runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
     engines: {
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'ready', packageBroken: false },
-      coqui: { state: 'not-installed', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {
@@ -836,7 +836,7 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
        body reads, #1647) — set qwen package-missing there too so it stays Repair. */
     vi.mocked(api.getModelsStatus).mockResolvedValue({
       ...MODELS_STATUS,
-      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false, packageFault: 'ok' } },
     });
     renderManager();
     const row = await screen.findByTestId('model-row-qwen-base');
@@ -870,7 +870,7 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     });
     vi.mocked(api.getModelsStatus).mockResolvedValue({
       ...MODELS_STATUS,
-      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false, packageFault: 'ok' } },
     });
     renderManager();
     const row = await screen.findByTestId('model-row-qwen-base');

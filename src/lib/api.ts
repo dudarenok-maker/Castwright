@@ -7510,9 +7510,9 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
       // The Model Manager's row toggle label is now single-sourced from here
       // (see engineInstallLabel in model-manager.tsx), so any drift from the
       // inventory would surface as a label/card mismatch.
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'ready', packageBroken: false },
-      coqui: { state: 'ready', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'ready', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {

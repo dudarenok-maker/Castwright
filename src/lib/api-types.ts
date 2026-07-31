@@ -5413,6 +5413,19 @@ export interface components {
              *     first-run "fine" guarantee.
              */
             packageBroken: boolean;
+            /**
+             * @description #1999 — same two live signals as packageBroken (a real import
+             *     attempt vs. the find_spec probe), classified into WHICH fault
+             *     applies rather than just whether one does: "missing" (the
+             *     package isn't on the venv path) vs. "broken" (present but a real
+             *     import raised). "ok" also covers "unknown" (sidecar down, older
+             *     sidecar, or nothing has tried to import this engine yet) — never
+             *     a fault on its own. Lets a consumer (the Setup checker) name the
+             *     same fault the Admin console's diagnostics row names, instead of
+             *     re-deriving a possibly-disagreeing verdict.
+             * @enum {string}
+             */
+            packageFault: "ok" | "missing" | "broken";
         };
         EngineRecommendation: {
             /** @enum {string} */

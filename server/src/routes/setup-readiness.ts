@@ -138,8 +138,8 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
     noEngineAtAll,
     anyEngineUsable,
     weightsMissingEngine,
-    kokoroPackageConfirmedBroken: models.engines.kokoro.packageBroken,
-    qwenPackageConfirmedBroken: models.engines.qwen.packageBroken,
+    kokoroPackageFault: models.engines.kokoro.packageFault,
+    qwenPackageFault: models.engines.qwen.packageFault,
   });
 
   const {
