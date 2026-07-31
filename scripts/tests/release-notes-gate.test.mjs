@@ -10,6 +10,7 @@ import {
   findMojibake,
   checkMojibake,
   parseMojibakeAllowlist,
+  formatHonouredEcho,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -476,19 +477,77 @@ test('an unterminated marker harvests no quoted prose', () => {
   assert.match(res.reason, /3 double-UTF-8-encoded mojibake span\(s\)/);
 });
 
-// #1982 F5 — a marker inside a fenced code block is documentation, not policy.
-// Both gated files are markdown, and a future note documenting this syntax with
-// a realistic literal would otherwise arm it in the published release body.
-test('a marker inside a fenced code block suppresses nothing', () => {
+// #1990 — there is no fence exemption at all any more. An earlier version
+// skipped markers inside a ```-fenced code block on the theory that
+// documenting the syntax in a gated file could not then arm it; the
+// fence-awareness itself is deleted now (see the comment above
+// parseMojibakeAllowlist), so a marker inside ANY of these shapes is honoured
+// like any other, and checkMojibake's `honoured` field / formatHonouredEcho
+// name it so an accidental arming is visible rather than silent.
+test('a marker inside a backtick-fenced code block now arms, and the echo names it', () => {
   const text =
     '```\n' +
     `<!-- release-notes-gate: allow "${CAFE}" -->\n` +
     '```\n\n' +
     `Order at ${CAFE} today.\n`;
-  assert.deepEqual(parseMojibakeAllowlist(text), []);
+  assert.deepEqual(parseMojibakeAllowlist(text), [CAFE]);
   const res = checkMojibake(text, 'test.md');
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /2 double-UTF-8-encoded mojibake span\(s\)/);
+  assert.equal(res.ok, true, res.reason); // the fenced marker excuses the span
+  assert.deepEqual(res.honoured, [CAFE]);
+  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 marker(s): "${CAFE}"`);
+});
+
+// #1990 shape 1 — a `~~~` fence. The old parser only ever tracked ``` lines,
+// so this one already slipped through pre-fix; it stays armed post-fix, and
+// what's new is that the echo now names it instead of the marker's presence
+// being invisible.
+test('a marker inside a ~~~ fence arms, and the echo names it', () => {
+  const text = `~~~\n<!-- release-notes-gate: allow "${GROSS}" -->\n~~~\n\nWe serve ${GROSS} portions.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [GROSS]);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [GROSS]);
+  assert.match(formatHonouredEcho('test.md', res.honoured), /honoured 1 marker\(s\)/);
+});
+
+// #1990 shape 2 — a 4-space indented code block. There is no fence to track
+// at all here, so this also already slipped through pre-fix.
+test('a marker inside a 4-space indented code block arms, and the echo names it', () => {
+  const text = `    <!-- release-notes-gate: allow "${TROLL}" -->\n\n${TROLL} is up north.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [TROLL]);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [TROLL]);
+});
+
+// #1990 shape 3 — a fence inside a blockquote. The old FENCE_RE's `^\s*`
+// anchor never matched the `>` prefix, so this shape also already slipped
+// through pre-fix.
+test('a marker inside a blockquoted fence arms, and the echo names it', () => {
+  const text = `> \`\`\`\n> <!-- release-notes-gate: allow "${DEGREE}" -->\n> \`\`\`\n\nIt hit ${DEGREE} at noon.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [DEGREE]);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [DEGREE]);
+});
+
+// #1990 shape 4 — the parity flip. A single earlier line that merely STARTS
+// with a backtick fence toggles the old tracker's in-fence flag with no
+// matching partner, so anything after it (fenced or not) inherits the wrong
+// state. Here it flips the tracker to "in fence" before it ever reaches the
+// marker, so the OLD fence-aware parser reads the marker as inert (an empty
+// array) even though nothing about the marker itself is fenced — proving the
+// old skip was parity-dependent, not fence-aware. The new parser has no
+// concept of fence state at all, so it honours the marker regardless.
+test('an unrelated earlier stray backtick-fence line no longer flips the marker after it (parity case)', () => {
+  const text =
+    '``` this line merely starts with a backtick fence, and has no matching partner\n' +
+    `<!-- release-notes-gate: allow "${CAFE}" -->\n\n` +
+    `Order at ${CAFE} today.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [CAFE]);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [CAFE]);
 });
 
 // #1982 — the core of the design change, stated directly.
@@ -500,4 +559,102 @@ test('a literal naming only the flagged span suppresses nothing, and the failure
   assert.equal(res.ok, false); // …it just excuses nothing, not even its own copy
   assert.match(res.reason, /2 double-UTF-8-encoded mojibake span\(s\)/);
   assert.match(res.reason, /suppresses NOTHING/);
+});
+
+// #1985 — a marker is refused outright in RELEASE_NOTES.md: the file is
+// cumulative and never mechanically reset, so a marker there would keep its
+// literal excused for every future release with nothing to expire it. This
+// must fail EVEN THOUGH the marker would otherwise excuse a real span — the
+// refusal fires on the marker's mere presence, not on whether it was needed.
+test('a marker in RELEASE_NOTES.md is refused outright, naming the file and both alternatives', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nOrder at ${CAFE} today.\n`;
+  const res = checkMojibake(text, 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /RELEASE_NOTES\.md/);
+  assert.match(res.reason, /refused/);
+  assert.match(res.reason, /re-encode/i);
+  assert.match(res.reason, /--force/);
+  assert.deepEqual(res.honoured, []); // refused, so nothing is honoured or echoed
+});
+
+// The refusal is keyed on the label naming RELEASE_NOTES.md specifically —
+// the exact same marker, in any other label (docs/release-notes-next.md, or a
+// bare working-file label used elsewhere in this suite), still works exactly
+// as it always has.
+test('the same marker still works in every label other than RELEASE_NOTES.md', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nOrder at ${CAFE} today.\n`;
+  for (const label of ['docs/release-notes-next.md', 'test.md', 'notes.md']) {
+    const res = checkMojibake(text, label);
+    assert.equal(res.ok, true, `${label}: ${res.reason}`);
+    assert.deepEqual(res.honoured, [CAFE], label);
+  }
+});
+
+// A file that simply has no marker at all is unaffected by the refusal path —
+// RELEASE_NOTES.md must still fail (and pass) exactly as before on ordinary
+// mojibake with no marker in sight.
+test('RELEASE_NOTES.md with no marker still gates mojibake normally', () => {
+  assert.equal(checkMojibake('Clean text with a real — dash.', 'RELEASE_NOTES.md').ok, true);
+  const res = checkMojibake(`Corrupted: ${MOJIBAKE_EM_DASH} dash.`, 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+  assert.deepEqual(res.honoured, []); // no marker present, so nothing to honour
+});
+
+// #1990 — formatHonouredEcho itself: the exact echo wording, and that it is
+// silent (returns null) when nothing was honoured, so a normal, marker-free
+// run prints nothing extra.
+test('formatHonouredEcho names every honoured literal and stays silent otherwise', () => {
+  assert.equal(
+    formatHonouredEcho('docs/release-notes-next.md', [CAFE, GROSS]),
+    `[allow] docs/release-notes-next.md honoured 2 marker(s): "${CAFE}", "${GROSS}"`,
+  );
+  assert.equal(formatHonouredEcho('docs/release-notes-next.md', []), null);
+  assert.equal(formatHonouredEcho('docs/release-notes-next.md', undefined), null);
+});
+
+// #1990 — the echo fires on a PASSING run too, not only a failing one: a
+// marker that excused every span it named must still show up in `honoured`.
+test('checkMojibake reports honoured markers even when the gate passes', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nOrder at ${CAFE} today.\n`;
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [CAFE]);
+  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 marker(s): "${CAFE}"`);
+});
+
+// #1990 — the echo also fires on a FAILING run: a marker that excuses nothing
+// (or not everything) must still be named, so an operator can see it was
+// parsed even though it didn't help.
+test('checkMojibake reports honoured markers even when the gate still fails', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\n\nCorrupted: ${MOJIBAKE_EM_DASH} dash.\n`;
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.honoured, [CAFE]);
+});
+
+// Fail-closed regression (#1990's confirmed-working list, item 1): a marker
+// split across two lines — the terminator IS present, just on the wrong line
+// — still yields nothing. ALLOW_MARKER_RE requires `-->` on the same line as
+// `<!--` (no fence involved at all), so this was never about fences and stays
+// exactly as strict post-fix.
+test('a marker split across two lines yields nothing, fence or no fence', () => {
+  // The literal is deliberately plain ASCII (not CAFE) so the malformed
+  // marker's own leaked text can't itself register as a second mojibake hit.
+  const text = `<!-- release-notes-gate: allow "HELLO"\n-->\n\nCorrupted: ${MOJIBAKE_EM_DASH} dash.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), []);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+});
+
+// Fail-closed regression (#1990's confirmed-working list, item 3): CRLF line
+// endings must not break marker parsing (a marker still parses) or the
+// mojibake scan itself.
+test('CRLF line endings do not break marker parsing or the mojibake scan', () => {
+  const text = `<!-- release-notes-gate: allow "${CAFE}" -->\r\n\r\nOrder at ${CAFE} today.\r\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [CAFE]);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, true, res.reason);
+  assert.deepEqual(res.honoured, [CAFE]);
 });

@@ -15,7 +15,7 @@
    encoding mangle there ships straight to the releases page. */
 
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const PLACEHOLDER_RE = /See the GitHub release for details\./i;
@@ -119,7 +119,9 @@ export function findMojibake(text) {
 /* #1973 — the allowlist marker. An HTML comment in the notes file itself names
    the exact literal(s) to accept; CONTRIBUTING.md's "Release notes" section
    carries a copy-pasteable example (deliberately NOT reproduced here, since
-   this file is not the one being gated but the docs it describes are).
+   this file is not the one being gated but the docs it describes are — the
+   gate never reads CONTRIBUTING.md, so documenting the syntax there can never
+   arm it).
 
    Chosen over an env-var kill switch because it is span-scoped (the gate stays
    live everywhere else in the same file), it travels in the same commit as the
@@ -129,40 +131,65 @@ export function findMojibake(text) {
    no wildcards, no regex — and must each be a single whitespace-free word (see
    allowedRanges).
 
-   A marker does NOT expire on its own. docs/release-notes-next.md is cleared
-   by hand in the first PR after a cut, which happens to drop any marker in it;
-   RELEASE_NOTES.md is cumulative, so a marker added there stays live — and
-   keeps that literal excused — for every future release.
+   A marker is legal ONLY in docs/release-notes-next.md (#1985). It is cleared
+   by hand in the first PR after a cut, which happens to drop any marker in it
+   along with the rest of the body — so a marker there self-expires. A marker
+   in RELEASE_NOTES.md would not: that file is cumulative and never reset, so
+   it would keep that literal excused for every future release with nothing to
+   remove it. checkMojibake below refuses outright (does not merely warn) when
+   it finds a marker in RELEASE_NOTES.md.
 
-   Two fail-closed bounds (#1982):
-   - A marker must be self-contained on ONE line. Scanning to the next `-->`
-     anywhere in the file let a marker missing its terminator swallow the prose
-     after it and harvest every unrelated `"…"` in it as a literal.
-   - Markers inside a fenced code block are ignored, so documenting this syntax
-     inside a gated file cannot arm it. */
+   One fail-closed bound remains (#1982): a marker must be self-contained on
+   ONE line. Scanning to the next `-->` anywhere in the file let a marker
+   missing its terminator swallow the prose after it and harvest every
+   unrelated `"…"` in it as a literal.
+
+   There is deliberately NO fence-awareness (#1990). An earlier version skipped
+   markers inside a backtick-fenced code block, on the theory that documenting
+   the syntax in a gated file could not then arm it. In practice the skip only
+   tracked ``` fences by parity: a `~~~` fence, a four-space-indented block, a
+   fence inside a blockquote, or even just an earlier line merely *starting*
+   with a backtick fence (flipping the parity) all left a marker armed anyway —
+   proper fence tracking is a markdown-parsing problem this gate has no
+   business owning, and every patch would leave another shape. Instead: every
+   marker anywhere in the file is honoured, full stop, and checkMojibake makes
+   that safe by echoing every marker it honours on every run (pass or fail) —
+   see formatHonouredEcho — so an accidental arming is visible, never silent. */
 const ALLOW_MARKER_RE = /<!--[ \t]*release-notes-gate:[ \t]*allow\b([^\n\r]*?)-->/g;
 const ALLOW_LITERAL_RE = /"([^"]*)"/g;
-const FENCE_RE = /^\s*```/;
 
 /** Collect every literal named by an allowlist marker in `text` (markers and
-    literals-per-marker are both many-per-file). Fenced code blocks are skipped
-    and a marker never spans a line break — see ALLOW_MARKER_RE above. */
+    literals-per-marker are both many-per-file). A marker never spans a line
+    break — see ALLOW_MARKER_RE above — but otherwise every marker in the file
+    is honoured; there is no fence exemption (#1990, see the comment above). */
 export function parseMojibakeAllowlist(text) {
   const literals = [];
-  let inFence = false;
-  for (const line of String(text ?? '').split(/\r?\n/)) {
-    if (FENCE_RE.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    for (const marker of line.matchAll(ALLOW_MARKER_RE)) {
-      for (const lit of marker[1].matchAll(ALLOW_LITERAL_RE)) {
-        if (lit[1].length > 0) literals.push(lit[1]);
-      }
+  for (const marker of String(text ?? '').matchAll(ALLOW_MARKER_RE)) {
+    for (const lit of marker[1].matchAll(ALLOW_LITERAL_RE)) {
+      if (lit[1].length > 0) literals.push(lit[1]);
     }
   }
   return literals;
+}
+
+/** The one file a marker is refused in outright (#1985): RELEASE_NOTES.md is
+    cumulative and never mechanically reset, so a marker there would excuse
+    its literal for every future release with nothing to expire it. Matched by
+    basename so a caller passing a full path (as the CLI below does for a
+    custom notesPath) is still recognised. */
+function isCumulativeReleaseNotesFile(label) {
+  return basename(String(label ?? '')) === 'RELEASE_NOTES.md';
+}
+
+/** Render the "an armed marker is never silent" echo line (#1990) for a file
+    that honoured at least one marker literal, or `null` when it honoured none
+    — the caller should print the line only when it is non-null. Shared by
+    every call site (this file's CLI and bump-version.mjs) so the wording
+    can't drift between them. */
+export function formatHonouredEcho(label, honoured) {
+  if (!honoured || honoured.length === 0) return null;
+  const list = honoured.map((l) => JSON.stringify(l)).join(', ');
+  return `[allow] ${label} honoured ${honoured.length} marker(s): ${list}`;
 }
 
 /** Half-open [start, end) character ranges of every real occurrence of every
@@ -274,12 +301,37 @@ function suggestLiteral(text, hit) {
  * The marker line contains the literal with its own quotes around it, so the
  * marker's own occurrence still excuses itself; that falls out of the rule
  * rather than being special-cased.
+ *
+ * The return also carries `honoured`: every literal parseMojibakeAllowlist
+ * found in `text` (empty when `label` is the refused RELEASE_NOTES.md case
+ * below). A caller prints it via formatHonouredEcho on EVERY run, pass or
+ * fail (#1990) — the property that replaces fence-awareness is "an armed
+ * marker is never silent," not "some markers don't count."
  */
 export function checkMojibake(text, label) {
   const s = text ?? '';
-  const ranges = allowedRanges(s, parseMojibakeAllowlist(s));
+  const literals = parseMojibakeAllowlist(s);
+
+  // #1985 — RELEASE_NOTES.md is cumulative and never mechanically reset, so a
+  // marker there would excuse its literal forever with nothing to expire it.
+  // Refuse outright rather than silently honouring or merely reporting it —
+  // an ignored marker would read to the author as "my marker worked".
+  if (literals.length > 0 && isCumulativeReleaseNotesFile(label)) {
+    return {
+      ok: false,
+      honoured: [],
+      reason:
+        `${label} contains a release-notes-gate allowlist marker, but markers are refused in ` +
+        `${label} (#1985): it is cumulative and never reset, so a marker there would keep that ` +
+        `literal excused for every future release with nothing to remove it. Re-encode the ` +
+        `offending text so it no longer flags, or run bump-version.mjs with --force to downgrade ` +
+        `this whole check to a warning for this release.`,
+    };
+  }
+
+  const ranges = allowedRanges(s, literals);
   const hits = findMojibake(s).filter((h) => !isExcused(ranges, h.index, h.index + h.coreLength));
-  if (hits.length === 0) return { ok: true, reason: '' };
+  if (hits.length === 0) return { ok: true, reason: '', honoured: literals };
   const sample = hits
     .slice(0, 5)
     .map((h) => `${JSON.stringify(h.chunk)} (should be ${JSON.stringify(h.decoded)})`)
@@ -316,6 +368,7 @@ export function checkMojibake(text, label) {
       `Re-encode the file${why.has('unquotable') ? ', or reword the offending word' : ''}.`;
   return {
     ok: false,
+    honoured: literals,
     reason:
       `${label} contains ${hits.length} double-UTF-8-encoded mojibake span(s): ${sample}${more}. ` +
       `Re-encoding the file is the ordinary fix (see #1956). If a span is legitimate text and not ` +
@@ -409,6 +462,11 @@ if (invokedHref && import.meta.url === invokedHref) {
   for (const [targetPath, label] of mojibakeTargets) {
     if (!existsSync(targetPath)) continue;
     const mojibakeRes = checkMojibake(readFileSync(targetPath, 'utf8'), label);
+    // #1990 — echo every honoured marker on every run, pass or fail, so an
+    // accidental arming (e.g. one hiding in what looked like a fenced block)
+    // is never silent.
+    const echo = formatHonouredEcho(label, mojibakeRes.honoured);
+    if (echo) process.stdout.write(`${echo}\n`);
     if (!mojibakeRes.ok) {
       process.stderr.write(`[release-notes-gate] ${mojibakeRes.reason}\n`);
       process.exit(1);
