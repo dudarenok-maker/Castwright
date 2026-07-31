@@ -425,9 +425,25 @@ after round 3 — including two of rev 3's own that were themselves placebos.
   → red. **[R3]** (rev 3's false positive)
 - `slotStatus: 'ready'` + `hasMaster: false` → `null`. Mutation: ungate rule 5 →
   red. **[R3]**
-- `slotStatus: 'stale'` + blank transcript + Qwen → `no-transcript`. Mutation:
-  restore rev 2's `status === 'ready' → null` short-circuit → red.
+- `slotStatus: 'stale'` + blank transcript + Qwen → `no-transcript`.
+  **[R4] Mutation corrected:** rev 3 named "restore rev 2's
+  `status === 'ready' → null` short-circuit". That mutation is **inert** — the
+  guard is false for a `'stale'` input by construction, so it cannot redden any
+  fixture, and an implementer who runs it as written gets a green suite and a
+  false all-clear. The mutation that actually targets this case is **narrowing
+  rule 6's gate from `slotStatus !== 'ready'` to `slotStatus === undefined`**
+  (i.e. "only warn if never derived"), which is the plausible wrong
+  implementation. Verified red on exactly this case.
 - `entryFound: false` → `missing-entry`. **[R3]**
+- **[R4] One case per verdict — rules 2, 4 and 5 must each be asserted
+  positively**, on an otherwise-healthy input: `consentRevoked` → `revoked`,
+  `slotStatus: 'failed'` → `derive-failed`, and (on **Coqui**, so rule 6 cannot
+  supply the verdict instead) `!hasMaster` → `missing-master`. Without these,
+  each of those three rules can be **deleted outright** with the whole suite
+  still green — measured, not hypothesised. Every mutation rev 3 named probes a
+  gate or an ordering; **none probes existence**, so the named list passed in
+  full against a predicate missing half its rules. Existence mutations are part
+  of the bar, not an extra.
 - `wrong-engine` outranks slot status on a **doubly-broken** input (not
   clone-capable *and* a `failed` slot); with a healthy slot, precedence is untested
   and reversed-order code passes.

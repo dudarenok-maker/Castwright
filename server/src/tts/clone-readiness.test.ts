@@ -76,6 +76,35 @@ const cases: Case[] = [
     input: { ...base, engine: 'qwen', slotStatus: 'stale', transcript: '', characterHasSlot: true },
     expected: 'no-transcript',
   },
+  /* The three cases below pin that rules 2, 4 and 5 EXIST — each asserts a
+     verdict no other fixture produces. Without them all five of this plan's
+     named mutations still pass while the rule is deleted outright, because
+     every named mutation probes a gate or an ordering and none probes
+     existence. Verified: deleting any one of these three rules reddens
+     exactly its own case and nothing else. */
+  {
+    // Rule 2. Mutation: delete rule 2 -> red (falls through to null, since
+    // the rest of this input is healthy).
+    name: 'consentRevoked -> revoked (on an otherwise healthy input)',
+    input: { ...base, consentRevoked: true },
+    expected: 'revoked',
+  },
+  {
+    // Rule 4. Mutation: delete rule 4 -> red (a failed slot with a master
+    // and a transcript otherwise falls through to null).
+    name: "slotStatus 'failed' -> derive-failed (on an otherwise healthy input)",
+    input: { ...base, slotStatus: 'failed' },
+    expected: 'derive-failed',
+  },
+  {
+    // Rule 5. Mutation: delete rule 5 -> red. Coqui deliberately, so the
+    // verdict cannot be reached by rule 6 (qwen-only) instead — on Qwen a
+    // blank-transcript variant of this input would report 'no-transcript'
+    // and the case would pass with rule 5 gone.
+    name: 'not-ready slot + hasMaster:false on Coqui -> missing-master',
+    input: { ...base, engine: 'coqui', hasMaster: false },
+    expected: 'missing-master',
+  },
   {
     // Rule 1 outranks everything, including a maximally-broken remainder.
     name: 'entryFound:false -> missing-entry regardless of every other field',
