@@ -73,6 +73,33 @@ describe('buildSynthReplacements', () => {
     expect(seen).toEqual([[4, 5]]);
   });
 
+  /* #1972 — voiceName always overwrites (unlike the QA fields, there's no
+     "gate didn't run" state to protect: a re-record always synthesises, so
+     a fresh voiceName is always meaningful when the caller reports one). */
+  it('carries voiceName from the synth output onto the replacement', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        voiceName: 'kokoro-some-voice',
+      }),
+    });
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceName: 'kokoro-some-voice' });
+  });
+
+  it('omits voiceName when the caller does not report one', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000 }),
+    });
+    expect('voiceName' in reps[0].freshVerdict!).toBe(false);
+  });
+
   it('resamples replacement PCM onto the chapter grid when the synth rate differs', async () => {
     const reps = await buildSynthReplacements({
       segments,

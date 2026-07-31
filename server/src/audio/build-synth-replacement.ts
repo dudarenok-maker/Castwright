@@ -45,6 +45,12 @@ export interface SynthOutput {
       actually run for this call, gating whether `asr`/`asrSuspect`/`asrRetries`
       are meaningful. */
   asrRan?: boolean;
+  /** #1972 — the voice ACTUALLY sent to the provider for this re-record
+      (`ChapterSegment['voiceName']`). Absent only for a caller that hasn't
+      wired it through; when present it always overwrites the segment's prior
+      value (unlike the gated QA fields above, a re-record always synthesises,
+      so there's no "gate didn't run" state to protect against). */
+  voiceName?: ChapterSegment['voiceName'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -89,6 +95,10 @@ export async function buildSynthReplacements(
       ...(out.signalQaRan ? { qa: out.qa, qaRetries: out.qaRetries } : {}),
       ...(out.asrRan ? { asr: out.asr, asrSuspect: out.asrSuspect, asrRetries: out.asrRetries } : {}),
       ...(out.signalQaRan || out.asrRan ? { suspect: out.suspect } : {}),
+      // #1972 — only set the key when the caller actually reports a voice, so
+      // an un-migrated caller can't wipe a segment's prior voiceName with an
+      // explicit `undefined` (same "omit, don't overwrite" rule as above).
+      ...(out.voiceName ? { voiceName: out.voiceName } : {}),
     };
     replacements.push({
       startSegmentIndex: i,

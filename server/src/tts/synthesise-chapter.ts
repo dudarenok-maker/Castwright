@@ -406,6 +406,14 @@ export interface ChapterSegment {
       (its `X-Voice-Substituted-From` header). Absent on a clean render. Surfaces
       a silent voice fallback so the golden-audio gate can fail on it. */
   voiceSubstitutedFrom?: string;
+  /** #1972 — the voice name ACTUALLY sent to the provider for this segment
+      (post-fallback, post-emotion-variant — `resolveGroup(group).voiceName`
+      for a body group, the title beat's own resolved narrator voice for
+      `kind: 'title'`). `buildCharacterSnapshots` reads this back per character
+      instead of re-deriving `resolvedVoiceName` from the cast record, so the
+      snapshot can never claim a voice that was never requested — the
+      provenance gap `character-snapshots.ts` used to have. */
+  voiceName?: string;
   /** Per-sentence pre-assembly QA verdict (segment-qa.ts). Set only when the
       gate ran (`maxSegmentRerecords > 0`); absent on the title beat and on
       legacy chapters synthesised before the gate landed. */
@@ -2148,6 +2156,7 @@ export async function synthesiseChapter(
       endSec: titleEndSec,
       kind: 'title',
       renderedFallbackEngine: titleFb.renderedFallbackEngine,
+      voiceName: narratorVoice,
     });
 
     onTitleComplete?.({ accumulatedSec: titleEndSec });
@@ -3098,6 +3107,7 @@ export async function synthesiseChapter(
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
+      voiceName: resolveGroup(group).voiceName,
       qa,
       suspect: quarantined || qa?.status === 'suspect' ? true : undefined,
       qaRetries: qaRetryCountByIndex.get(group.index) || undefined,
