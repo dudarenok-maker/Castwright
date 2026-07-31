@@ -80,12 +80,15 @@ test('checkMojibake reports a capped sample plus a remainder count', () => {
 // #1973 — the allowlist marker. The detector's acceptance rule ("cp1252-mappable
 // characters whose bytes form valid UTF-8 with a lead byte >= 0xC2") is satisfied
 // by some legitimate text, and release.yml's CLI path exits 1 with no --force, so
-// a false positive can block a publish outright. All four are from the issue's
-// measured table of legitimate strings the detector flags.
+// a false positive can block a publish outright. All four are the issue's measured
+// legitimate shapes, each shown with the surrounding characters that make it
+// legitimate — which is also what makes it allowlistable at all (#1982): a literal
+// has to extend past the flagged span, so the flagged pair on its own is never a
+// usable literal.
 const CAFE = 'CAFÉ™'; // "É™" reads as a mangled "ə"
 const GROSS = 'groß—'; // "ß—" reads as a mangled "ߗ"
-const TROLL = 'Å§'; // reads as a mangled "ŧ"
-const DEGREE = 'Ü°'; // reads as a mangled "ܰ"
+const TROLL = 'Å§land'; // "Å§" reads as a mangled "ŧ"
+const DEGREE = '25Ü°C'; // "Ü°" reads as a mangled "ܰ"
 
 test('parseMojibakeAllowlist reads every literal of every marker', () => {
   const text =
@@ -221,16 +224,103 @@ test('pasting the suggested marker and re-running still flags genuine corruption
   assert.ok(res2.reason.includes(JSON.stringify('É™zz')), res2.reason);
 });
 
-test('checkMojibake degrades safely when a token contains a double-quote', () => {
-  // Create a scenario where the token containing the mojibake includes a quote
-  // E.g., something like: He said "CAFÉ™"
+// #1982 — the failure message must never print a line that would not work or
+// would over-suppress. A token carrying a double-quote cannot go inside the
+// marker's own quoted literal, and the old fallback (print the bare core) was
+// precisely the file-wide-blinding line. So: print nothing, and say why.
+test('no marker is suggested when the surrounding token would break the marker syntax', () => {
   const text = `He said "CAFÉ™" yesterday.`;
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, false);
-  // Should still print a marker, but safely degraded to the core since the token has a quote
-  assert.match(res.reason, /<!-- release-notes-gate: allow "[^"]*" -->/);
-  // The marker should parse correctly via parseMojibakeAllowlist
-  const marker = res.reason.match(/<!-- release-notes-gate: allow "[^"]*" -->/)[0];
-  const allowlist = parseMojibakeAllowlist(marker);
-  assert.ok(allowlist.length > 0, 'marker should parse without error');
+  assert.equal(/<!-- release-notes-gate: allow "[^"]*" -->/.test(res.reason), false, res.reason);
+  assert.match(res.reason, /can be allowlisted at all/);
+});
+
+// #1982 F1 — THE REPLAY. The suggestion mechanism must never be a route to a
+// green gate: paste whatever the gate prints, re-run, repeat. Every span here
+// is whitespace-delimited (the dominant #1956 shape), so widening finds nothing
+// to add and no literal is legal for any of them. Before the fix, widening was
+// a no-op on exactly these spans, the printed literal was the bare core, and
+// one paste per distinct span drove the real 242-span file to green.
+test('replaying the suggested markers can never drive a corrupted file green', () => {
+  const spans = [
+    MOJIBAKE_EM_DASH, // 3-byte —
+    MOJIBAKE_ARROW, // 3-byte →
+    'â€¦', // 3-byte …
+    'Â§', // 2-byte §
+    'â‰¥', // 3-byte ≥
+    'ðŸš€', // 4-byte 🚀
+  ];
+  let text = spans.map((s, n) => `- line ${n} has a ${s} in it\n`).join('');
+  const MARKER_RE = /<!-- release-notes-gate: allow "[^"]*" -->/;
+  let rounds = 0;
+  let res = checkMojibake(text, 'test.md');
+  assert.match(res.reason, /6 double-UTF-8-encoded mojibake span\(s\)/);
+  while (!res.ok && rounds < 25) {
+    const m = res.reason.match(MARKER_RE);
+    if (!m) break; // nothing offered — the loop is over
+    text = `${m[0]}\n${text}`;
+    rounds += 1;
+    res = checkMojibake(text, 'test.md');
+  }
+  assert.ok(rounds < 25, `the paste loop must terminate, took ${rounds} rounds`);
+  assert.equal(res.ok, false, 'the gate must never go green off its own suggestions');
+  // And it terminated because nothing was offered, not because it ran out of road.
+  assert.equal(MARKER_RE.test(res.reason), false, res.reason);
+  assert.match(res.reason, /6 double-UTF-8-encoded mojibake span\(s\)/);
+});
+
+// #1982 F2 — a hit's tail is NOT always mere context. A greedy 4-character match
+// can hold two 2-byte mangles; measuring the core off the decoded lead code point
+// judged only the first half and dropped the second half with it.
+test('a literal ending at one mojibake pair does not swallow the pair immediately after it', () => {
+  const body = `Our ${CAFE}Â© sign.\n`; // CAFÉ™ (legitimate) then a mangled ©
+  const marker = `<!-- release-notes-gate: allow "${CAFE}" -->`;
+  const res = checkMojibake(`${marker}\n\n${body}`, 'test.md');
+  assert.equal(res.ok, false, 'the adjacent mangle must still be reported');
+  assert.match(res.reason, /1 double-UTF-8-encoded mojibake span/);
+  // The whole four-character run is reported, decoding to "ə©" — the second half
+  // is the genuine corruption the marker must not reach.
+  assert.ok(res.reason.includes(JSON.stringify('É™Â©')), res.reason);
+  assert.ok(res.reason.includes('©'), res.reason);
+});
+
+// #1982 F3 — fail closed on a malformed marker. Scanning to the next "-->"
+// anywhere in the file let an unterminated marker harvest every quoted phrase
+// after it as a literal, silencing whatever those phrases happened to contain.
+test('an unterminated marker harvests no quoted prose', () => {
+  const text =
+    `<!-- release-notes-gate: allow "${CAFE}"\n` + // no terminator on this line
+    `We shipped "an em dash ${MOJIBAKE_EM_DASH} here" and "an arrow ${MOJIBAKE_ARROW} here".\n` +
+    `-->\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), []);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /3 double-UTF-8-encoded mojibake span\(s\)/);
+});
+
+// #1982 F5 — a marker inside a fenced code block is documentation, not policy.
+// Both gated files are markdown, and a future note documenting this syntax with
+// a realistic literal would otherwise arm it in the published release body.
+test('a marker inside a fenced code block suppresses nothing', () => {
+  const text =
+    '```\n' +
+    `<!-- release-notes-gate: allow "${CAFE}" -->\n` +
+    '```\n\n' +
+    `Order at ${CAFE} today.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), []);
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /2 double-UTF-8-encoded mojibake span\(s\)/);
+});
+
+// #1982 — the core of the design change, stated directly.
+test('a literal naming only the flagged span suppresses nothing, and the failure says why', () => {
+  const bare = 'É™';
+  const text = `<!-- release-notes-gate: allow "${bare}" -->\n\nzz${bare}zz was mangled.\n`;
+  assert.deepEqual(parseMojibakeAllowlist(text), [bare]); // the marker parses fine…
+  const res = checkMojibake(text, 'test.md');
+  assert.equal(res.ok, false); // …it just excuses nothing, not even its own copy
+  assert.match(res.reason, /2 double-UTF-8-encoded mojibake span\(s\)/);
+  assert.match(res.reason, /suppresses NOTHING/);
 });
