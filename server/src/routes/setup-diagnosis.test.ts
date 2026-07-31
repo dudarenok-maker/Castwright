@@ -210,6 +210,25 @@ describe('diagnoseTts', () => {
       expect(r.remediation).toMatch(/Repair Kokoro in Model Manager/i);
     });
 
+    /* #2010 (n2) — the broken branch used to return no `action` either (the
+       same dead end Minor 5 fixed for the missing branch above): the user
+       read "Repair Kokoro in Model Manager." with nothing to click. Model
+       Manager's own Repair control (kokoro-install.tsx et al.) hits the exact
+       same install-job endpoint regardless of which fault produced the row —
+       reinstalling the package IS the repair — so this carries the SAME
+       action kind as the missing branch, just relabeled "Repair". Mutation
+       check: dropping ENGINE_REPAIR_ACTION[engine] from the broken return in
+       setup-diagnosis.ts makes this fail (r.action undefined). */
+    it('a BROKEN package carries a matching kokoro-install action labelled Repair, not just text', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
+      expect(r.action).toMatchObject({ kind: 'kokoro-install', label: 'Repair Kokoro' });
+    });
+
+    it('a BROKEN qwen package carries the matching qwen-install action labelled Repair', () => {
+      const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'broken' });
+      expect(r.action).toMatchObject({ kind: 'qwen-install', label: 'Repair Qwen3-TTS' });
+    });
+
     it('names qwen when kokoro is fine but qwen is missing', () => {
       const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, qwenPackageFault: 'missing' });
       expect(r.message).toMatch(/Qwen package is missing/i);
@@ -259,7 +278,9 @@ describe('diagnoseTts', () => {
   it('reports package-broken only once the sidecar is confirmed pass', () => {
     const r = diagnoseTts(SIDECAR_PASS, { ...TTS_READY, anyEngineUsable: false, kokoroPackageFault: 'broken' });
     expect(r).toMatchObject({ status: 'fail', cause: 'package-broken' });
-    expect(r.action).toBeUndefined();
+    /* #2010 (n2) — this row now carries a Repair action (see the dedicated
+       tests above); it is no longer action-less. */
+    expect(r.action).toMatchObject({ kind: 'kokoro-install' });
   });
 
   it('never returns package-broken while the sidecar is not pass, even if the flag is somehow set', () => {

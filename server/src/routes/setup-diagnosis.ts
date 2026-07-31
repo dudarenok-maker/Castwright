@@ -149,6 +149,19 @@ const ENGINE_INSTALL_ACTION: Record<'kokoro' | 'qwen' | 'coqui', BlockerDiagnosi
   coqui: { kind: 'coqui-install', label: 'Install Coqui XTTS v2' },
 };
 
+/* #2010 (n2) — the "broken" remediation ("Repair X in Model Manager") needs a
+   clickable action for the same reason the "missing" one got one above: an
+   instruction with nothing to click is a dead end. Model Manager's own Repair
+   control (kokoro-install.tsx et al.) hits this exact same install-job
+   endpoint regardless of which fault produced the row — reinstalling the
+   package IS the repair — so only the button's label needs to differ from
+   ENGINE_INSTALL_ACTION. */
+const ENGINE_REPAIR_ACTION: Record<'kokoro' | 'qwen' | 'coqui', BlockerDiagnosis['action']> = {
+  kokoro: { kind: 'kokoro-install', label: 'Repair Kokoro' },
+  qwen: { kind: 'qwen-install', label: 'Repair Qwen3-TTS' },
+  coqui: { kind: 'coqui-install', label: 'Repair Coqui XTTS v2' },
+};
+
 /** #1999 — display names matching the Admin console's diagnostics row
     (diagnostics.ts's STANDARD_TTS), so the two surfaces name the same fault
     the same way. */
@@ -230,6 +243,7 @@ export function diagnoseTts(sidecar: BlockerDiagnosis, input: TtsDiagnosisInput)
         'package-broken',
         `The ${name} package is present but will not import in the voice engine runtime.`,
         `Repair ${name} in Model Manager.`,
+        ENGINE_REPAIR_ACTION[engine],
       );
     }
   }

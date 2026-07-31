@@ -946,6 +946,16 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   never installed. (A *successful* import still outranks a `false` find_spec —
   if `kokoro_import_ok` is `true` the row is `ok` whatever the probe says, since
   a real import that returned is the stronger evidence.)
+- **Check Model Manager too, in this same missing state** (#2010 m1 — the
+  reviewer's own repro cell). The Kokoro row must offer **Install**, not
+  Repair, and its badge must agree with its toggle: the badge must read as
+  not-yet-installed (e.g. "Not installed") and must **not** read "Needs
+  repair" next to an "Install" button. Before the m1 fix the row's badge read
+  the disk-only inventory state while the toggle read the live packageFault
+  probe, so this exact cell showed "Needs repair" beside "Install" — a runner
+  following only the bullets above would have no criterion telling them
+  whether that mismatch was expected. It is not: badge and toggle must always
+  name the same fault.
 - **Now check the Setup checker surface too** (`GET /api/setup/readiness`,
   `server/src/routes/setup-diagnosis.ts`'s `diagnoseTts` — out of scope for this
   row before #1999/PR #2010, in scope now, since it is the surface that PR

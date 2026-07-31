@@ -787,6 +787,51 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     expect(within(row).queryByRole('button', { name: /load model/i })).toBeNull();
   });
 
+  /* #2010 (m1) — the everyday "package uninstalled, weights still on disk"
+     cell: inventory's disk-only installState still says 'package-missing',
+     but the live probe has confirmed the fault is 'missing' (never
+     installed), not 'broken'. Before this fix the badge read installState
+     alone and said "Needs repair" right next to an "Install" toggle — badge
+     and button disagreeing about which fault this row has. Assert BOTH the
+     badge and the toggle here, not just one, so a fix that repoints only one
+     of them can't pass. */
+  it('a live-confirmed "missing" fault renders "Not installed" on the badge, agreeing with the Install toggle', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'package-missing',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: {
+        ...MODELS_STATUS.engines,
+        qwen: { state: 'package-missing', packageBroken: true, packageFault: 'missing' },
+      },
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    await waitFor(() =>
+      expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Install/),
+    );
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).not.toHaveTextContent(/Repair/);
+    expect(within(row).getByText(/not installed/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/needs repair/i)).toBeNull();
+  });
+
   it('weights-missing row shows "Weights missing"', async () => {
     mockInventory.mockResolvedValue({
       ...INVENTORY,
