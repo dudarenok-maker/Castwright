@@ -434,7 +434,12 @@ def test_content_gate_passes_when_fresh_transcript_matches_the_recorded_baseline
     monkeypatch, tmp_path
 ) -> None:
     """Control for the M4 pair below: a fresh transcript identical to the
-    recorded baseline passes cleanly."""
+    recorded baseline passes cleanly.
+
+    F6b (PR #2002 code-review): the failing twin below asserts
+    `whisper.calls == 1`; this control had omitted it, so it could pass with
+    zero transcribes ever attempted -- one loop-mutation (e.g. an early
+    `continue`/`return` skipping the whole body) from vacuous."""
     monkeypatch.delenv("GOLDEN_ASR", raising=False)
     monkeypatch.delenv("GOLDEN_BLESS", raising=False)
     fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
@@ -443,9 +448,11 @@ def test_content_gate_passes_when_fresh_transcript_matches_the_recorded_baseline
     monkeypatch.setattr(golden, "FIXTURE_PATH", fixture_path)
     monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
     _patch_kokoro_stub(monkeypatch, tmp_path)
-    monkeypatch.setattr(main, "WhisperEngine", lambda: _StubWhisperEngine(next_text="hello world"))
+    whisper = _StubWhisperEngine(next_text="hello world")
+    monkeypatch.setattr(main, "WhisperEngine", lambda: whisper)
 
     _expect_pass(golden.test_kokoro_golden_content_matches_baseline)
+    assert whisper.calls == 1
 
 
 def test_content_gate_fails_when_the_baseline_transcript_differs(monkeypatch, tmp_path) -> None:
@@ -490,3 +497,75 @@ def test_content_gate_fails_with_no_recorded_transcript(monkeypatch, tmp_path) -
         AssertionError,
         "re-bless required",
     )
+
+
+# ── _bless caller-side wiring (PR #2002 code-review, F1) ───────────────────
+
+
+def test_bless_writes_the_baseline_when_every_line_is_accepted(monkeypatch, tmp_path) -> None:
+    """Control for the refusal case below: a clean bless (fresh transcript
+    matches the recorded one, no drift) actually writes the file -- proving
+    the refusal test below isn't vacuously green because `_bless` never
+    writes anything at all.
+
+    Also checks the WRITTEN content, not just that some bytes changed
+    (a follow-on gap of the same F1 shape, found while closing F1 itself):
+    the recorded transcript here is deliberately ONE word longer than the
+    fixture `text` ("hello there world" vs "hello world"), so the correct
+    `text_edits` is 1, not 0 -- a caller-side bug that hardcoded `text_edits`
+    to 0 (or copied the wrong field, or wrote under the wrong line id) would
+    still make `after != before` true, so that check alone would not have
+    caught it."""
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
+        tmp_path, recorded_transcript="hello there world"
+    )
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    monkeypatch.delenv("GOLDEN_REBLESS_CONTENT", raising=False)
+    before = baseline_path.read_bytes()
+
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    kokoro = _StubKokoroEngine(tmp_path / "kokoro-v1.0.onnx", tmp_path / "voices-v1.0.bin")
+    whisper = _StubWhisperEngine(next_text="hello there world")  # matches recorded -> no refusal
+
+    golden._bless(kokoro, whisper, fixture)
+
+    after = baseline_path.read_bytes()
+    assert after != before, "a clean bless must actually write the baseline"
+
+    written = json.loads(after.decode("utf-8"))
+    entry = written["entries"]["stub-line"]
+    assert entry["transcript"] == "hello there world"
+    assert entry["text_edits"] == 1  # content_edits("hello world", "hello there world")
+    assert entry["voice"] == "af_heart"
+
+
+def test_bless_aborts_and_writes_nothing_when_any_line_is_refused(monkeypatch, tmp_path) -> None:
+    """F1 (PR #2002 code-review): `_bless`'s CALLER-side wiring had zero
+    coverage. `bless_guard` (the pure function) is exhaustively pinned in
+    `test_golden_compare.py`, but nothing pinned that `_bless()` actually
+    reads the guard's verdict and aborts the WHOLE write on a refusal.
+    Mutation-verified red against both: `if refusals: raise` neutered to
+    `if False and refusals: raise`, and `if guard_reason is not None:
+    refusals.append(...)` neutered the same way -- both left the entire
+    fast tier green while writing the baseline despite a refusal.
+
+    A refusal must both RAISE and leave the file BYTE-IDENTICAL -- checking
+    only the exception would miss a mutation that drops the raise but still
+    corrupts the file, or vice versa (the first #2002 mutation raises
+    nothing AND writes)."""
+    fixture_path, baseline_path = _write_kokoro_stub_fixture_and_baseline(
+        tmp_path, recorded_transcript="hello world"
+    )
+    monkeypatch.setattr(golden, "BASELINE_PATH", baseline_path)
+    monkeypatch.delenv("GOLDEN_REBLESS_CONTENT", raising=False)
+    before = baseline_path.read_bytes()
+
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    kokoro = _StubKokoroEngine(tmp_path / "kokoro-v1.0.onnx", tmp_path / "voices-v1.0.bin")
+    whisper = _StubWhisperEngine(next_text="hello there")  # differs from recorded -> G1 refuses
+
+    with pytest.raises(AssertionError, match="Bless refused"):
+        golden._bless(kokoro, whisper, fixture)
+
+    after = baseline_path.read_bytes()
+    assert after == before, "a refused bless must leave the baseline file untouched"

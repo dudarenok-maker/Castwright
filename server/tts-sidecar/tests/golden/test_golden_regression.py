@@ -253,10 +253,18 @@ def test_kokoro_golden_content_matches_baseline():
     vacuously via `_make_kokoro`'s own skip paths); GOLDEN_BLESS second, since
     content is (re)recorded by the lengths test's `_bless()` call, not here.
 
-    ANY ASR failure is a FAILURE, never a SKIP (#1911 s5) — this path must
-    NOT call `prereq.engine_absent_reason` / `prereq.synthesise_or_skip`,
-    which would turn a missing `faster_whisper` into a green SKIP. The ONLY
-    accepted skips are the two env checks below."""
+    ANY ASR failure is a FAILURE, never a SKIP (#1911 s5) — the ASR path
+    itself (WhisperEngine construction + transcribe) must NOT call
+    `prereq.engine_absent_reason` / `prereq.synthesise_or_skip`, which would
+    turn a missing `faster_whisper` into a green SKIP, and has no accepted
+    skip of its own beyond the two env checks below.
+
+    That is NOT a claim about the function as a whole: `_make_kokoro()`
+    (called below) carries its own two pre-existing skip paths — missing
+    Kokoro weights, and a blanket `except RuntimeError` on warm-up that
+    over-swallows (tracked separately as #1987, not fixed by ops-45). Those
+    are Kokoro-side and orthogonal to this test's ASR-content contract; the
+    property this docstring pins is narrower and about the ASR path only."""
     if os.environ.get("GOLDEN_ASR") == "0":
         pytest.skip("GOLDEN_ASR=0 — content-drift check disabled for this run.")
 

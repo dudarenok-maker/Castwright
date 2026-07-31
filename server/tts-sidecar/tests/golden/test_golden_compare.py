@@ -264,6 +264,18 @@ def test_bless_guard_g1_is_silent_on_an_identical_transcript_even_without_the_fl
     assert bless_guard("hello world", existing, "hello world", allow_rebless_content=False) is None
 
 
+def test_bless_guard_g1_is_silent_on_a_normalisation_only_difference():
+    # F6c (PR #2002 code-review): G1 compares NORMALISED transcripts, not
+    # raw strings -- a punctuation/case-only re-bless (e.g. Whisper's
+    # capitalisation or trailing punctuation shifting run-to-run with no
+    # actual content change) must not need GOLDEN_REBLESS_CONTENT either.
+    # Mutating the comparison to raw `recorded != fresh` leaves every other
+    # test green, since none of them drive a normalisation-only difference
+    # through G1 specifically.
+    existing = {"transcript": "Hello, world!", "text_edits": 0}
+    assert bless_guard("hello world", existing, "hello world", allow_rebless_content=False) is None
+
+
 def test_bless_guard_g2_refuses_beyond_the_recorded_plus_one_cap_even_with_the_flag():
     # The flag bypasses G1 (transcript-differs), never G2 (the edit-count cap).
     existing = {"transcript": "hello world", "text_edits": 0}
@@ -278,22 +290,24 @@ def test_bless_guard_g2_refuses_beyond_the_recorded_plus_one_cap_even_with_the_f
 
 
 def test_bless_guard_g2_allows_exactly_the_plus_one_boundary():
+    # F6a (PR #2002 code-review): the prior version of this test never
+    # actually drove edits == recorded + 1 -- one assertion was 0 edits
+    # (trivially within any cap), the other was 3 edits (well past it).
+    # Recorded text_edits=1, so the cap is 2: exactly 2 edits must be
+    # ALLOWED, and 3 edits (one past the cap) must be REFUSED.
     existing = {"transcript": "one two three four five", "text_edits": 1}
-    # 2 edits vs recorded 1 -- exactly at the +1 cap, must be allowed once G1
-    # is satisfied by an identical transcript (no re-bless-content flag needed
-    # since we're not changing the recorded transcript here, only checking G2
-    # in isolation via a transcript that already matches).
+
     assert bless_guard(
         "one two three four five",
-        {"transcript": "one two three four five", "text_edits": 1},
-        "one two three four five",
-        allow_rebless_content=False,
+        existing,
+        "one two threee fourr five",  # three->threee, four->fourr: 2 edits, == cap
+        allow_rebless_content=True,
     ) is None
-    # Now drive G2 alone: allow the transcript diff, and check the cap edge.
+
     reason = bless_guard(
         "one two three four five",
         existing,
-        "one two threee fourr fiver",  # 3 word-substitutions -> 3 edits, cap is 1+1=2
+        "one two threee fourr fiver",  # + five->fiver: 3 edits, one past the cap
         allow_rebless_content=True,
     )
     assert reason is not None
