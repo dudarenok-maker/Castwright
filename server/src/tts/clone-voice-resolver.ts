@@ -59,16 +59,18 @@ export interface BrokenClonedVoice {
     | 'misconfigured'
     | 'wrong-engine';
   /** fs-38 Wave 3c, Task 18 — which engine this voice was being resolved on,
-      set for the two reasons whose remedy text below actually names an
-      engine: `engine-unavailable` (Task 18) and `wrong-engine` (GATE 1 I-2).
-      Left unset for every other reason so `toEqual` against a pre-3c literal
-      (no `engine` key) still matches — `toEqual` treats a missing key and an
-      explicit `undefined` the same way.
+      set for the three reasons whose remedy text below actually names an
+      engine: `engine-unavailable` (Task 18), `wrong-engine` (GATE 1 I-2),
+      and `derive-failed` (#1967). Left unset for every other reason so
+      `toEqual` against a pre-3c literal (no `engine` key) still matches —
+      `toEqual` treats a missing key and an explicit `undefined` the same way.
 
-      The two reasons name the engine for OPPOSITE purposes, and conflating
-      them is the I-2 defect: for `engine-unavailable` the engine is the one
-      to RE-ENABLE; for `wrong-engine` it is the one the cloned voice
-      actually lives on, i.e. the one to SWITCH THE BOOK TO. */
+      The three reasons name the engine for DIFFERENT purposes, and
+      conflating `engine-unavailable`/`wrong-engine` was the I-2 defect: for
+      `engine-unavailable` the engine is the one to RE-ENABLE; for
+      `wrong-engine` it is the one the cloned voice actually lives on, i.e.
+      the one to SWITCH THE BOOK TO; for `derive-failed` it is the one to
+      RE-RUN THE CLONE FOR. */
   engine?: CloneEngine;
 }
 
@@ -82,9 +84,10 @@ export interface BrokenClonedVoice {
     `CLONE_ENGINE_LIST`'s canonical order instead, so the copy is stable
     regardless of report order.
 
-    Falls back to 'Qwen' when no entry of that reason carries an `engine` at
-    all — the pre-3c shape, and the shape the legacy single-name constructor
-    produces — so that copy stays byte-identical to the old hardcoded text. */
+    Each entry missing its own `engine` falls back to 'qwen' individually (the
+    `?? 'qwen'` in the map below) — the pre-3c shape, and the shape the legacy
+    single-name constructor produces — so that copy stays byte-identical to
+    the old hardcoded text for an untagged entry. */
 function engineLabelFor(broken: BrokenClonedVoice[], reason: BrokenClonedVoice['reason']): string {
   const engines = new Set(broken.filter((b) => b.reason === reason).map((b) => b.engine ?? 'qwen'));
   return CLONE_ENGINE_LIST.filter((e) => engines.has(e))

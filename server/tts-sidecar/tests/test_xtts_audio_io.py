@@ -87,6 +87,27 @@ def test_matches_torchaudio_when_torchcodec_works(ref_wav):
     assert torch.allclose(ours, expected, atol=1e-6)
 
 
+def test_matches_torchaudio_resample_when_torchcodec_works(ref_wav):
+    """Fidelity at a target rate that actually differs from the file's own
+    rate. The test above always passes `sampling_rate` equal to ref_wav's own
+    24000 Hz, so `lsr != sampling_rate` (xtts_audio_io.py) is never true and
+    the resample branch (`torchaudio.functional.resample`) never runs there.
+    Production always resamples -- the sidecar's 24000 Hz masters down to
+    XTTS's 22050 Hz -- so this exercises that branch against the exact
+    torchaudio.functional.resample call it mirrors.
+    """
+    torchaudio = pytest.importorskip("torchaudio")
+    target_sr = 16000
+    try:
+        expected, sr = torchaudio.load(str(ref_wav))
+    except Exception:
+        pytest.skip("torchaudio's loader unavailable here (no shared FFmpeg)")
+    assert sr != target_sr
+    expected = torchaudio.functional.resample(expected, sr, target_sr)
+    ours = wave_load_audio(str(ref_wav), target_sr)
+    assert torch.allclose(ours, expected, atol=1e-6)
+
+
 def test_accepts_pathlib_path(ref_wav):
     assert wave_load_audio(ref_wav, 22050).shape[0] == 1
 

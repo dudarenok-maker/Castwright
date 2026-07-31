@@ -66,6 +66,24 @@ function run(python, pyArgs, env) {
   return res.status ?? 1;
 }
 
+// Like run(), but pipes stdout instead of inheriting it, so the caller can
+// inspect what printed (the COQUI_VERIFY_MARKER check below) while still
+// echoing everything to the user exactly as run() would.
+function runCapture(python, pyArgs, env) {
+  const res = spawnSync(python, pyArgs, {
+    cwd: SIDECAR_DIR,
+    stdio: ['inherit', 'pipe', 'pipe'],
+    env: { ...process.env, ...env },
+    windowsHide: true,
+  });
+  if (res.error) throw new Error(`spawn failed: ${res.error.message}`);
+  const stdout = res.stdout ? res.stdout.toString() : '';
+  const stderr = res.stderr ? res.stderr.toString() : '';
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  return { status: res.status ?? 1, stdout };
+}
+
 /**
  * The ordered pip-install steps the installer runs, before the XTTS prefetch.
  * Exported (pure) so the sequence — coqui-tts, then torchcodec, then the CJK
@@ -123,6 +141,14 @@ export function coquiPipInstallSteps(constraints) {
   ];
 }
 
+// Printed by COQUI_VERIFY_CODE immediately before it enters
+// patched_xtts_load_audio() — the last checkpoint before the code that can
+// actually detect loader drift. main() greps captured stdout for this line
+// to tell "the patch itself failed to apply" apart from any earlier, unrelated
+// crash (a numpy import error, a tempdir permission failure, `import TTS`
+// itself failing) that never reached the patch at all.
+export const COQUI_VERIFY_MARKER = '[install-coqui] entering clone-path patch';
+
 /**
  * #1967 — verify the clone path can actually decode reference audio before we
  * spend 1.8 GB on weights. coqui-tts is NOT pinned (base.txt carries no
@@ -146,6 +172,7 @@ export const COQUI_VERIFY_CODE = [
   'pcm = (np.sin(np.linspace(0, 6.28 * 220, 2400)) * 16000).astype("<i2")',
   'w = wave.open(p, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)',
   'w.writeframes(pcm.tobytes()); w.close()',
+  `print(${JSON.stringify(COQUI_VERIFY_MARKER)})`,
   'with patched_xtts_load_audio():',
   '    a = _x.load_audio(p, 22050)',
   'assert a.shape[0] == 1, a.shape',
@@ -191,11 +218,16 @@ function main() {
   }
 
   step('Verifying the clone path can decode reference audio (#1967)...');
-  if (run(python, ['-c', COQUI_VERIFY_CODE], env) !== 0) {
-    step('FAIL: the XTTS reference-audio patch could not be applied.');
-    step("      This coqui-tts release has moved or reshaped XTTS's reference loader,");
-    step('      so cloned-voice derives would fail. Report the version above on');
-    step('      https://github.com/dudarenok-maker/Castwright/issues/1967');
+  const verify = runCapture(python, ['-c', COQUI_VERIFY_CODE], env);
+  if (verify.status !== 0) {
+    if (verify.stdout.includes(COQUI_VERIFY_MARKER)) {
+      step('FAIL: the XTTS reference-audio patch could not be applied.');
+      step("      This coqui-tts release has moved or reshaped XTTS's reference loader,");
+      step('      so cloned-voice derives would fail. Report the version above on');
+      step('      https://github.com/dudarenok-maker/Castwright/issues/1967');
+    } else {
+      step('FAIL: the clone-path verification could not run; check that coqui-tts imported cleanly.');
+    }
     process.exit(1);
   }
 

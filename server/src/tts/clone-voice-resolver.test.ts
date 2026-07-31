@@ -1335,6 +1335,35 @@ describe('resolveClonedVoicesForChapter', () => {
       // The sibling qwen slot is untouched by the coqui failure stamp.
       expect(written.engines.qwen).toEqual({ status: 'ready', baseModel: 'qwen3-0.6b' });
     });
+
+    it('a persisted xtts failed status (second run onward) is tagged engine: coqui via the classifier path, not just the catch path — #1967', async () => {
+      // Unlike the "permanent (4xx) derive failure" test above, which derives
+      // and only THEN persists failed, this fixture starts with the slot
+      // already stamped failed — the shape every run after the first
+      // actually hits. classifyClonedVoice (clone-voice-resolver.ts:235)
+      // returns broken/derive-failed straight from the manifest slot,
+      // WITHOUT ever calling deriveEngineArtifact, so the `engine` tag can
+      // only come from the classifier-path spread (clone-voice-resolver.ts
+      // :469-473) — the catch-path test above can't exercise that spread at
+      // all. Losing that widening resolves the tag through `engineLabelFor`'s
+      // `?? 'qwen'` fallback and prints "Re-run the clone for Qwen" on a
+      // Coqui book — #1967's exact symptom.
+      const entry = baseEntry({ engines: { xtts: { status: 'failed' } } });
+      const deps = makeDeps({ readEntry: vi.fn(async () => entry) });
+
+      let thrown: UnresolvableClonedVoiceError | undefined;
+      try {
+        await resolveClonedVoicesForChapter(
+          [{ characterName: 'Marlow', characterId: 'marlow', libraryUuid: 'u1', engine: 'coqui', wrongEngine: false, engineUnavailable: false }],
+          deps,
+        );
+      } catch (e) {
+        thrown = e as UnresolvableClonedVoiceError;
+      }
+
+      expect(thrown?.broken).toEqual([{ name: 'Marlow', reason: 'derive-failed', engine: 'coqui' }]);
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    });
   });
 
   /* fs-38 Wave 3c, Task 18 — UnresolvableClonedVoiceError's remedy text is
@@ -2546,17 +2575,6 @@ describe('#1967 — derive-failed remedy copy', () => {
     ]);
     expect(e.message).toContain('re-run the clone for Coqui');
     expect(e.message).not.toContain('; Re-run');
-  });
-
-  it('an UNTAGGED derive-failed (the persisted-failed-slot path) never names Qwen', () => {
-    // clone-voice-resolver.ts:446-458 emits derive-failed with no engine unless
-    // Step 4(c) widens the spread gate. Without that widening this test prints
-    // "Re-run the clone for Qwen" — #1967's exact symptom, on every run after
-    // the first.
-    const e = UnresolvableClonedVoiceError.fromList([
-      { name: 'Одуван', reason: 'derive-failed', engine: 'coqui' },
-    ]);
-    expect(e.message).not.toContain('Qwen');
   });
 
   it('the first remedy reads correctly in sentence-initial position', () => {
