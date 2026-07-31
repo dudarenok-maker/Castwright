@@ -2409,8 +2409,17 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
      optimistically showing success: no cast-slice write, and the inline
      error renders. */
   it('does not write the override and surfaces the error when assignLibraryVoice rejects', async () => {
+    /* #1933 retired the old Qwen-only "Cloned voice is not ready to assign
+       yet." string outright — this test only exercises the drawer's
+       generic rejection-surfacing plumbing (any `Error.message` the API
+       layer throws must render inline), so the exact wording is not
+       load-bearing, but it should still be one the current rule can
+       actually produce, not a retired one. This is `_mockBlockMessage`'s
+       real 'no-clip' shape for this fixture's name. */
     assignLibraryVoice.mockRejectedValueOnce(
-      new Error('Cloned voice is not ready to assign yet.'),
+      new Error(
+        '"Captain Halloran (library)" has no retained reference clip and its Qwen voice is not ready, so there is nothing to derive it from. Re-clone the voice before assigning it to this character.',
+      ),
     );
     const { store } = renderDrawer(
       { ...baseChar, ttsEngine: 'qwen' },
@@ -2422,7 +2431,9 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
 
     expect(
       await screen.findByTestId('profile-drawer-my-voices-error'),
-    ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+    ).toHaveTextContent(
+      '"Captain Halloran (library)" has no retained reference clip and its Qwen voice is not ready, so there is nothing to derive it from. Re-clone the voice before assigning it to this character.',
+    );
 
     // No optimistic write — the character's override slot stays untouched.
     const halloran = store.getState().cast.characters.find((c) => c.id === 'halloran');

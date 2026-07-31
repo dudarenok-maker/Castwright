@@ -45,6 +45,7 @@ import {
   type TtsVoiceAssignment,
 } from '../tts/voice-mapping.js';
 import { codeForSidecarName } from '../tts/language-registry.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import {
@@ -184,7 +185,7 @@ interface VoicesMetaJson {
 
 function isNarratorId(id: string, name?: string): boolean {
   const lid = id.toLowerCase();
-  if (lid === 'narrator' || lid === 'char-narrator') return true;
+  if (NARRATOR_CHARACTER_IDS.includes(lid)) return true;
   return (name ?? '').toLowerCase() === 'narrator';
 }
 

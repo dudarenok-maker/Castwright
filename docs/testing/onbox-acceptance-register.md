@@ -593,6 +593,29 @@ motivated the old fail-loud behaviour — Coqui loading while Qwen is still resi
 a card too small for both. Worth watching once, because the failure mode if the
 judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 
+> **Observation 2026-07-31 — NOT a discharge, but the first real datapoint.** A mixed
+> Qwen+Coqui render was run on the 8 GB card incidentally, while discharging A26 item 1:
+> the Russian Coalfall chapter 2 with twelve designed-Qwen characters and `oduvan` forced
+> onto a cloned XTTS voice. **The evict was NOT forced to fail** — this is the ordinary
+> path, not A19's scenario — and the chapter still died:
+>
+> ```
+> chapter_failed  errorCode: "vram-spill"
+> "The GPU ran out of video memory (VRAM) mid-render — too many models were resident at once."
+> ```
+>
+> So of the three outcomes this row asks you to distinguish, the *unforced* case already
+> lands on **"a sidecar OOM that fails the chapter with its own message"** — cleanly
+> classified and remediated, not a crash or a recycle storm. Repeated with
+> `modelKey: coqui-xtts-v2` at run level and it spilled again, because a character's own
+> `ttsEngine` still routes it: the run-level key does not force single-engine.
+>
+> What this does **not** tell us is A19's actual question — whether a *failed evict* makes
+> it worse — since the evict here was never made to fail. But it does mean the co-residency
+> hazard is reachable on this card **without** any evict failure at all, which is worth
+> knowing before running the forced case. Note the box also had two agent pytest suites
+> holding ~2 GB of cuda:0 at the time, so this is a contended-card datapoint, not a clean one.
+
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
   character that falls back to Coqui. Force the evict to fail: point
@@ -826,7 +849,7 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 **The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
 
-**Partially discharged 2026-07-31** on that reverted box. What ran, and what it proved:
+**Partially discharged — items 1 and 3 are now DONE (2026-07-31); items 2 and 4 remain.** What ran, and what it proved:
 
 - `import torchcodec` → `RuntimeError: Could not load libtorchcodec … FFmpeg is not properly installed`. The box is genuinely broken, so nothing below is a vacuous pass.
 - `torchaudio`'s own loader on a reference WAV → same failure. This is the pre-fix path.
@@ -835,14 +858,47 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 **Still owed** is everything that needs the sidecar and a real voice — see items 1–4.
 
-- **1. Static-FFmpeg derive — STILL OWED.** The mechanism is proven above, but the full path through `CoquiEngine.clone_voice` has not run: it needs a sidecar started from post-merge code (the one running on 2026-07-31 predated the merge) plus a real consented sample. Run a Coqui cloned-voice derive on the reverted box; it must **complete** and write `voices/xtts/xtts-<uuid>.{pt,json}` — the exact case that failed unpatched, and the one that blocked all nine of A1's Section E items. Confirm from the sidecar log that the derive was reached rather than short-circuited by a cached `.pt`.
+- **1. Static-FFmpeg derive — DISCHARGED 2026-07-31.** Ran on the reverted box against a sidecar the server genuinely supervised. The derive **completed** through the full `CoquiEngine.clone_voice` path and wrote both artifacts into a directory that was **empty** beforehand, so no cached `.pt` could have short-circuited it:
+
+  ```
+  18:12:59.558 [sidecar] Cloned + cached Coqui voice 'xtts-0abceba4-…' from caller clip.
+  xtts-0abceba4-5eba-4d8f-8bdf-46bee14c931d.pt    135,509 B
+  xtts-0abceba4-5eba-4d8f-8bdf-46bee14c931d.json      172 B
+  ```
+
+  No `derive-failed`, no `Cloned voice(s) unavailable`. The rendered audio is the clone and not a substitute — **0.229** cosine against the source clip versus a **0.014** different-speaker floor, measured through the production `/synthesize` → `/embed` path rather than read off `resolvedVoiceName`.
+
+  **Three preconditions were verified, not assumed** — each is a way this acceptance can be faked:
+  1. *The box is really static-FFmpeg.* `import torchcodec` still fails. The 25 stray hash-suffixed FFmpeg DLLs the first revert left inside `site-packages/torchcodec/` were also removed (62.6 MB); torchcodec's own 10 extensions are intact.
+  2. *The sidecar is post-merge.* The running one had been orphaned by a recycle storm — `POST /api/sidecar/restart` returned **409**, i.e. nothing supervised it, so its vintage was unknown. Restarted the stack; `/restart` then returned **200**. **Treat a 409 as "this sidecar may be any age."**
+  3. *No cache existed to short-circuit the derive.* `voices/xtts/` was empty.
+
+  **Deviation, deliberate:** the hand-off brief suggests reusing E-01's splice setup. A **full chapter generation** was used instead, because [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) — found the same day — makes the splice unsafe on that book (13 of 21 targeted segments divergent), and that contamination is exactly why E-01's original identity claim had to be retracted.
+
+  **This does NOT discharge E-01.** The chapter itself failed *after* the derive with `vram-spill` (mixed Qwen+Coqui on the 8 GB card — see A19), so "the chapter renders" and the by-ear check remain owed there.
+
+  A separate finding came out of it: a clone rendered in a language other than its source clip's loses most of its speaker identity on XTTS — 0.600 (English) → 0.229 (Russian), same derive. Filed as [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998).
+
 - **2. Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was **measured** during PR #1978's review, on the still-hot-patched box, by running both decoders side by side against the same WAV: **max difference 0.0**, mono and stereo-downmix alike, so the replacement is bit-identical to the loader it replaces rather than merely similar. What remains is the *audible* end of it — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the rendered output is equivalent. Cheap once item 1 can run.
-- **3. Install-time verification — HALF RUN.** The healthy direction is done: `COQUI_VERIFY_CODE` was extracted and executed against the real venv with the installer's own `cwd`, printing `[install-coqui] entering clone-path patch` then `[install-coqui] clone-path verify ok`, exit 0. **The failure direction is still owed** — deliberately corrupt the installed `TTS.tts.models.xtts.load_audio` signature before the snippet runs and confirm the installer exits 1 with the *drift* message naming the `coqui-tts` version, **and** that an unrelated pre-patch crash (e.g. a broken `import TTS`) instead gets the neutral "could not run" message. That two-way distinction is the whole point of the marker line and is untested on a real install.
+- **3. Install-time verification — DISCHARGED 2026-07-31.** Both failure directions now run on a real install, and they produce **different** messages, which was the whole point of the marker line:
+
+  | Scenario | exit | marker in stdout | branch selected |
+  |---|---|---|---|
+  | control — healthy | **0** | true | PASS, no failure branch |
+  | **loader drift** (rebound to a wrong signature) | **1** | **true** | **MSG-1** — "patch could not be applied", names `coqui-tts 0.27.5`, points at #1967 |
+  | **unrelated crash** (`import TTS` raises) | **1** | **false** | **MSG-2** — neutral "verification could not run" |
+
+  Direction 2 correctly did **not** get MSG-1 — the specific defect this item existed to rule out. Drift message verbatim: `RuntimeError: XTTS reference-audio patch cannot be applied: unexpected load_audio signature ('some_other_name', 'and_another', 'extra') (coqui-tts 0.27.5).`
+
+  Driven through the **real** `COQUI_VERIFY_CODE` and the **real** branch predicate from `install-coqui.mjs:222-232`; perturbations injected via `PYTHONPATH` only (a `sitecustomize.py` rebinding `load_audio`, and a shadow `TTS/__init__.py` raising `ImportError`), so the shared venv was never mutated. The guard's other drift shape (attribute missing) is already unit-covered by `test_raises_when_load_audio_missing`; the on-box-unique part was the marker-driven branch selection, which is what ran.
+
 - **4. Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` that `pinokio/install.js` provisions and record whether it succeeds or fails — genuinely unknown at design time (design spec §11): conda-forge's ffmpeg is built shared, but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to the conda env's `Library/bin` DLLs, so shared-ness there does not imply loadable here. #1967's fix makes the answer moot for *behaviour* either way — a Coqui clone derives correctly on Pinokio regardless — but the outcome itself is still owed as a recorded fact; see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. **Batch with E1**, which already owns the Pinokio box.
 
 *Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
 
-### A27 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986) · **no GPU needed, sidecar venv only**
+---
+
+### A27 · A missing Kokoro/Qwen package surfaces as Install, a present-but-unimportable one as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986; missing-variant copy corrected and Setup-checker coverage added by [#1999](https://github.com/dudarenok-maker/Castwright/issues/1999), PR #2010) · **no GPU needed, sidecar venv only**
 
 The whole point of `*_import_ok` is a package that `find_spec` finds and a real
 `import` cannot load — the #1944 speechbrain shape. **That state cannot be
@@ -868,25 +924,63 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   load control) so the import chokepoint actually runs. It must fail *and* be
   recorded: re-poll `/health` and observe `kokoro_import_ok: false` while
   `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
-- **Observe the two user-facing surfaces.** Model Manager's Kokoro card must
-  offer **Repair** (not "install", and not a silent healthy row —
+- **Observe the two user-facing surfaces.** Model Manager's
+  Kokoro card must offer **Repair** (not "install", and not a silent healthy row —
   `installState: 'package-missing'` off a `true` find_spec is the tell), and the
   Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
-  `src/views/admin.tsx:232` — this row is the *only* surface that shows this
-  string; the Setup checker's copy comes from a different endpoint and is not
-  under test here) must read
+  `src/views/admin.tsx:232` — this row is the *only* surface that shows this exact
+  string; the Setup checker's copy comes from a different endpoint, checked
+  separately below) must read
   `reachable · Kokoro package will not import — repair in Model Manager`.
 - **Then check the *missing* variant, and check it AFTER a load attempt.** On a
   venv with no `kokoro_onnx` at all, force a Kokoro load and re-poll: both live
   signals are now known and both are `false` — the attempt records
   `kokoro_import_ok: false` (the ImportError) while `kokoro_package_installed`
   is `false` too — yet they describe one fault, not two. The Voice engine row
-  must read `reachable · Kokoro package missing — repair in Model Manager` and
-  must **not** say "will not import". This is the exact cell PR #1986's review
-  found inverted: "will not import" here sends the operator to repair a package
-  that was simply never installed. (A *successful* import still outranks a
-  `false` find_spec — if `kokoro_import_ok` is `true` the row is `ok` whatever
-  the probe says, since a real import that returned is the stronger evidence.)
+  must read `reachable · Kokoro package missing — install in Model Manager` and
+  must **not** say "will not import" or "repair". (#1999/PR #2010 corrected this
+  row's own verb from "repair" to "install" — a stale expectation here would
+  fail a runner against *correct* behaviour, which is exactly what this update
+  fixes.) This is also the exact cell PR #1986's original review found inverted:
+  "will not import" here sends the operator to repair a package that was simply
+  never installed. (A *successful* import still outranks a `false` find_spec —
+  if `kokoro_import_ok` is `true` the row is `ok` whatever the probe says, since
+  a real import that returned is the stronger evidence.)
+- **Check Model Manager too, in this same missing state** (#2010 m1 — the
+  reviewer's own repro cell). The Kokoro row must offer **Install**, not
+  Repair, and its badge must agree with its toggle: the badge must read as
+  not-yet-installed (e.g. "Not installed") and must **not** read "Needs
+  repair" next to an "Install" button. Before the m1 fix the row's badge read
+  the disk-only inventory state while the toggle read the live packageFault
+  probe, so this exact cell showed "Needs repair" beside "Install" — a runner
+  following only the bullets above would have no criterion telling them
+  whether that mismatch was expected. It is not: badge and toggle must always
+  name the same fault.
+- **Now check the Setup checker surface too** (`GET /api/setup/readiness`,
+  `server/src/routes/setup-diagnosis.ts`'s `diagnoseTts` — out of scope for this
+  row before #1999/PR #2010, in scope now, since it is the surface that PR
+  actually changed and the one whose trigger cannot be manufactured in CI). With
+  only Kokoro broken (the "will not import" state above) and Qwen untouched, its
+  `blockers.tts` must read *"The Kokoro package is present but will not import in
+  the voice engine runtime."* with remediation *"Repair Kokoro in Model
+  Manager."* — naming the engine in both. With only Kokoro missing (the "install"
+  state above), it must read *"The Kokoro package is missing from the voice
+  engine runtime."* with remediation *"Install Kokoro in Model Manager."*, and
+  the response's `blockers.tts.action.kind` must be `kokoro-install` — not
+  absent, which would leave the instruction with nothing to click.
+- **Then the mixed-fault case — the one a runner is most likely to hit and
+  least likely to interpret correctly.** Break `qwen_tts/__init__.py` too (its
+  own repeat of the steps below) so Kokoro is *missing* (no `kokoro_onnx` at
+  all) and Qwen is *broken* (present, import raises) at the same time. The
+  Setup checker must name **Qwen**, not Kokoro: *"The Qwen package is present
+  but will not import…"* / *"Repair Qwen in Model Manager."* — a live-confirmed
+  broken package is the fault the user cannot infer on their own, and outranks
+  a merely-missing one regardless of which engine has which. (Pre-#2010 review
+  this precedence was inverted — Kokoro's plain "not installed" was named
+  instead, and Qwen's real breakage went unmentioned entirely. The Admin
+  console's Voice engine row is unaffected by this precedence question — it
+  already names *both* engines when both are at fault, as its own STANDARD_TTS
+  loop; only the Setup checker's single-blocker copy has to choose one.)
 - **Confirm Coqui stays out of the diagnostics row.** On a box with Coqui
   deliberately not installed, the Voice engine row must remain `ok` — Coqui is
   opt-in and its absence is not a fault.

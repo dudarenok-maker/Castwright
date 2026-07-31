@@ -206,6 +206,21 @@ describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {
     const res = await request(app).post(`/api/books/${bookId}/cast/voice-style/generate-all`);
     expect(res.status).toBe(409);
   });
+
+  it('also skips a char-narrator id by default — the promoted-cast-row twin of "narrator" (#1895)', async () => {
+    // Name deliberately does NOT literal-match "Narrator" — isolates the
+    // id-based branch of isNarrator from its by-name fallback.
+    writeBookOnDisk([
+      { id: 'char-narrator', name: 'The Storyteller', role: 'narrator', color: 'narrator' },
+      { id: 'wren', name: 'Wren', role: 'protagonist', color: 'lilac' },
+    ]);
+    const res = await request(app).post(`/api/books/${bookId}/cast/voice-style/generate-all`);
+    expect(res.status).toBe(200);
+    expect(generateVoiceStylePersona).toHaveBeenCalledTimes(1);
+    expect(res.body.voiceStyles).toEqual({ wren: 'persona-for-wren' });
+    const cast = readCast();
+    expect(cast.characters.find((c) => c.id === 'char-narrator')?.voiceStyle).toBeUndefined();
+  });
 });
 
 /* --- GPU plan wiring (srv-48 Task 8) ----------------------------------------

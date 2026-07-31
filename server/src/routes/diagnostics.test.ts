@@ -253,7 +253,8 @@ describe('GET /api/diagnostics', () => {
       const sidecar = byId(res.body.checks, 'sidecar');
       expect(sidecar.status).toBe('fail');
       expect(sidecar.detail).toMatch(/qwen/i);
-      expect(sidecar.detail).toMatch(/repair/i);
+      // #1999 — a MISSING package points at installing it, not repairing it.
+      expect(sidecar.detail).toMatch(/install/i);
       expect(res.body.overall).toBe('fail');
     });
 
@@ -377,6 +378,24 @@ describe('GET /api/diagnostics', () => {
         const sidecar = byId(res.body.checks, 'sidecar');
         expect(sidecar.detail).toMatch(/Kokoro package missing/i);
         expect(sidecar.detail).not.toMatch(/will not import/i);
+      });
+
+      /* #1999 — "repair" is the wrong verb for a package that was never
+         installed; the two faults must carry different verbs, on this row
+         exactly as on the Setup checker. */
+      it('a MISSING package points at installing it, never at repair', async () => {
+        probeSidecarHealth.mockResolvedValue(reachable({ qwenPackageInstalled: false }));
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.detail).toMatch(/install in Model Manager/i);
+        expect(sidecar.detail).not.toMatch(/repair/i);
+      });
+
+      it('a package that will not import still points at repair', async () => {
+        probeSidecarHealth.mockResolvedValue(reachable({ qwenImportOk: false }));
+        const res = await request(makeApp()).get('/api/diagnostics');
+        const sidecar = byId(res.body.checks, 'sidecar');
+        expect(sidecar.detail).toMatch(/will not import — repair in Model Manager/i);
       });
 
       it('importOk true outranks a find_spec false — a real import beats the probe', async () => {

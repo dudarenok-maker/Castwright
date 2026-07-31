@@ -92,6 +92,26 @@ describe('voice-mapping catalogs are self-consistent', () => {
   });
 });
 
+describe('pickVoiceForEngine — narrator id recognition (#1895)', () => {
+  it('routes both narrator id shapes into the narrator-warm bucket when warmth is high', () => {
+    // Name deliberately does NOT literal-match "narrator" — isolates the
+    // id-based branch of inferProfile's narrator check. warmth:56 is
+    // deliberately BELOW the non-narrator fallback's own warm/cool split
+    // (>= 60, voice-mapping.ts:302) but still within the narrator branch's
+    // (>= 55, :283) — so the two branches disagree unless the narrator
+    // check itself is what recognises the id.
+    const hint = { tone: { warmth: 56, pace: 50, authority: 40, emotion: 50 } };
+    const narratorVoice = pickVoiceForEngine('kokoro', { id: 'narrator', character: 'Someone' }, hint);
+    const charNarratorVoice = pickVoiceForEngine(
+      'kokoro',
+      { id: 'char-narrator', character: 'Someone' },
+      hint,
+    );
+    expect(KOKORO_PROFILE_VOICES['narrator-warm']).toContain(narratorVoice);
+    expect(KOKORO_PROFILE_VOICES['narrator-warm']).toContain(charNarratorVoice);
+  });
+});
+
 describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
   /* The override is the user's manual reassignment of a cast member's TTS
      voice (e.g. "make Brann use Coqui · Asya Anara"). When set AND its

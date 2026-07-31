@@ -7421,6 +7421,7 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    described in the contract. Do NOT hand-edit — change openapi.yaml and run
    `npm run openapi:types`. */
 export type EngineHealthState = ApiComponents['schemas']['EngineStatus']['state'];
+export type PackageFault = ApiComponents['schemas']['EngineStatus']['packageFault'];
 export type RuntimeProcessState = ApiComponents['schemas']['RuntimeStatus']['process'];
 /* NeedsAnswer is a UI key-set label (the wizard's guided-question answer
    key), not a wire field on any /api/setup/* response — openapi.yaml has no
@@ -7510,9 +7511,9 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
       // The Model Manager's row toggle label is now single-sourced from here
       // (see engineInstallLabel in model-manager.tsx), so any drift from the
       // inventory would surface as a label/card mismatch.
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'ready', packageBroken: false },
-      coqui: { state: 'ready', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'ready', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {
@@ -9928,20 +9929,101 @@ export async function mockPromoteToLibrary(body: {
   return entry;
 }
 
-/* fs-38 Wave 3c, Task 41 — mirrors the three 409 guards on
-   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler,
-   re-verified against that route as it stands after Task 24 made it
-   engine-aware: revoked consent, then a cloned voice that hasn't finished
-   deriving (still gated on the `qwen` slot specifically — Task 24 didn't
-   touch that guard, only the wrong-engine one below and the both-slots
-   write), then a cloned voice assigned onto a non-clone-capable engine.
-   Task 24 widened the wrong-engine rejection from "must be qwen" to "must
-   be qwen OR coqui" (Coqui XTTS v2 is now clone-capable too — see
-   `CLONE_CAPABLE_ENGINES`, tts/clone-engines.ts) — a cloned entry with a
-   ready `xtts` slot now assigns cleanly on a coqui-routed character (see
-   the `lib-cloned-demo` fixture and its now-passing coqui-assign test;
-   Task 29's original "deliberate lag" test for this case is gone — see
-   that test's replacement below for why).
+/* #1933 — the mock mirror of the per-engine assign readiness rule on
+   server/src/routes/voice-library.ts (`clonedAssignBlock`). See that
+   function's doc comment for the full rule table and render-time
+   citations; this is the SAME rule, re-derived here because mock mode has
+   no server route to call through.
+
+   Mock mode has no filesystem, so it cannot represent the server's
+   clip-on-disk `stat()` check (`clonedMasterClipExists`) — a declared
+   `master` is treated as present, the same approximation
+   `_mockAssignWrittenSlots` already documents for the coqui-derivability
+   arm below. */
+type MockCloneAssignBlock = 'failed' | 'no-clip' | 'no-transcript';
+
+const MOCK_CLONE_ENGINE_LABELS: Record<CloneEngineSlot, string> = { qwen: 'Qwen', coqui: 'Coqui XTTS v2' };
+
+function otherCloneEngineSlot(engine: CloneEngineSlot): CloneEngineSlot {
+  return engine === 'qwen' ? 'coqui' : 'qwen';
+}
+
+function _mockClonedAssignBlock(entry: VoiceLibraryEntry, engine: CloneEngineSlot): MockCloneAssignBlock | null {
+  const slot = engine === 'coqui' ? entry.engines?.xtts : entry.engines?.qwen;
+  if (slot?.status === 'failed') return 'failed';
+  if (slot?.status === 'ready') return null;
+  if (!entry.master) return 'no-clip';
+  if (engine === 'qwen' && !entry.master.transcript?.trim()) return 'no-transcript';
+  return null;
+}
+
+/** The 409 the ROUTED engine's own readiness failure produces — mirrors
+ *  `blockMessage()` on the server, minus the character name (mock mode has
+ *  no cast to read one from — see `mockAssignLibraryVoice`'s own doc
+ *  comment for why). */
+function _mockBlockMessage(block: MockCloneAssignBlock, entry: VoiceLibraryEntry, engine: CloneEngineSlot): string {
+  const label = MOCK_CLONE_ENGINE_LABELS[engine];
+  switch (block) {
+    case 'failed':
+      return (
+        `"${entry.name}"'s ${label} voice failed to derive, so this character would fail to render on ${label}. ` +
+        `Re-clone the voice, or cast this character on ${MOCK_CLONE_ENGINE_LABELS[otherCloneEngineSlot(engine)]} instead.`
+      );
+    case 'no-clip':
+      return (
+        `"${entry.name}" has no retained reference clip and its ${label} voice is not ready, so there is ` +
+        `nothing to derive it from. Re-clone the voice before assigning it to this character.`
+      );
+    case 'no-transcript':
+      return (
+        `"${entry.name}"'s Qwen voice is not ready and its reference clip has no transcript, which a Qwen ` +
+        `clone needs. Re-clone the voice with a transcript. Casting this character on Coqui XTTS v2 would let ` +
+        `the assign through — Coqui needs no transcript — but the Qwen slot this also writes would stay unusable.`
+      );
+  }
+}
+
+/** The 200 advisory (`warning` field) when the OTHER clone-capable engine
+ *  is unusable — mirrors `advisoryMessage()` on the server. */
+function _mockAdvisoryMessage(block: MockCloneAssignBlock, entry: VoiceLibraryEntry, engine: CloneEngineSlot): string {
+  const label = MOCK_CLONE_ENGINE_LABELS[engine];
+  switch (block) {
+    case 'failed':
+      return (
+        `Assigned. Note: "${entry.name}"'s ${label} voice failed to derive, so if this character is ever ` +
+        `switched to ${label} it will fail to render. Re-clone the voice to fix it.`
+      );
+    case 'no-clip':
+      return (
+        `Assigned. Note: "${entry.name}" has no retained reference clip, so its ${label} voice can never be ` +
+        `derived — if this character is ever switched to ${label} it will fail to render.`
+      );
+    case 'no-transcript':
+      return (
+        `Assigned. Note: "${entry.name}"'s reference clip has no transcript, which a Qwen clone needs — its ` +
+        `Qwen voice can't be derived, so if this character is ever switched to Qwen it will fail to render. ` +
+        `Re-clone the voice with a transcript to fix it.`
+      );
+  }
+}
+
+/** The routed engine mock mode resolves a cloned assign to — the caller's
+ *  own explicit `modelKey` when present, else 'qwen' (see
+ *  `_mockAssignGuardError`'s doc comment for why mock mode can't weigh a
+ *  character's own `ttsEngine`/account default the way the real route
+ *  does). Shared by the guard and the advisory below so the two evaluate
+ *  the SAME routed engine — one predicate, two uses, mirroring the real
+ *  route's own `clonedAssignBlock`/`routedEngine` pairing. */
+function _mockRoutedEngine(modelKey: TtsModelKey | undefined) {
+  return modelKey ? engineForModelKey(modelKey) : 'qwen';
+}
+
+/* fs-38 Wave 3c, Task 41, re-verified for #1933 — mirrors the guards on
+   server/src/routes/voice-library.ts's POST /:voiceUuid/assign handler:
+   revoked consent, then (for a cloned entry) a non-clone-capable routed
+   engine, then — #1933 — the routed engine's own per-engine readiness
+   (`_mockClonedAssignBlock`, above), replacing the old Qwen-only "not ready
+   to assign yet" gate that over-blocked a Coqui-routed assign.
 
    The real guard also weighs the target character's own `ttsEngine`
    override and the persisted account default, via
@@ -9951,7 +10033,9 @@ export async function mockPromoteToLibrary(body: {
    `api.*`), so it only looks at the caller's own explicit `modelKey` —
    every real caller already sends its pending engine choice (see
    profile-drawer.tsx's `useMyVoice`) — falling back to 'qwen' (the common
-   case) when omitted.
+   case) when omitted. It also has no character name to interpolate into
+   the message the way the server's `blockMessage`/`advisoryMessage` do —
+   these mock strings name the voice and the reason, not the character.
 
    Exported so the guard itself can be unit-tested directly against ad-hoc
    entries, without growing the shared `MOCK_VOICE_LIBRARY_ENTRIES` fixture
@@ -9965,14 +10049,13 @@ export function _mockAssignGuardError(
   if (entry.consent?.revokedAt) {
     return 'Consent for this voice has been revoked.';
   }
-  if (entry.provenance === 'cloned' && entry.engines?.qwen?.status !== 'ready') {
-    return 'Cloned voice is not ready to assign yet.';
-  }
   if (entry.provenance === 'cloned') {
-    const routedEngine = modelKey ? engineForModelKey(modelKey) : 'qwen';
+    const routedEngine = _mockRoutedEngine(modelKey);
     if (routedEngine !== 'qwen' && routedEngine !== 'coqui') {
       return `Cloned voices render on Qwen or Coqui XTTS v2, but this book is set to ${routedEngine}. Switch the book's engine to Qwen or Coqui XTTS v2 before assigning this character.`;
     }
+    const block = _mockClonedAssignBlock(entry, routedEngine);
+    if (block) return _mockBlockMessage(block, entry, routedEngine);
   }
   return null;
 }
@@ -10000,6 +10083,26 @@ export function _mockAssignWrittenSlots(entry: VoiceLibraryEntry): CloneEngineSl
   return coqui ? ['qwen', 'coqui'] : ['qwen'];
 }
 
+/* #1933 — the mock's mirror of the real route's `clonedAdvisory` (§2d/§3b
+   of the implementation brief): `_mockAssignWrittenSlots` persists BOTH
+   clone-capable slots unconditionally for a cloned entry, regardless of
+   which engine the assign was routed for, so this warns when the OTHER
+   engine's slot is unusable. Exported for direct unit testing, same
+   rationale as `_mockAssignGuardError` above — this is the "200 advisory"
+   half of the #1933 rule; `_mockAssignGuardError` above is the "409" half,
+   both built on the same `_mockClonedAssignBlock` predicate. */
+export function _mockAssignAdvisory(
+  entry: VoiceLibraryEntry,
+  modelKey: TtsModelKey | undefined,
+): string | undefined {
+  if (entry.provenance !== 'cloned') return undefined;
+  const routedEngine = _mockRoutedEngine(modelKey);
+  if (routedEngine !== 'qwen' && routedEngine !== 'coqui') return undefined;
+  const otherEngine = otherCloneEngineSlot(routedEngine);
+  const otherBlock = _mockClonedAssignBlock(entry, otherEngine);
+  return otherBlock ? _mockAdvisoryMessage(otherBlock, entry, otherEngine) : undefined;
+}
+
 export async function mockAssignLibraryVoice(
   voiceUuid: string,
   body: { bookId: string; characterId: string; modelKey?: TtsModelKey },
@@ -10009,7 +10112,9 @@ export async function mockAssignLibraryVoice(
   if (!entry) throw new Error(`No voice-library entry "${voiceUuid}".`);
   const guardError = _mockAssignGuardError(entry, body.modelKey);
   if (guardError) throw new Error(guardError);
-  return { updated: 1, written: _mockAssignWrittenSlots(entry) };
+
+  const warning = _mockAssignAdvisory(entry, body.modelKey);
+  return { updated: 1, written: _mockAssignWrittenSlots(entry), ...(warning ? { warning } : {}) };
 }
 
 /* GATE 1 — mock "Remove voice". Mock mode keeps characters in the redux cast

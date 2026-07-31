@@ -4208,24 +4208,25 @@ export interface components {
         ChapterLoudness: {
             /**
              * @description Integrated loudness (LUFS) of the finished chapter, measured by a
-             *     real `ebur128` pass over the encoded file after it lands on disk
-             *     (`server/src/audio/measure-loudness.ts`). If that post-write
+             *     real `ebur128` pass over the encoded file at the temp path,
+             *     before the atomic rename to the chapter's final name
+             *     (`server/src/audio/measure-loudness.ts`). If that
              *     measurement fails, falls back to loudnorm's self-reported
              *     `output_i`, which is NOT a measurement of the finished file.
              */
             i: number;
             /**
-             * @description Loudness range (LU), measured by the same post-write `ebur128`
-             *     pass as `i`. Falls back to loudnorm's self-reported `output_lra`
-             *     on measurement failure.
+             * @description Loudness range (LU), measured by the same `ebur128` pass as `i`
+             *     (at the temp path, before the atomic rename). Falls back to
+             *     loudnorm's self-reported `output_lra` on measurement failure.
              */
             lra: number;
             /**
-             * @description True peak (dBTP), measured by the same post-write `ebur128` pass
-             *     as `i`. Falls back to loudnorm's self-reported `output_tp` on
-             *     measurement failure — that fallback is the ceiling loudnorm was
-             *     ASKED to hit, not what the audio measured, and can read below the
-             *     true sample peak.
+             * @description True peak (dBTP), measured by the same `ebur128` pass as `i` (at
+             *     the temp path, before the atomic rename). Falls back to
+             *     loudnorm's self-reported `output_tp` on measurement failure —
+             *     that fallback is the ceiling loudnorm was ASKED to hit, not what
+             *     the audio measured, and can read below the true sample peak.
              */
             tp: number;
             /**
@@ -5413,6 +5414,21 @@ export interface components {
              *     first-run "fine" guarantee.
              */
             packageBroken: boolean;
+            /**
+             * @description #1999 — same two live signals as packageBroken (a real import
+             *     attempt vs. the find_spec probe), classified into WHICH fault
+             *     applies rather than just whether one does: "missing" (the
+             *     package isn't on the venv path) vs. "broken" (present but a real
+             *     import raised). "ok" also covers "unknown" (sidecar down, older
+             *     sidecar, or nothing has tried to import this engine yet) — never
+             *     a fault on its own. Lets every consumer — the Setup checker, the
+             *     Admin console's diagnostics row, and Model Manager's own
+             *     Install/Repair buttons (`engineInstallLabel` and the three
+             *     install cards) — name the same fault instead of re-deriving a
+             *     possibly-disagreeing verdict.
+             * @enum {string}
+             */
+            packageFault: "ok" | "missing" | "broken";
         };
         EngineRecommendation: {
             /** @enum {string} */
@@ -8042,14 +8058,27 @@ export interface operations {
                          */
                         written: ("qwen" | "coqui")[];
                         /**
-                         * @description Non-fatal advisory (#1953) — set when a DESIGNED voice's baked
-                         *     manifest language differs from the book's language. The
-                         *     assignment still succeeds; this is a warning, never a 409 (see
-                         *     the cloned-voice wrong-engine 409 below, which is a distinct,
-                         *     unrelated guard). Applies on an English book as well as a
-                         *     non-English one. Absent for a cloned/imported entry (which has
-                         *     no baked design language) and for a matching-language designed
-                         *     voice.
+                         * @description Non-fatal advisory. Carries one of two mutually exclusive
+                         *     (by provenance) signals, never both:
+                         *
+                         *     - (#1953) set when a DESIGNED voice's baked manifest language
+                         *       differs from the book's language. Applies on an English book
+                         *       as well as a non-English one. Absent for a cloned/imported
+                         *       entry (which has no baked design language) and for a
+                         *       matching-language designed voice.
+                         *     - (#1933) set when a CLONED entry's OTHER clone-capable engine
+                         *       (not the one this assign routed to) is not derivable — its
+                         *       slot is terminally failed, or has no derivable source (no
+                         *       retained reference clip; or, for Qwen, no transcript). Both
+                         *       engine slots are always written for a cloned entry
+                         *       regardless of which one this assign routed to, so this warns
+                         *       about the one left unusable rather than letting it surface
+                         *       silently the next time the character is switched to it.
+                         *
+                         *     Either way the assignment still succeeds; this is a warning,
+                         *     never a 409 (see the cloned-voice per-engine-readiness 409
+                         *     below, which blocks on the ROUTED engine instead of warning
+                         *     about the other one).
                          */
                         warning?: string | null;
                     };
@@ -8063,10 +8092,18 @@ export interface operations {
                 content?: never;
             };
             /**
-             * @description The entry's consent has been revoked, or the entry hasn't finished
-             *     deriving on Qwen yet, or (cloned entries only) the character would
-             *     route to an engine that isn't clone-capable — cloned voices render
-             *     on Qwen or Coqui XTTS v2, never on a third engine.
+             * @description The entry's consent has been revoked, or (cloned entries only) the
+             *     character would route to an engine that isn't clone-capable — cloned
+             *     voices render on Qwen or Coqui XTTS v2, never on a third engine — or
+             *     (#1933) the ROUTED engine's own slot isn't usable: it's terminally
+             *     failed, or has no derivable source (no retained reference clip; or,
+             *     for Qwen, no transcript).
+             *
+             *     Precedence note: the consent-revoked check runs first and can fire
+             *     before `bookId`/`characterId` are resolved, but the wrong-engine and
+             *     per-engine-readiness checks run only after they resolve to a real
+             *     book and character — an unresolvable book or character returns
+             *     **404** instead, even for an otherwise-unready cloned entry.
              */
             409: {
                 headers: {

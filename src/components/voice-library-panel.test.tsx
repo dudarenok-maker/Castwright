@@ -816,8 +816,17 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
      rejecting path actually SETS the user-visible message (not merely
      that no exception escapes, the classic placebo shape on this branch). */
   it('surfaces the server error inline when assignLibraryVoice rejects', async () => {
+    /* #1933 retired the old Qwen-only "Cloned voice is not ready to assign
+       yet." string outright — this test only exercises the panel's generic
+       rejection-surfacing plumbing (any `Error.message` the API layer
+       throws must render inline), so the exact wording is not load-bearing,
+       but it should still be one the current rule can actually produce,
+       not a retired one. This is `_mockBlockMessage`'s real 'no-clip' shape
+       for this fixture's name. */
     assignLibraryVoiceMock.mockRejectedValueOnce(
-      new Error('Cloned voice is not ready to assign yet.'),
+      new Error(
+        '"Captain Halloran" has no retained reference clip and its Qwen voice is not ready, so there is nothing to derive it from. Re-clone the voice before assigning it to this character.',
+      ),
     );
     render(<VoiceLibraryPanel {...noopProps} bookId="b1" characters={[marlow]} />, {
       myVoices: [entry],
@@ -827,7 +836,9 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
 
     expect(
       await screen.findByTestId('voice-library-my-voices-error'),
-    ).toHaveTextContent('Cloned voice is not ready to assign yet.');
+    ).toHaveTextContent(
+      '"Captain Halloran" has no retained reference clip and its Qwen voice is not ready, so there is nothing to derive it from. Re-clone the voice before assigning it to this character.',
+    );
   });
 
   /* GATE 2 C-2 — the drawer's [F1] fix (profile-drawer.test.tsx "does NOT

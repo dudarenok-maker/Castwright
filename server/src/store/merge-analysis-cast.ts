@@ -29,6 +29,7 @@
 import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -183,7 +184,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     // the narrator that would drop a user RENAME. Carry forward a non-default
     // prior name; a default prior name lets the fresh (re-localized) name win.
     if (
-      (f.id === 'narrator' || f.id === 'char-narrator') &&
+      NARRATOR_CHARACTER_IDS.includes(f.id) &&
       typeof old.name === 'string' &&
       !isDefaultNarratorName(old.name)
     ) {
@@ -371,8 +372,7 @@ export function dedupePriorCastByName<T extends CastRecord>(
 
   const nameKeyOf = (c: CastRecord): string =>
     typeof c.name === 'string' ? normaliseNameKey(c.name) : '';
-  const isNarrator = (c: CastRecord): boolean =>
-    c.id === 'narrator' || c.id === 'char-narrator';
+  const isNarrator = (c: CastRecord): boolean => NARRATOR_CHARACTER_IDS.includes(c.id);
 
   const groups = new Map<string, T[]>();
   for (const c of priorCast) {

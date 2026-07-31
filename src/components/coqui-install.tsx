@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PrimaryButton } from './primitives';
-import type { EngineHealthState } from '../lib/api';
+import type { EngineHealthState, PackageFault } from '../lib/api';
 
 export interface CoquiInstallJob {
   id: string;
@@ -30,7 +30,7 @@ export function CoquiInstall({
   status,
   onInstalled,
 }: {
-  status: { state: EngineHealthState; packageBroken: boolean };
+  status: { state: EngineHealthState; packageBroken: boolean; packageFault: PackageFault };
   onInstalled?: () => void;
 }) {
   const [job, setJob] = useState<CoquiInstallJob | null>(null);
@@ -103,7 +103,7 @@ export function CoquiInstall({
       );
     }
 
-    if (status.packageBroken) {
+    if (status.packageFault === 'broken') {
       return (
         <div
           data-testid="coqui-install-repair"
@@ -120,6 +120,31 @@ export function CoquiInstall({
           </div>
           <PrimaryButton variant="dark" onClick={startInstall} disabled={busy} icon={false}>
             {busy ? 'Starting…' : 'Repair Coqui XTTS v2'}
+          </PrimaryButton>
+          {error && <p className="text-xs text-rose-700">{error}</p>}
+        </div>
+      );
+    }
+
+    /* #2010 (Major 2) — see kokoro-install.tsx's identical branch: a live
+       sidecar-confirmed "missing" fault takes priority over the disk-only
+       state check below, so this card can't say "Repair" for a fault the
+       Setup checker / Admin console are calling "missing" and pointing at
+       Install for. */
+    if (status.packageFault === 'missing') {
+      return (
+        <div
+          data-testid="coqui-install-missing"
+          className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-3"
+        >
+          <div>
+            <p className="text-sm font-semibold text-amber-900">The Coqui package is missing</p>
+            <p className="mt-1 text-xs text-amber-900/70">
+              The voice engine confirmed the Coqui package is not installed. Install reinstalls it.
+            </p>
+          </div>
+          <PrimaryButton variant="dark" onClick={startInstall} disabled={busy} icon={false}>
+            {busy ? 'Starting…' : 'Install Coqui XTTS v2'}
           </PrimaryButton>
           {error && <p className="text-xs text-rose-700">{error}</p>}
         </div>

@@ -25,6 +25,7 @@ import { WORKSPACE_ROOT } from '../workspace/paths.js';
 import { readinessSeverity } from '../tts/engine-presence.js';
 import { VOICE_ENGINES, type VoiceEngineId } from '../tts/voice-engine-registry.js';
 import type { EngineId } from '../tts/engine-health.js';
+import { classifyPackageFault } from '../tts/models-status.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
 export type CheckId = 'gpu' | 'sidecar' | 'asr' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
@@ -174,28 +175,23 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
          Unknown on both axes is never a fault — see the fail-open rule at
          voice-engine-registry.ts:26-29.
 
-         Order matters, and it is not the order the signals' strength suggests:
-           1. importOk === true wins outright. A real import that RETURNED is
-              proof the package is usable, so it overrides a find_spec that
-              says otherwise (a stale or wrong probe).
-           2. specPresent === false then wins over importOk === false. When a
-              load is attempted against an engine whose package is genuinely
-              absent, the sidecar records BOTH — the ImportError sets
-              importOk = false and find_spec still says false — and they are
-              one fault, not two. "Missing" is the stronger and more
-              actionable claim: "will not import — repair in Model Manager"
-              sends the operator to repair something that was never installed.
-           3. importOk === false is left for the case it alone describes: the
-              package IS on the path and importing it still raised. */
+         #1999 — the precedence order this used to spell out inline now lives
+         once in classifyPackageFault (tts/models-status.ts), shared with the
+         Setup checker (setup-diagnosis.ts) so the two surfaces can't disagree
+         about which fault a given engine has. Each fault gets its own verb:
+         "missing" points at installing it; "will not import" keeps pointing
+         at Model Manager repair — "repair" is the wrong verb for a package
+         that was never installed. */
       const broken = STANDARD_TTS.flatMap((e) => {
         const entry = VOICE_ENGINES.find((v) => v.id === e.engine);
         if (!entry) return [];
-        const importOk = entry.liveImportOk(sidecar);
-        if (importOk === true) return [];
-        if (entry.liveSpecPresent(sidecar) === false) {
-          return [{ ...e, phrase: `${e.name} package missing` }];
+        const fault = classifyPackageFault(entry.liveImportOk(sidecar), entry.liveSpecPresent(sidecar));
+        if (fault === 'missing') {
+          return [{ ...e, phrase: `${e.name} package missing — install in Model Manager` }];
         }
-        if (importOk === false) return [{ ...e, phrase: `${e.name} package will not import` }];
+        if (fault === 'broken') {
+          return [{ ...e, phrase: `${e.name} package will not import — repair in Model Manager` }];
+        }
         return [];
       });
       if (broken.length > 0) {
@@ -210,7 +206,7 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
           id: 'sidecar',
           label: 'Voice engine',
           status: sev,
-          detail: `reachable · ${broken.map((e) => e.phrase).join(', ')} — repair in Model Manager`,
+          detail: `reachable · ${broken.map((e) => e.phrase).join(', ')}`,
           value: resident.join(', ') || null,
         };
       }
