@@ -815,7 +815,7 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 ---
 
-### A27 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986; missing-variant copy corrected and Setup-checker coverage added by [#1999](https://github.com/dudarenok-maker/Castwright/issues/1999), PR #2010) · **no GPU needed, sidecar venv only**
+### A27 · A missing Kokoro/Qwen package surfaces as Install, a present-but-unimportable one as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986; missing-variant copy corrected and Setup-checker coverage added by [#1999](https://github.com/dudarenok-maker/Castwright/issues/1999), PR #2010) · **no GPU needed, sidecar venv only**
 
 The whole point of `*_import_ok` is a package that `find_spec` finds and a real
 `import` cannot load — the #1944 speechbrain shape. **That state cannot be
