@@ -367,6 +367,65 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(segFile.segments[1].endSec - segFile.segments[1].startSec).toBeCloseTo(0.3, 5);
   });
 
+  /* #1888 — synthesiseChapter (the repair's own synth call) DOES compute
+     voiceSubstitutedFrom correctly per segment; this pins that the value
+     actually survives onto the persisted segment through the splice route's
+     synth closure + buildSynthReplacements + spliceChapterSegments, AND that
+     a later clean re-record CLEARS a stale prior substitution flag rather
+     than preserving it (the easy bug to introduce while fixing the drop). */
+  it('threads voiceSubstitutedFrom from a re-record onto the persisted segment, and clears it on a later clean re-record (#1888)', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+
+    synthMock.mockImplementationOnce(async () => ({
+      pcm: tone(0.3, 9000),
+      sampleRate: SR,
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.3, voiceSubstitutedFrom: 'Requested Voice' },
+      ],
+      durationSec: 0.3,
+      rerecordMs: 0,
+      transcribeMs: 0,
+      embedMs: 0,
+    }));
+
+    const res1 = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(
+      parseSse(res1.text).find((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res1.text}`,
+    ).toBeTruthy();
+
+    let segFile = JSON.parse(readFileSync(join(titleLedAudioRoot, `${SLUG}.segments.json`), 'utf8')) as {
+      segments: Array<{ voiceSubstitutedFrom?: string }>;
+    };
+    expect(segFile.segments[1].voiceSubstitutedFrom).toBe('Requested Voice');
+
+    synthMock.mockImplementationOnce(async () => ({
+      pcm: tone(0.3, 9000),
+      sampleRate: SR,
+      segments: [{ groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.3 }],
+      durationSec: 0.3,
+      rerecordMs: 0,
+      transcribeMs: 0,
+      embedMs: 0,
+    }));
+
+    const res2 = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(
+      parseSse(res2.text).find((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res2.text}`,
+    ).toBeTruthy();
+
+    segFile = JSON.parse(readFileSync(join(titleLedAudioRoot, `${SLUG}.segments.json`), 'utf8')) as {
+      segments: Array<{ voiceSubstitutedFrom?: string }>;
+    };
+    expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
+  });
+
   it('rejects targeting the title beat (index 0) directly with the title-only error', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
