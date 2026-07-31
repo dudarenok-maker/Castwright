@@ -4,7 +4,7 @@
    the chapter grid when the synth returns a different rate. */
 
 import { describe, it, expect } from 'vitest';
-import { buildSynthReplacements, isRerecordableSegment } from './build-synth-replacement.js';
+import { buildSynthReplacements, isRerecordableSegment, findDivergentSentences } from './build-synth-replacement.js';
 import type { ChapterSegment } from '../tts/synthesise-chapter.js';
 
 function seg(i: number, characterId: string, sentenceIds: number[]): ChapterSegment {
@@ -71,6 +71,33 @@ describe('buildSynthReplacements', () => {
       },
     });
     expect(seen).toEqual([[4, 5]]);
+  });
+
+  /* #1972 — voiceName always overwrites (unlike the QA fields, there's no
+     "gate didn't run" state to protect: a re-record always synthesises, so
+     a fresh voiceName is always meaningful when the caller reports one). */
+  it('carries voiceName from the synth output onto the replacement', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        voiceName: 'kokoro-some-voice',
+      }),
+    });
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceName: 'kokoro-some-voice' });
+  });
+
+  it('omits voiceName when the caller does not report one', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000 }),
+    });
+    expect('voiceName' in reps[0].freshVerdict!).toBe(false);
   });
 
   it('resamples replacement PCM onto the chapter grid when the synth rate differs', async () => {
@@ -248,5 +275,96 @@ describe('buildSynthReplacements', () => {
     });
     expect(reps[0].freshVerdict).toStrictEqual({});
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  /* M1 (#1972 follow-up) — baseVoiceName follows the SAME omit-don't-overwrite
+     rule as voiceName. */
+  it('carries baseVoiceName from the synth output onto the replacement', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        voiceName: 'qwen-wren__angry',
+        baseVoiceName: 'qwen-wren',
+      }),
+    });
+    expect(reps[0].freshVerdict).toStrictEqual({
+      voiceName: 'qwen-wren__angry',
+      baseVoiceName: 'qwen-wren',
+    });
+  });
+
+  it('omits baseVoiceName when the caller does not report one', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x' }),
+    });
+    expect('baseVoiceName' in reps[0].freshVerdict!).toBe(false);
+  });
+});
+
+describe('findDivergentSentences (#1972 shared predicate)', () => {
+  const segs = [
+    seg(0, 'amy', [1]),
+    seg(1, 'castor', [2]),
+    seg(2, 'wren', [3, 4]),
+  ];
+
+  it('finds nothing when segFile and the current analysis agree', () => {
+    const current = [
+      { id: 1, characterId: 'amy', text: 'Hi.' },
+      { id: 2, characterId: 'castor', text: 'Bye.' },
+    ];
+    expect(findDivergentSentences(segs, [0, 1], current)).toEqual([]);
+  });
+
+  it('flags a sentence the current analysis moved to a DIFFERENT character, naming the new owner', () => {
+    const current = [{ id: 2, characterId: 'narrator', text: 'Actually narration.' }];
+    expect(findDivergentSentences(segs, [1], current)).toEqual([
+      { segmentIndex: 1, sentenceId: 2, newOwner: 'narrator' },
+    ]);
+  });
+
+  it('flags a sentence id ABSENT from the current analysis (re-segmentation renumbered ids) — newOwner is null, not the stale characterId', () => {
+    expect(findDivergentSentences(segs, [1], [])).toEqual([
+      { segmentIndex: 1, sentenceId: 2, newOwner: null },
+    ]);
+  });
+
+  it('flags a sentence marked excludeFromSynthesis (fs-58) — buildSentenceGroups would drop it, splicing silence', () => {
+    const current = [{ id: 2, characterId: 'castor', text: 'Bye.', excludeFromSynthesis: true }];
+    expect(findDivergentSentences(segs, [1], current)).toEqual([
+      { segmentIndex: 1, sentenceId: 2, newOwner: null },
+    ]);
+  });
+
+  it('flags a sentence that normalises to empty text — buildSentenceGroups drops it too', () => {
+    const current = [{ id: 2, characterId: 'castor', text: '   ' }];
+    expect(findDivergentSentences(segs, [1], current)).toEqual([
+      { segmentIndex: 1, sentenceId: 2, newOwner: null },
+    ]);
+  });
+
+  it('emits one entry PER diverged sentence id for a multi-sentence segment', () => {
+    const current = [
+      { id: 3, characterId: 'wren', text: 'Mine.' }, // agrees
+      { id: 4, characterId: 'narrator', text: 'Not mine.' }, // diverges
+    ];
+    expect(findDivergentSentences(segs, [2], current)).toEqual([
+      { segmentIndex: 2, sentenceId: 4, newOwner: 'narrator' },
+    ]);
+  });
+
+  it('only checks the requested targetIndices, ignoring divergence elsewhere in segments', () => {
+    const current = [
+      { id: 1, characterId: 'amy', text: 'Agrees, and IS targeted.' },
+      { id: 2, characterId: 'narrator', text: 'Diverged, but not targeted.' },
+    ];
+    expect(findDivergentSentences(segs, [0], current)).toEqual([]);
   });
 });

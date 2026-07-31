@@ -3619,4 +3619,33 @@ describe('synthesiseChapter — 1.7B implies prosody (is17b derives from ttsMode
     expect(provider.batchCalls[0].items[0].voiceName).toBe('qwen-n'); // base, not qwen-n__angry
     expect(provider.batchCalls[0].items[0].instruct).toBeTruthy();
   });
+
+  /* M1 (#1972 follow-up) — on the 0.6B tier (no liveInstruct), the emotion
+     DOES travel as a `__<emotion>` voice suffix (unlike the 1.7B case just
+     above). The provider must still hear the exact suffixed voice, but the
+     segment's OWN `baseVoiceName` must strip it — that's the field
+     finalize-chapter-write.ts collects into the per-character snapshot, so a
+     character whose last segment happens to be this tagged quote doesn't get
+     `qwen-n__angry` stamped as its resolved voice. */
+  it('#1972 M1 — a 0.6B group with a designed emotion variant sends the SUFFIXED voice to the provider but stamps baseVoiceName WITHOUT it', async () => {
+    const provider = makeLiveInstructBatchProvider();
+    // Same 3-sentence shape as the 1.7B sibling test above (anchor + two
+    // same-emotion lines) — the anchor synthesises solo, so the batch
+    // (`batchCalls[0]`) is the two emotion-tagged lines.
+    const res = await synthesiseChapter({
+      sentences: [
+        { id: 1, chapterId: 1, characterId: 'n', text: 'Anchor.' },
+        { id: 2, chapterId: 1, characterId: 'n', text: 'Stop.', emotion: 'angry' },
+        { id: 3, chapterId: 1, characterId: 'n', text: 'Now.', emotion: 'angry' },
+      ],
+      cast: [{ id: 'n', overrideTtsVoices: { qwen: { name: 'wren', variants: { angry: { name: 'wren__angry' } } } } }],
+      provider, modelKey: 'qwen3-tts-0.6b', engine: 'qwen', qwenBatchSize: 8,
+    });
+    // Sent to the provider WITH the suffix — the sidecar must hear the variant.
+    expect(provider.batchCalls[0].items[0].voiceName).toBe('qwen-n__angry');
+    const seg = res.segments.find((s) => s.sentenceIds?.includes(2));
+    expect(seg?.voiceName).toBe('qwen-n__angry');
+    // The character-snapshot-facing field strips the suffix.
+    expect(seg?.baseVoiceName).toBe('qwen-n');
+  });
 });

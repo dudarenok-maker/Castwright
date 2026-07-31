@@ -34,7 +34,19 @@ const VERDICT_MANUSCRIPT_ID = 'm_verdict_test';
 // below land inside segment-qa's duration-ratio window regardless of it being
 // the accepted (healthy) or failed (silent) take — only the RMS/silence check
 // should decide acceptance in these tests, not an incidental duration flag.
-const VERDICT_SENTENCES = [{ id: 2, text: 'Yes.' }];
+// C2 (#1972 follow-up) — every fixture using this manuscript id targets
+// sentence id 2 on segFile's 'castor' segment, so `characterId` must AGREE
+// with that or the new divergence guard (findDivergentSentences) treats
+// every one of these re-records as attribution-diverged and diverts it to
+// `stillSuspect` before it ever reaches `buildSynthReplacements` — a real
+// analysis cache always carries `characterId` (schema-required), so this is
+// just completing an under-specified fixture, not loosening the guard.
+const VERDICT_SENTENCES = [{ id: 2, characterId: 'castor', text: 'Yes.' }];
+/* C2 (#1972 follow-up) — a manuscript whose CURRENT analysis has moved the
+   flagged segment's sentence id to a DIFFERENT character than segFile's
+   last render records — the same attribution-source disagreement #1972
+   fixed for chapter-splice.ts, reached here via the repair path instead. */
+const DIVERGENT_QA_MANUSCRIPT_ID = 'm_qa_divergent';
 
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
@@ -73,6 +85,11 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
     loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
       if (manuscriptId === VERDICT_MANUSCRIPT_ID) {
         return { chapters: { 1: VERDICT_SENTENCES } };
+      }
+      if (manuscriptId === DIVERGENT_QA_MANUSCRIPT_ID) {
+        // segFile (below) says sentence 2 belongs to 'castor'; the current
+        // analysis says it's 'amy''s — the two disagree.
+        return { chapters: { 1: [{ id: 2, characterId: 'amy', text: 'Actually amy.' }] } };
       }
       return real.loadAnalysisCache(manuscriptId);
     }),
@@ -885,5 +902,135 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-38 Wave 3c clone
       `expected qa_repair_complete, got:\n${res.text}`,
     ).toBeTruthy();
     expect(events.filter((e) => e.type === 'warning')).toEqual([]);
+  });
+});
+
+/* C2 (#1972 follow-up) — chapter-qa-repair.ts had the SAME attribution-source
+   mix chapter-splice.ts did: it selects a flagged segment to re-record by
+   segFile.segments[i].characterId (the chapter's last render) but resolves
+   its sentences — and therefore its VOICE — from the CURRENT analysis cache.
+   Unlike the splice route (refuses the whole operation), this route repairs
+   many segments in one automated pass, so it drops just the diverged index
+   into `stillSuspect` and repairs everything else. */
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attribution-source divergence)', () => {
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  let synthesiseChapterMock: any;
+
+  const AUTHOR4 = 'Divergent QA Author';
+  const SERIES4 = 'Standalones';
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  /** amy (healthy) + castor (dead-silent — flagged by the signal scan).
+      segFile says sentence 2 belongs to castor; the mocked
+      DIVERGENT_QA_MANUSCRIPT_ID analysis (above) says it's amy's now. */
+  async function scaffoldDivergentQaBook(bookTitle: string): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR4, SERIES4, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR4, SERIES4, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: DIVERGENT_QA_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR4,
+        series: SERIES4,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorSilent = Buffer.alloc(SR * 2); // 1s of dead silence — flagged by the signal scan
+    const chapterPcm = Buffer.concat([amy, castorSilent]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  function divergentBookAudioRoot(bookTitle: string): string {
+    return audioDirFn(join(workspaceRoot, 'books', AUTHOR4, SERIES4, bookTitle));
+  }
+
+  it('drops the diverged segment into stillSuspect WITHOUT re-recording it under the wrong voice — never calls synthesiseChapter', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      segments: [{ groupIndex: 0, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 0.5, voiceName: 'kokoro-amy' }],
+    }));
+
+    const bookTitle = 'Divergent QA Story';
+    const { bookId: id, chapterSlug } = await scaffoldDivergentQaBook(bookTitle);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    // The regression this closes: pre-fix, the diverged segment would have
+    // been re-recorded — rendering 'amy's line — into castor's voice slot.
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+
+    // Castor's segment on disk is byte-identical to before the repair:
+    // still hers, still carrying no voiceName — nothing was ever
+    // synthesised for it.
+    const segFile = JSON.parse(
+      readFileSync(join(divergentBookAudioRoot(bookTitle), `${chapterSlug}.segments.json`), 'utf8'),
+    ) as { segments: Array<{ characterId: string; voiceName?: string }> };
+    expect(segFile.segments[1].characterId).toBe('castor');
+    expect(segFile.segments[1].voiceName).toBeUndefined();
   });
 });
