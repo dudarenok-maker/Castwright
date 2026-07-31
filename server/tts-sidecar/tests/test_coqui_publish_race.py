@@ -359,15 +359,15 @@ def test_a_second_stop_during_the_retry_reload_is_not_blocked_by_the_synth_lock(
     Drives the exact interleaving #1925 describes, now re-derived against
     current code (plan 273 §1.2):
 
-      1. `synthesize` (`:1927-1983`) on a cold engine starts the pre-lock
-         `_ensure_loaded` at `:1934` — epoch 0, load #1. `_synth_lock` is
+      1. `synthesize` (`:1971-2032`) on a cold engine starts the pre-lock
+         `_ensure_loaded` at `:1978` — epoch 0, load #1. `_synth_lock` is
          free throughout; only `_cold_load_lock` is held.
       2. Stop 1 (`unload()`) takes the free `_synth_lock`, bumps the epoch,
          and returns FAST — `_tts` is still `None` so `_drop_model_locked`
          early-outs before it can do any real teardown work.
       3. Load #1 reaches its publish with a stale epoch snapshot, discards
          (`"Coqui load discarded"`), and `_tts` stays `None`.
-      4. `synthesize`'s in-claim re-ensure at `:1980` starts load #2 — again
+      4. `synthesize`'s in-claim re-ensure at `:2029` starts load #2 — again
          outside `_synth_lock` (only `_cold_load_lock`).
       5. Stop 2, fired WHILE load #2 is still parked mid-construction, must
          ALSO return FAST: `unload()` only ever contends on `_synth_lock`,
@@ -382,7 +382,7 @@ def test_a_second_stop_during_the_retry_reload_is_not_blocked_by_the_synth_lock(
     Stop already returned.
 
     Mutation that must fail this test — the faithful #1925 reconstruction:
-    change `synthesize`'s in-claim `self._ensure_loaded(model)` (`:1980`) to
+    change `synthesize`'s in-claim `self._ensure_loaded(model)` (`:2029`) to
     `with self._synth_lock: self._ensure_loaded(model, lock_held=True)` — the
     exact pre-Wave-3c shape the issue reports. Stop 2 then queues behind the
     parked load #2 and the 0.5 s bound trips.

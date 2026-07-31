@@ -1313,9 +1313,15 @@ class CoquiEngine(Engine):
         #     self._synth_lock:` block in the same thread WITHOUT
         #     `lock_held=True`; its publish takes this lock itself, so that
         #     deadlocks. This is why `synthesize`'s re-ensure sits immediately
-        #     BEFORE its acquire rather than inside it, unlike
-        #     QwenEngine/WhisperEngine whose `_ensure_loaded` is lock-free —
-        #     see `synthesize` for what that costs and why it is safe.
+        #     BEFORE its acquire rather than inside it — the same
+        #     outside-the-lock spot QwenEngine's and WhisperEngine's
+        #     re-ensures now use too (plan 273 T7/T8 moved both of theirs
+        #     there; see `synthesize`'s :2016-2021 comment for what that
+        #     costs and why it is safe). QwenEngine/WhisperEngine's
+        #     `_ensure_loaded` is lock-free internally (unlike this one,
+        #     whose publish takes `_synth_lock`), so the three engines land
+        #     in the same place for different reasons — that is NOT an
+        #     asymmetry to "fix".
         #   - a holder that needs to drop the model calls `_drop_model_locked()`
         #     (then `_reclaim_after_drop()` once released), never `unload()`.
         self._synth_lock = threading.Lock()
@@ -3540,8 +3546,8 @@ class PlacementController:
         reclaim — happens off the loop. The `maybe_free_idle*` methods keep
         their blocking `acquire()` and re-validate legs byte for byte; only
         the CALLER of `step.run()` moved. This mirrors the idle watchdogs
-        (`:6455`, `:6458`, `:6516`), which already offload these same
-        methods so the event loop and /health stay live.
+        (`:6703`, `:6706`, `:6764`, `:6840`), which already offload these
+        same methods so the event loop and /health stay live.
         """
         for step in self.idle_evict_steps(device_key, engine):
             # Re-read on every iteration, not once before the loop: nothing
@@ -5877,8 +5883,9 @@ class QwenEngine(Engine):
                 lang = language or lang
                 load_ms = (time.perf_counter() - load_start) * 1000.0
 
-                # Guarded forward (re-ensures under `_synth_lock`; reloads+retries
-                # once, then self-recycles, on a silent degenerate-load).
+                # Guarded forward (re-ensures BEFORE `_synth_lock` is taken, each
+                # attempt; serialises the forward itself under the lock; reloads+
+                # retries once, then self-recycles, on a silent degenerate-load).
                 audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
                     "_base17", self._ensure_base17_loaded, self.BASE17_MODEL,
                     text, lang, prompt,
@@ -5912,8 +5919,9 @@ class QwenEngine(Engine):
         load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
-        # Guarded forward (serialises + re-ensures under `_synth_lock`; reloads and
-        # retries once, then self-recycles, on a silent degenerate-load).
+        # Guarded forward (re-ensures BEFORE `_synth_lock` is taken, each attempt;
+        # serialises the forward itself under the lock; reloads and retries once,
+        # then self-recycles, on a silent degenerate-load).
         audio, sr, gen_ms, audio_ms = self._guarded_base_synth(
             "_base", self._ensure_base_loaded, self.BASE_MODEL, text, lang, prompt,
         )
