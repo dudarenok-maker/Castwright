@@ -753,7 +753,13 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_batch_synth(
     engine = qwen_batch_runtime["engine"]
     _design(engine, "a")
     orig_base = engine._base
-    engine._base = None  # force the pre-lock ensure to (simulate a) cold load
+    # monkeypatch.setattr (not a raw assignment) so `_base` is restored to its
+    # pre-test value at teardown regardless of the mutations further below —
+    # mirrors the `_base17` sibling test's own precedent (review finding 6):
+    # `engine.unload()` (invoked by the Stop thread below) also clears
+    # `_prompt_cache`, a side effect a raw assignment here does nothing to
+    # guard against.
+    monkeypatch.setattr(engine, "_base", None)  # force the pre-lock ensure to (simulate a) cold load
 
     entry = threading.Event()
     release = threading.Event()
@@ -763,7 +769,7 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_batch_synth(
             return
         entry.set()
         assert release.wait(5), "release never set — test bug"
-        engine._base = orig_base
+        monkeypatch.setattr(engine, "_base", orig_base)
 
     monkeypatch.setattr(engine, "_ensure_base_loaded", fake_ensure_base)
 
@@ -795,6 +801,46 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_batch_synth(
     assert batch_errors == [], f"synthesize_batch raised: {batch_errors!r}"
     assert len(batch_result) == 1
     assert len(batch_result[0].pcms) == 1
+
+
+def test_synthesize_batch_0_6b_raises_runtime_error_when_base_unloaded_in_gap(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """#1975 (plan 273 T7/T8 shape, site 3) — review finding 4: the sibling
+    test above only exercises the HAPPY path where the hoisted pre-lock
+    `_ensure_base_loaded()` (main.py:6461) wins the race and reloads `_base`
+    before the lock reads it. Nothing asserts the OTHER outcome — a
+    concurrent `/unload` that instead wins the narrow gap between that ensure
+    returning and the lock body reading `self._base` — which must raise the
+    typed "Qwen Base model was unloaded before this batch render started"
+    `RuntimeError` rather than crash with an `AttributeError` on `None`.
+
+    Simulates the gap deterministically: `_ensure_base_loaded` is
+    monkeypatched to an unconditional no-op, so `_base` — explicitly nulled
+    below — stays `None` straight through to the lock body's read, standing
+    in for a concurrent `/unload` winning the gap right after the real
+    hoisted ensure would have returned.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base is None: raise RuntimeError(...)` guard at :6469-6473. Without
+    it this test would instead fail with an `AttributeError` from calling
+    `.generate_voice_clone` on `None` — proving the guard, not just some
+    other exception, is what's under test.
+    """
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+    # Symmetric with the review's finding 6 fix above — monkeypatch.setattr,
+    # not a raw assignment, so `_base` is restored regardless of how this
+    # test exits.
+    monkeypatch.setattr(engine, "_base", None)
+    monkeypatch.setattr(engine, "_ensure_base_loaded", lambda device=None: None)
+
+    items = [{"voice": "a", "text": "Hello there."}]
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen Base model was unloaded before this batch render started",
+    ):
+        engine.synthesize_batch("0.6b", items)
 
 
 def test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth(
@@ -890,6 +936,57 @@ def test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth(
     assert len(batch_result) == 1
     assert len(fake17.clone_calls) == 1
     assert len(batch_result[0].pcms) == 2
+
+
+def test_synthesize_batch_1_7b_raises_runtime_error_when_base17_unloaded_in_gap(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """#1975 (plan 273 T7/T8 shape, site 2) — review finding 4: the sibling
+    test above only exercises the HAPPY path where the hoisted pre-lock
+    `_ensure_base17_loaded()` (main.py:6384) wins the race and reloads
+    `_base17` before the lock reads it. Nothing asserts the OTHER outcome —
+    a concurrent `unload_base17()` that instead wins the narrow gap between
+    that ensure returning and the lock body reading `self._base17` — which
+    must raise the typed "Qwen 1.7B-Base model was unloaded before this
+    batch render started" `RuntimeError` rather than crash with an
+    `AttributeError` on `None`.
+
+    Simulates the gap deterministically: `_load_voice_prompt_17b` is stubbed
+    (as in the sibling test) so the per-item prompt-loading loop never
+    touches the real model, and `_ensure_base17_loaded` — both the
+    top-of-branch call at :6343 and the hoisted pre-lock call at :6384 — is
+    monkeypatched to an unconditional no-op, so `_base17` stays `None` (its
+    fixture-reset value) straight through to the lock body's read, standing
+    in for a concurrent `unload_base17()` winning the gap right after the
+    real hoisted ensure would have returned.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base17 is None: raise RuntimeError(...)` guard at :6387-6391. Without
+    it this test would instead fail with an `AttributeError` from calling
+    `.generate_voice_clone` on `None` — proving the guard, not just some
+    other exception, is what's under test.
+    """
+    engine = qwen_batch_runtime["engine"]
+    # Explicitly null (via monkeypatch, not a raw assignment — see review
+    # finding 6) rather than assuming the fixture's default: `qwen_batch_runtime`
+    # doesn't reset `_base17` itself (see the sibling test's own comment
+    # above), so a bare `assert engine._base17 is None` would be fragile to
+    # test order.
+    monkeypatch.setattr(engine, "_base17", None)
+
+    monkeypatch.setattr(
+        engine,
+        "_load_voice_prompt_17b",
+        lambda voice: ([_FakePromptItem(1000, "pangram")], "English", False),
+    )
+    monkeypatch.setattr(engine, "_ensure_base17_loaded", lambda device=None: None)
+
+    items = [{"voice": "p", "text": "Hello."}]
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen 1.7B-Base model was unloaded before this batch render started",
+    ):
+        engine.synthesize_batch("1.7b", items)
 
 
 def test_route_batch_cuda_error_poisons_and_503s(qwen_batch_runtime, monkeypatch) -> None:
