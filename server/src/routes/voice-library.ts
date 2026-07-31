@@ -669,6 +669,85 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
   }
 });
 
+/* POST /api/voice-library/:voiceUuid/engines/:engine/retry — plan 276
+   Decision 7.
+
+   Deletes the engine's slot key from `entry.engines` (through the same
+   per-uuid-locked `updateEntry` the transcript edit above uses) rather than
+   rewriting its `status`: `VoiceLibraryEngineStatus.status` is required
+   (workspace/voice-library.ts), so there is no "unset" value to write, and
+   an absent slot already flows correctly through `classifyClonedVoice`
+   (clone-voice-resolver.ts:241-246) as "never derived". A fresh derive
+   rewrites the slot with its own version stamp. Nothing else needs
+   resetting — `master`, the clip file and the qwen `.pt` all stay exactly
+   as they are.
+
+   No-op (200, entry unchanged), not an error, when the slot isn't `failed`
+   — a `ready` slot needs no retry, and an absent slot has nothing to clear.
+   Distinguishing "slot present but healthy" from "slot absent" would add a
+   branch that behaves identically either way, so both fall through the same
+   early return.
+
+   [R3] Why this does not reintroduce the loop the `failed` stamp exists to
+   prevent. `cloneReadiness`'s rule 4 (`slotStatus === 'failed'` ->
+   `derive-failed`) is ordered BEFORE rules 5/6 (`missing-master` /
+   `no-transcript`) — see clone-readiness.ts. Once this route deletes the
+   stamp, the predicate re-evaluates the UNDERLYING cause on the next
+   check: a derive-failed voice with a blank transcript immediately reports
+   `no-transcript` again, and the cast-time gate stays up with the CTA that
+   actually fixes it. Only a failure whose cause isn't expressible in rules
+   5-6 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
+   again on the next derive — that residue is real and is why the CTA is
+   labelled "Retry derive", not "Fix"; a repeat failure simply re-stamps
+   `failed`. The policy `clone-voice-resolver.ts:229-231` protects is that a
+   failed derive is never SILENTLY retried (i.e. auto-retried on every
+   render); this is a user-initiated, explicit clear, not that. */
+voiceLibraryRouter.post('/:voiceUuid/engines/:engine/retry', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const engineParam = req.params.engine as TtsEngine;
+    if (!isCloneEngine(engineParam)) {
+      return res.status(400).json({ error: `"${req.params.engine}" is not a clone-capable engine.` });
+    }
+    const slotKey = manifestSlotFor(engineParam);
+
+    /* `entryFound`/`noop` are set from INSIDE the locked mutate callback,
+       not from a separate pre-lock read — the lock's own `fresh` read is
+       the single source of truth for both "does this uuid exist" and
+       "does the slot need clearing", so there's no separate stale read to
+       drift from it. Returning `undefined` from the callback tells
+       `updateEntry` to skip the write entirely (see its own doc comment on
+       :297) — the true no-op case never touches disk, so `updatedAt` (and
+       everything else) really is unchanged, not merely content-equal. */
+    let entryFound = true;
+    let noop: import('../workspace/voice-library.js').VoiceLibraryEntry | null = null;
+    const written = await updateEntry(voiceUuid, (fresh) => {
+      if (!fresh) {
+        entryFound = false;
+        return null;
+      }
+      if (fresh.engines[slotKey]?.status !== 'failed') {
+        noop = fresh;
+        return undefined;
+      }
+      const restEngines = { ...fresh.engines };
+      delete restEngines[slotKey];
+      return { ...fresh, engines: restEngines };
+    });
+
+    if (!entryFound) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+    if (!written) {
+      return res.json(noop);
+    }
+    res.json(written);
+  } catch (e) {
+    console.error('[voice-library] retry failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice engine retry failed.' });
+  }
+});
+
 /* POST /api/voice-library/:voiceUuid/sample
 
    Mirrors POST /api/voices/:voiceId/sample (routes/voice-sample.ts) for a

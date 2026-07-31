@@ -774,6 +774,197 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
   });
 });
 
+describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan 276, Decision 7)', () => {
+  function makeClonedEntry(
+    voiceUuid: string,
+    overrides: Partial<import('../workspace/voice-library.js').VoiceLibraryEntry> = {},
+  ) {
+    return makeEntry({
+      voiceUuid,
+      provenance: 'cloned',
+      consent: {
+        personName: 'Dad',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00.000Z',
+        attestedBy: 'me',
+      },
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24_000,
+        durationSeconds: 12,
+        transcript: 'the original whisper transcript',
+        transcriptSource: 'whisper',
+        captureMethod: 'upload',
+      },
+      ...overrides,
+    });
+  }
+
+  it('deletes the slot key for a `failed` qwen slot', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-qwen-failed-1', {
+        engines: { qwen: { status: 'failed', baseModel: 'old' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-qwen-failed-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.qwen).toBeUndefined();
+    const onDisk = await vl.readEntry('retry-qwen-failed-1');
+    expect(onDisk?.engines.qwen).toBeUndefined();
+    expect('qwen' in (onDisk?.engines ?? {})).toBe(false);
+  });
+
+  /* Invariant 2 (plan 276) — library slots are keyed `qwen` / `xtts`, but the
+     ENGINE name for Coqui is `coqui`. The route must map `coqui` -> `xtts`
+     via `manifestSlotFor`, never index `entry.engines.coqui` (which doesn't
+     exist on the type at all). Reached via the engine name, not the slot
+     key, so a wrong-slot mapping bug is exactly what this catches. */
+  it('deletes the slot key for a `failed` xtts slot, reached via engine name `coqui`', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-xtts-failed-1', {
+        engines: { xtts: { status: 'failed', coquiVersion: 'old' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-xtts-failed-1/engines/coqui/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.xtts).toBeUndefined();
+    const onDisk = await vl.readEntry('retry-xtts-failed-1');
+    expect(onDisk?.engines.xtts).toBeUndefined();
+    expect('xtts' in (onDisk?.engines ?? {})).toBe(false);
+  });
+
+  it('is a no-op on a `ready` slot', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-ready-1', {
+        engines: { qwen: { status: 'ready', baseModel: 'current-model' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-ready-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+    const onDisk = await vl.readEntry('retry-ready-1');
+    expect(onDisk?.engines.qwen).toEqual({ status: 'ready', baseModel: 'current-model' });
+  });
+
+  it('is a no-op on an absent slot', async () => {
+    await vl.writeEntry(makeClonedEntry('retry-absent-1', { engines: {} }));
+
+    const res = await request(app).post('/api/voice-library/retry-absent-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines).toEqual({});
+    const onDisk = await vl.readEntry('retry-absent-1');
+    expect(onDisk?.engines).toEqual({});
+  });
+
+  it('rejects a non-clone-capable engine with 400', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-badengine-1', {
+        engines: { qwen: { status: 'failed', baseModel: 'old' } },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-badengine-1/engines/kokoro/retry');
+
+    expect(res.status).toBe(400);
+    const onDisk = await vl.readEntry('retry-badengine-1');
+    expect(onDisk?.engines.qwen).toEqual({ status: 'failed', baseModel: 'old' });
+  });
+
+  it('404s on an unknown uuid', async () => {
+    const res = await request(app).post('/api/voice-library/does-not-exist/engines/qwen/retry');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('leaves `master`, the clip and the OTHER engine slot untouched', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-survives-1', {
+        engines: {
+          qwen: { status: 'failed', baseModel: 'old' },
+          xtts: { status: 'ready', coquiVersion: 'v1' },
+        },
+      }),
+    );
+
+    const res = await request(app).post('/api/voice-library/retry-survives-1/engines/qwen/retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engines.xtts).toEqual({ status: 'ready', coquiVersion: 'v1' });
+    expect(res.body.master.clipFile).toBe('master.wav');
+    expect(res.body.master.transcript).toBe('the original whisper transcript');
+
+    const onDisk = await vl.readEntry('retry-survives-1');
+    expect(onDisk?.engines.xtts).toEqual({ status: 'ready', coquiVersion: 'v1' });
+    expect(onDisk?.master?.clipFile).toBe('master.wav');
+    expect(onDisk?.master?.transcript).toBe('the original whisper transcript');
+  });
+
+  /* Modeled on the transcript-edit lock fixture above (PATCH describe,
+     `writes the transcript edit through updateEntry, never a stale
+     pre-lock snapshot`) — that fixture's concurrent writer (A) mutates BOTH
+     `engines` and `master` so pinning only one of a handler's reads of the
+     fresh snapshot can't hide behind the other still passing. A holds the
+     per-uuid lock first and blocks inside it on a manually-released gate,
+     forcing this route's own write to queue behind A's if (and only if) it
+     goes through the same lock. If the route were reimplemented as an
+     unlocked `readEntry` + `writeEntry` pair, its read would land on the
+     PRE-A snapshot and its write would silently erase A's concurrent
+     `xtts`/`master` changes. */
+  it('goes through updateEntry, never a stale pre-lock snapshot', async () => {
+    await vl.writeEntry(
+      makeClonedEntry('retry-lock-1', {
+        engines: { qwen: { status: 'failed', baseModel: 'old' } },
+      }),
+    );
+
+    let releaseA: () => void = () => {};
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const order: string[] = [];
+
+    const pA = vl.updateEntry('retry-lock-1', async (fresh) => {
+      order.push('A-mutate-start');
+      await gateA;
+      order.push('A-write');
+      return {
+        ...fresh!,
+        engines: { ...fresh!.engines, xtts: { status: 'ready', coquiVersion: 'v-set-by-A' } },
+        master: { ...fresh!.master!, durationSeconds: 99 },
+      };
+    });
+
+    const pRetry = request(app)
+      .post('/api/voice-library/retry-lock-1/engines/qwen/retry')
+      .then((res) => {
+        order.push('B-response');
+        return res;
+      });
+
+    releaseA();
+    const [, retryRes] = await Promise.all([pA, pRetry]);
+
+    expect(order).toEqual(['A-mutate-start', 'A-write', 'B-response']);
+    expect(retryRes.status).toBe(200);
+
+    const final = await vl.readEntry('retry-lock-1');
+    // A's concurrent xtts + master writes survive — B's deletion was based
+    // on the FRESH (post-A) entry, not a stale pre-lock read.
+    expect(final?.engines.xtts).toEqual({ status: 'ready', coquiVersion: 'v-set-by-A' });
+    expect(final?.master?.durationSeconds).toBe(99);
+    // ...and B's own deletion of the failed qwen slot also landed.
+    expect(final?.engines.qwen).toBeUndefined();
+  });
+});
+
 describe('DELETE /api/voice-library/:voiceUuid', () => {
   /* GATE 1 fix (C3) — the purge's `failed` array now DECIDES whether the
      manifest dir comes off and whether the route answers `deleted: true`, so
