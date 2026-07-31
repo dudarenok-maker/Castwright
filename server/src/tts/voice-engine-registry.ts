@@ -23,10 +23,20 @@ export interface VoiceEngineEntry {
   packageInstalledOnDisk: (repoRoot: string) => boolean;
   /** Model weights present on disk (disk fact). */
   weightsPresentOnDisk: (repoRoot: string) => boolean;
-  /** Live: package importable in the running sidecar. undefined when the health
-      field is absent (older sidecar / sidecar down) — caller treats undefined as
-      "unknown", never as broken. */
-  livePackageImportable: (h: Partial<SidecarHealthResult>) => boolean | undefined;
+  /** Live: the sidecar actually EXECUTED this engine's import statement and it
+      returned (true) / raised (false). undefined when no real attempt has
+      happened yet in that sidecar process, or the field is absent (older
+      sidecar / sidecar down). #1965 — undefined is the COMMON value for kokoro,
+      qwen and whisper: unlike coqui they have no startup pin, so the flag only
+      populates once something tries to load the engine. Callers treat undefined
+      as "unknown" and fall back to liveSpecPresent — NEVER as broken. */
+  liveImportOk: (h: Partial<SidecarHealthResult>) => boolean | undefined;
+  /** Live: the sidecar's `find_spec` probe found the package on the venv path.
+      Weaker than liveImportOk — find_spec never executes the module, so it says
+      "installed" for a package that cannot actually import (#1944). undefined
+      when the health field is absent (older sidecar / sidecar down), which the
+      caller treats as "unknown", never as broken. */
+  liveSpecPresent: (h: Partial<SidecarHealthResult>) => boolean | undefined;
   /** Live: model resident in the sidecar now. */
   liveLoaded: (h: Partial<SidecarHealthResult>) => boolean;
   /** Authored: the engine produces expressive/emotive speech (no code source —
@@ -50,7 +60,8 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     defaultModelKey: 'kokoro-v1',
     packageInstalledOnDisk: (root) => kokoroPackageInstalled(root),
     weightsPresentOnDisk: (root) => detectKokoroInstalledOnDisk(root),
-    livePackageImportable: (h) => h.kokoroPackageInstalled,
+    liveImportOk: (h) => h.kokoroImportOk ?? undefined,
+    liveSpecPresent: (h) => h.kokoroPackageInstalled,
     liveLoaded: (h) => h.kokoroLoaded === true,
     expressive: false,
     genVramFloorMb: 1024,
@@ -61,7 +72,8 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     defaultModelKey: 'qwen3-tts-0.6b',
     packageInstalledOnDisk: (root) => qwenPackageInstalled(root),
     weightsPresentOnDisk: () => qwenWeightsPresent(),
-    livePackageImportable: (h) => h.qwenPackageInstalled,
+    liveImportOk: (h) => h.qwenImportOk ?? undefined,
+    liveSpecPresent: (h) => h.qwenPackageInstalled,
     liveLoaded: (h) => h.qwenLoaded === true,
     expressive: true,
     genVramFloorMb: 6144,
@@ -72,13 +84,14 @@ export const VOICE_ENGINES: VoiceEngineEntry[] = [
     defaultModelKey: 'coqui-xtts-v2',
     packageInstalledOnDisk: (root) => coquiPackageInstalled(root),
     weightsPresentOnDisk: () => coquiWeightsPresent(),
-    /* #1963 — prefer the sticky real-import-attempt signal (coquiImportOk)
-       over the find_spec-only coquiPackageInstalled, which can say
-       "installed" for a package that cannot actually load (the speechbrain
-       lazy-proxy collision, #1944). `??` falls back to coquiPackageInstalled
-       whenever coquiImportOk is null OR absent (an older sidecar) — the
-       null/absent case is deliberately unchanged from today's behaviour. */
-    livePackageImportable: (h) => h.coquiImportOk ?? h.coquiPackageInstalled,
+    /* #1963/#1965 — the sticky real-import-attempt signal (coquiImportOk) and
+       the find_spec probe (coquiPackageInstalled) are reported SEPARATELY; the
+       "prefer importOk, fall back to find_spec" collapse that used to live here
+       now lives once in models-status's packageBroken predicate, so it is not
+       spelled twice. `null` (no real attempt yet) and absent (older sidecar)
+       both read as undefined = unknown. */
+    liveImportOk: (h) => h.coquiImportOk ?? undefined,
+    liveSpecPresent: (h) => h.coquiPackageInstalled,
     liveLoaded: (h) => h.modelLoaded === true,
     expressive: true,
     genVramFloorMb: 4096,

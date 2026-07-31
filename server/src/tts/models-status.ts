@@ -34,14 +34,27 @@ export interface ModelsStatus {
   recommendation: RecommendationSet;
 }
 
-/** Per-engine probe results, gathered by the route handler. `importable` is the
-    live /health find_spec flag: true (importable), false (present-but-broken), or
-    undefined (unknown — sidecar down / older sidecar). */
+/** Per-engine probe results, gathered by the route handler.
+
+    #1965 — the two live signals are kept APART rather than pre-collapsed into a
+    single `importable`, because they are not the same claim:
+
+    - `importOk` — a REAL import statement was executed in the sidecar and
+      returned (true) or raised (false). Sticky per sidecar process.
+    - `specPresent` — the `find_spec` probe. Says the package is on the venv's
+      path; says nothing about whether importing it would actually work (that
+      gap is #1944, the speechbrain lazy-proxy collision).
+
+    `undefined` on EITHER means unknown — sidecar down, older sidecar, or (for
+    `importOk`, the common case) nothing has tried to import that engine yet in
+    this sidecar process. Unknown is never "broken"; see the fail-open rule at
+    voice-engine-registry.ts:26-29. */
 export interface EngineProbeResult {
   packageOnDisk: boolean;
   weightsOnDisk: boolean;
   loaded: boolean;
-  importable: boolean | undefined;
+  importOk: boolean | undefined;
+  specPresent: boolean | undefined;
 }
 
 export interface BuildModelsStatusInput {
@@ -59,9 +72,19 @@ export function buildModelsStatus(input: BuildModelsStatusInput): ModelsStatus {
       weightsPresent: p.weightsOnDisk,
       loaded: p.loaded,
     });
-    // packageBroken: disk says package present, but the live sidecar can't import it.
-    // undefined importable (sidecar down) → not broken-confirmed → false.
-    const packageBroken = p.packageOnDisk && p.importable === false;
+    /* packageBroken: disk says package present, but the live sidecar can't use
+       it. A real failed import is the strongest evidence and wins outright;
+       with no real attempt to trust we fall back to find_spec. Unknown on both
+       axes (sidecar down / older sidecar / engine never loaded) → not
+       broken-confirmed → false.
+
+       #1965 — this is exactly equivalent to the pre-split
+       `packageOnDisk && (importOk ?? specPresent) === false`, which is what
+       makes the split a pure refactor: the `??` collapse used to happen in
+       voice-engine-registry's single accessor and now happens here, once. */
+    const packageBroken =
+      p.packageOnDisk &&
+      (p.importOk === false || (p.importOk === undefined && p.specPresent === false));
     engines[entry.id] = { state, packageBroken };
   }
   return {
