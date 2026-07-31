@@ -447,10 +447,18 @@ async function main() {
   // Pre-flight 5c (#1956): RELEASE_NOTES.md must be free of double-UTF-8
   // mojibake — a corrupted file would otherwise ship the mangle straight to
   // users. --force downgrades to a warning; --dry-run only reports.
+  //
+  // No formatHonouredEcho() call here, unlike the pre-flight 6b block below:
+  // the label is always the literal string 'RELEASE_NOTES.md', and
+  // checkMojibake refuses outright as soon as ANY marker exists for that
+  // label (#1985) — so `mojibakeCheck.honoured` can never be non-empty on
+  // this path, and an echo call here could never print anything. Confirmed
+  // by running this exact CLI end to end against a RELEASE_NOTES.md carrying
+  // a marker (PR #2007 review, Major 2): the run prints the refusal, never
+  // an `[allow]` line. Don't add one back without first changing that
+  // refusal-first invariant.
   if (existsSync(notesPath)) {
     const mojibakeCheck = checkMojibake(readFileSync(notesPath, 'utf8'), 'RELEASE_NOTES.md');
-    const echo = formatHonouredEcho('RELEASE_NOTES.md', mojibakeCheck.honoured);
-    if (echo) info(echo);
     if (!mojibakeCheck.ok) {
       if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
       else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);

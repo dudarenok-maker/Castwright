@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import {
   parseTopReleaseNote,
   isPlaceholderNotes,
@@ -17,6 +19,33 @@ const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\
 const PLACEHOLDER = '# v9.9.9\n\nSee the GitHub release for details.';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// PR #2007 review, Major 2 — every other test in this file calls
+// checkMojibake()/formatHonouredEcho() directly, which pins the HELPER and
+// the DATA but never the WIRING between them at the actual call site. Spawn
+// the real CLI (mirrors the technique bump-version.test.mjs already uses)
+// so a deleted echo call site is caught, not just a broken helper.
+const here = dirname(fileURLToPath(import.meta.url));
+const gateScript = resolve(here, '..', 'release-notes-gate.mjs');
+
+/* repoRootFromHere() inside release-notes-gate.mjs resolves relative to the
+   SCRIPT'S OWN file location, not cwd — so mirroring just the script into a
+   throwaway scripts/ dir is enough to make it treat that tempdir as "the
+   repo" for both RELEASE_NOTES.md and docs/release-notes-next.md. */
+function setupGateFixture() {
+  const dir = mkdtempSync(resolve(tmpdir(), 'release-notes-gate-test-'));
+  mkdirSync(resolve(dir, 'scripts'));
+  writeFileSync(resolve(dir, 'scripts', 'release-notes-gate.mjs'), readFileSync(gateScript, 'utf8'));
+  mkdirSync(resolve(dir, 'docs'));
+  return dir;
+}
+
+function runGate(dir, args) {
+  return spawnSync('node', [resolve(dir, 'scripts', 'release-notes-gate.mjs'), ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+}
 
 test('parseTopReleaseNote reads only the newest section', () => {
   const top = parseTopReleaseNote(REAL);
@@ -494,7 +523,7 @@ test('a marker inside a backtick-fenced code block now arms, and the echo names 
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, true, res.reason); // the fenced marker excuses the span
   assert.deepEqual(res.honoured, [CAFE]);
-  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 marker(s): "${CAFE}"`);
+  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 literal(s): "${CAFE}"`);
 });
 
 // #1990 shape 1 — a `~~~` fence. The old parser only ever tracked ``` lines,
@@ -507,7 +536,7 @@ test('a marker inside a ~~~ fence arms, and the echo names it', () => {
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, true, res.reason);
   assert.deepEqual(res.honoured, [GROSS]);
-  assert.match(formatHonouredEcho('test.md', res.honoured), /honoured 1 marker\(s\)/);
+  assert.match(formatHonouredEcho('test.md', res.honoured), /honoured 1 literal\(s\)/);
 });
 
 // #1990 shape 2 — a 4-space indented code block. There is no fence to track
@@ -611,13 +640,42 @@ test('RELEASE_NOTES.md with no marker still gates mojibake normally', () => {
   assert.deepEqual(res.honoured, []); // no marker present, so nothing to honour
 });
 
+// PR #2007 review, Major 1 — a SUGGESTIBLE span (word-embedded, unlike the
+// standalone em-dash above) must not make the gate print a paste-able marker
+// line for RELEASE_NOTES.md: that label refuses any marker outright (#1985),
+// so following the old "add this line to RELEASE_NOTES.md: ..." advice
+// verbatim just walked the operator into the refusal above on the very next
+// run. This is exactly the shape the standalone-em-dash test above cannot
+// catch, since a standalone span was never suggestible to begin with.
+test('a suggestible span in RELEASE_NOTES.md never advises a paste-able marker line', () => {
+  const res = checkMojibake(`Ships with a ${CAFE} badge.`, 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.doesNotMatch(res.reason, /add this line/);
+  assert.doesNotMatch(res.reason, /<!--/);
+  assert.match(res.reason, /refused outright/);
+  assert.match(res.reason, /re-encode/i);
+  assert.match(res.reason, /--force/);
+  assert.match(res.reason, /bump-version\.mjs-only/);
+  assert.deepEqual(res.honoured, []); // no marker was present to honour
+});
+
+// PR #2007 review, Minor 6 — CONTRIBUTING.md and the header comment both
+// promise the refusal covers "any marker," not merely one that happens to
+// parse a quoted literal. A marker with no literal at all must still refuse.
+test('a marker naming no literal at all is still refused in RELEASE_NOTES.md', () => {
+  const res = checkMojibake('<!-- release-notes-gate: allow -->\nSome text.', 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /refused/);
+  assert.deepEqual(res.honoured, []);
+});
+
 // #1990 — formatHonouredEcho itself: the exact echo wording, and that it is
 // silent (returns null) when nothing was honoured, so a normal, marker-free
 // run prints nothing extra.
 test('formatHonouredEcho names every honoured literal and stays silent otherwise', () => {
   assert.equal(
     formatHonouredEcho('docs/release-notes-next.md', [CAFE, GROSS]),
-    `[allow] docs/release-notes-next.md honoured 2 marker(s): "${CAFE}", "${GROSS}"`,
+    `[allow] docs/release-notes-next.md honoured 2 literal(s): "${CAFE}", "${GROSS}"`,
   );
   assert.equal(formatHonouredEcho('docs/release-notes-next.md', []), null);
   assert.equal(formatHonouredEcho('docs/release-notes-next.md', undefined), null);
@@ -630,7 +688,7 @@ test('checkMojibake reports honoured markers even when the gate passes', () => {
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, true, res.reason);
   assert.deepEqual(res.honoured, [CAFE]);
-  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 marker(s): "${CAFE}"`);
+  assert.equal(formatHonouredEcho('test.md', res.honoured), `[allow] test.md honoured 1 literal(s): "${CAFE}"`);
 });
 
 // #1990 — the echo also fires on a FAILING run: a marker that excuses nothing
@@ -667,4 +725,28 @@ test('CRLF line endings do not break marker parsing or the mojibake scan', () =>
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, true, res.reason);
   assert.deepEqual(res.honoured, [CAFE]);
+});
+
+// PR #2007 review, Major 2 — the CLI's own call site (the for-loop over
+// mojibakeTargets that prints formatHonouredEcho's result on every run, pass
+// or fail) had no test targeting it at all: every test above calls
+// checkMojibake()/formatHonouredEcho() directly, so a deleted `if (echo)
+// process.stdout.write(...)` line was invisible to the whole suite.
+// docs/release-notes-next.md (not RELEASE_NOTES.md, which refuses a marker
+// outright) is where a real marker can actually be honoured and echoed.
+test('the CLI echoes an honoured marker in docs/release-notes-next.md on stdout', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.0\n\n- Ships with a ${CAFE} badge.\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
+    assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

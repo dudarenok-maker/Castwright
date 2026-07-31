@@ -61,13 +61,20 @@ export const STEPS = [
          gate against those real committed files at RUNTIME (#1956) — same
          #1847 trap as fixtures/** above: without them, a notes-only diff
          (exactly the shape that would reintroduce the corruption) never
-         busts this step's input hash and the assertion sits stale-green. */
+         busts this step's input hash and the assertion sits stale-green.
+         bump-version.mjs is the same trap (PR #2007 review, Minor 9):
+         bump-version.test.mjs reads it as TEXT at RUNTIME (mirrors it into a
+         throwaway repo, see `setupRepo`), not via a module-graph edge, so a
+         bump-version.mjs-only diff would otherwise leave this step
+         stale-green locally (CI is unaffected: verify.yml's `^scripts/`
+         match already covers it). */
       extraFiles: [
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
         'RELEASE_NOTES.md',
         'docs/release-notes-next.md',
         'scripts/release-notes-gate.mjs',
+        'scripts/bump-version.mjs',
       ],
       includeLockfiles: ['root'],
     },
