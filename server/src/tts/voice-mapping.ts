@@ -12,6 +12,7 @@
 import type { TtsEngine } from './index.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { isCloneEngine, cloneStorageKey, libraryVoiceForEngine } from './clone-engines.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 
 /* srv-43 — the on-disk/sidecar STORAGE key for a bespoke Qwen voice. Prefers
    the immutable voiceUuid (globally unique → no cross-series collision); else
@@ -437,8 +438,7 @@ function inferProfile(voice: VoiceLike, hint?: CharacterHint): VoiceProfile {
      gender). Match by id or by name so generated and library voices both
      resolve here. */
   const isNarrator =
-    voice.id === 'narrator' ||
-    voice.id === 'char-narrator' ||
+    NARRATOR_CHARACTER_IDS.includes(voice.id) ||
     (voice.character ?? '').toLowerCase() === 'narrator';
   const isExplicitlyGendered = hint?.gender === 'male' || hint?.gender === 'female';
   if (isNarrator && !isExplicitlyGendered) {

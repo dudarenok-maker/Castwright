@@ -206,6 +206,13 @@ describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
     expect(merged.find((c) => c.id === 'wren')!.name).toBe('Wren');
   });
+
+  it('carries forward a user-renamed narrator across reparse — char-narrator id (#1895)', () => {
+    const existing = [{ id: 'char-narrator', name: 'The Bard', voiceStyle: 'crisp herald' }];
+    const fresh = [{ id: 'char-narrator', name: 'Erzähler', role: 'narrator', color: 'narrator' }];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.find((c) => c.id === 'char-narrator')!.name).toBe('The Bard');
+  });
 });
 
 describe('seedReuseGuardsFromPriorCast', () => {
@@ -427,6 +434,21 @@ describe('dedupePriorCastByName', () => {
     ];
     const { cast } = dedupePriorCastByName(prior);
     expect(cast).toHaveLength(2);
+  });
+
+  it('excludes a char-narrator row from grouping even when a REAL character shares its name (#1895)', () => {
+    /* Discriminating fixture: unlike the narrator-vs-narrator pair above (a
+       size-1 group either way, so it can't tell isNarrator's id-check apart
+       from a no-op), this narrator shares its name with an UNRELATED real
+       character. If 'char-narrator' were ever NOT recognised as a narrator
+       id, it would fall into the same name-group as 'sasha-2' (group size
+       2) and get collapsed away — losing the narrator row entirely. */
+    const prior: C[] = [
+      { id: 'char-narrator', name: 'Sasha', voiceState: 'tuned' },
+      { id: 'sasha-2', name: 'Sasha', voiceState: 'generated' },
+    ];
+    const { cast } = dedupePriorCastByName(prior);
+    expect(cast.map((c) => c.id).sort()).toEqual(['char-narrator', 'sasha-2']);
   });
 
   it('leaves distinct names untouched and preserves order', () => {

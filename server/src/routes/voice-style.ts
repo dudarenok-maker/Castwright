@@ -23,6 +23,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
@@ -32,12 +33,12 @@ interface CastFile {
   characters: CastCharacter[];
 }
 
-/* Narrator detection mirrors routes/voices.ts:isNarratorId — by id
-   ('narrator' / 'char-narrator') or by name. The narrator stays on a
-   Kokoro preset (plan 108), so it has no bespoke persona by default. */
+/* Narrator detection mirrors routes/voices.ts:isNarratorId — by id (the
+   shared NARRATOR_CHARACTER_IDS pair, #1895) or by name. The narrator stays
+   on a Kokoro preset (plan 108), so it has no bespoke persona by default. */
 function isNarrator(c: CastCharacter): boolean {
   const lid = (c.id ?? '').toLowerCase();
-  if (lid === 'narrator' || lid === 'char-narrator') return true;
+  if (NARRATOR_CHARACTER_IDS.includes(lid)) return true;
   return (c.name ?? '').toLowerCase() === 'narrator';
 }
 

@@ -12,10 +12,10 @@
    bespoke designed voice, so including it would swamp the threshold and
    defeat the point. */
 
-const NARRATOR_IDS = new Set(['narrator', 'char-narrator']);
+import { NARRATOR_CHARACTER_IDS } from './narrator-ids';
 
 function isNarrator(id: string, name?: string): boolean {
-  if (NARRATOR_IDS.has(id.toLowerCase())) return true;
+  if (NARRATOR_CHARACTER_IDS.includes(id.toLowerCase())) return true;
   return (name ?? '').toLowerCase() === 'narrator';
 }
 

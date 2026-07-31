@@ -1088,6 +1088,38 @@ describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
   });
 });
 
+describe('GET /api/voices — isNarratorId recognises both narrator id shapes (#1895)', () => {
+  /* A standalone book whose narrator carries the promoted-cast-row id
+     'char-narrator' rather than the bare 'narrator'. Name deliberately does
+     NOT literal-match "Narrator" — isolates the id-based branch of
+     isNarratorId (drives the `reusable` flag) from its by-name fallback. */
+  let narratorBookId: string;
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    narratorBookId = paths.makeBookId('Narrator Author', 'Standalones', 'Narrator Book');
+    writeBookOnDisk(
+      workspaceRoot,
+      'Narrator Author',
+      'Standalones',
+      'Narrator Book',
+      narratorBookId,
+      [{ id: 'char-narrator', name: 'The Storyteller', role: 'narrator', color: 'narrator' }],
+      true /* isStandalone */,
+    );
+  });
+
+  it('marks a char-narrator voice reusable, same as a bare-narrator one', async () => {
+    const res = await request(app).get('/api/voices');
+    expect(res.status).toBe(200);
+    const voice = res.body.voices.find(
+      (v: { id: string; bookId: string }) => v.id === 'char-narrator' && v.bookId === narratorBookId,
+    );
+    expect(voice).toBeDefined();
+    expect(voice.reusable).toBe(true);
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override', () => {
   it('writes the override into overrideTtsVoices[engine] across every cast.json sharing the voiceId', async () => {
     const res = await request(app)

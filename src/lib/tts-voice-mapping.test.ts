@@ -47,6 +47,15 @@ describe('inferProfile', () => {
     ).toBe('narrator-cool');
   });
 
+  it('routes the char-narrator id with high warmth to narrator-warm — the promoted-cast-row twin of "narrator" (#1895)', () => {
+    expect(
+      inferProfile({
+        id: 'char-narrator',
+        tone: { warmth: 70, pace: 50, authority: 40, emotion: 50 },
+      }),
+    ).toBe('narrator-warm');
+  });
+
   it('respects explicit female gender even on the narrator id', () => {
     /* The narrator short-circuit only fires when no gender is set —
        once the user picks one, the bucket should follow gender×register. */

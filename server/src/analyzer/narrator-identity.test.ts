@@ -65,6 +65,12 @@ describe('applyNarratorIdentity', () => {
     expect(twice).toEqual(once);
   });
 
+  it('also recognises the char-narrator id — the promoted-cast-row twin of "narrator" (#1895)', () => {
+    const out = applyNarratorIdentity([narrator({ id: 'char-narrator' })], 'de')[0];
+    expect(out.name).toBe('Erzähler');
+    expect(out.aliases).toEqual(['Narrator']);
+  });
+
   it('is a no-op with no narrator, and falls back to Narrator for unknown language', () => {
     expect(applyNarratorIdentity([hero()], 'de')).toEqual([hero()]);
     expect(applyNarratorIdentity([narrator()], 'zz')[0].name).toBe('Narrator');
