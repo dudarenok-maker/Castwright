@@ -478,8 +478,13 @@ export async function encodePcmToAudio(
 
   /* Loudness-stats callback fires AFTER the encode succeeds — that way a
      failed encode doesn't leave a `.lufs.json` sidecar describing audio
-     that never landed on disk. Awaited so caller-supplied write errors
-     surface as rejections from this function rather than unhandled. */
+     that never landed on disk. Awaited to keep ordering deterministic: the
+     only caller (finalize-chapter-write.ts) just captures `stats` into a
+     local for the real ebur128 re-measurement + single sidecar write that
+     happen after this function returns (plan 274 T1) — no write happens
+     inside the callback itself — but awaiting still means any future
+     callback error would surface as a rejection from this function rather
+     than going unhandled. */
   if (pendingSidecar && opts.onLoudnessMeasured) {
     await opts.onLoudnessMeasured(pendingSidecar);
   }
