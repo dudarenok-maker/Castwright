@@ -1882,39 +1882,60 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    artifact sweep both genuinely ran; this is a partial outcome, not an
    error. `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` are the same
    two fields the revoke route above already carries (Task 14a), deliberately
-   reused rather than a second, delete-only signal. */
+   reused rather than a second, delete-only signal.
+
+   #1981 — the whole scan -> clear -> erase sequence (`readEntry` and its
+   404, `scanLibraryVoiceUsage`, `clearLibraryVoiceReferences`,
+   `eraseLibraryVoiceArtifacts`) is wrapped in `withLibraryVoiceLock`,
+   symmetric with `POST /:voiceUuid/assign`'s own use of the same key: that
+   is what closes the erase-vs-assign race (the scan can pass a book, an
+   assign then plants a reference in it, the artifacts get erased afterwards
+   — a character left pointing at a `libraryUuid` whose files are gone).
+   `library-voice` opens before `readEntry` (not just before the scan) for
+   the same rule-2 reason `/assign` states in its own comment: the 404 is a
+   decision derived from the library entry, so it belongs inside the lock
+   too — even though two concurrent DELETEs racing this window is itself
+   harmless (the second finds nothing left to erase).
+   `clearLibraryVoiceReferences` (workspace/voice-library-usage.ts) takes a
+   `withCastLock` per book INSIDE this lock, never the other way — this is
+   `library-voice -> cast`, matching cast-lock.ts's rule 4/global order, and
+   the same order `/assign` takes; either route taking the two locks in the
+   opposite order would AB/BA-deadlock the other, with no timeout and no
+   diagnostic (see cast-lock.ts's header). */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
+  const { voiceUuid } = req.params;
   try {
-    const { voiceUuid } = req.params;
-    const existing = await readEntry(voiceUuid);
-    if (!existing) {
-      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
-    }
+    return await withLibraryVoiceLock(voiceUuid, async () => {
+      const existing = await readEntry(voiceUuid);
+      if (!existing) {
+        return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+      }
 
-    const confirmed = req.query.confirm === '1';
-    const usage = await scanLibraryVoiceUsage(voiceUuid);
-    if (usage.length > 0 && !confirmed) {
-      return res.status(409).json({ usage });
-    }
+      const confirmed = req.query.confirm === '1';
+      const usage = await scanLibraryVoiceUsage(voiceUuid);
+      if (usage.length > 0 && !confirmed) {
+        return res.status(409).json({ usage });
+      }
 
-    if (usage.length > 0) {
-      await clearLibraryVoiceReferences(voiceUuid);
-    }
-    const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
-    if (purgeResult.failed.length > 0) {
-      console.warn(
-        `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
-          `un-erased — the entry is RETAINED so the consent gates still cover them:`,
-        purgeResult.failed,
-      );
-      return res.status(200).json({
-        deleted: false,
-        artifactPurgeIncomplete: true,
-        artifactPurgeFailedPaths: purgeResult.failed,
-      });
-    }
+      if (usage.length > 0) {
+        await clearLibraryVoiceReferences(voiceUuid);
+      }
+      const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
+      if (purgeResult.failed.length > 0) {
+        console.warn(
+          `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+            `un-erased — the entry is RETAINED so the consent gates still cover them:`,
+          purgeResult.failed,
+        );
+        return res.status(200).json({
+          deleted: false,
+          artifactPurgeIncomplete: true,
+          artifactPurgeFailedPaths: purgeResult.failed,
+        });
+      }
 
-    res.status(200).json({ deleted: true });
+      return res.status(200).json({ deleted: true });
+    });
   } catch (e) {
     console.error('[voice-library] delete failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library delete failed.' });

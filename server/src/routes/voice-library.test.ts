@@ -679,6 +679,62 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
       .send({ text: 'Hello.' });
     expect(sample.status).toBe(403);
   });
+
+  /* #1981 — the filed defect: the usage scan can pass a book, an assign can
+     then plant a reference in that book, and the artifacts are erased
+     afterwards — leaving a character pointing at a libraryUuid whose files
+     are gone. `alice` starts unassigned so the assign has something to plant
+     mid-delete; the delete is unconditionally confirmed since the race is
+     about ordering, not the pre-flight 409. */
+  it('does not leave a dangling reference when an assign races a voice delete', async () => {
+    const uuid = 'race-erase-assign';
+    const artifacts = await seedFullVoiceArtifacts(uuid);
+    const bookId = 'book-erase-assign-race';
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      { id: 'alice', name: 'Alice' },
+    ]);
+
+    await Promise.all([
+      request(app).delete(`/api/voice-library/${uuid}?confirm=1`),
+      request(app).post(`/api/voice-library/${uuid}/assign`)
+        .send({ bookId, characterId: 'alice' }),
+    ]);
+
+    const cast = await readJson<CastJson>(castJsonPath(bookDir));
+    const alice = cast?.characters?.find((c) => c.id === 'alice');
+    const stillReferenced = alice?.overrideTtsVoices?.qwen?.libraryUuid === uuid;
+    const artifactsGone = !existsSync(artifacts.ptPath);
+    /* Either the assign lost (no reference) or it won (artifacts still there).
+       Never both. */
+    expect(stillReferenced && artifactsGone).toBe(false);
+  });
+
+  /* #1981 finding 2 (Task 4 review) — nothing exercised the `library-voice`
+     lock itself, or the global `library-voice -> cast` order across the two
+     routes that both take it (POST /assign and this DELETE). Both sides take
+     the SAME order, so this can't AB/BA today — but if a future edit ever
+     inverted either side, the two would deadlock on cast-lock.ts's
+     no-timeout mutex with no diagnostic (see its header, rule 4). Race
+     against a timeout sentinel, mirroring cast-lock.test.ts's own AB/BA
+     test, so a regression fails fast in CI instead of hanging the run. */
+  it('#1981 — a DELETE and an assign contending on the same uuid never deadlock', async () => {
+    const uuid = 'race-lock-order';
+    await seedFullVoiceArtifacts(uuid);
+    const bookId = 'book-lock-order';
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      { id: 'alice', name: 'Alice' },
+    ]);
+
+    const result = await Promise.race([
+      Promise.all([
+        request(app).delete(`/api/voice-library/${uuid}?confirm=1`),
+        request(app).post(`/api/voice-library/${uuid}/assign`)
+          .send({ bookId, characterId: 'alice' }),
+      ]).then(() => 'settled'),
+      new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+    ]);
+    expect(result).toBe('settled');
+  });
 });
 
 /* Task 10 — POST /:voiceUuid/sample. Mirrors POST /api/voices/:voiceId/sample

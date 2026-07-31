@@ -12,6 +12,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { withCastLock } from './cast-lock.js';
 import type { BookStateJson } from './scan.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
@@ -89,28 +90,46 @@ export async function scanLibraryVoiceUsage(voiceUuid: string): Promise<LibraryV
     surfaces "needs a voice"). Sibling engine slots and every other
     character/book are left untouched. Only writes a cast.json that
     actually changed. Called by the DELETE route after usage is confirmed
-    (or when the voice turns out to be unused, where this is a no-op). */
-export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<void> {
-  for await (const { bookDir, cast } of walkConfirmedCasts()) {
-    let dirty = false;
-    const characters = (cast.characters ?? []).map((c) => {
-      const overrides = c.overrideTtsVoices;
-      if (!overrides) return c;
-      const next = { ...overrides };
-      let changed = false;
-      for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
-        if (overrides[engine]?.libraryUuid === voiceUuid) {
-          delete next[engine];
-          changed = true;
-        }
-      }
-      if (!changed) return c;
-      dirty = true;
-      return { ...c, overrideTtsVoices: next };
-    });
+    (or when the voice turns out to be unused, where this is a no-op).
 
-    if (dirty) {
-      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
-    }
+    #1981 — the whole per-book read-modify-write is wrapped in `withCastLock`,
+    re-reading `castJsonPath(bookDir)` fresh inside the lock rather than using
+    the `cast` `walkConfirmedCasts()` yielded: that snapshot is read OUTSIDE
+    any lock (both here and in the read-only `scanLibraryVoiceUsage` above,
+    which shares the same walker) and is stale by the time this function's
+    write lands — a concurrent write to the SAME book (e.g. an overlapping
+    `/assign`) between the walker's read and this write would otherwise be
+    silently replayed over. The DELETE route (`routes/voice-library.ts`)
+    holds `library-voice:<uuid>` across this whole call, which is why this
+    only ever needs a PER-BOOK cast lock, not a `withCastLocks` across every
+    book at once — rule 1 (one level of locking) still holds because nothing
+    else in this call chain also takes a cast lock. */
+export async function clearLibraryVoiceReferences(voiceUuid: string): Promise<void> {
+  for await (const { bookDir } of walkConfirmedCasts()) {
+    await withCastLock(bookDir, async () => {
+      const cast = await readJson<CastJson>(castJsonPath(bookDir));
+      if (!cast) return;
+
+      let dirty = false;
+      const characters = (cast.characters ?? []).map((c) => {
+        const overrides = c.overrideTtsVoices;
+        if (!overrides) return c;
+        const next = { ...overrides };
+        let changed = false;
+        for (const engine of Object.keys(overrides) as (keyof typeof overrides)[]) {
+          if (overrides[engine]?.libraryUuid === voiceUuid) {
+            delete next[engine];
+            changed = true;
+          }
+        }
+        if (!changed) return c;
+        dirty = true;
+        return { ...c, overrideTtsVoices: next };
+      });
+
+      if (dirty) {
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
+      }
+    });
   }
 }
