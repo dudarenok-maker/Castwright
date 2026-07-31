@@ -555,8 +555,11 @@ CTA is rendered when one exists" is satisfiable by a single always-on button:
 
 - each reason renders its own CTA and no other;
 - `revoked` / `missing-master` render explanatory copy and **no** CTA;
-- "Cast on other engine" is **hidden** when the character lacks the other engine's
-  cast slot.
+- **[R4]** "Cast on _<engine>_" is **hidden** when `castOnEngine` is null, and
+  when it is non-null the button **names that engine** — a Kokoro-routed
+  character cloned only on Coqui must read "Cast on Coqui", not "Cast on Qwen"
+  and not a generic label. A test asserting only that *some* re-cast button
+  appears passes against the blind-swap bug this replaced.
 
 **Decisions 6 & 7 (`server/src/routes/voice-library.test.ts`)**
 
