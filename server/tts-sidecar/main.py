@@ -1235,6 +1235,50 @@ def _record_coqui_import_result(ok: bool) -> None:
     _COQUI_IMPORT_OK = ok
 
 
+# (#1965) The same sticky, real-attempt import status for the other three
+# engines whose `/health` story is otherwise a `find_spec`-only probe. Each is
+# recorded OPPORTUNISTICALLY — at the single import chokepoint the engine
+# already runs on its own cold-load path — so none of them adds startup work.
+# Coqui's eager `_pin_coqui_import_order` costs a measured +11.7 s of
+# sidecar-unreachable boot; paying that per engine is not worth it.
+#
+# Honest ceiling, shared by all four: a sticky flag only populates once
+# something actually tries to load. On an install that never renders with
+# Kokoro, `_KOKORO_IMPORT_OK` stays `None` for ever and the caller's
+# `find_spec` fallback governs, exactly as before. This narrows the window in
+# which a find_spec probe can advertise an unloadable engine; it does not
+# close it.
+_KOKORO_IMPORT_OK: Optional[bool] = None
+
+# NOTE the deliberately narrow claim: `True` here means "`from qwen_tts import
+# Qwen3TTSModel` returned", NOT "the Qwen engine loaded". `_load_qwen_model`
+# continues past the import into `from_pretrained`, a manual `.to(device)`
+# move and a documented intermittent meta-tensor retry loop, any of which can
+# still fail with the import perfectly healthy. Do not let this flag (or a
+# field derived from it) grow a name that claims more than the import — a
+# field claiming more than it knows is the whole subject of #1965. `torch` is
+# imported separately from `qwen_tts` at that chokepoint so a missing PyTorch
+# is never mis-recorded as a broken qwen-tts package.
+_QWEN_IMPORT_OK: Optional[bool] = None
+
+_WHISPER_IMPORT_OK: Optional[bool] = None
+
+
+def _record_kokoro_import_result(ok: bool) -> None:
+    global _KOKORO_IMPORT_OK
+    _KOKORO_IMPORT_OK = ok
+
+
+def _record_qwen_import_result(ok: bool) -> None:
+    global _QWEN_IMPORT_OK
+    _QWEN_IMPORT_OK = ok
+
+
+def _record_whisper_import_result(ok: bool) -> None:
+    global _WHISPER_IMPORT_OK
+    _WHISPER_IMPORT_OK = ok
+
+
 class CoquiEngine(Engine):
     """Coqui XTTS v2 via the `TTS` package. The model is loaded once on first
     call. XTTS speaks ~24 kHz; we down/up nothing — emit at native rate and
@@ -2419,7 +2463,31 @@ class CoquiEngine(Engine):
         which Property 2's purge path already reaches via `_voice_paths`.
         """
         import torch  # noqa: PLC0415  — never `self._torch`, unload() nulls it (AC-I3)
-        import TTS as _tts_pkg  # noqa: PLC0415
+
+        # (#1965) This `import TTS` runs BEFORE `_ensure_loaded` below, so on a
+        # broken Coqui install it is the frame that raises — and it used to do
+        # so without recording anything, leaving `coqui_import_ok` at None on
+        # exactly the #1944 failure shape. Record the FAILURE here (any
+        # exception class, per #1962 review finding 3) and re-raise unchanged.
+        #
+        # Deliberately does NOT record success: `import TTS` is a strictly
+        # weaker import than the `from TTS.api import TTS` the flag documents —
+        # the speechbrain lazy-proxy collision fires inside `TTS.api`'s own
+        # import chain, which this package-level import never enters. Claiming
+        # True off it would be the overclaim #1965 is about. The success case
+        # needs no help anyway: `_ensure_loaded` on the next line does the real
+        # import and records it either way.
+        try:
+            import TTS as _tts_pkg  # noqa: PLC0415
+        except BaseException:
+            _record_coqui_import_result(False)
+            raise
+
+        # (#1967, PR #1978) Deliberately OUTSIDE the recording wrapper above:
+        # `xtts_audio_io` is our own shim, not the Coqui package, so a failure
+        # here says nothing about whether coqui-tts imports. Recording it as
+        # `coqui_import_ok = False` would be the same mis-attribution #1965
+        # separated `torch` out of `_load_qwen_model` to avoid.
         from xtts_audio_io import patched_xtts_load_audio  # noqa: PLC0415
 
         self._ensure_loaded(model, device=device)
@@ -2712,7 +2780,20 @@ class KokoroEngine(Engine):
             self._requested_device = device
         try:
             from kokoro_onnx import Kokoro  # type: ignore
-        except ImportError as e:
+            _record_kokoro_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui). A duplicate kernel-registration
+            # RuntimeError out of the onnxruntime/torch stack is NOT an
+            # ImportError, so an ImportError-only record would leave
+            # `kokoro_import_ok` at None (or stale True) while the engine is
+            # genuinely unstartable — which is precisely the "advertises an
+            # engine that cannot start" defect this flag exists to close.
+            # Non-ImportError failures re-raise unchanged so their own
+            # diagnostic isn't swallowed by the kokoro-onnx install message.
+            _record_kokoro_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
             # Profile-aware remediation: the right ONNX-runtime package depends on
             # this box's accelerator profile (injected as CASTWRIGHT_ACCELERATOR_
             # PROFILE), not a hard-coded "needs an NVIDIA GPU".
@@ -3456,6 +3537,98 @@ class ReservationLedger:
             return best_key
 
 
+# #1993 review (n11) — `gc.collect()` + `empty_cache()` failures are
+# best-effort and swallowed (see the docstring below), but a broken CUDA
+# context can make EVERY admission fail, and the retry loop
+# (`GPU_CAPACITY_MAX_ATTEMPTS`, up to 30 attempts) would otherwise log a full
+# traceback on each one. Latched module-level: the first failure logs
+# `exc_info=True`, every one after that in this process logs the message
+# only. Never resets — if CUDA is broken it stays broken until restart, so a
+# second full trace teaches nothing the first didn't already say.
+_reclaim_failure_traced = False
+
+
+def _reclaim_device_cache(device_key: str) -> None:
+    """Bare `gc.collect()` + `torch.cuda.empty_cache()`, with no target model
+    to unload first (#1976).
+
+    Every reclaim ELSEWHERE in this file — `unload()`, `unload_design()`,
+    `maybe_free_idle*` (Qwen/Coqui), the `_idle_evict_steps` ladder — is a
+    side effect of freeing a specific *resident* model's tensors; that
+    residency check is what makes their own `empty_cache()` call effective
+    (there's something just-freed for it to return to the driver). But a
+    chapter render leaves a caching-allocator pool behind on the render card
+    even after the engine reports unloaded: the model itself was already
+    freed and `empty_cache()`'d at unload time, yet the driver still shows
+    several GB reserved on that card (measured ~3.9 GB, #1976's table) —
+    fully reclaimable (a load/unload cycle on the SAME stranded state
+    recovered it), just never reclaimed, because nothing is resident anymore
+    for any existing reclaim path to key off. This function is the only one
+    of the shape "reclaim regardless of what (if anything) is resident" —
+    see `PlacementController._reclaim_stranded_cache` for why it runs as its
+    own last-resort phase, once, only on the admission-failure path, rather
+    than as another `_idle_evict_steps` entry.
+
+    `device_key` does NOT scope which device's cache gets freed (#1993
+    review M2 — corrects this docstring's earlier, wrong claim). Verified
+    against the installed torch 2.11.0+cu128: `torch.cuda.empty_cache()`
+    takes no device argument, and neither does `torch._C._cuda_emptyCache()`
+    underneath it — `NativeCachingAllocator::emptyCache()` loops every
+    device's allocator internally. An earlier version of this function
+    wrapped the call in `with torch.cuda.device(idx):`, which did nothing to
+    scope it (the call ignores torch's "current device" concept entirely) —
+    removed rather than left in place implying a guarantee that was never
+    real. `device_key` is kept as the parameter only for the log message
+    below and as the seam the tests inject a fake `reclaim` hook through
+    (`PlacementController.__init__`'s `reclaim=`); see
+    `PlacementController._reclaim_stranded_cache` for the two guards
+    (in-use check + per-device cooldown) that exist BECAUSE this call is
+    global, not despite it — freeing another device's cache while a real op
+    is running there forces that op to pay a fresh `cudaMalloc`, and
+    `cudaFree` synchronises the whole device, not just one card.
+
+    `gc.collect()` first (but only once CUDA is confirmed available, #1993
+    review m9 — a CPU-only box shouldn't pay a full-heap collection on every
+    failed admission), same reasoning as `unload()`: dropped `nn.Module`
+    reference cycles keep their tensors alive past a plain `del`/None
+    assignment until the collector runs, which would otherwise make
+    `empty_cache()` a no-op. Safe to run even when something else IS
+    resident on ANY device — `empty_cache()` only returns cache blocks the
+    allocator holds but nothing currently references; it can never evict a
+    live model's own tensors. That half of the old "never competes" claim
+    stays true; the "with a real resident model's memory" half does not (see
+    above) — it competes for cycles and for the freshly-emptied cache blocks
+    themselves, just never for a live tensor.
+
+    Best-effort: any torch/CUDA failure (no CUDA build, a poisoned context) is
+    swallowed here, matching every other reclaim path in this file — this is
+    a last-resort cushion, not a step whose failure should propagate."""
+    global _reclaim_failure_traced
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception:
+        log.warning(
+            "stranded-cache reclaim failed for %s",
+            device_key,
+            exc_info=not _reclaim_failure_traced,
+        )
+        _reclaim_failure_traced = True
+
+
+# #1993 review (C1) — the per-device reclaim cooldown. A module constant, not
+# an env knob: this isn't an operator-facing tunable (per CLAUDE.md, a new
+# knob needs a config-registry entry + wiki row; this doesn't rise to that —
+# there's one defensible value, not a tradeoff an operator would want to
+# make), just a guard against the retry-storm shape below. See
+# `PlacementController._reclaim_stranded_cache` for why it exists.
+_RECLAIM_COOLDOWN_SECONDS = 30.0
+
+
 class PlacementController:
     """Capacity-aware admission: decides which device (or cpu, or no
     capacity) a model load / synth op may proceed on, and reserves the
@@ -3470,6 +3643,7 @@ class PlacementController:
         reserve_mb: Optional[Callable[[], int]] = None,
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
+        reclaim: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.probe = probe
         self.footprints = footprints if footprints is not None else FootprintTable()
@@ -3480,6 +3654,13 @@ class PlacementController:
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+        # #1976 — injectable so tests can assert call count / sequence a fake
+        # probe against without a real allocator; see `_reclaim_stranded_cache`.
+        self.reclaim = reclaim if reclaim is not None else _reclaim_device_cache
+        # #1993 review (C1) — last `time.monotonic()` a reclaim actually ran,
+        # per device_key. Read/written only by `_reclaim_stranded_cache`'s
+        # cooldown guard; see there for why.
+        self._last_reclaim: dict[str, float] = {}
         # Serialises the admission-RESOLUTION phase only (probe -> try_hold ->
         # evict -> resolve) across concurrent `reservation()` calls (plan 273,
         # T4) — NOT the `yield`/`finally` (that would serialise every op
@@ -3517,7 +3698,19 @@ class PlacementController:
         Node should try to free the analyzer's share from, since it's where an
         evict is likeliest to cross the threshold. None if the probe shows no
         GPU. (Diverges deliberately from an earlier 'largest shortfall' note:
-        max-headroom is the recoverable device, not the least-recoverable one.)"""
+        max-headroom is the recoverable device, not the least-recoverable one.)
+
+        #1993 review (M3) — on a multi-GPU box this is systematically the
+        WRONG card to target for `_reclaim_stranded_cache` (#1976): a
+        stranded caching-allocator pool REDUCES a device's apparent headroom,
+        so the device holding one is the one this function is least likely
+        to pick. Demonstrated on a two-device simulation
+        (`test_reclaim_target_is_the_wrong_card_on_a_two_device_box` in
+        test_placement.py): pool on cuda:0, this returns cuda:1. Harmless in
+        practice only because `_reclaim_device_cache` reclaims EVERY device's
+        cache, not just the passed-in one (#1993 review M2) — so the wrong
+        pick still frees the right pool as a side effect. Do not read
+        "reclaim target" as "the device whose cache gets freed"; it isn't."""
         reserve_cap = self.reserve_mb()
         best_key: Optional[str] = None
         best_headroom: Optional[int] = None
@@ -3583,6 +3776,56 @@ class PlacementController:
                 return got
         return None
 
+    async def _reclaim_stranded_cache(self, device_key: str) -> None:
+        """The #1976 last-resort reclaim: a bare `gc.collect()` +
+        `torch.cuda.empty_cache()`, called by `admit()` /
+        `_resolve_admission()` AFTER `_evict_until`'s residency ladder has
+        already run and failed.
+
+        Deliberately NOT another `_idle_evict_steps` entry (see that
+        function's own #1976 note for the full reasoning): this reclaim has
+        no residency precondition — there's no "nothing loaded here, skip"
+        case for it the way every real eviction step has — so it belongs
+        outside that per-engine, cheapest-reload-first list, as its own
+        unconditional final phase instead.
+
+        Two guards (#1993 review C1) sit in front of the actual reclaim —
+        each is a plain early return, so `admit()`/`_resolve_admission()`
+        need no changes of their own to get both:
+
+        1. **In use → skip.** `ledger.engines_holding(device_key)` is the
+           existing "don't touch what's in flight" authority (#1920B,
+           already used by `_evict_until` for the identical reasoning). A
+           STRANDED pool is by definition one nothing is using — if this
+           returns non-empty, `device_key` isn't stranded, it's live, and
+           reclaiming would instead be racing `_reclaim_device_cache`'s
+           process-wide `empty_cache()` (#1993 review M2) against that op's
+           own allocator.
+        2. **Cooldown → skip.** `_RECLAIM_COOLDOWN_SECONDS` per `device_key`.
+           Without this, a genuine `noCapacity` 503 gets retried by Node's
+           `withCapacityRetry` (`server/src/gpu/capacity-retry.ts`) up to
+           `GPU_CAPACITY_MAX_ATTEMPTS` (default 30) every
+           `GPU_CAPACITY_POLL_MS` (default 2000ms) — EVERY retry re-enters
+           here, so an unrelated refused op (an ASR transcribe, a voice
+           design) during a chapter render would fire up to 30
+           `gc.collect()` + `empty_cache()` cycles into the render's own
+           allocator, each one running under `reservation()`'s
+           `_admit_lock` and each one's `cudaFree` implicitly synchronising
+           the device.
+
+        Runs on a worker thread via `asyncio.to_thread`, same reasoning as
+        every `step.run()` in `_evict_until`: `empty_cache()` can block on
+        the CUDA allocator's own lock, and this must not stall the event
+        loop (`/health` etc.) any more than a real eviction step would."""
+        if self.ledger.engines_holding(device_key):
+            return
+        now = time.monotonic()
+        last = self._last_reclaim.get(device_key)
+        if last is not None and (now - last) < _RECLAIM_COOLDOWN_SECONDS:
+            return
+        self._last_reclaim[device_key] = now
+        await asyncio.to_thread(self.reclaim, device_key)
+
     async def admit(
         self,
         engine: str,
@@ -3642,6 +3885,19 @@ class PlacementController:
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
         # yet resident) op needs Node to evict from ITS pinned card too.
         device_key = resident if resident is not None else (pinned if pinned is not None else worst)
+        # Last resort before reporting noCapacity (#1976): `_evict_until` above
+        # only frees RESIDENT engines — a stranded, reserved-but-unallocated
+        # pool left behind by an earlier unload has nothing there for it to
+        # evict, so it falls straight through unreclaimed even after the whole
+        # ladder ran. One bare reclaim + one re-probe, only here on the
+        # failure path, so a stranded pool can never by itself cause a refusal.
+        if device_key is not None:
+            await self._reclaim_stranded_cache(device_key)
+            key = self.ledger.best_fit(
+                self._gpu_candidates(self.probe(), constraint), peak, reserve_cap
+            )
+            if key is not None:
+                return {"device": key}
         return {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
 
     @staticmethod
@@ -3712,6 +3968,23 @@ class PlacementController:
                 held = await self._evict_until(worst, engine, _fits)
             if held is None:
                 devices = self.probe()
+                # Last resort before noCapacity (#1976) — see `admit()`'s twin
+                # step / `_reclaim_stranded_cache`'s docstring: `_evict_until`
+                # above only frees RESIDENT engines, so a stranded,
+                # reserved-but-unallocated pool left behind by an earlier
+                # unload survives the whole ladder untouched. One bare
+                # reclaim + one re-probe + one re-`try_hold`, only here on the
+                # failure path, so a stranded pool can never by itself cause
+                # a refusal.
+                reclaim_key = resident if resident is not None else (
+                    pinned if pinned is not None else self._worst_device_key(devices)
+                )
+                if reclaim_key is not None:
+                    await self._reclaim_stranded_cache(reclaim_key)
+                    devices = self.probe()
+                    held = self.ledger.try_hold(
+                        self._gpu_candidates(devices, constraint), peak, reserve_cap, engine
+                    )
 
         if held is not None:
             admission: dict = {"device": held[0]}
@@ -3874,6 +4147,24 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
     entirely when the admitting op is itself Coqui: evicting would unload the
     model that op is about to reload. It also uses a real idle TTL rather than
     the 0.0 the transient models take.
+
+    NOTE (#1976): this list is deliberately residency-only — every step here
+    frees a *specific resident engine's* tensors. The bare "reclaim whatever
+    the allocator is holding regardless of what's resident" fallback lives
+    OUTSIDE this list, as `PlacementController._reclaim_stranded_cache` /
+    `_reclaim_device_cache`, run once by `admit()`/`_resolve_admission()`
+    after this whole ladder has already been tried and failed. It is not a
+    step here on purpose: unlike every step above, it always has *something*
+    to try (there's no "not resident, skip" case for it), so folding it into
+    this cheapest-first, re-probe-after-each list would mean it fires on
+    EVERY admission failure BEFORE the resident-engine steps below even
+    where nothing is stranded — turning "cheapest first" into "run every
+    time first" and forcing every idle-evict test in test_devices.py to
+    special-case an always-present leading entry. Keeping it as a separate
+    final phase instead means: this list, and everything that pins its
+    ordering/contents, is unchanged by #1976; the stranded-cache reclaim
+    still runs exactly once, only after residency-based eviction has already
+    had its chance and failed.
     """
     steps: list["EvictStep"] = []
     if _same_card(getattr(SPK, "device", None), device_key):
@@ -4360,14 +4651,37 @@ class QwenEngine(Engine):
         (e.g. "eager" to bench the baseline, "flash_attention_2" with a wheel).
         A build that *rejects* the kwarg retries without it — the load never
         hardens into a failure over the attention knob."""
+        # torch and qwen_tts are imported SEPARATELY (#1965). They used to share
+        # one `try`, which meant a missing/broken PyTorch would have been
+        # recorded as `qwen_import_ok=False` and mis-attributed the fault to the
+        # qwen-tts package — sending the operator to reinstall the wrong thing.
+        # Only the qwen_tts import feeds the flag.
         try:
             import torch  # type: ignore
-            from qwen_tts import Qwen3TTSModel  # type: ignore
         except ImportError as e:
             raise RuntimeError(
-                f"Failed to import qwen_tts/torch ({e}). Install with: "
-                "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
-                "server/tts-sidecar."
+                f"Failed to import torch, which qwen_tts needs ({e}). Install "
+                "with: `.\\.venv\\Scripts\\python.exe -m pip install torch "
+                "torchaudio` in server/tts-sidecar."
+            ) from e
+        try:
+            from qwen_tts import Qwen3TTSModel  # type: ignore
+            _record_qwen_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui): a non-ImportError failure out
+            # of the import chain leaves the engine just as unstartable, and an
+            # ImportError-only record would leave `qwen_import_ok` at None (or
+            # stale True) while claiming health it doesn't have. Non-ImportError
+            # failures re-raise unchanged so their own diagnostic survives.
+            _record_qwen_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
+            raise RuntimeError(
+                f"Failed to import qwen_tts ({e}). PyTorch IS importable in "
+                "this venv, so this is not a missing-PyTorch problem. Install "
+                "with: `.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` "
+                "in server/tts-sidecar."
             ) from e
         _apply_torch_perf_flags(torch)
         _validate_cuda_index(self._device, torch)
@@ -6222,7 +6536,18 @@ class WhisperEngine:
         dev = device if device is not None else self._device
         try:
             from faster_whisper import WhisperModel  # type: ignore
-        except ImportError as e:
+            _record_whisper_import_result(True)
+        except BaseException as e:
+            # Record on ANY failure, not just ImportError (#1965, same shape as
+            # #1962 review finding 3 for Coqui). faster-whisper pulls in
+            # ctranslate2, whose CUDA/cuDNN loader raises plain RuntimeErrors on
+            # a mismatched runtime — not ImportError — so an ImportError-only
+            # record would leave `whisper_import_ok` at None (or stale True)
+            # while ASR is genuinely unstartable. Non-ImportError failures
+            # re-raise unchanged so their own diagnostic isn't swallowed.
+            _record_whisper_import_result(False)
+            if not isinstance(e, ImportError):
+                raise
             raise RuntimeError(
                 f"Failed to import faster-whisper ({e}). Install with: "
                 "`.\\.venv\\Scripts\\python.exe -m pip install faster-whisper` "
@@ -7002,6 +7327,38 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
         return (None, None, None)
 
 
+def _cuda_vram_mb_per_device() -> dict[str, dict[str, float]]:
+    """{"cuda:N": {"reserved_mb", "total_mb"}} for every CUDA-API-visible
+    device — the multi-GPU-safe complement to `_cuda_vram_mb()` above.
+
+    `_cuda_vram_mb()` deliberately stays current-device-only (it feeds the
+    recycle watchdog, which is intentionally scoped that way — see its own
+    docstring); it is NOT touched here. But that same current-device reading
+    is also what `/health` surfaces as `vram_reserved_mb`, and on a box where
+    `torch.cuda.current_device()` isn't device 0 (any code path that called
+    `set_device()` elsewhere in the process) that field silently reports the
+    WRONG card — measured on #1976's box: `50` while nvidia-smi showed 3587
+    MiB reserved on cuda:0. Rather than change the existing scalar field's
+    meaning (a live Node consumer reads it, `server/src/routes/sidecar-
+    health.ts`) or redesign the health payload, this adds an unambiguous
+    per-device breakdown alongside it. Never raises; {} when CUDA is
+    unavailable — same fail-open contract as `_cuda_vram_mb`."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return {}
+        out: dict[str, dict[str, float]] = {}
+        for i in range(torch.cuda.device_count()):
+            out[f"cuda:{i}"] = {
+                "reserved_mb": torch.cuda.memory_reserved(i) / 1_000_000.0,
+                "total_mb": torch.cuda.get_device_properties(i).total_memory / 1_000_000.0,
+            }
+        return out
+    except Exception:
+        return {}
+
+
 class DeviceLedger:
     """Thread-safe per-card VRAM reader wrapping the Wave-1 sampler
     (_sample_card). Read from three thread contexts (the _memory_watchdog
@@ -7662,12 +8019,24 @@ async def _pin_coqui_import_order() -> None:
     for every install would tax Qwen-only and Kokoro-only users, who can
     never hit a collision that requires BOTH cloning (which calls /embed) and
     Coqui rendering. So the package being importable is not the gate — the
-    XTTS v2 WEIGHTS being on disk is. `coqui-tts` ships as an ordinary
-    dependency and is always present; the ~2 GB `model.pth` only exists if
-    someone deliberately installed Coqui, which makes it a reliable "this
-    install uses Coqui" signal. Same reasoning that flipped PRELOAD_KOKORO
-    off in fs-60: an always-paid, engine-specific cost stops being a good
-    default once not everyone uses that engine.
+    XTTS v2 WEIGHTS being on disk is.
+
+    (#1965 corrects the reason this docstring used to give. It claimed
+    `coqui-tts` "ships as an ordinary dependency and is always present", which
+    is false: `coqui-tts` appears in no requirements file's install lines, and
+    both `requirements/nvidia-cuda.txt:4` and `requirements/amd-rocm.txt:7` say
+    Coqui is opt-in, pip-installed from the Model Manager. The gate is still
+    correct, but by CORRELATION rather than by the package being universal —
+    the same Model Manager action installs the package and fetches the ~2 GB
+    `model.pth`, so weights-present implies package-present in practice, while
+    the weights are the stricter and more durable "this install uses Coqui"
+    signal (a package can linger after the weights are purged). Note the
+    package check above still runs first and still skips the pin on its own;
+    the weights check only narrows it further.)
+
+    Same reasoning that flipped PRELOAD_KOKORO off in fs-60: an always-paid,
+    engine-specific cost stops being a good default once not everyone uses
+    that engine.
 
     The Python default here MUST match the registry knob's default (a known
     past bug class in this repo — see `_QWEN_DEGEN_GUARD_ENABLED` /
@@ -8348,6 +8717,22 @@ def health() -> dict[str, Any]:
         "coqui_version": _coqui_installed_version(),
         "kokoro_package_installed": _kokoro_package_installed(),
         "whisper_package_installed": _whisper_package_installed(),
+        # (#1965) The same real-import-attempt truth for the other three
+        # engines, alongside their find_spec-only `*_package_installed` probes.
+        # Tri-state in all four cases: None = nothing has tried to import this
+        # engine yet in this process (fall back to the find_spec probe — never
+        # read None as "broken"); True/False = the most recent REAL import
+        # attempt returned / raised.
+        #
+        # These are recorded opportunistically at each engine's own cold-load
+        # chokepoint, so unlike Coqui there is no startup pin that can populate
+        # them before first use. `qwen_import_ok` in particular means only that
+        # `from qwen_tts import Qwen3TTSModel` returned — the rest of
+        # `_load_qwen_model` (from_pretrained, the .to(device) move, the
+        # meta-tensor retry loop) can still fail with this True.
+        "kokoro_import_ok": _KOKORO_IMPORT_OK,
+        "qwen_import_ok": _QWEN_IMPORT_OK,
+        "whisper_import_ok": _WHISPER_IMPORT_OK,
         # ASR (srv-31) load state — its own pair, same pattern as the synth
         # engines, so the one-poll invariant holds. `asr_device` lets an
         # operator confirm whether transcription is on the GPU or CPU.
@@ -8372,8 +8757,14 @@ def health() -> dict[str, Any]:
         # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
         "committed_mb": _process_commit_mb(),
+        # CURRENT-DEVICE-ONLY (#1976) — `_cuda_vram_mb()` reads
+        # `torch.cuda.current_device()`, not necessarily the render/recycle
+        # card, so this can under-report on a multi-GPU box. Kept as-is for
+        # back-compat (`server/src/routes/sidecar-health.ts` reads it); use
+        # `vram_reserved_mb_by_device` for an unambiguous per-card reading.
         "vram_reserved_mb": _vram_reserved,
         "vram_total_mb": _vram_total,
+        "vram_reserved_mb_by_device": _cuda_vram_mb_per_device(),
         # EFFECTIVE hard recycle ceilings (committed RAM / reserved VRAM, MB) —
         # what this process will actually self-exit (code 43) at, after resolving
         # env + auto defaults. The Node spawn-gate compares these against its

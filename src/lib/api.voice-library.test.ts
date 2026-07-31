@@ -454,4 +454,108 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       ).rejects.toThrow(/attestedBy/);
     });
   });
+
+  /* #1974 — the mock's structural consent validation must mirror the real
+     route's validateConsentDraft before the attestedBy gate, returning 422
+     (not raw TypeError or 400) for malformed drafts. */
+  describe('clone consent structural validation (422)', () => {
+    it('rejects when consent is absent → 422', async () => {
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: undefined as any,
+        }),
+      ).rejects.toThrow(/422/);
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: undefined as any,
+        }),
+      ).rejects.toThrow(/A complete consent record/);
+    });
+
+    it('rejects when relationship is absent → 422 (not 400)', async () => {
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: {
+            personName: 'Alice',
+            permittedUse: 'personal',
+          } as any,
+        }),
+      ).rejects.toThrow(/422/);
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: {
+            personName: 'Alice',
+            permittedUse: 'personal',
+          } as any,
+        }),
+      ).rejects.not.toThrow(/attestedBy/);
+    });
+
+    it('rejects when personName is empty → 422', async () => {
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: {
+            personName: '   ',
+            relationship: 'self',
+            permittedUse: 'personal',
+          },
+        }),
+      ).rejects.toThrow(/422/);
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: {
+            personName: '   ',
+            relationship: 'self',
+            permittedUse: 'personal',
+          },
+        }),
+      ).rejects.toThrow(/A complete consent record/);
+    });
+
+    it('rejects when permittedUse is not "personal" → 422', async () => {
+      await expect(
+        mockCloneVoice({
+          candidateId: 'cand-1',
+          consent: {
+            personName: 'Alice',
+            relationship: 'self',
+            permittedUse: 'commercial' as any,
+          },
+        }),
+      ).rejects.toThrow(/422/);
+    });
+
+    it('accepts valid self consent without attestedBy', async () => {
+      const entry = await mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: {
+          personName: 'Alice',
+          relationship: 'self',
+          permittedUse: 'personal',
+        },
+      });
+      expect(entry.consent?.personName).toBe('Alice');
+      expect(entry.consent?.attestedBy).toBe('Alice'); // falls back to personName
+    });
+
+    it('accepts valid non-self consent with attestedBy', async () => {
+      const entry = await mockCloneVoice({
+        candidateId: 'cand-1',
+        consent: {
+          personName: 'Ana',
+          relationship: 'guardian-of-minor',
+          permittedUse: 'personal',
+          attestedBy: 'Dana',
+        },
+      });
+      expect(entry.consent?.personName).toBe('Ana');
+      expect(entry.consent?.attestedBy).toBe('Dana');
+    });
+  });
 });

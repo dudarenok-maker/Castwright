@@ -10179,6 +10179,24 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
       `Voice clone failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
     );
   }
+  /* #1974 — mirror the real route's structural validation of the consent
+     draft BEFORE the attestedBy gate. The route rejects a malformed consent
+     with 422 (structural), then rejects missing attestedBy with 400 (attester).
+     Without this guard, a missing consent would throw a raw TypeError here,
+     diverging from the real path. */
+  const consentDraft = body.consent as Record<string, unknown> | undefined;
+  const personName = typeof consentDraft?.personName === 'string' ? consentDraft.personName.trim() : '';
+  const relationship = consentDraft?.relationship;
+  const relationshipValid =
+    relationship === 'self' ||
+    relationship === 'family-with-permission' ||
+    relationship === 'guardian-of-minor';
+  const permittedUseValid = consentDraft?.permittedUse === 'personal';
+  if (!personName || !relationshipValid || !permittedUseValid) {
+    throw new Error(
+      `Voice clone failed (422): {"error":"A complete consent record (person, relationship, permitted use) is required."}`,
+    );
+  }
   const now = new Date().toISOString();
   /* #1836 — mirror the real route: a supplied non-blank transcript wins over
      the canned Whisper text and flips transcriptSource to 'user'. Without
@@ -10197,7 +10215,7 @@ export async function mockCloneVoice(body: CloneVoiceBody): Promise<VoiceLibrary
      construction, so an incomplete caller never gets a persisted entry. */
   const attestedByTrimmed =
     typeof body.consent.attestedBy === 'string' ? body.consent.attestedBy.trim() : '';
-  if (body.consent.relationship !== 'self' && !attestedByTrimmed) {
+  if (relationship !== 'self' && !attestedByTrimmed) {
     throw new Error(
       `Voice clone failed (400): {"error":"\`consent.attestedBy\` is required when \`consent.relationship\` is not \\"self\\"."}`,
     );
