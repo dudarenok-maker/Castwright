@@ -29,6 +29,11 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const bumpScript = resolve(here, '..', 'bump-version.mjs');
 
+// PR #2007 review, Major 2 — same literal used by release-notes-gate.test.mjs's
+// mojibake fixtures: "É™" reads as a mangled "ə", so "CAFÉ™" is a legitimate,
+// word-embedded false positive the allowlist marker exists for.
+const CAFE = 'CAFÉ™';
+
 // Strip GIT_* env vars before spawning git in a throwaway repo. When this
 // test runs from a git hook context (e.g. pre-commit via husky), the parent
 // `git commit` sets GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / GIT_PREFIX,
@@ -334,6 +339,61 @@ test('bump-version preserves ## section headers in the tag annotation', () => {
     assert.match(annotation, /^## Features$/m, 'expected ## Features header to survive');
     assert.match(annotation, /^## Fixes$/m, 'expected ## Fixes header to survive');
     assert.match(annotation, /^## Engineering$/m, 'expected ## Engineering header to survive');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// PR #2007 review, Major 2 — bump-version.mjs's own pre-flight 6b call site
+// (`formatHonouredEcho(args.notesFile, mojibakeCheck.honoured)` +
+// `if (echo) info(echo)`) had no test at all: release-notes-gate.test.mjs
+// only ever calls checkMojibake()/formatHonouredEcho() directly, never
+// through this script's actual wiring. Deleting that call site is invisible
+// to every other test in the suite (verified: the whole 76-test
+// release-notes-gate.test.mjs + bump-version.test.mjs pair stays green with
+// all three of this feature's call sites deleted at once).
+test('bump-version echoes an honoured marker in --notes-file on stdout', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-marker-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.1\n\nFixes:\n- ships with a ${CAFE} badge.\n`,
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// PR #2007 review, Major 2 — bump-version.mjs's OTHER checkMojibake call site
+// (pre-flight 5c, against the committed RELEASE_NOTES.md itself) is provably
+// dead for a positive echo: the label there is always the literal string
+// 'RELEASE_NOTES.md', and checkMojibake refuses outright as soon as any
+// marker exists for that label (#1985), so `mojibakeCheck.honoured` can never
+// be non-empty on this path — confirmed by running this exact scenario
+// end-to-end. The `formatHonouredEcho`/`if (echo) info(echo)` pair was
+// removed from that call site rather than tested with a fake positive case;
+// this test pins the actual, only-possible behaviour instead: a marker in
+// RELEASE_NOTES.md still produces the #1985 refusal (downgraded to a warning
+// by --force here) and never an `[allow]` line.
+test('bump-version never echoes a RELEASE_NOTES.md marker — it is refused instead', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(
+      resolve(dir, 'RELEASE_NOTES.md'),
+      `# v1.0.1\n\nFixes:\n<!-- release-notes-gate: allow "${CAFE}" -->\n- ships with a ${CAFE} badge.\n`,
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--force', '--allow-placeholder', '--skip-cross-os']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /^\[allow\]/m);
+    assert.match(out.stdout, /mojibake gate \(--force\).*refused in RELEASE_NOTES\.md \(#1985\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

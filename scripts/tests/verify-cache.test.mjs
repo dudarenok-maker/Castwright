@@ -419,6 +419,16 @@ test('stepTouchedByDiff: a hook-script diff matches test:hooks via extraFiles', 
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// PR #2007 review, Minor 9 — bump-version.test.mjs mirrors bump-version.mjs's
+// TEXT into a throwaway repo at RUNTIME (no module-graph edge), the same
+// #1847 trap release-notes-gate.mjs's own extraFiles entry already guards
+// against. Without this entry, a bump-version.mjs-only diff leaves
+// test:hooks [cached] locally even though bump-version.test.mjs exercises it.
+test('stepTouchedByDiff: a bump-version.mjs diff matches test:hooks via extraFiles', () => {
+  const diff = ['scripts/bump-version.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['tailwind.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
