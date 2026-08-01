@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-08-01
 owner: null
 ---
 
 # Cast-time warning — and fix — when a cloned voice cannot render on its routed engine
 
-> Status: draft
+> Status: stable
 > Key files: `server/src/tts/clone-readiness.ts` (new, shared by both sides), `src/store/voice-readiness-selectors.ts`, `src/store/start-generation-flow.ts`, `src/modals/clone-readiness-gate.tsx` (new), `server/src/routes/voice-library.ts`
 > URL surface: `#/books/<id>/cast` ("Approve cast & start generating") and `#/books/<id>/generation` ("Resume generation")
 > OpenAPI ops: `PATCH /api/voice-library/{voiceUuid}` (**extended**), `POST /api/voice-library/{voiceUuid}/engines/{engine}/retry` (**new**)
@@ -630,4 +630,38 @@ owner's instruction.
 
 ## Ship notes
 
-_To fill on merge: shipped date, commit SHA._
+**Shipped 2026-08-01** — PR [#2067](https://github.com/dudarenok-maker/Castwright/pull/2067),
+merge commit `8127c68e`. Closes #1980.
+
+All nine tasks landed, plus the e2e spec. Four defects were found and fixed
+during implementation rather than filed: `withComputedStaleness` overwriting a
+persisted `'failed'` status; the same transform running on `GET /` only, so
+`patchEntry.fulfilled` put a raw status back in the slice and the plan's own
+"Add transcript" CTA could clear the gate for the wrong reason; `otherEngineOk`'s
+blind binary engine swap, replaced by `castOnEngine`; and six misleading
+`baseModel: 'current-model'` fixture stamps. Each is recorded as an `[R4]` note
+against the decision it corrects.
+
+**Four placebo tests were caught and repaired**, one of them authored by this
+plan. Rules 2, 4 and 5 of the predicate could each be deleted outright with the
+whole suite green, because every mutation the plan named probed a gate or an
+ordering and none probed existence; the transcript-lock test pinned only the
+first of the handler's two reads of the fresh snapshot; the contract test's 1v2
+row was not actually doubly-broken; and the fail-open test exercised a branch
+that could not execute, because a `createAsyncThunk` dispatch never rejects
+without `.unwrap()`. That last one meant the gate failed **closed** — reporting
+`missing-entry` for every cloned character whenever `GET /api/voice-library`
+failed. Found by the `code-review` gate, not by the suite.
+
+**Owed on-box acceptance:** register row **A31** and
+[`docs/testing/clone-readiness-gate-onbox-acceptance.md`](../../testing/clone-readiness-gate-onbox-acceptance.md).
+No automated layer proves that pressing the CTAs repairs the render — they all
+stop at the API response — and `derive-failed` / "Retry derive" is unreachable
+in mock mode by construction.
+
+**Follow-ups filed:** [#2054](https://github.com/dudarenok-maker/Castwright/issues/2054)
+(a cloned slot with no resolvable `libraryUuid` gets no verdict while the render
+hard-fails `misconfigured`) and
+[#2068](https://github.com/dudarenok-maker/Castwright/issues/2068) (four residual
+gaps from the review, incl. a debounce race between "Cast on _engine_" and
+"Proceed anyway").
