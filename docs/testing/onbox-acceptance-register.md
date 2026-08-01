@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 30 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**47 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**48 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1250,6 +1250,54 @@ hand-edit a baseline JSON for the refusal drill (revert before committing).
 synthetic-fixture half of the evidence, this row is the real-file half.
 *Cost:* short — one clean bless, one deliberately-broken bless, one
 deliberately-broken Kokoro run; well under an hour total.
+
+---
+
+### A31 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
+
+The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
+test binding it to the render's own oracle, an e2e walkthrough. What no suite
+proves is that pressing the buttons **repairs the render**. Every automated
+layer stops at the API response; none of them derives an artifact or synthesises
+a line.
+
+Two specific gaps, one of them structural:
+
+- **`derive-failed` / "Retry derive" is unreachable in mock mode.**
+  `mockCloneVoice` unconditionally stamps `engines.qwen.status: 'ready'`, and no
+  exported mock mutator can move a slot to `'failed'`. So the e2e spec
+  (`e2e/clone-readiness-gate.spec.ts`) covers `no-transcript` and the two silent
+  controls and **cannot** cover this CTA at all. It is untested outside unit
+  level by construction, not by omission.
+- **"Add transcript" is only proven to persist.** The server test asserts the
+  write; nothing asserts that a Qwen derive then *succeeds* against the
+  corrected text — which is the entire premise of the CTA.
+
+Run:
+
+- Ingest a clip **without** a transcript, assign it while the session engine is
+  Coqui (expect 200 + #1933's advisory), then switch the session engine to Qwen
+  and press "Approve cast & start generating". The gate must name the character,
+  Qwen, and the missing transcript, and offer **Add transcript**.
+- Use the CTA. Then **render a chapter** and confirm the cloned voice actually
+  speaks on Qwen — the derive succeeded against the user-supplied text. Capture
+  the resolved voice key from `characterSnapshots`, not just the absence of an
+  error.
+- Force a genuine `failed` slot (a real derive failure — e.g. attempt a Qwen
+  derive against an empty transcript on-box), confirm the gate reports
+  **derive-failed**, press **Retry derive**, and confirm the predicate
+  re-evaluates to the *underlying* cause (`no-transcript`) rather than reporting
+  healthy. Plan 276 Decision 7 argues this is why the CTA cannot loop; nothing
+  automated exercises it against a real stamp.
+- **Control:** with the session engine switched back to Coqui, the same cast
+  must produce **no** gate. Steps above pass equally well against a check that
+  always warns.
+
+*Needs:* the 8 GB card, a real sidecar, and a real cloned voice with a real
+master clip. *Criteria:* the run sheet
+[`clone-readiness-gate-onbox-acceptance.md`](clone-readiness-gate-onbox-acceptance.md);
+walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
+cloning session, which already stages a real clone on this card.
 
 ---
 

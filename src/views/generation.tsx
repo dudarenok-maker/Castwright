@@ -285,6 +285,10 @@ export function GenerationView({
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
   const selectedAnalyzerModelId = useAppSelector((s) => s.ui.selectedModel);
+  /* Plan 276 — disables "Resume generation" while `startGenerationFlow`'s
+     fetchVoiceLibrary round-trip (the clone-readiness pre-check) is in
+     flight, so a slow fetch can't be double-clicked into two starts. */
+  const startGenerationPending = useAppSelector((s) => s.ui.startGenerationPending);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   /* Plan 78 — chapter rename modal state at the view level. One mount,
      opened/closed via the per-row Rename button. */
@@ -1066,9 +1070,10 @@ export function GenerationView({
             <button
               type="button"
               onClick={() => dispatch(startGenerationFlow())}
+              disabled={startGenerationPending}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
-              className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2"
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
               <IconPlay className="w-4 h-4" /> Resume generation
             </button>

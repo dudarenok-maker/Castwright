@@ -64,6 +64,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -9547,6 +9548,12 @@ export interface VoiceLibraryPatch {
   tags?: string[];
   pinned?: boolean;
   persona?: string;
+  /** Plan 276 Decision 6 — the "Add transcript" cast-time-gate CTA. Rejected
+      server-side unless the entry is `provenance: 'cloned'` and carries a
+      `master` clip. Reuses `MAX_CLONE_TRANSCRIPT_CHARS` (same cap as the
+      clone wizard). A non-empty value also clears a `failed` qwen slot —
+      see `routes/voice-library.ts`'s PATCH handler for the full write. */
+  transcript?: string;
 }
 /* fs-38 Wave 3c — DELETE /api/voice-library/:voiceUuid no longer always
    erases. When the artifact purge leaves anything behind, the route KEEPS the
@@ -9594,6 +9601,27 @@ async function realPatchVoiceLibrary(
   if (!res.ok)
     throw new Error(
       `Voice library update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/** Plan 276 Decision 7 — the "Retry derive" cast-time-gate CTA. Deletes the
+    given engine's slot key on the server (never rewrites its `status`; see
+    `routes/voice-library.ts`'s retry-route doc comment for why), so the
+    NEXT `cloneReadiness` check re-evaluates the underlying cause instead of
+    reporting `derive-failed` forever. No-op (200, entry unchanged) when the
+    slot isn't `failed`. */
+async function realRetryCloneEngine(
+  voiceUuid: string,
+  engine: CloneEngineSlot,
+): Promise<VoiceLibraryEntry> {
+  const res = await fetch(
+    `/api/voice-library/${encodeURIComponent(voiceUuid)}/engines/${encodeURIComponent(engine)}/retry`,
+    { method: 'POST' },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Voice engine retry failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -9797,6 +9825,30 @@ export function _resetMockVoiceLibrary(): void {
   mockVoiceLibraryEntries = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({ ...e }));
 }
 
+/* e2e test-only escape hatch (plan 276) — mock mode's public API surface
+   cannot produce a cloned entry that has never derived on an engine, or one
+   with a blank transcript: `mockCloneVoice` unconditionally stamps
+   `engines.qwen.status: 'ready'` and always fills a transcript (falling
+   back to the canned Whisper string). Merges `patch` onto the REAL entry
+   IN PLACE (top-level shallow merge, same shape `mockPatchVoiceLibrary`
+   already applies) so a later PATCH/retry against the same voiceUuid keeps
+   resolving against a real, still-tracked entry rather than a redux-only
+   simulation. Wired to `window.__mockVoiceLibrary` in main.tsx, same DEV/e2e
+   gate as `__mockQueue`. Throws on an unknown voiceUuid — same posture as
+   every other mock mutator here. */
+export function _overrideMockVoiceLibraryEntry(
+  voiceUuid: string,
+  patch: Partial<VoiceLibraryEntry>,
+): void {
+  const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
+  if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  mockVoiceLibraryEntries = [
+    ...mockVoiceLibraryEntries.slice(0, idx),
+    { ...mockVoiceLibraryEntries[idx], ...patch },
+    ...mockVoiceLibraryEntries.slice(idx + 1),
+  ];
+}
+
 function sortMockVoiceLibrary(entries: VoiceLibraryEntry[]): VoiceLibraryEntry[] {
   return [...entries].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -9816,9 +9868,85 @@ export async function mockPatchVoiceLibrary(
   await wait(60);
   const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
   if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  const existing = mockVoiceLibraryEntries[idx];
+  let updated: VoiceLibraryEntry = {
+    ...existing,
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+    ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+    ...(patch.persona !== undefined ? { persona: patch.persona } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  /* Plan 276 Decision 6 — mirrors `routes/voice-library.ts`'s PATCH handler.
+     `transcript` is NOT a top-level `VoiceLibraryEntry` field (unlike
+     name/tags/pinned/persona above), so it can never be handled by a
+     generic `...patch` spread — it writes into `master.transcript` (plus
+     the second persisted copy, `sampleTranscript`) and invalidates the
+     stale language stamps rather than the qwen `.pt`, which is acoustic,
+     not lexical. */
+  if (patch.transcript !== undefined) {
+    if (existing.provenance !== 'cloned' || !existing.master) {
+      throw new Error(
+        'Voice library update failed (400): {"error":"`transcript` can only be set on a cloned voice with a master clip."}',
+      );
+    }
+    if (patch.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+      throw new Error(
+        `Voice library update failed (400): {"error":"Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters)."}`,
+      );
+    }
+    updated = {
+      ...updated,
+      sampleTranscript: patch.transcript,
+      master: {
+        ...existing.master,
+        transcript: patch.transcript,
+        transcriptSource: 'user',
+        languageCode: undefined,
+      },
+      languageCode: undefined,
+    };
+    /* Decision 6's third clause — a non-empty corrected transcript removes
+       the CAUSE of a qwen `no-transcript`-flavoured derive failure, so the
+       terminal `failed` stamp comes off (same slot-deletion mechanism as
+       the retry route below). `''` supplies no fix, so it must NOT clear
+       the stamp. */
+    if (patch.transcript.trim() && updated.engines.qwen?.status === 'failed') {
+      const restEngines = { ...updated.engines };
+      delete restEngines.qwen;
+      updated = { ...updated, engines: restEngines };
+    }
+  }
+  mockVoiceLibraryEntries = [
+    ...mockVoiceLibraryEntries.slice(0, idx),
+    updated,
+    ...mockVoiceLibraryEntries.slice(idx + 1),
+  ];
+  return updated;
+}
+
+/** Mock mirror of the retry route (Decision 7) — deletes the engine's slot
+    key rather than rewriting `status`; a no-op (entry unchanged) when the
+    slot isn't `failed`. Mirrors `_mockClonedAssignBlock`'s
+    `engine === 'coqui' ? entry.engines?.xtts : entry.engines?.qwen` slot
+    mapping. */
+export async function mockRetryCloneEngine(
+  voiceUuid: string,
+  engine: CloneEngineSlot,
+): Promise<VoiceLibraryEntry> {
+  await wait(60);
+  const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
+  if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  const entry = mockVoiceLibraryEntries[idx];
+  const slotKey = manifestSlotFor(engine);
+  if (entry.engines?.[slotKey]?.status !== 'failed') {
+    return entry;
+  }
+  const restEngines = { ...entry.engines };
+  delete restEngines[slotKey];
   const updated: VoiceLibraryEntry = {
-    ...mockVoiceLibraryEntries[idx],
-    ...patch,
+    ...entry,
+    engines: restEngines,
     updatedAt: new Date().toISOString(),
   };
   mockVoiceLibraryEntries = [
@@ -10560,6 +10688,7 @@ const real = {
   resumeScoring: realResumeScoring,
   listVoiceLibrary: realListVoiceLibrary,
   patchVoiceLibrary: realPatchVoiceLibrary,
+  retryCloneEngine: realRetryCloneEngine,
   deleteVoiceLibrary: realDeleteVoiceLibrary,
   designLibraryVoice: realDesignLibraryVoice,
   redesignLibraryVoice: realRedesignLibraryVoice,
@@ -10854,6 +10983,7 @@ const mock = {
   resumeScoring: mockResumeScoring,
   listVoiceLibrary: mockListVoiceLibrary,
   patchVoiceLibrary: mockPatchVoiceLibrary,
+  retryCloneEngine: mockRetryCloneEngine,
   deleteVoiceLibrary: mockDeleteVoiceLibrary,
   designLibraryVoice: mockDesignLibraryVoice,
   redesignLibraryVoice: mockRedesignLibraryVoice,

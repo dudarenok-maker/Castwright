@@ -78,6 +78,7 @@ import { MatchDetailDrawer } from '../modals/match-detail';
 import { RegenerateModal } from '../modals/regenerate';
 import { StartGenerationModal } from '../modals/start-generation';
 import { VoiceReadinessGateModal } from '../modals/voice-readiness-gate';
+import { CloneReadinessGateModal } from '../modals/clone-readiness-gate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
@@ -1833,6 +1834,7 @@ export function Layout() {
         />
       )}
       <VoiceReadinessGateModal />
+      <CloneReadinessGateModal />
       {ui.regenChapter && (
         <RegenerateModal
           chapter={ui.regenChapter}
