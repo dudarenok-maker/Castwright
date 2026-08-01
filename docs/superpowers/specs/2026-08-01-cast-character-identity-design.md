@@ -385,19 +385,32 @@ human rather than guessed.
 
 ## 10. Sequencing against the cast.json write lock
 
-`docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` is approved
-but **not implemented** — no `withCastLock` exists in the tree as of this spec.
-It converts 35 `cast.json` read..write sites to a lock, including
-`cast-create.ts` (touched by §4.5) and the `analysis.ts` write sites that
-consume `mergeAnalysisResultWithExistingCast` (§4.4).
+`docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` is **in
+flight right now** — not merged to `main`, but 8 commits deep on
+`feat/server-1981-cast-lock` in the `C:\Claude\Projects\wt-1981-cast-lock`
+worktree (29 files, +2454/-860), where it has already added
+`server/src/workspace/cast-lock.ts` exporting `withCastLock`, `withCastLocks`
+and `withLibraryVoiceLock`. It converts 35 `cast.json` read..write sites.
 
-Overlap is modest — most of this design lands in a new resolver module and in
-`merge-analysis-cast.ts`, which is a pure function and not itself a lock site
-(its callers are). But the two should not be implemented concurrently in
-separate worktrees against the same files. Whichever starts second rebases onto
-the first. The repair script (§4.8) writes `cast.json` outside the server
-process entirely and needs the lock design's answer for out-of-process writers,
-or must be run with the server stopped — stated as a precondition either way.
+**The actual file overlap with this design is exactly one file**: the lock
+branch touches `cast-create.ts` (and `cast-create.test.ts`), which §4.5 also
+touches. Everything else this design lands in —
+`merge-analysis-cast.ts`, `synthesise-chapter.ts`, `analysis.ts`,
+`schemas.ts`, `segments-io.ts`, `revisions.ts`, `chapter-qa-repair.ts`,
+`render-integrity/aggregate.ts` — is untouched by the lock branch. Verified by
+`git diff --name-only main...HEAD` on that branch.
+
+Consequences:
+
+- §4.5 is a one-line change (swap the private `slugify` for `safeId`) in the
+  one contended file. Whichever lands second rebases; the conflict is trivial.
+- **The lock branch should merge first** regardless, because §4.4's caller
+  sites in `analysis.ts` are lock sites in that design's Class 5, and building
+  against the pre-lock shape means re-verifying afterwards.
+- The repair script (§4.8) writes `cast.json` from **outside the server
+  process**, which no in-process mutex covers. It must be run with the server
+  stopped; that is a stated precondition of the script and it should refuse to
+  `--apply` if it can reach a live server on the configured port.
 
 ## 11. Open questions
 
