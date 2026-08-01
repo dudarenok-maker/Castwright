@@ -173,7 +173,22 @@ export default defineConfig({
     maxWorkers,
     retry: 1,
     // ops-46 (#2028) — see retryHazardReporter above for why retry:1 stays
-    // and what this adds on top of it.
-    reporters: ['default', retryHazardReporter],
+    // and what this adds on top of it. Vitest only appends its OWN built-in
+    // 'github-actions' reporter (inline PR annotations + the "Flaky Tests"
+    // $GITHUB_STEP_SUMMARY panel) when the resolved `reporters` array is
+    // EMPTY — setting one explicitly, unconditionally, silently suppressed
+    // that panel on every CI run of this suite (verify.yml runs `vitest run`
+    // directly in server/). Reproduced against installed vitest 4.1.9 with
+    // GITHUB_ACTIONS=true: an empty `reporters` config prints `::error
+    // file=…,line=…::…` inline annotations and writes a rendered "Flaky
+    // Tests" summary; `['default', retryHazardReporter]` prints neither.
+    // Re-adding 'github-actions' explicitly under CI restores both — the
+    // console.warn from retryHazardReporter is additive there, not a
+    // replacement for it; locally (no GITHUB_ACTIONS), where the built-in
+    // reporter never fires anyway, retryHazardReporter is the only signal.
+    reporters:
+      process.env.GITHUB_ACTIONS === 'true'
+        ? ['default', 'github-actions', retryHazardReporter]
+        : ['default', retryHazardReporter],
   },
 });

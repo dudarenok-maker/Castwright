@@ -161,3 +161,34 @@ describe('retryHazardReporter — real wiring (#2028, PR #2049 review F2)', () =
     expect(combined).toContain('fails once then passes, to trigger a real vitest retry');
   });
 });
+
+/* F1 (PR #2049 review) — same "data, not wire" defect shape, for vitest's
+   OWN built-in 'github-actions' reporter: it is appended automatically only
+   when the resolved `reporters` array is EMPTY, so setting one
+   unconditionally silently suppressed it in CI (verify.yml runs `vitest
+   run` directly in server/, so this is the live gating path). Spawns the
+   real CLI exactly like the F2 describe block above. */
+const OUTRIGHT_FAIL_FIXTURE = `it('deliberately fails outright, no rescue', () => {
+  expect(1).toBe(2);
+});
+`;
+
+describe('github-actions reporter — real wiring under CI (#2028, PR #2049 review F1)', () => {
+  it("GITHUB_ACTIONS=true restores the built-in github-actions reporter's ::error annotation", () => {
+    const withCi = runVitestOnFixture(
+      '__wire_fixture_gha_on__.test.ts',
+      OUTRIGHT_FAIL_FIXTURE,
+      { GITHUB_ACTIONS: 'true' },
+    );
+    expect(`${withCi.stdout ?? ''}${withCi.stderr ?? ''}`).toContain('::error');
+
+    // And the toggle is real, not a vitest-global behaviour our config can't
+    // affect either way: outside CI the built-in reporter never fires.
+    const withoutCi = runVitestOnFixture(
+      '__wire_fixture_gha_off__.test.ts',
+      OUTRIGHT_FAIL_FIXTURE,
+      { GITHUB_ACTIONS: undefined },
+    );
+    expect(`${withoutCi.stdout ?? ''}${withoutCi.stderr ?? ''}`).not.toContain('::error');
+  });
+});
