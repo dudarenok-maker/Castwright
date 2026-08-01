@@ -25,7 +25,15 @@ export function castIdHistoryPath(bookDir: string): string {
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
   try {
     const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir));
-    if (raw && typeof raw === 'object' && raw.schema === 1 && typeof raw.supersededBy === 'object') {
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      !Array.isArray(raw) &&
+      raw.schema === 1 &&
+      typeof raw.supersededBy === 'object' &&
+      !Array.isArray(raw.supersededBy) &&
+      raw.supersededBy !== null
+    ) {
       return raw;
     }
   } catch {
