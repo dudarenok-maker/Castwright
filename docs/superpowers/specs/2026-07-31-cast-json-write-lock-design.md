@@ -192,17 +192,21 @@ CLAUDE.md's *Conventions worth preserving*:
    Wrapping only the write buys nothing at all. This is the easy way to produce a
    diff that looks correct and fixes nothing.
 
-   **The carve-out, and its criterion.** Four sites legitimately leave something
+   **The carve-out, and its criterion.** Five sites legitimately leave something
    outside — `promote-voice`'s `realVoiceId`, `cast-design.ts`'s two idempotency
-   guards, `cast-add-from-roster`'s target read, and
-   `ensureCharacterVoiceUuid`'s series branch. A value may stay outside the lock
+   guards, `cast-add-from-roster`'s target read, `ensureCharacterVoiceUuid`'s
+   series branch, and `voice-style.ts`'s pre-lock cast read in both `/generate`
+   and `/generate-all` (#1981 review fix round). A value may stay outside the lock
    **only when** (a) re-deriving it inside would be wrong rather than merely
    redundant — because irreversible work outside the lock has already committed to
-   it, as with `realVoiceId`'s renamed artifacts — or (b) it is a cross-book read a
-   per-book lock cannot cover anyway. Every such case is named at its site and
-   carried as a residual in §12. **Anything not on that list, with a reason
-   written down, is rule 2's failure mode and not a narrowing.** A reviewer who
-   cannot tell which they are looking at should treat it as the failure mode.
+   it, as with `realVoiceId`'s renamed artifacts, or because re-deriving it would
+   mean moving that irreversible work (an LLM call) inside the lock, as with
+   `voice-style.ts`'s character snapshot and `isNarrator` decision — or (b) it is
+   a cross-book read a per-book lock cannot cover anyway. Every such case is named
+   at its site and carried as a residual in §12. **Anything not on that list, with
+   a reason written down, is rule 2's failure mode and not a narrowing.** A
+   reviewer who cannot tell which they are looking at should treat it as the
+   failure mode.
 3. **Two or more books → `withCastLocks`, never nested `withCastLock`s.**
 4. **Global lock order: `design` → `library-voice` → `cast`.** Every acquisition
    site names where it sits in that order. Never acquire a lock from an earlier
@@ -251,7 +255,7 @@ plan carries an arithmetic check on that.
 | `cast-merge.ts` | `:197` |
 | `cast-series-patch.ts` | `:221` |
 | `cast-design.ts` | `:293`, `:452` |
-| `voice-style.ts` | `:69`, `:129` |
+| `voice-style.ts` | `:69`, `:129` — **not mechanical, see below** |
 | `voice-override-linked.ts` | `:364` |
 | `book-state.ts` | `:634` |
 | `voice-library.ts` | `:1434` (`POST /assign`), `:1536` (`DELETE /assign`) |
@@ -319,6 +323,17 @@ Three of these are not routine wraps despite sitting in this class:
   `cast` and re-read `castJsonPath(bookDir)` inside its own per-book lock**,
   leaving the walker's signature and the read-only scan untouched. A contained
   conversion, not a design decision.
+- **`voice-style.ts`'s two sites are not mechanical wraps** (#1981 review fix
+  round). Both `/generate` (`:69`) and `/generate-all` (`:129`) call
+  `generateVoiceStylePersona` — an LLM round-trip that, on the Gemini path, sits
+  behind `geminiRateLimiter.acquire`'s unbounded sleep — so a naive wrap holds the
+  book's cast lock across it, the same shape this section already refuses for
+  `promote-voice`'s sidecar `fetch`. Both handlers instead read unlocked, generate
+  unlocked, and persist through `cast-design.ts`'s `writeVoiceStylePersona`
+  helper, which re-reads the cast fresh inside its own short-lived per-character
+  lock immediately before writing — the same re-read-before-write shape already
+  used by `cast-design.ts`'s two Class 1 sites (`:293`, `:452`), reused rather
+  than forked. See §4's carve-out list and §12.1 for the residual this creates.
 
 ### Class 2 — multi-book: `withCastLocks` (8 sites)
 
@@ -824,12 +839,30 @@ approach, not fixing a bug.
   one loses a mutation. That trade is why §6 keeps `analysis.ts` off the mutex
   and §5 narrows `promote-voice` to exclude its sidecar `fetch`. With those two
   exclusions, expected hold time everywhere is one file read plus one file write.
+  (`voice-style.ts`'s `/generate` and `/generate-all` originally wrapped
+  `generateVoiceStylePersona` — an LLM call, unbounded on the Gemini path behind
+  `geminiRateLimiter.acquire` — inside `withCastLock`, falsifying this claim for
+  both handlers; the #1981 review fix round restructured both to generate outside
+  the lock and persist through `writeVoiceStylePersona`'s own short per-character
+  lock, restoring it. See the next bullet for the residual that restructure
+  creates.)
 - **`promote-voice`'s `realVoiceId` is pinned to its pre-lock read** (§5) — the
   artifacts have already been renamed to it by the time the lock is taken, so
   re-deriving it would name files that do not exist.
 - **`cast-design.ts`'s idempotency guards are evaluated before an LLM call**, and
   the lock covers only the later re-read and write, so two concurrent runs can
   each generate a persona with the second overwriting the first.
+- **`voice-style.ts`'s pre-lock cast read is a residual, matching `cast-design.ts`'s
+  shape above.** `/generate` and `/generate-all` read cast.json once, unlocked,
+  before generating. The character snapshot passed to `generateVoiceStylePersona`
+  and the `isNarrator` skip decision can both go stale against a concurrent edit —
+  a rename mid-flight yields a persona describing former traits, and (for
+  `/generate-all` only) a character added mid-batch gets no persona this run,
+  picked up on the next one. The persist itself is never wrong:
+  `writeVoiceStylePersona` re-reads fresh inside its own lock and touches only the
+  one target character, so a concurrent edit to a *different* character always
+  survives, and a character deleted before the persist is skipped
+  (`written: false`), not resurrected.
 - **A multi-book propagation is per-book atomic, not atomic as a whole** (§3.2).
 - **Rules 1 and 4 are convention, not enforcement.** A future nested locker, or
   one that takes cast-then-design, deadlocks at runtime rather than failing a

@@ -21,8 +21,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withCastLock } from '../workspace/cast-lock.js';
+import { readJson } from '../workspace/state-io.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
@@ -53,38 +52,48 @@ voiceStyleRouter.post(
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
 
-    /* #1981 — the read is inside the lock, and so is the whole
-       generate-then-write span: the character index used for the write is
-       derived from this read. */
-    return withCastLock(bookDir, async () => {
-      const cast = await readJson<CastFile>(castJsonPath(bookDir));
-      if (!cast?.characters?.length) {
-        return res.status(409).json({
-          error: 'Book has no cast on disk yet. Run analysis before generating voice styles.',
-        });
-      }
+    /* #1981 review fix round 2 — this NO LONGER holds the book's cast lock
+       across the LLM call. `generateVoiceStylePersona` is a Gemini/Ollama
+       round-trip, and on the Gemini path it sits behind
+       `geminiRateLimiter.acquire`'s unbounded sleep — the same defect class
+       `/generate-all` was just fixed for (see that handler's own comment
+       below). Same recipe here: this read is OUTSIDE any lock and only
+       decides whether the character exists and what to feed the generator —
+       it is not the source of truth for the write. The persist goes through
+       `writeVoiceStylePersona` (cast-design.ts), which re-reads the cast
+       FRESH inside its own short-lived per-character lock immediately before
+       writing. A character deleted between this read and the persist is not
+       resurrected — `writeVoiceStylePersona` returns `false`, which this
+       handler turns into the same 404 an unknown character gets up front. */
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    if (!cast?.characters?.length) {
+      return res.status(409).json({
+        error: 'Book has no cast on disk yet. Run analysis before generating voice styles.',
+      });
+    }
 
-      const idx = cast.characters.findIndex((c) => c.id === characterId);
-      if (idx === -1) {
+    const idx = cast.characters.findIndex((c) => c.id === characterId);
+    if (idx === -1) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    try {
+      const prep = await preparePersonaBatch(bookDir);
+      const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
+      const written = await writeVoiceStylePersona(bookDir, characterId, voiceStyle);
+      if (!written) {
         return res.status(404).json({ error: `Character "${characterId}" not found.` });
       }
-
-      try {
-        const prep = await preparePersonaBatch(bookDir);
-        const voiceStyle = await generateVoiceStylePersona(cast.characters[idx], prep);
-        cast.characters[idx] = { ...cast.characters[idx], voiceStyle };
-        await writeJsonAtomic(castJsonPath(bookDir), cast);
-        console.log(
-          `[voice-style] book=${bookId} character=${characterId} → "${voiceStyle.slice(0, 60)}"`,
-        );
-        return res.json({ voiceStyle });
-      } catch (e) {
-        console.error('[voice-style] generate failed', e);
-        return res
-          .status(500)
-          .json({ error: (e as Error).message || 'Voice-style generation failed.' });
-      }
-    });
+      console.log(
+        `[voice-style] book=${bookId} character=${characterId} → "${voiceStyle.slice(0, 60)}"`,
+      );
+      return res.json({ voiceStyle });
+    } catch (e) {
+      console.error('[voice-style] generate failed', e);
+      return res
+        .status(500)
+        .json({ error: (e as Error).message || 'Voice-style generation failed.' });
+    }
   },
 );
 
