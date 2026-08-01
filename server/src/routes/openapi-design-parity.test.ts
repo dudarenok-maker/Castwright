@@ -21,6 +21,23 @@
    themselves — verified (see below) to have zero false positives in either
    file, i.e. every such literal really is an SSE event `type`.
 
+   **What this guard does NOT catch (independent review, PR #2048, finding
+   F6) — and this is the direction that matters for a drift guard, not the
+   false-positive one:** the extraction is a literal-string regex, so any
+   event whose `type` is built from a named constant, a template literal, a
+   variable, or emitted by a FOURTH module this file doesn't read is
+   INVISIBLE to it — the openapi enum is never compared against that event
+   at all, and the test passes silently (reproduced: routing an event's type
+   through a `const EV_X = 'x' as const` indirection, or registering a route
+   with a verb other than `get`/`post`, both leave this suite green while
+   the wire carries something openapi.yaml never described). No code change
+   closes this without the production-code cost noted above — the mitigant
+   is that today's two route files use only inline string literals and only
+   `get`/`post`, so the miss is theoretical for the surface as it stands, not
+   for the mechanism this test implements. A future PR that introduces
+   either shape reintroduces the exact silent-drift failure #1934 exists to
+   prevent, undetected by this file.
+
    **Line-ending agnostic**, same reasoning as openapi-setup-parity.test.ts:
    openapi.yaml is LF-pinned via .gitattributes but an existing Windows
    checkout can still carry CRLF (core.autocrlf never rewrites an unchanged

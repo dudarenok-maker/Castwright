@@ -70,10 +70,16 @@ describe('engine-device-state.ts never imports from routes/ (#2013 layering guar
   it('this module has no static, dynamic, or type-only import from ../routes/', () => {
     const thisFile = fileURLToPath(import.meta.url).replace(/\.test\.ts$/, '.ts');
     const src = readFileSync(thisFile, 'utf8');
-    // Matches `from '../routes/...'` / `import('../routes/...')` in any
-    // quote style, static or dynamic, type-only or value.
-    const hit =
-      /from\s+['"]\.\.\/routes\//.test(src) || /import\(\s*['"]\.\.\/routes\//.test(src);
+    /* Independent review (PR #2048, finding F5) — the prior two-regex form
+       used `['"]` only, so a dynamic `import(`../routes/...`)` (backtick
+       template literal, no interpolation) sailed through undetected. Proven
+       live: `gpu/sidecar-vram-sample.ts:41` already reaches a route module
+       this exact way, so backtick dynamic import is the established local
+       idiom, not an exotic case. Collapsed to ONE regex over the whole
+       quote class (`'`, `"`, and backtick) instead of separately matching
+       `from '...'` / `import('...')` shapes — a path preceded by EITHER
+       keyword, in any of the three quote styles, now trips it. */
+    const hit = /['"`]\.\.\/routes\//.test(src);
     expect(hit).toBe(false);
   });
 });
