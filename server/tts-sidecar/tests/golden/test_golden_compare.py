@@ -90,10 +90,22 @@ def test_normalize_words_lowercases_and_splits():
     assert normalize_words("The Lighthouse Keeper.") == ["the", "lighthouse", "keeper"]
 
 
-def test_normalize_words_strips_possessive_s():
-    # Matches segment-asr-qa.ts:276-277 -- "'s" and any stray apostrophe drop,
-    # rather than splitting into two tokens.
-    assert normalize_words("Aldric's before noon") == ["aldric", "before", "noon"]
+def test_normalize_words_does_not_collapse_possessive_s():
+    # #2005: deliberately does NOT mirror segment-asr-qa.ts:276-277's
+    # possessive-strip -- that production line only ever strips a genuine
+    # possessive because a prior step in normalizeForWer already expanded
+    # contractions; this function never did, so stripping "'s" here
+    # collapsed contractions ("he's" == "he") too, defeating the golden
+    # gate's whole single-word-drift purpose. An apostrophe now just falls
+    # out as ordinary punctuation, splitting the word either side of it.
+    assert normalize_words("Aldric's before noon") == ["aldric", "s", "before", "noon"]
+
+
+def test_normalize_words_does_not_collapse_apostrophe_s_contractions():
+    # The live bug (#2005): stripping "'s" made a dropped/added contraction
+    # invisible to a gate whose advertised purpose is catching exactly this.
+    assert normalize_words("he's here") != normalize_words("he here")
+    assert normalize_words("it's fine") != normalize_words("it fine")
 
 
 def test_normalize_words_strips_punctuation_and_dashes():
@@ -102,6 +114,7 @@ def test_normalize_words_strips_punctuation_and_dashes():
         "she",
         "said",
         "it",
+        "s",
         "fine",
     ]
 
@@ -160,8 +173,8 @@ def test_assert_content_passes_on_an_exact_match():
 
 
 def test_assert_content_passes_on_a_normalisation_only_difference():
-    # Casing/punctuation/possessive differences carry no content signal --
-    # both sides are Whisper output, so this is not the bless-path case.
+    # Casing/punctuation differences carry no content signal -- both sides
+    # are Whisper output, so this is not the bless-path case.
     assert assert_content("Wait, she said!", "wait she said") is None
 
 

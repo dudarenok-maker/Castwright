@@ -47,8 +47,6 @@ INT16_FULL_SCALE = 32768.0
 # able to spuriously refuse a legitimate first bless for no detection gain.
 FIRST_BLESS_MAX_WER = 0.35
 
-_SMART_APOSTROPHE = "\u2019"  # RIGHT SINGLE QUOTATION MARK -- written as a Python escape, never a literal glyph (see r_unicode_regex_class memory note)
-_POSSESSIVE_RE = re.compile(r"'s\b")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -142,16 +140,30 @@ def model_sha256(path: str) -> Optional[str]:
 
 def normalize_words(text: str) -> list[str]:
     """Tokenise `text` for content-drift comparison: NFKC -> casefold ->
-    strip possessive 's / stray apostrophes -> replace non-alphanumeric with
-    a space -> split. Deliberately NOT `segment-asr-qa.ts`'s `normalizeForWer`
-    — no contraction expansion, no integer-to-word spelling (see #1911 §2d:
-    under `bless_guard`'s G2 cap, adding those buys zero spare capacity, so
-    they are skipped to save ~12 lines and a second copy of production's
-    number table)."""
+    replace non-alphanumeric with a space -> split. Deliberately NOT
+    `segment-asr-qa.ts`'s `normalizeForWer` — no contraction expansion, no
+    integer-to-word spelling (see #1911 §2d: under `bless_guard`'s G2 cap,
+    adding those buys zero spare capacity, so they are skipped to save ~12
+    lines and a second copy of production's number table).
+
+    #2005: earlier revisions also stripped possessive `'s` / stray
+    apostrophes before this step, mirroring `segment-asr-qa.ts:276-277`.
+    That mirror was incomplete — production expands contractions BEFORE
+    stripping `'s` (so only a genuine possessive ever reaches the strip),
+    while this function never expanded contractions at all. The result
+    collapsed `'s` **contractions** too: `he's` / `it's` / `that's` all
+    normalised to `he` / `it` / `that`, so a regression that drops or adds
+    `'s` scored 0 edits on a gate whose whole purpose is single-word drift
+    (live on the committed `abbreviations` fixture: `Aldric's`). Per this
+    module's own stricter-than-production rationale (see the module
+    docstring), and since the drift check compares Whisper transcript to
+    Whisper transcript (both sides carry the same apostrophe-splitting
+    quirk, so it cancels — see #1911's identical argument for dropping
+    integer-spelling normalisation), the fix is to drop the strip rather
+    than add contraction expansion: an apostrophe is now just punctuation
+    that falls out via `_NON_ALNUM_RE`, splitting `he's` into `he`, `s` —
+    two tokens, not silently swallowed into `he`."""
     s = unicodedata.normalize("NFKC", text or "").casefold()
-    s = s.replace(_SMART_APOSTROPHE, "'")
-    s = _POSSESSIVE_RE.sub("", s)
-    s = s.replace("'", "")
     s = _NON_ALNUM_RE.sub(" ", s)
     return s.split()
 
