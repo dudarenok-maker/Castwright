@@ -67,8 +67,9 @@ const maxWorkers = lowConcurrency ? 1 : 2;
    (a Map/Set/counter at module scope, or fixture state on disk keyed by a
    fixed path), attempt 1 fails and leaks its mutation; attempt 2 reads state
    attempt 1 already touched and passes for the wrong reason. See
-   CONTRIBUTING.md's "Testing discipline" section for the full writeup and
-   the `--retry=0` verification convention this reporter exists to surface.
+   CONTRIBUTING.md's "When you ship a change" section (the "#2028" note) for
+   the full writeup and the `--retry=0` verification convention this
+   reporter exists to surface.
 
    Deliberately NOT flipped to retry:0 or scoped per-file here. Both were
    considered and rejected for THIS change:
@@ -99,8 +100,8 @@ export const retryHazardReporter: Reporter = {
         `[retry-hazard] ${testCase.module.moduleId} :: "${testCase.fullName}" failed on its ` +
           `first attempt and only passed after ${diagnostic.retryCount} retry(ies). If this test ` +
           'asserts on module-level mutable state, retry:1 may be hiding a genuine red-phase ' +
-          'failure (#2028) — re-run with --retry=0 to check. See CONTRIBUTING.md "Testing ' +
-          'discipline".',
+          'failure (#2028) — re-run with --retry=0 to check. See CONTRIBUTING.md "When you ' +
+          'ship a change" (the "#2028" note).',
       );
     }
   },
