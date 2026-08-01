@@ -31,8 +31,23 @@ This file has a browsable HTML twin at the URL above. Artifact URLs are
 server-assigned UUIDs — they cannot be renamed, aliased, or re-slugged — so
 **that exact URL is the artifact's identity**. Update it by passing it as the
 `url` argument; publishing the register without it mints a *second*, competing
-register and orphans this one. That is the single most likely way this register
-goes wrong.
+register and orphans this one.
+
+**The twin is a hand-authored HTML page, not a rendering of this file — never
+publish this `.md` to that URL.** Passing the right `url` is *not* sufficient.
+Publishing this markdown keeps the URL and destroys the page, replacing the
+styled register with default markdown rendering: no summary strip, a
+self-referential "Live view" section, and dead relative links. **Nothing errors
+when this happens.** It happened four times between 2026-07-31 and 2026-08-01,
+to four different PR-shipping agents that each read the paragraph above and
+concluded they had complied.
+
+So: publish the styled twin. If you do not have it to hand, **find the last good
+copy before editing anything** — grep the session transcripts under
+`~/.claude/projects/<project>/**/*.jsonl` for this artifact's UUID, take the most
+recent `Artifact` call whose `file_path` ends in `.html`, and start from that
+file. Then diff this markdown from the commit at that publish to `HEAD` to get
+the delta you owe.
 
 The twin carries derived figures — owed count, per-group counts, oldest debt —
 that must be **recomputed** on every edit. Rows can be right while the summary
