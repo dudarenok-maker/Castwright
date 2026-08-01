@@ -8,7 +8,7 @@ leaving this root cause alone — see that issue's "Piece 3 — FILE ONLY" note)
 re-record path), plan 122 (the 2026-05-27 one-off id repair whose residue is
 §1.4), the cast.json write-lock design (§10)
 
-**Review:** two adversarial passes (Premium tier).
+**Review:** three adversarial passes (Premium tier).
 
 *Round 1* broke three load-bearing claims of the first draft — the
 rewrite-emission mechanism was inert, the RC3 diagnosis was a no-op, and the
@@ -21,10 +21,18 @@ case §4.4 claimed to fix, an eighth join site whose omission would have made
 wave 2 a regression, and that an alias can be silently shadowed by a re-minted
 live id.
 
-All are corrected below. Corpus figures were independently re-measured and
-reproduced exactly in both rounds. One round-1 finding was wrong and is
-recorded in §12; a rebuttal this spec made to a second one was itself wrong,
-and §12 now says so.
+*Round 3* found three MORE sites that destroy the same field — including one in
+the very function next door to the one round 2 hardened. Five sites across three
+rounds, each found only because someone named it. That is what forced the
+design's current shape: **the id history moved off the `Character` record
+entirely** (§4.1). The question that provoked it is worth keeping: *is the
+invariant enforced by enumeration or by construction?* It was enumeration, over
+an open set, and it was wrong three times running.
+
+All findings are folded in below. Corpus figures were independently
+re-measured and reproduced exactly in all three rounds. One round-1 finding was
+wrong and is recorded in §12; a rebuttal this spec made to a second one was
+itself wrong, and §12 now says so.
 
 ## 1. What is actually wrong
 
@@ -184,39 +192,84 @@ bucket's name back to generic, so it can never produce
 
 ## 4. Design
 
-### 4.1 `cast.json` is authoritative; the analyzer id becomes an alias
+### 4.1 The id history is a side-table, not a field on `Character`
 
-A `Character` gains one optional field:
+**This is the design's second shape, and the reason for the change matters more
+than the shape itself.** The first shape put an `idAliases: string[]` field on
+`Character`. Three adversarial rounds then found five separate places that
+destroy it, each discovered only because someone named it:
 
-```ts
-/** Every analyzer-assigned or previously-persisted id seen for this
-    character. The analyzer is non-deterministic about ids across runs, and
-    several code paths rename a persisted id (#2040 §1.2 RC3); a frozen
-    segments.json or a stale analysis cache may still reference any of them.
-    Resolution reads through this set — see cast-resolve.ts. */
-idAliases?: string[];
+| # | Site | How it destroys the field |
+|---|---|---|
+| 1 | `mergeAnalysisResultWithExistingCast:163-194` | rebuilds every row as `{ ...f }` from the fresh roster, overlaying a 9-field allow-list |
+| 2 | `applyRewriteToPriorCast:224-275` | collision path keeps one row, discards the loser entirely |
+| 3 | `dedupePriorCastByName:405-425` | same shape — unions display-name `aliases`, pushes the loser's **id** to a log array, `continue`s |
+| 4 | `preserveDesignedVoicesOnCastWrite:44` | client `PUT` writes the roster verbatim except three fields plus `voiceUuid` |
+| 5 | `book-state.ts:917-925` | reparse carryover rebuilds each row from `{id, name}` + `aliases` + `PRESERVED_VOICE_FIELDS`, then `rm`s `cast.json` nine lines later |
+
+Every one is the same class: **a record rebuilt from an explicit field list
+silently drops a field nobody remembered to add.** Patching them one at a time
+is enumeration over an open set — it converged three times and was wrong three
+times, and nothing about the fourth patch would have made a sixth site
+impossible rather than merely un-found.
+
+So the id history **stops being a field on a record that gets rebuilt**:
+
+```
+.audiobook/cast-id-history.json
+{
+  "schema": 1,
+  "supersededBy": {
+    "mayrin":       "mairin",
+    "unknown-male": "timkin",
+    "the-torment":  "the_torment"
+  }
+}
 ```
 
-Added to `characterSchema` (`server/src/handoff/schemas.ts`) as
-`z.array(z.string()).optional()`, mirroring the existing `aliases` field.
-`openapi.yaml` carries `Character` (line 6451, `aliases` at 6462), so the field
-is added there too and `src/lib/api-types.ts` is regenerated with
-`npm run openapi:types`.
+A flat map from a **superseded id** to the **cast id that now owns it**.
 
-`aliases` (display-name spellings) and `idAliases` (ids) stay separate — they
-are matched against different things, and conflating them would let a display
-name resolve as an id.
+**What this actually buys, stated precisely.** It does not make forgetting
+impossible — a future code path that retires an id can still fail to record it.
+What it changes is the *failure mode*. Under the field design, an unrelated
+rebuild silently deleted history that was already working: a regression, in a
+place with no connection to this feature. Under the side-table, the worst a
+missed call site can do is fail to add a new entry — the id stays orphaned
+exactly as it is today, which is visible in the §4.6 banner and fixable
+additively. **Nothing can take working resolution away.** That is the property
+three rounds of patching could not buy.
 
-**`idAliases` must survive a client cast write.**
-`preserveDesignedVoicesOnCastWrite` (`server/src/workspace/preserve-cast-voices.ts:44`)
-protects exactly three fields plus `voiceUuid`; a `PUT /:bookId/state` slice
-`'cast'` writes the roster verbatim otherwise, so any client round-trip that
-omits `idAliases` would erase it — destroying the only thing that makes frozen
-segments resolve. `idAliases` joins that preserved set with **union**
-semantics, not the fill-the-gap semantics the three design fields use: the set
-accumulates and must never shrink through a round-trip. The frontend's
-`hydrateFromAnalysis` overlay (`src/store/cast-slice.ts`) needs the same
-treatment.
+Consequences that fall out of it:
+
+- `characterSchema`, `openapi.yaml` and `api-types.ts` are **untouched** by this
+  design. No new `Character` field, so no allow-list anywhere needs updating,
+  and site 4's client `PUT` and site 1's merge become non-issues by
+  construction rather than by patch.
+- The file survives `rm cast.json` — so site 5, the reparse that destroys the
+  cast and keeps `manuscript-edits.json`, keeps the history that reconciles the
+  edits it preserved. It must be explicitly excluded from reparse and
+  "Start fresh" cleanup; that exclusion is the one thing worth a guard test.
+- Losing the file degrades to today's behaviour. It is a lookup side-table and
+  is **never authoritative for identity** — `cast.json` remains that. It cannot
+  corrupt a cast; at worst it stops helping.
+
+**One writer.** Every retirement goes through a single choke point:
+
+```ts
+// server/src/store/cast-id-history.ts
+/** Record that `from` is no longer a live cast id and `to` now owns its lines.
+    Also repoints any existing entry that pointed at `from`, so resolution stays
+    a single O(1) lookup instead of a transitive chase. Idempotent; a no-op when
+    from === to. */
+export async function retireCharacterId(
+  bookDir: string, from: string, to: string,
+): Promise<void>;
+```
+
+Its callers are the five id-retiring paths — sites 1, 2, 3 above, plus
+§4.4's remap and `cast-merge`'s `performCastMerge`
+(`cast-merge.ts:142-146`, which drops the source row outright and today orphans
+every segment that row rendered).
 
 ### 4.2 The matcher: exact and encoding-equivalent only
 
@@ -225,7 +278,7 @@ governs only the first.
 
 - **The matcher** (this section) runs at **merge/repair time**, over *display
   names and ids*, and decides whether a fresh row is the same person as an
-  existing cast row — i.e. whether an `idAliases` entry is recorded at all.
+  existing cast row — i.e. whether a history entry is recorded at all.
 - **The resolver** (§4.3) runs at **read time**, over *ids only*, and looks a
   `characterId` up against aliases already recorded. It never matches on names
   and never records anything.
@@ -272,17 +325,31 @@ export interface CastResolution {
       than an exact id — the caller may want to report the reconciliation. */
   viaAlias?: string;
 }
-export function buildCastResolver(cast: readonly CastRecord[]): {
+/** `history` is the `supersededBy` map from cast-id-history.json (§4.1).
+    Callers that cannot cheaply load it may pass `{}` — resolution then falls
+    back to the two id-only tiers, which is what recovers the wave-1
+    population. */
+export function buildCastResolver(
+  cast: readonly CastRecord[],
+  history: Readonly<Record<string, string>> = {},
+): {
   resolve(characterId: string): CastResolution | undefined;
 };
 ```
 
-Resolution order — four id-only lookups, first hit wins: exact id → exact
-`idAliases` → `normaliseIdKey`'d id → `normaliseIdKey`'d `idAliases`. Display
-names are not consulted.
+Resolution order — four id-only lookups, first hit wins: exact id → `history`
+hit whose target is a live cast id → `normaliseIdKey`'d id → `normaliseIdKey`'d
+`history` key. Display names are never consulted.
+
+**A history entry never beats a live id.** Tier 1 is exact-id, so when a
+retired id is later re-minted as a real character — `foldMinorCast` remints
+`unknown-male` routinely, and Exile's cache still carries it for five chapters
+— the live row wins. That is correct, but it silently reroutes the 55 segments
+that history was covering, so §4.4 requires the stale entry to be **dropped and
+reported** at the moment the id is reclaimed, rather than left to lose quietly.
 
 **The normalised tiers return `undefined` on a tie.** If two cast rows share a
-`normaliseIdKey`, or an alias duplicates another row's id, silently picking one
+`normaliseIdKey`, or a history key duplicates another row's id, silently picking one
 would render every line of one character in another's voice — strictly worse
 than today's narrator substitution, which at least stamps
 `renderedFallbackCharacterId` and shows in #2023's banner. No such collision
@@ -397,43 +464,50 @@ This is the riskiest single change in the design (§9).
 
 **The invariant that generalises all of this:**
 
-> Any code path that changes a character's persisted id records the old id in
-> that character's `idAliases` — and no code path on the analysis write path
-> may drop the field.
+> Any code path that retires a character id calls
+> `retireCharacterId(bookDir, from, to)` (§4.1). Nothing else needs to know the
+> id history exists.
 
-It takes **three** changes, not one. An earlier draft named only the first and
-was inert, which is the same defect the round-1 review killed one level up.
+Because the history is not a field on `Character`, the five destroy-sites
+tabulated in §4.1 stop being changes this design has to make. Sites 1, 4 and 5
+(the merge's allow-list, the client `PUT` preserve set, the reparse carryover
+whitelist) become non-issues outright — they rebuild `Character` records, and
+the history no longer lives there. Sites 2 and 3 turn from *"must remember to
+preserve a field"* into *"must call the choke point"*, and a missed call leaves
+an id orphaned exactly as it is today rather than deleting resolution that was
+already working.
 
-1. **`applyRewriteToPriorCast` (`merge-analysis-cast.ts:224-275`) appends the
-   old id.** Today it swaps a live row's id (`:235`) and discards the original.
-2. **Its collision path must union the loser, not drop it.** When two prior
-   rows rewrite onto one canonical id, `winners`/`voiceStateRank` keeps one and
-   pushes the other to `droppedVoices` — a log array — then discards it
-   (`:274`). The dedup collapse **is** this path, so it is precisely the case
-   the invariant must cover. The rule is
-   `winner.idAliases ∪= {winner.originalId, loser.originalId} ∪ loser.idAliases`.
-3. **`mergeAnalysisResultWithExistingCast` must union `idAliases`.** This is
-   the load-bearing one. It builds every output row as `{ ...f }` from the
-   *fresh* roster and overlays only `PRESERVED_VOICE_FIELDS` (`:35-45`), a
-   union of `aliases`, and the narrator carry-forward. `idAliases` is in none
-   of them — so without this, every re-analysis erases the accumulated alias
-   set for every matched character, and changes 1 and 2 are discarded eight
-   lines after they are made (`analysis.ts:4767` → `:4775`). Union it on
-   **both** the id-matched branch and the name-fallback branch, exactly as
-   `aliases` is handled at `:180-181`.
+The call sites are:
 
-**An alias must never shadow a live id, and must yield when its id is
-re-minted.** Resolution is exact-id-first (§4.3), so a returning real
-`unknown-male` row correctly wins over Timkin's alias — but then Timkin's 21
-frozen segments silently reroute to the generic background bucket with no tie,
-no warning and no orphan stamp. This is not hypothetical: `foldMinorCast` mints
-that bucket routinely (`fold-minor-cast.ts:294-303`) and Exile's cache
-`chapterCast` still carries `unknown-male` for chapters 7/11/24/33/34, which
-`rebuildRoster` folds back into every roster build. **55 of the 188 segments
-are exposed.** The rule: when a fresh roster introduces a live row whose id
-collides with an existing `idAliases` entry, that entry is **removed** from the
-other character and the affected segments are reported as *needs your decision*
-(§4.6) rather than silently rerouted.
+1. **`applyRewriteToPriorCast` (`merge-analysis-cast.ts:224-275`)** — both the
+   plain rename (`:235`) and the collision path, which today keeps one row and
+   discards the loser at `:274`.
+2. **`dedupePriorCastByName` (`:405-425`)** — the fourth collapse, found in
+   round 3. It unions the loser's display-name `aliases`, pushes the loser's
+   **id** into a `dropped` log array, and `continue`s past the row. It runs
+   *before* `applyRewriteToPriorCast` (`analysis.ts:2822`/`:5224` vs
+   `:4767`/`:5920`), so it is the first chance to lose an id, not the last.
+3. **`mergeAnalysisResultWithExistingCast`'s name-fallback branch** — when it
+   matches `old` under a different id, that id is retired.
+4. **§4.4's remap** — every entry in its `rewrites` map is a retirement.
+5. **`performCastMerge` (`cast-merge.ts:142-146`)** — a user merging two
+   characters drops the source row outright and rewrites
+   `manuscript-edits.json` and the cache into target-id space, but never
+   touches `segments.json`. Every segment that row already rendered is orphaned
+   the instant the merge lands. §4.3 correctly excludes this route from the
+   *resolver* (its id comes from an API caller), but that exclusion never
+   applied to the write side — it retires an id and so it records one.
+
+**A retired id must yield when it is re-minted, loudly.** Resolution is
+exact-id-first (§4.3), so a returning real `unknown-male` row correctly beats
+Timkin's history entry — but Timkin's 21 frozen segments then reroute to the
+generic background bucket with no tie, no warning and no orphan stamp.
+`foldMinorCast` remints that bucket routinely (`fold-minor-cast.ts:294-303`)
+and Exile's cache still carries `unknown-male` for chapters 7/11/24/33/34,
+which `rebuildRoster` folds into every roster build. **55 of the 188 segments
+are exposed.** The rule: when a fresh roster introduces a live row whose id is a
+key in the history, that entry is **dropped** and its segments are reported as
+*needs your decision* (§4.6) rather than silently rerouted.
 
 ### 4.5 RC2 — `cast-create.ts` uses `safeId`
 
@@ -467,7 +541,7 @@ With that fixed, the banner splits in two:
   so the user can confirm or reject rather than reading raw ids.
 
 **The un-record path must be durable.** Rejecting a reconciliation removes the
-`idAliases` entry — but §4.4's fallback matches on the *name*, which the
+history entry — but §4.4's fallback matches on the *name*, which the
 rejection does not change, so the next re-analysis would simply re-record it.
 The repo already has the right primitive: `notLinkedTo`, honoured by
 `dedupePriorCastByName` (`merge-analysis-cast.ts:391`, `groupHasNotLinkedEdge`)
@@ -520,7 +594,15 @@ with RC1 or with another incomplete repair, but that has not been traced. The
 repair pass handles them the same way as any other unresolved orphan — reported
 for a human — so this gap does not block wave 3, but it does mean §1.2 is not
 yet a complete account and should not be read as one.
-- Writes `cast.json.bak.id-drift-<date>` before any change.
+
+The pass also:
+
+- **Writes `cast-id-history.json`, not `cast.json`.** This is a consequence of
+  §4.1 worth stating plainly: the repair adds history entries and does not touch
+  the cast at all, so it cannot strip a voice, reorder a roster, or corrupt an
+  identity. It still takes a `cast.json.bak.id-drift-<date>` backup before any
+  run that would touch the cast for an unrelated reason, and it still refuses
+  `--apply` against a live server.
 - Emits the **re-render list**: book, chapter, orphaned id, segment count,
   approximate affected duration. Whether to spend GPU time on those re-renders
   is a separate call.
@@ -528,19 +610,19 @@ yet a complete account and should not be read as one.
 ## 5. Testing
 
 **The headline regression test must exercise §4.4, not presuppose its
-outcome.** A test that starts from a cast already holding
-`idAliases: ['mayrin']` tests only the resolver and would stay green if §4.4
-did nothing — the placebo shape this repo has been bitten by before. So:
+outcome.** A test that starts from a history already containing
+`mayrin → mairin` tests only the resolver and would stay green if §4.4 did
+nothing — the placebo shape this repo has been bitten by before. So:
 
 1. **Resolver test** — a chapter group carrying `mayrin`, against a cast
-   holding `mairin` with `idAliases: ['mayrin']`, renders in Мэйрин's designed
-   voice and stamps no `renderedFallbackCharacterId`. Fails before, passes
-   after.
-2. **Merge test, no alias pre-seeded** — run the merge with a prior cast
-   holding `mairin` and a fresh roster holding `mayrin` for the same name;
-   assert the written cast keeps `mairin`, that `mayrin` lands in `idAliases`,
-   **and that this run's sentences were remapped to `mairin`**. This is the one
-   that fails if the remap is inert.
+   holding `mairin` and a history containing `mayrin → mairin`, renders in
+   Мэйрин's designed voice and stamps no `renderedFallbackCharacterId`. Fails
+   before, passes after.
+2. **Merge test, nothing pre-seeded** — start with an EMPTY history, run the
+   analysis with a prior cast holding `mairin` and a fresh roster holding
+   `mayrin` for the same name; assert the written cast keeps `mairin`, that the
+   history now contains `mayrin → mairin`, **and that this run's sentences were
+   remapped to `mairin`**. This is the one that fails if the remap is inert.
 
 | Layer | Coverage |
 |---|---|
@@ -548,14 +630,13 @@ did nothing — the placebo shape this repo has been bitten by before. So:
 | unit | `buildCastResolver`: each of the four tiers hits; a true miss returns `undefined`; **a tie returns `undefined`** |
 | server | an **unvoiced** drifted character keeps its prior id (locks RC1) |
 | server | the ambiguity guard still refuses to match when two candidates share a name key |
-| server | `applyRewriteToPriorCast` appends the old id to `idAliases` |
-| server | its **collision** path unions the loser's id *and* the loser's existing `idAliases` into the winner (locks RC3's live path — the unit test above passes without this) |
-| server | **end-to-end**: run a full analysis over a book whose cast already has `idAliases`, and assert the written `cast.json` still has them. This is the test that fails if `mergeAnalysisResultWithExistingCast` drops the field — the two rows above are green either way |
-| server | `findDivergentSentences` does not report divergence when the sentence store and the frozen segment differ only by an alias (locks the eighth site; without it wave 2 blocks QA repair) |
-| server | a fresh roster re-minting a live `unknown-male` row removes that entry from the other character's `idAliases` and reports the affected segments rather than rerouting them |
-| server | a rejected reconciliation writes a `notLinkedTo` edge, and a subsequent re-analysis does not re-record the alias |
+| server | `retireCharacterId` is idempotent, no-ops when `from === to`, and **repoints** an existing entry whose target was `from` |
+| server | each of the five call sites records a retirement — `applyRewriteToPriorCast` rename, its collision loser, `dedupePriorCastByName`'s loser, the merge's name-fallback, `performCastMerge`'s source |
+| server | **the survival guard**: a reparse (`applyReparse`, which `rm`s `cast.json`) and a client cast `PUT` both leave `cast-id-history.json` intact. This is the test that pins §4.1's whole rationale — under the previous field-based design both of these destroyed the data |
+| server | `findDivergentSentences` does not report divergence when the sentence store and the frozen segment differ only by a retired id (locks the eighth site; without it wave 2 blocks QA repair) |
+| server | a fresh roster re-minting a live `unknown-male` row drops that history entry and reports the affected segments rather than rerouting them |
+| server | a rejected reconciliation writes a `notLinkedTo` edge, and a subsequent re-analysis does not re-record the retirement |
 | server | `pruneSuggestionsToRoster` still returns a non-empty list after a remap (locks §4.4 step 4) |
-| server | a client cast `PUT` omitting `idAliases` does not erase it (locks §4.1) |
 | server | `:1519` — a resolvable orphan still puts the resolved character into the clone pre-pass |
 | server | `cast-create` mints hyphen ids and preserves a Cyrillic name (RC2) |
 | server | `resolveGroup` still records the #2023 orphan stamp on a genuine miss |
@@ -568,7 +649,7 @@ The golden-audio tier is not involved — no audio-assembly behaviour changes.
 
 | Wave | Ships | Standalone effect |
 |---|---|---|
-| 1 | `normaliseIdKey`, `buildCastResolver` (incl. tie handling), all seven sites, `idAliases` on the schema + preserved-on-write | Recovers **68 of 188** orphaned segments (36%) via Tier B alone, with no alias recorded — and closes the `:1519` gate it would otherwise open |
+| 1 | `normaliseIdKey`, `buildCastResolver` (incl. tie handling), all eight sites | Recovers **68 of 188** orphaned segments (36%) via the normalised tier alone, with an EMPTY history and no schema change at all — and closes the `:1519` gate it would otherwise open |
 | 2 | §4.4's early remap pass, all three parts of the id invariant, the eighth site, RC2 | Stops new **cast.json** drift on both the model and dedup paths, and keeps the alias set alive across re-analysis |
 | 3 | repair pass, banner split + un-record path, re-render list | Cleans up the existing books |
 
@@ -627,7 +708,7 @@ hazards:
   ambiguous where today the voiced one matches cleanly — stranding the designed
   voice as a 0-line duplicate. `dedupePriorCastByName` mitigates but does not
   close this, and it keys on a *different* normaliser (§4.2, §11).
-- *Durability.* A wrong match now writes a persisted `idAliases` entry rather
+- *Durability.* A wrong match now writes a persisted history entry rather
   than only mis-carrying voice fields. §4.6's un-record path is the mitigation
   and is not optional.
 
