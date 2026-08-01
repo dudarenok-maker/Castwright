@@ -190,7 +190,7 @@ describe('selectCloneReadinessVerdicts', () => {
       expect(selectCloneReadinessVerdicts(state([c], [e]), 'b1')).toEqual([]);
     });
 
-    it('reports wrong-engine when routed off qwen, with castOnEngine null — the legacy shape carries no `provenance` on ANY engine, so `hasClonedProvenance` (the ONLY correct castOnEngine helper, arity 2) is false for it everywhere; a mutation dropping its second argument (`characterHasClonedSlot(character)`, always true for any cloned character) would read castOnEngine as "qwen" here', () => {
+    it('reports wrong-engine when routed off qwen, and offers "Cast on Qwen" — `buildInput` already computes the legacy-aware `characterHasSlot` (engine === \'qwen\') correctly for the qwen candidate; overwriting it with the bare, provenance-requiring `hasClonedProvenance(character, candidate)` (always false for this shape, which carries no `provenance` field at all) self-rejects every candidate and was the #5 regression this pins against', () => {
       const c = char({
         ttsEngine: 'coqui',
         overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: 'v1' } },
@@ -198,7 +198,7 @@ describe('selectCloneReadinessVerdicts', () => {
       const e = entry({ engines: { qwen: { status: 'ready', baseModel: 'x' } }, master: healthyMaster() });
       const verdicts = selectCloneReadinessVerdicts(state([c], [e]), 'b1');
       expect(verdicts).toEqual([
-        expect.objectContaining({ reason: 'wrong-engine', castOnEngine: null }),
+        expect.objectContaining({ reason: 'wrong-engine', castOnEngine: 'qwen' }),
       ]);
     });
   });

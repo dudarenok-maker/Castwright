@@ -66,12 +66,14 @@ const cases: Case[] = [
   },
   {
     // Rules 5/6 must NOT treat "not failed" as "healthy" — only an actual
-    // 'ready' status exempts. Mutation: insert rev 2's dead short-circuit
-    // (`if (slotStatus === 'ready') return null;` right after rule 2) ->
-    // this must go red, because 'stale' would then also short-circuit if
-    // the short-circuit were instead written as "not ready is fine"; more
-    // directly, this pins that 'stale' (distinct from 'ready') still falls
-    // through to rule 6.
+    // 'ready' status exempts. "Insert rev 2's dead short-circuit" is INERT
+    // here: `slotStatus === 'ready'` is false for a 'stale' input by
+    // construction, so that mutation can never redden this fixture (plan
+    // 276's [R4] correction). The mutation that actually targets this case
+    // is narrowing rule 6's gate from `slotStatus !== 'ready'` to
+    // `slotStatus === undefined` (i.e. "only warn if never derived") ->
+    // this must go red, because a 'stale' slot (not `undefined`) would then
+    // skip rule 6 and fall through to null instead of `no-transcript`.
     name: "slotStatus 'stale' + blank transcript + Qwen -> no-transcript",
     input: { ...base, engine: 'qwen', slotStatus: 'stale', transcript: '', characterHasSlot: true },
     expected: 'no-transcript',

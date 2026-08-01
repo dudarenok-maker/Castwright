@@ -476,6 +476,31 @@ const rows: Row[] = [
     expectedClient: 'derive-failed',
     expectedRender: 'derive-failed',
   },
+  // --- The C1 regression row (Decision 2 [R3]): a persisted 'failed' status
+  // that is ALSO version-stale. Every other 'failed' row above pins
+  // `versionMismatch: false`, so none of them actually reaches
+  // `withComputedStaleness`'s `qwen.status !== 'failed'` guard — the guard
+  // only matters when a failed slot's version stamp doesn't match the
+  // current one. Mutation: delete `qwen.status !== 'failed' &&` from
+  // `withComputedStaleness` (routes/voice-library.ts) -> the client side
+  // reads the overwritten 'stale' status instead of 'failed', falls through
+  // to rule 7 (a non-blank transcript on qwen with slotStatus 'stale' isn't
+  // caught by rules 5/6 either), and this row goes red on the client
+  // assertion (null instead of 'derive-failed') without ever reaching the
+  // co-oracle comparison.
+  {
+    name: "C1: a failed slot that is ALSO version-stale still yields derive-failed (withComputedStaleness must not overwrite a failed status)",
+    entryFound: true,
+    consentRevoked: false,
+    rawStatus: 'failed',
+    versionMismatch: true,
+    hasMaster: true,
+    transcript: 'a transcript',
+    engine: 'qwen',
+    characterHasSlot: true,
+    expectedClient: 'derive-failed',
+    expectedRender: 'derive-failed',
+  },
   {
     name: 'entryFound:false on an otherwise-healthy input -> client missing-entry, render misconfigured',
     entryFound: false,

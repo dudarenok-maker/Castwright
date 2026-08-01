@@ -66,17 +66,17 @@ export function startGenerationFlow() {
          even though a cloned voice IS assigned. Skipped when no character
          could possibly trip the check at all, to avoid a needless fetch on
          every plain (non-cloned) book's start-generation click. */
-      /* Plan 276 Decision 5 — its OWN entry condition and early return,
-         independent of `rendersOnQwen`: a Coqui-only cloned cast must reach
-         this gate. `fetchVoiceLibrary` (Decision 2) ensures the library
-         entries are actually loaded — the cast view never fetches it itself
-         (only `my-voices-section.tsx` does) — so the slice can be empty here
-         even though a cloned voice IS assigned. Skipped when no character
-         could possibly trip the check at all, to avoid a needless fetch on
-         every plain (non-cloned) book's start-generation click. */
       if (bookId && castNeedsCloneCheck(cast.characters)) {
         try {
-          await dispatch(fetchVoiceLibrary());
+          /* `.unwrap()` is required: `fetchVoiceLibrary` is a
+             `createAsyncThunk`, so dispatching it returns a promise that
+             ALWAYS resolves (with a `rejected` action) on failure — a bare
+             `await dispatch(...)` never throws, so a plain try/catch around
+             it is dead code and the gate would fail CLOSED (empty `entries`
+             reads every cloned character as `missing-entry`) instead of
+             open. `.unwrap()` re-throws the rejection so this catch can
+             actually run. */
+          await dispatch(fetchVoiceLibrary()).unwrap();
         } catch {
           /* Decision 5 — fails open: an advisory this thunk couldn't
              compute must never block the user from generating. */

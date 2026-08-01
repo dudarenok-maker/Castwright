@@ -1,9 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
+import { configureStore } from '@reduxjs/toolkit';
 import { castRendersOnQwen, startGenerationFlow } from './start-generation-flow';
-import { uiActions } from './ui-slice';
+import { uiSlice, uiActions } from './ui-slice';
+import { castSlice } from './cast-slice';
+import { voiceLibrarySlice } from './voice-library-slice';
 import type { Character } from '../lib/types';
 import type { VoiceLibraryEntry } from './voice-library-slice';
 import type { AppDispatch, RootState } from './index';
+
+/* Backs the real-store fail-open test below (Decision 5) — mocked at the
+   `api` boundary, never at the `fetchVoiceLibrary` thunk itself, so the
+   thunk's own resolve/reject plumbing (and `.unwrap()`'s re-throw) is
+   exercised for real rather than assumed. Same shape as
+   `voice-library-slice.test.ts`'s own `api` mock. */
+vi.mock('../lib/api', () => ({
+  api: { listVoiceLibrary: vi.fn() },
+}));
+import { api } from '../lib/api';
 
 const char = (over: Partial<Character>): Character => ({ id: 'c', name: 'C', ...over }) as Character;
 
@@ -41,8 +54,13 @@ describe('startGenerationFlow thunk', () => {
   /* `dispatch` is a bare mock (no real thunk middleware), so a `fetchVoiceLibrary()`
      dispatch (the only OTHER thunk this flow dispatches) arrives here as a plain
      function argument — every other dispatch this flow makes is a plain ui-slice
-     action object. `opts.fetchFails` flips it to reject, exercising Decision 5's
-     fail-open path without needing a real store. */
+     action object. The production flow calls `.unwrap()` on that dispatch result
+     (Decision 5), so the fake must return something `.unwrap()`-able rather than
+     a bare value or Promise. This helper only ever exercises the SUCCESS path —
+     the fail-open path needs a REAL store + thunk middleware to be exercised
+     honestly (a bare mock can't reproduce `createAsyncThunk`'s actual
+     resolve-with-a-rejected-action shape), so that case has its own dedicated
+     real-store test below rather than a `fetchFails` flag here. */
   const run = async (
     characters: Character[],
     ttsModelKey: string,
@@ -50,14 +68,11 @@ describe('startGenerationFlow thunk', () => {
       bookId?: string;
       language?: string;
       libraryEntries?: VoiceLibraryEntry[];
-      fetchFails?: boolean;
     } = {},
   ) => {
     const dispatch = vi.fn((action: unknown) => {
       if (typeof action === 'function') {
-        return opts.fetchFails
-          ? Promise.reject(new Error('fetch failed'))
-          : Promise.resolve({ voices: opts.libraryEntries ?? [] });
+        return { unwrap: () => Promise.resolve({ voices: opts.libraryEntries ?? [] }) };
       }
       return action;
     });
@@ -168,19 +183,69 @@ describe('startGenerationFlow thunk', () => {
     });
 
     it('fails open on a fetchVoiceLibrary rejection — generation starts rather than blocking on an advisory it could not compute', async () => {
+      /* Driven through a REAL store + thunk middleware, deliberately NOT the
+         `run()` helper above. `fetchVoiceLibrary` is a `createAsyncThunk`:
+         dispatching it returns a promise that ALWAYS resolves (with a
+         `rejected` action) unless `.unwrap()`ped, so `run()`'s bare-mock
+         `dispatch` — which hands the producer's function argument straight
+         to a `Promise.reject(...)` stand-in — accepts a bare
+         `try { await dispatch(...) } catch {}` as if it could ever run. It
+         can't: a real dispatch of a rejected `createAsyncThunk` never
+         throws. Only a real store's thunk middleware, with the real
+         `fetchVoiceLibrary` action creator, reproduces that shape. Mutation:
+         delete the whole fail-open `try`/`catch` (or drop `.unwrap()` back
+         to a bare `await`) from `start-generation-flow.ts` -> this test goes
+         red (no `requestStartGeneration`, and the promise the flow returns
+         rejects instead of resolving). */
+      vi.mocked(api.listVoiceLibrary).mockRejectedValueOnce(new Error('fetch failed'));
       const cast = [
         char({
           ttsEngine: 'coqui',
           overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
         }),
       ];
-      const dispatch = await run(cast, 'coqui-xtts-v2', {
-        libraryEntries: [healthyEntry()],
-        fetchFails: true,
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          voiceLibrary: voiceLibrarySlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            ttsModelKey: 'coqui-xtts-v2',
+            stage: {
+              kind: 'ready',
+              bookId: 'b1',
+              view: 'manuscript',
+              currentChapterId: 1,
+              openProfileId: null,
+            },
+          } as never,
+          cast: { ...castSlice.getInitialState(), characters: cast },
+          voiceLibrary: voiceLibrarySlice.getInitialState(),
+        },
       });
-      expect(dispatch).toHaveBeenCalledWith(uiActions.requestStartGeneration());
-      expect(dispatch).not.toHaveBeenCalledWith(uiActions.openCloneReadinessGate({ bookId: 'b1' }));
-      expect(dispatch).not.toHaveBeenCalledWith(uiActions.openStartGenPrompt());
+      const dispatchSpy = vi.spyOn(store, 'dispatch');
+
+      /* Calling the thunk directly (rather than `store.dispatch(thunk)`)
+         keeps the same call shape the `run()` helper above uses — this
+         thunk's `dispatch`/`getState` parameters are typed against the
+         FULL app's `AppDispatch`/`RootState`, which this deliberately
+         minimal store doesn't structurally satisfy — while still routing
+         every dispatch through the REAL store's real thunk middleware and
+         reducers (the spy wraps `store.dispatch` itself, not a copy). */
+      await startGenerationFlow()(
+        store.dispatch as unknown as AppDispatch,
+        store.getState as unknown as () => RootState,
+      );
+
+      const types = dispatchSpy.mock.calls.map((c) => (c[0] as { type?: string })?.type);
+      expect(types).toContain(uiActions.requestStartGeneration().type);
+      expect(types).not.toContain(uiActions.openCloneReadinessGate({ bookId: 'b1' }).type);
+      expect(types).not.toContain(uiActions.openStartGenPrompt({}).type);
+      // The rejection was genuinely observed, not merely assumed absent.
+      expect(store.getState().voiceLibrary.status).toBe('error');
     });
 
     it('skips fetchVoiceLibrary entirely for a plain cast with no cloned or legacy slot at all', async () => {

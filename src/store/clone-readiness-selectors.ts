@@ -186,7 +186,18 @@ function buildInput(
     per-candidate `characterHasSlot` MUST be `hasClonedProvenance` (arity 2,
     single-engine) — `characterHasClonedSlot` takes ONE argument and does not
     compile with two; dropping the second argument silently makes this
-    always-true for any cloned character. */
+    always-true for any cloned character.
+
+    `buildInput` already computes `characterHasSlot` correctly for the
+    candidate engine — legacy-aware (trap 1's `isLegacy ? engine === 'qwen' :
+    hasClonedProvenance(...)`), which is exactly trap 4's requirement on the
+    non-legacy path and the ONLY correct answer on the legacy one. Do NOT
+    recompute/overwrite it with a bare `hasClonedProvenance(character,
+    candidate)` here — `hasClonedProvenance` is false for the legacy
+    bare-uuid shape on every engine by definition (it has no `provenance`
+    field at all), so overwriting silently self-rejects every candidate for a
+    legacy character and `castOnEngine` comes back `null` even when "Cast on
+    Qwen" would fix it. */
 function castOnEngineFor(
   character: Character,
   mainInput: CloneReadinessInput,
@@ -196,10 +207,7 @@ function castOnEngineFor(
   for (const candidate of candidates) {
     const candidateInput = buildInput(character, candidate, entries);
     if (!candidateInput) continue;
-    const verdict = cloneReadiness({
-      ...candidateInput,
-      characterHasSlot: hasClonedProvenance(character, candidate),
-    });
+    const verdict = cloneReadiness(candidateInput);
     if (verdict === null) return candidate;
   }
   return null;

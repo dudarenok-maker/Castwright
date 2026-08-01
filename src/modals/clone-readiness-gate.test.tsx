@@ -11,7 +11,7 @@
    right CTA, and nothing else. */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, within, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, within, cleanup, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { CloneReadinessGateModal } from './clone-readiness-gate';
@@ -70,11 +70,6 @@ function makeStore(opts: { gate?: { bookId: string } | null; characters?: Charac
   });
 }
 
-/* Every button label this modal can ever render, across all six reasons —
-   used to assert "renders its own CTA and no other" by checking every OTHER
-   label is absent from a given row. */
-const ALL_CTA_LABELS = ['Add transcript', 'Retry derive', 'Assign a different voice'];
-
 function ctaButtonsIn(row: HTMLElement): string[] {
   return within(row)
     .queryAllByRole('button')
@@ -114,10 +109,7 @@ describe('CloneReadinessGateModal', () => {
       </Provider>,
     );
     const row = screen.getByTestId('clone-readiness-row-c1');
-    expect(within(row).getByRole('button', { name: 'Add transcript' })).toBeInTheDocument();
-    for (const label of ALL_CTA_LABELS.filter((l) => l !== 'Add transcript')) {
-      expect(within(row).queryByRole('button', { name: label })).not.toBeInTheDocument();
-    }
+    expect(ctaButtonsIn(row)).toEqual(['Add transcript']);
   });
 
   it('derive-failed renders "Retry derive" and no other CTA', () => {
@@ -129,10 +121,7 @@ describe('CloneReadinessGateModal', () => {
       </Provider>,
     );
     const row = screen.getByTestId('clone-readiness-row-c1');
-    expect(within(row).getByRole('button', { name: 'Retry derive' })).toBeInTheDocument();
-    for (const label of ALL_CTA_LABELS.filter((l) => l !== 'Retry derive')) {
-      expect(within(row).queryByRole('button', { name: label })).not.toBeInTheDocument();
-    }
+    expect(ctaButtonsIn(row)).toEqual(['Retry derive']);
   });
 
   it('missing-entry renders "Assign a different voice" and no other CTA', () => {
@@ -144,10 +133,7 @@ describe('CloneReadinessGateModal', () => {
       </Provider>,
     );
     const row = screen.getByTestId('clone-readiness-row-c1');
-    expect(within(row).getByRole('button', { name: 'Assign a different voice' })).toBeInTheDocument();
-    for (const label of ALL_CTA_LABELS.filter((l) => l !== 'Assign a different voice')) {
-      expect(within(row).queryByRole('button', { name: label })).not.toBeInTheDocument();
-    }
+    expect(ctaButtonsIn(row)).toEqual(['Assign a different voice']);
   });
 
   it('revoked renders explanatory copy and NO CTA at all', () => {
@@ -221,6 +207,53 @@ describe('CloneReadinessGateModal', () => {
     expect(store.getState().cast.characters[0].ttsEngine).toBe('coqui');
   });
 
+  it('"Retry derive" calls retryCloneEngine with the voiceUuid and the character\'s ROUTED engine (Decision 7)', async () => {
+    mockVerdicts = [verdict({ characterId: 'c1', reason: 'derive-failed', engine: 'coqui' })];
+    const store = makeStore({
+      characters: [
+        char({
+          id: 'c1',
+          overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'lib-uuid-1', provenance: 'cloned' } },
+        }),
+      ],
+    });
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry derive' }));
+    await waitFor(() => expect(retryCloneEngine).toHaveBeenCalledWith('lib-uuid-1', 'coqui'));
+  });
+
+  it('"Save transcript" PATCHes the library with the typed transcript (Decision 6)', async () => {
+    mockVerdicts = [verdict({ characterId: 'c1', reason: 'no-transcript', engine: 'qwen' })];
+    const store = makeStore({
+      characters: [
+        char({
+          id: 'c1',
+          overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: 'lib-uuid-2', provenance: 'cloned' } },
+        }),
+      ],
+    });
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add transcript' }));
+    const row = screen.getByTestId('clone-readiness-row-c1');
+    fireEvent.change(within(row).getByRole('textbox', { name: 'transcript' }), {
+      target: { value: 'A brand new transcript.' },
+    });
+    fireEvent.click(within(row).getByRole('button', { name: 'Save transcript' }));
+    await waitFor(() =>
+      expect(patchVoiceLibrary).toHaveBeenCalledWith('lib-uuid-2', {
+        transcript: 'A brand new transcript.',
+      }),
+    );
+  });
+
   it('multiple characters with different reasons each render their own row and CTA', () => {
     mockVerdicts = [
       verdict({ characterId: 'c1', characterName: 'Alice', reason: 'no-transcript', engine: 'qwen' }),
@@ -240,7 +273,7 @@ describe('CloneReadinessGateModal', () => {
     expect(within(row2).getByRole('button', { name: 'Retry derive' })).toBeInTheDocument();
   });
 
-  it('Proceed anyway closes the gate and does NOT dispatch openStartGenPrompt', () => {
+  it('Proceed anyway closes the gate, dispatches requestStartGeneration, and does NOT dispatch openStartGenPrompt', () => {
     mockVerdicts = [verdict({ characterId: 'c1', reason: 'revoked' })];
     const store = makeStore({ characters: [char({ id: 'c1' })] });
     const dispatchSpy = vi.spyOn(store, 'dispatch');
@@ -253,6 +286,14 @@ describe('CloneReadinessGateModal', () => {
     expect(
       dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.openStartGenPrompt({}).type),
     ).toBe(false);
+    /* The positive half — Decision 1's warn-and-ALLOW only holds if
+       "Proceed anyway" actually starts generation. Asserting only the
+       negative (above) is what let this regress to warn-and-BLOCK silently:
+       deleting the `requestStartGeneration` dispatch from `onProceedAnyway`
+       still passes a suite that only checks `openStartGenPrompt` is absent. */
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+    ).toBe(true);
     expect(store.getState().ui.startGenPrompt).toBeNull();
     expect(store.getState().ui.cloneReadinessGate).toBeNull();
   });
@@ -260,6 +301,7 @@ describe('CloneReadinessGateModal', () => {
   it('Cancel closes the gate without starting generation', () => {
     mockVerdicts = [verdict({ characterId: 'c1', reason: 'revoked' })];
     const store = makeStore({ characters: [char({ id: 'c1' })] });
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
     render(
       <Provider store={store}>
         <CloneReadinessGateModal />
@@ -267,5 +309,8 @@ describe('CloneReadinessGateModal', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(store.getState().ui.cloneReadinessGate).toBeNull();
+    expect(
+      dispatchSpy.mock.calls.some((c) => c[0]?.type === uiActions.requestStartGeneration().type),
+    ).toBe(false);
   });
 });
