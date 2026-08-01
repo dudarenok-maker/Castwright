@@ -33,6 +33,7 @@ const bumpScript = resolve(here, '..', 'bump-version.mjs');
 // mojibake fixtures: "É™" reads as a mangled "ə", so "CAFÉ™" is a legitimate,
 // word-embedded false positive the allowlist marker exists for.
 const CAFE = 'CAFÉ™';
+const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone == unallowlistable
 
 // Strip GIT_* env vars before spawning git in a throwaway repo. When this
 // test runs from a git hook context (e.g. pre-commit via husky), the parent
@@ -364,6 +365,35 @@ test('bump-version echoes an honoured marker in --notes-file on stdout', () => {
     rmSync(notes, { force: true });
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2025 — the echo's ORDERING relative to its failure branch was untested:
+// the test above only ever exercises a PASSING run (a clean --notes-file
+// with just the allowlisted CAFÉ™ span). Verified during the PR #2007
+// re-review: moving `if (echo) info(echo)` to sit AFTER the
+// `if (!mojibakeCheck.ok)` block leaves the whole suite green while
+// genuinely silencing the echo whenever the gate goes on to die/warn. This
+// fixture pairs an armed CAFÉ™ marker with a SEPARATE, unallowlistable
+// standalone mangle, so the run still fails overall but must still echo the
+// marker it DID honour along the way.
+test('bump-version echoes an honoured --notes-file marker even when the gate still fails', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-marker-fail-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.1\n\nFixes:\n` +
+        `- ships with a ${CAFE} badge.\n` +
+        `- a ${MOJIBAKE_EM_DASH} standing alone.\n`,
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+    assert.match(out.stderr, /Mojibake gate.*1 double-UTF-8-encoded mojibake span/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

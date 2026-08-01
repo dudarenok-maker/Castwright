@@ -834,6 +834,37 @@ test('the CLI fails on an unresolved conflict marker in docs/release-notes-next.
   }
 });
 
+// #2025 — the echo's ORDERING relative to its failure branch was untested,
+// and ordering is the whole property: PR #2007 replaced fence-awareness with
+// "an armed marker is never silent," which only holds if the [allow] line
+// prints even when the run goes on to fail. Both prior CLI spawn tests
+// (above) only ever exercised a PASSING run, so a `process.exit(1)` moved to
+// sit BEFORE the echo write was invisible to the whole suite — verified
+// during the PR #2007 re-review: moving both echo blocks after their failure
+// branches left the suite at 81 pass / 0 fail while genuinely silencing the
+// echo on every failing run. This fixture — an armed CAFÉ™ marker plus a
+// SEPARATE, unallowlistable standalone mangle — forces exactly that
+// combination: the gate still fails (the standalone span), but the marker it
+// honoured along the way must still be echoed.
+test('the CLI echoes an honoured marker even on a run that still fails overall', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.0\n\n` +
+        `- Ships with a ${CAFE} badge.\n` +
+        `- A ${MOJIBAKE_EM_DASH} standing alone.\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
+    assert.match(out.stderr, /1 double-UTF-8-encoded mojibake span/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the CLI passes on a clean RELEASE_NOTES.md with no conflict markers', () => {
   const dir = setupGateFixture();
   try {
