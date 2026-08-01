@@ -1567,59 +1567,91 @@ def test_designed_voice_survives_restart_at_env_dir(monkeypatch, tmp_path) -> No
     assert restarted._base is not None  # loaded on demand, found the .pt
 
 
+def _real_legacy_voices_dir() -> str:
+    """The actual, shared, __file__-relative legacy dir _migrate_legacy_voices
+    resolves to when nothing overrides it — used ONLY as a before/after
+    witness (#2030) that a test didn't write there, never as a fixture dir
+    itself."""
+    return os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+
+
 def test_legacy_voices_migrated_to_env_dir(monkeypatch, tmp_path) -> None:
     """On init, if QWEN_VOICES_DIR relocates the cache and the legacy
     __file__-relative dir holds *.pt embeddings while the target is empty,
-    the legacy files are moved (shutil.move) into the new dir."""
-    # Seed a fake legacy voices/qwen dir next to main.py with one voice.
-    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    the legacy files are moved (shutil.move) into the new dir.
+
+    #2030: the legacy dir used to be seeded at the REAL, shared,
+    __file__-relative `voices/qwen` next to main.py (`__init__` has no
+    override seam for it, unlike `QWEN_VOICES_DIR` for the target dir) —
+    two concurrent pytest runs against the same worktree raced on that one
+    path. `_migrate_legacy_voices(legacy_dir)` itself already takes an
+    explicit dir; the only unseamed part was `__init__`'s bare `__file__`
+    lookup, which resolves against the module's globals — so patching
+    `main.__file__` closes the seam with NO production change."""
+    real_legacy_dir = _real_legacy_voices_dir()
+    before = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+
+    fake_module_dir = tmp_path / "fake_sidecar_root"
+    fake_module_dir.mkdir()
+    monkeypatch.setattr(main, "__file__", str(fake_module_dir / "main.py"))
+
+    # Seed the (now tmp_path-scoped) legacy voices/qwen dir with one voice.
+    legacy_dir = os.path.join(str(fake_module_dir), "voices", "qwen")
     os.makedirs(legacy_dir, exist_ok=True)
     legacy_pt = os.path.join(legacy_dir, "_migtest.pt")
     legacy_json = os.path.join(legacy_dir, "_migtest.json")
-    try:
-        with open(legacy_pt, "wb") as fh:
-            fh.write(b"\x00")
-        with open(legacy_json, "w", encoding="utf-8") as fh:
-            fh.write('{"voiceId": "_migtest"}')
+    with open(legacy_pt, "wb") as fh:
+        fh.write(b"\x00")
+    with open(legacy_json, "w", encoding="utf-8") as fh:
+        fh.write('{"voiceId": "_migtest"}')
 
-        target = tmp_path / "ws" / "voices" / "qwen"
-        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
-        main.QwenEngine()  # __init__ runs the migration
+    target = tmp_path / "ws" / "voices" / "qwen"
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+    main.QwenEngine()  # __init__ runs the migration
 
-        # Moved into the new dir, removed from the legacy dir.
-        assert (target / "_migtest.pt").is_file()
-        assert (target / "_migtest.json").is_file()
-        assert not os.path.exists(legacy_pt)
-        assert not os.path.exists(legacy_json)
-    finally:
-        for p in (legacy_pt, legacy_json):
-            if os.path.exists(p):
-                os.remove(p)
+    # Moved into the new dir, removed from the legacy dir.
+    assert (target / "_migtest.pt").is_file()
+    assert (target / "_migtest.json").is_file()
+    assert not os.path.exists(legacy_pt)
+    assert not os.path.exists(legacy_json)
+
+    # The REAL source-tree legacy dir was never touched by any of the above.
+    after = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+    assert before == after, "test wrote into the real source-tree legacy voices/qwen dir"
 
 
 def test_legacy_migration_skipped_when_target_already_populated(monkeypatch, tmp_path) -> None:
     """Migration is a no-op when the target dir already holds a designed
-    voice — never clobbers an existing workspace cache."""
-    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    voice — never clobbers an existing workspace cache.
+
+    #2030: same tmp_path-scoped legacy dir as the sibling test above —
+    see its docstring for why."""
+    real_legacy_dir = _real_legacy_voices_dir()
+    before = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+
+    fake_module_dir = tmp_path / "fake_sidecar_root"
+    fake_module_dir.mkdir()
+    monkeypatch.setattr(main, "__file__", str(fake_module_dir / "main.py"))
+
+    legacy_dir = os.path.join(str(fake_module_dir), "voices", "qwen")
     os.makedirs(legacy_dir, exist_ok=True)
     legacy_pt = os.path.join(legacy_dir, "_migtest2.pt")
-    try:
-        with open(legacy_pt, "wb") as fh:
-            fh.write(b"\x00")
+    with open(legacy_pt, "wb") as fh:
+        fh.write(b"\x00")
 
-        target = tmp_path / "ws" / "voices" / "qwen"
-        target.mkdir(parents=True)
-        (target / "existing.pt").write_bytes(b"\x00")
-        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
-        main.QwenEngine()
+    target = tmp_path / "ws" / "voices" / "qwen"
+    target.mkdir(parents=True)
+    (target / "existing.pt").write_bytes(b"\x00")
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+    main.QwenEngine()
 
-        # Target untouched; legacy file left in place (no merge).
-        assert (target / "existing.pt").is_file()
-        assert not (target / "_migtest2.pt").exists()
-        assert os.path.exists(legacy_pt)
-    finally:
-        if os.path.exists(legacy_pt):
-            os.remove(legacy_pt)
+    # Target untouched; legacy file left in place (no merge).
+    assert (target / "existing.pt").is_file()
+    assert not (target / "_migtest2.pt").exists()
+    assert os.path.exists(legacy_pt)
+
+    after = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+    assert before == after, "test wrote into the real source-tree legacy voices/qwen dir"
 
 
 def test_import_missing_qwen_tts_raises_with_pip_hint(monkeypatch) -> None:
