@@ -457,8 +457,13 @@ chapterQaRepairRouter.post(
           const ids = new Set(seg.sentenceIds);
           const subset = sentences.filter((s) => ids.has(s.id));
           const text = segText(seg);
-          let best: { pcm: Buffer; sampleRate: number; voiceName?: string; baseVoiceName?: string } | null =
-            null;
+          let best: {
+            pcm: Buffer;
+            sampleRate: number;
+            voiceName?: string;
+            baseVoiceName?: string;
+            voiceSubstitutedFrom?: string;
+          } | null = null;
           let bestVerdict: SegmentQaVerdict | null = null;
           let bestAsr: AsrClassification | null = null;
           /* Edit 3b (srv-36): extend running best-state with bestCosine. */
@@ -548,6 +553,7 @@ chapterQaRepairRouter.post(
                 sampleRate: r.sampleRate,
                 voiceName: bestSeg?.voiceName,
                 baseVoiceName: bestSeg?.baseVoiceName,
+                voiceSubstitutedFrom: bestSeg?.voiceSubstitutedFrom,
               };
               bestVerdict = v;
               bestAsr = a;
@@ -617,6 +623,11 @@ chapterQaRepairRouter.post(
             // already had; this route was missing it entirely).
             voiceName: best.voiceName,
             baseVoiceName: best.baseVoiceName,
+            // #1888 — the voice the ACCEPTED take requested, when the sidecar
+            // substituted a fallback for it. synthesiseChapter always computes
+            // this per-segment; threading it through here is what lets the
+            // diagnostic survive a repair instead of going stale.
+            voiceSubstitutedFrom: best.voiceSubstitutedFrom,
             /* fs-51 follow-up — unlike the splice route, THIS route's whole job
                is signal-QA repair: `bestVerdict` above is always populated by
                `evaluateSegmentPcm` regardless of any config gate, so the

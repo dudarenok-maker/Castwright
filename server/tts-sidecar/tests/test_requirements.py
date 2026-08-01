@@ -15,6 +15,7 @@ requirements.txt is a layered structure (a shim that `-r`-includes
 requirements/nvidia-cuda.txt, which `-r`-includes requirements/base.txt), so the
 checks below resolve the `-r` include chain and assert against the flattened
 dependency set — independent of which overlay file a line happens to live in."""
+import re
 from pathlib import Path
 
 REQ = Path(__file__).resolve().parent.parent / "requirements.txt"
@@ -161,3 +162,46 @@ def test_qwen_absent_from_cpu_overlay():
     lines = _overlay_lines("cpu.txt")
     assert not any(_pkg(l) == "qwen-tts" for l in lines), \
         "qwen-tts must not be in cpu.txt (Qwen is GPU-only standard)"
+
+
+def test_spacy_is_explicit_and_not_the_ja_extra():
+    """spacy (#2017: `CoquiEngine._infer_from_latents` passes
+    `enable_text_splitting=True`, config-faithful, mirroring `Xtts.synthesize`'s own
+    build, which reaches upstream's `get_spacy_lang` — raising `ImportError` without
+    spacy installed, so a cloned Coqui voice rendering a line at or above
+    `tokenizer.char_limits[lang]` would 500 outright) is reached ONLY via the opt-in
+    Coqui/XTTS path, same tier as coqui-tts itself — never by Qwen or Kokoro. So it
+    must NOT be in the shared manifest/overlays (same re-tier shape
+    `test_coqui_absent_from_all_overlays` guards for coqui-tts): a CPU-only or
+    Kokoro-only install would otherwise pay 22.3 MB / 16 packages for a library it
+    never imports. It must instead be installed by `install-coqui.mjs`, alongside
+    the CJK phonemizers in its third pip step, and stay PLAIN `spacy` there, never
+    `spacy[ja]` — the upstream error message literally instructs
+    `pip install spacy[ja]`, but the owner's measured decision against it (22.3 MB /
+    16 packages plain vs. 92.5 MB / 18 with the extra, of which 68.9 MB is
+    `sudachidict-core` alone) is recorded in that script's `coquiPipInstallSteps`
+    rationale. Japanese cloned-voice text-splitting stays broken on purpose, tracked
+    as #2038 (fs-59's call) — this guard stops a later blind `pip install spacy[ja]`
+    "fix" from silently re-adding the 70 MB dependency the owner already declined,
+    and stops spacy drifting back into the base manifest the way it started."""
+    lines = _lines()
+    assert not any(_pkg(l) == "spacy" for l in lines), \
+        "spacy must NOT be in the manifest/overlays (#2017) — it is reached only via " \
+        "the opt-in Coqui/XTTS path, so it belongs in install-coqui.mjs, not base.txt " \
+        "(a CPU-only/Kokoro-only install would otherwise pay 22.3 MB / 16 packages for " \
+        "a library it never imports)"
+
+    installer = (
+        Path(__file__).resolve().parent.parent / "scripts" / "install-coqui.mjs"
+    ).read_text(encoding="utf-8")
+    # Check the actual quoted pip-arg strings, not prose: the rationale comment
+    # legitimately *mentions* `spacy`/`spacy[ja]` in backticks to explain the
+    # opt-out, so a bare substring check on the whole file would false-positive
+    # on the comment even if the real pip argument were deleted.
+    quoted_args = re.findall(r"""['"]([^'"]*)['"]""", installer)
+    assert any(a.startswith("spacy") for a in quoted_args), \
+        "install-coqui.mjs must pass a quoted spacy pip argument (#2017) — " \
+        "CoquiEngine._infer_from_latents needs it for enable_text_splitting=True"
+    assert not any(a.startswith("spacy[ja]") for a in quoted_args), \
+        "spacy must NOT use the [ja] extra — SudachiPy/sudachidict-core (68.9 MB) was a " \
+        "deliberate opt-out (#2038), not an oversight to silently re-add"

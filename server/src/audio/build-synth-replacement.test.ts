@@ -87,7 +87,12 @@ describe('buildSynthReplacements', () => {
         voiceName: 'kokoro-some-voice',
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({ voiceName: 'kokoro-some-voice' });
+    // #1888 — voiceSubstitutedFrom is now unconditionally present (undefined
+    // here, since this synth output didn't report one).
+    expect(reps[0].freshVerdict).toStrictEqual({
+      voiceName: 'kokoro-some-voice',
+      voiceSubstitutedFrom: undefined,
+    });
   });
 
   it('omits voiceName when the caller does not report one', async () => {
@@ -143,6 +148,9 @@ describe('buildSynthReplacements', () => {
       qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
       suspect: undefined,
       qaRetries: undefined,
+      // #1888 — unconditionally present (undefined; this synth output
+      // reported no substitution).
+      voiceSubstitutedFrom: undefined,
     });
     // The asr/asrSuspect/asrRetries keys are OMITTED entirely (asrRan wasn't
     // set) — not merely `undefined`-valued.
@@ -188,7 +196,9 @@ describe('buildSynthReplacements', () => {
         // signalQaRan omitted (falsy) — the caller's gate never ran.
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({});
+    // #1888 — voiceSubstitutedFrom is unconditionally present regardless of
+    // the QA gates' on/off state.
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
     expect('qa' in reps[0].freshVerdict!).toBe(false);
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
     expect('qaRetries' in reps[0].freshVerdict!).toBe(false);
@@ -273,7 +283,8 @@ describe('buildSynthReplacements', () => {
         // signalQaRan and asrRan both omitted (false).
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({});
+    // #1888 — voiceSubstitutedFrom is unconditionally present regardless.
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
   });
 
@@ -294,6 +305,7 @@ describe('buildSynthReplacements', () => {
     expect(reps[0].freshVerdict).toStrictEqual({
       voiceName: 'qwen-wren__angry',
       baseVoiceName: 'qwen-wren',
+      voiceSubstitutedFrom: undefined,
     });
   });
 
@@ -305,6 +317,41 @@ describe('buildSynthReplacements', () => {
       synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x' }),
     });
     expect('baseVoiceName' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  /* #1888 — unlike voiceName/baseVoiceName (omitted when the caller doesn't
+     report one, so an unmigrated caller can't wipe a segment's prior value),
+     voiceSubstitutedFrom must ALWAYS be present on freshVerdict, because a
+     re-record always synthesises and therefore always has a definite answer
+     for "did THIS take substitute" — undefined is a meaningful, current
+     answer ("no"), not "the gate didn't run." Omitting the key here would let
+     spliceChapterSegments's `{...segment, ...freshVerdict}` spread leave a
+     stale prior substitution flag in place on a now-clean take. */
+  it('carries voiceSubstitutedFrom from the synth output onto the replacement when the take substituted', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        voiceSubstitutedFrom: 'Requested Voice',
+      }),
+    });
+    expect(reps[0].freshVerdict?.voiceSubstitutedFrom).toBe('Requested Voice');
+  });
+
+  it('includes voiceSubstitutedFrom as an explicit undefined key (not omitted) when the take reports no substitution — must not let the merge preserve a stale prior value (#1888)', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000 }),
+    });
+    // toStrictEqual (not toEqual) so a key present-but-undefined is
+    // distinguished from an omitted key — the whole point of this fix.
+    expect('voiceSubstitutedFrom' in reps[0].freshVerdict!).toBe(true);
+    expect(reps[0].freshVerdict?.voiceSubstitutedFrom).toBeUndefined();
   });
 });
 

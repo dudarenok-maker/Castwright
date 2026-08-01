@@ -407,6 +407,11 @@ chapterSpliceRouter.post(
               voiceName: s?.voiceName,
               // M1 — the same, minus any emotion-variant suffix.
               baseVoiceName: s?.baseVoiceName,
+              // #1888 — the voice this re-record REQUESTED, when the sidecar
+              // substituted a fallback for THIS take. synthesiseChapter always
+              // computes this per-segment; threading it through here is what
+              // lets the diagnostic survive a re-record instead of going stale.
+              voiceSubstitutedFrom: s?.voiceSubstitutedFrom,
               /* fs-51 follow-up — the signal-QA gate only actually evaluates a
                  verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
                  gate); ASR only runs when `asrOn`. Without these flags,

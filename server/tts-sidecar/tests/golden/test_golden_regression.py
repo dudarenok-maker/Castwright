@@ -50,6 +50,7 @@ from tests.golden.compare import (  # noqa: E402
     model_sha256,
     rms,
 )
+from tests.golden.prereq import synthesise_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.golden
 
@@ -78,19 +79,22 @@ def _load_json(path: Path) -> dict:
 
 def _make_kokoro() -> "main.KokoroEngine":
     """Build a real KokoroEngine and force a load, skipping the whole module
-    when the package or weights aren't present."""
+    when the package or weights aren't present.
+
+    #1987: the warm-up synth used to wrap ANY `RuntimeError` in a blanket
+    `pytest.skip(...)`, so a CUDA error, a bad voice substitution, or model
+    corruption during warm-up all reported a green SKIP instead of a
+    failure. `synthesise_or_skip` (the same classifier #1911 built for the
+    identical Coqui swallow) narrows the skip to "the kokoro-onnx package
+    itself is absent from this box" and lets everything else propagate."""
     engine = main.KokoroEngine()
     if not os.path.isfile(engine._model_path) or not os.path.isfile(engine._voices_path):
         pytest.skip(
             f"Kokoro weights not found at {engine._model_path} / {engine._voices_path} — "
             "run server/tts-sidecar/scripts/install-kokoro.ps1 to bless/run the golden gate."
         )
-    try:
-        # First synth triggers _ensure_loaded; a missing kokoro-onnx package
-        # raises RuntimeError which we turn into a skip.
-        engine.synthesize("v1", engine.FALLBACK_VOICE, "Warm up.")
-    except RuntimeError as e:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Kokoro engine unavailable: {e}")
+    # First synth triggers _ensure_loaded.
+    synthesise_or_skip(engine, "v1", engine.FALLBACK_VOICE, "Warm up.")
     return engine
 
 

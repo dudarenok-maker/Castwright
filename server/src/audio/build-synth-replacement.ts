@@ -59,6 +59,16 @@ export interface SynthOutput {
       quote that happens to carry an emotion variant doesn't stamp its
       `__<emotion>`-suffixed voiceName onto the character-level snapshot. */
   baseVoiceName?: ChapterSegment['baseVoiceName'];
+  /** #1888 — the voice this re-recorded segment REQUESTED, set only when
+      the sidecar substituted a fallback for THIS specific take
+      (`ChapterSegment['voiceSubstitutedFrom']`). UNLIKE `voiceName` above,
+      a re-record always has a definite answer for "did this take
+      substitute" — `undefined` here is a meaningful, current "no", not "the
+      caller hasn't wired this through." `buildSynthReplacements` must
+      therefore always set this key on `freshVerdict` (never omit it), or a
+      clean re-record would leave a stale substitution flag from the
+      segment's prior render in place. */
+  voiceSubstitutedFrom?: ChapterSegment['voiceSubstitutedFrom'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -110,6 +120,11 @@ export async function buildSynthReplacements(
       // M1 — same omit-don't-overwrite rule for the base (pre-emotion-variant)
       // voice name.
       ...(out.baseVoiceName ? { baseVoiceName: out.baseVoiceName } : {}),
+      // #1888 — UNCONDITIONAL, unlike the fields above: a re-record always
+      // synthesises and always has a definite substitution answer, so this
+      // key must always be set (even to `undefined`) so a clean take clears
+      // any stale substitution flag the segment's prior render carried.
+      voiceSubstitutedFrom: out.voiceSubstitutedFrom,
     };
     replacements.push({
       startSegmentIndex: i,

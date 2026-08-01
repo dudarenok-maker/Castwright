@@ -18,13 +18,24 @@
 //                          `--sidecar-only --bless` records Suite A's
 //                          kokoro-baseline.json AND instruct-baseline.json
 //                          (test_instruct_golden.py honours the same
-//                          GOLDEN_BLESS env). To re-capture the Suite B
-//                          INPUT fixture (not its baseline), run
+//                          GOLDEN_BLESS env) — there is no narrowing to bless
+//                          ONE of the two without `--engine=` below (#1995).
+//                          instruct-baseline.json's `tolerances` block is a
+//                          THRESHOLD, not a measurement: a bless that would
+//                          move it (e.g. `rtf_max`) is REFUSED unless
+//                          GOLDEN_REBLESS_THRESHOLDS=1 is also set, so an
+//                          unrelated Kokoro-content bless can't silently
+//                          loosen it — see compare.bless_guard_thresholds.
+//                          To re-capture the Suite B INPUT fixture (not its
+//                          baseline), run
 //                          server/tts-sidecar/tests/golden/capture_assembly_fixture.py.
 //                          NOTE: `npm run test:golden-audio:assembly` bypasses
 //                          this runner, so it can never bless — use the full
 //                          `npm run test:golden-audio -- --assembly-only --bless`.
 //   --engine=<kokoro|coqui|qwen>   narrow Suite A via pytest `-k <engine>`
+//                          (e.g. `--engine=kokoro --bless` blesses only
+//                          kokoro-baseline.json, leaving instruct-baseline.json
+//                          untouched — the #1995 coupling workaround).
 //
 // Cross-engine sanity (Coqui/Qwen) additionally needs its own opt-in env:
 //   GOLDEN_COQUI=1   GOLDEN_QWEN_VOICE=<designed voiceId>
@@ -32,6 +43,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { parseNvidiaSmiUtil } from './verify-cache.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -47,6 +59,35 @@ if (assemblyOnly && sidecarOnly) {
   console.error('run-golden-audio: --assembly-only and --sidecar-only are mutually exclusive.');
   process.exit(2);
 }
+
+// #1995: a ceiling blessed while the GPU is contended (another generation
+// running, a code-review agent loading the box, ...) reflects that
+// contention, not steady-state performance — the exact way instruct-
+// baseline.json's rtf_max was observed jumping 1.0 -> 1.31. This flags (does
+// NOT block) a `--bless` attempted under load, reusing the same nvidia-smi
+// parser verify-cache.mjs's own `[contention] GPU busy` warning is built on,
+// rather than standing up a second contention probe.
+const GPU_BUSY_THRESHOLD = 40; // % utilization -- mirrors verify-cache.mjs's own threshold
+
+function warnIfGpuBusyForBless() {
+  if (!bless) return;
+  const r = spawnSync(
+    'nvidia-smi',
+    ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+    { encoding: 'utf8', timeout: 5000 },
+  );
+  if (r.error || r.status !== 0) return; // no GPU / nvidia-smi absent -- nothing to flag
+  const util = parseNvidiaSmiUtil(r.stdout);
+  if (util !== null && util >= GPU_BUSY_THRESHOLD) {
+    console.log(
+      `[contention] GPU busy (~${util}% util) while blessing — a measurement recorded now ` +
+        '(e.g. instruct-baseline.json rtf_max) may reflect contention, not steady-state ' +
+        'performance. Consider re-blessing on a quiet box.',
+    );
+  }
+}
+
+warnIfGpuBusyForBless();
 
 const results = [];
 
