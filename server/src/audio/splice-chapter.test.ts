@@ -302,3 +302,22 @@ describe('spliceChapterSegments', () => {
     });
   });
 });
+
+describe('SegmentReplacement.freshVerdict Pick<> (#2034)', () => {
+  /* COMPILE-TIME assertion: vitest transpiles via esbuild and never checks
+     types, so this test always passes under `vitest run`. The real gate is
+     `npm run typecheck` (tsc) — `baseVoiceName` is written by
+     build-synth-replacement.ts:122 onto `freshVerdict`, so the Pick<> that
+     types it must list `baseVoiceName` or this literal fails with TS2353
+     ("Object literal may only specify known properties"). Mutation-verified
+     by removing `'baseVoiceName'` from the Pick<> in splice-chapter.ts and
+     re-running `npm run typecheck` (see commit message for the pasted red
+     output). */
+  it('accepts baseVoiceName as a known freshVerdict field', () => {
+    const freshVerdict: NonNullable<SegmentReplacement['freshVerdict']> = {
+      baseVoiceName: 'qwen-wren',
+      voiceSubstitutedFrom: undefined,
+    };
+    expect(freshVerdict.baseVoiceName).toBe('qwen-wren');
+  });
+});
