@@ -9824,6 +9824,30 @@ export function _resetMockVoiceLibrary(): void {
   mockVoiceLibraryEntries = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({ ...e }));
 }
 
+/* e2e test-only escape hatch (plan 276) — mock mode's public API surface
+   cannot produce a cloned entry that has never derived on an engine, or one
+   with a blank transcript: `mockCloneVoice` unconditionally stamps
+   `engines.qwen.status: 'ready'` and always fills a transcript (falling
+   back to the canned Whisper string). Merges `patch` onto the REAL entry
+   IN PLACE (top-level shallow merge, same shape `mockPatchVoiceLibrary`
+   already applies) so a later PATCH/retry against the same voiceUuid keeps
+   resolving against a real, still-tracked entry rather than a redux-only
+   simulation. Wired to `window.__mockVoiceLibrary` in main.tsx, same DEV/e2e
+   gate as `__mockQueue`. Throws on an unknown voiceUuid — same posture as
+   every other mock mutator here. */
+export function _overrideMockVoiceLibraryEntry(
+  voiceUuid: string,
+  patch: Partial<VoiceLibraryEntry>,
+): void {
+  const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
+  if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
+  mockVoiceLibraryEntries = [
+    ...mockVoiceLibraryEntries.slice(0, idx),
+    { ...mockVoiceLibraryEntries[idx], ...patch },
+    ...mockVoiceLibraryEntries.slice(idx + 1),
+  ];
+}
+
 function sortMockVoiceLibrary(entries: VoiceLibraryEntry[]): VoiceLibraryEntry[] {
   return [...entries].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;

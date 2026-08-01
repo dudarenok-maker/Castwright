@@ -63,6 +63,16 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'e2e') {
       reset: resetMockQueue,
     };
   });
+  /* Plan 276 — let e2e specs force a mock voice-library entry into a state
+     mock mode's public API can never produce on its own (a cloned voice
+     that never derived on an engine, or with a blank transcript — see
+     `_overrideMockVoiceLibraryEntry`'s own doc comment). Same DEV/e2e gate
+     as `__mockQueue` above. */
+  void import('./lib/api').then(({ _overrideMockVoiceLibraryEntry }) => {
+    (window as unknown as { __mockVoiceLibrary: unknown }).__mockVoiceLibrary = {
+      overrideEntry: _overrideMockVoiceLibraryEntry,
+    };
+  });
 }
 
 createRoot(document.getElementById('root')!).render(
