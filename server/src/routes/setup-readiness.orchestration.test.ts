@@ -21,6 +21,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import type { PackageFault } from '../tts/models-status.js';
 
 const computeModelsStatus = vi.fn();
 const venvCorePackageInstalled = vi.fn();
@@ -59,8 +60,8 @@ function makeApp() {
 
 type EngineState = 'not-installed' | 'package-missing' | 'weights-missing' | 'ready' | 'loaded';
 
-function engineStatus(state: EngineState, packageBroken = false) {
-  return { state, packageBroken };
+function engineStatus(state: EngineState, packageBroken = false, packageFault: PackageFault = 'ok') {
+  return { state, packageBroken, packageFault };
 }
 
 /* Builds a controlled computeModelsStatus() return value. Defaults to an
@@ -189,7 +190,7 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     computeModelsStatus.mockResolvedValue(modelsStatus({
       runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
       engines: {
-        kokoro: engineStatus('ready', true), // disk-ready but live-confirmed broken
+        kokoro: engineStatus('ready', true, 'broken'), // disk-ready but live-confirmed broken
         qwen: engineStatus('not-installed'),
         coqui: engineStatus('not-installed'),
       },
@@ -201,6 +202,62 @@ describe('GET /api/setup/readiness — orchestration wiring', () => {
     expect(res.body.blockers.sidecar.cause).not.toBe('unreachable-transient');
     expect(res.body.blockers.tts.status).toBe('fail');
     expect(res.body.blockers.tts.cause).toBe('package-broken');
+  });
+
+  /* #1999 review — a state this route COULD reach before this PR but silently
+     mis-reported: packageBroken is gated on packageOnDisk (state === 'ready'),
+     so an engine in 'package-missing' state (disk says package absent, weights
+     present) always had packageBroken === false, no matter what the LIVE
+     signals said — the boolean literally cannot fire outside 'ready'.
+     packageFault has no such gate: it reads importOk/specPresent directly, so
+     a live-confirmed import failure on a disk-absent package now surfaces
+     here too. Before this PR, this exact input (no engine not-installed, no
+     engine weights-missing, nothing usable, nothing live-CONFIRMED-broken by
+     the old boolean) fell through every branch to the generic 'pass' —
+     claiming a voice engine was ready when none was. This is a genuine,
+     deliberate widening: the two package-missing-with-a-real-import-failure
+     surfaces (this one and the Admin console's diagnostics row, which never
+     gated on disk at all) can no longer disagree. */
+  it('a package-missing engine that is ALSO live-confirmed broken now fails tts, instead of silently passing', async () => {
+    computeModelsStatus.mockResolvedValue(modelsStatus({
+      engines: {
+        kokoro: engineStatus('package-missing', false, 'broken'), // packageBroken false (disk-gated); packageFault broken (live-confirmed)
+        qwen: engineStatus('not-installed'),
+        coqui: engineStatus('not-installed'),
+      },
+    }));
+
+    const res = await request(makeApp()).get('/api/setup/readiness');
+
+    expect(res.body.blockers.tts.status).toBe('fail');
+    expect(res.body.blockers.tts.cause).toBe('package-broken');
+    expect(res.body.blockers.tts.message).toMatch(/Kokoro/i);
+  });
+
+  /* #2010 (Major 3) — the paired "missing" case for the "broken" one two tests
+     above. The PR that introduced the widening (commit 299659b6) pinned only
+     the `importOk === false` shape; independent review found the widening
+     actually flips FOUR of eighteen input cells, and the one this PR's own
+     tests missed is the DOMINANT real-world shape: `importOk === undefined`
+     (nothing has attempted the import — the documented common value) with
+     `specPresent === false` (the package is absent). That is the everyday
+     "kokoro package gone" state, not an edge case. Mitigating: anyEngineUsable
+     is already false here too, so this introduces no new false positive —
+     only the correct fail replaces a wrong-and-silent pass. */
+  it('a package-missing engine that the live probe ALSO confirms missing (the common shape — nothing attempted, spec absent) now fails tts too', async () => {
+    computeModelsStatus.mockResolvedValue(modelsStatus({
+      engines: {
+        kokoro: engineStatus('package-missing', false, 'missing'), // packageBroken false (disk-gated); packageFault missing (live-confirmed)
+        qwen: engineStatus('not-installed'),
+        coqui: engineStatus('not-installed'),
+      },
+    }));
+
+    const res = await request(makeApp()).get('/api/setup/readiness');
+
+    expect(res.body.blockers.tts.status).toBe('fail');
+    expect(res.body.blockers.tts.cause).toBe('package-broken');
+    expect(res.body.blockers.tts.message).toMatch(/Kokoro package is missing/i);
   });
 
   it('derives weightsMissingEngine from models.engines — a weights-missing kokoro with nothing else usable surfaces as tts:weights-missing', async () => {

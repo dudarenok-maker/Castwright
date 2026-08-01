@@ -375,6 +375,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'medium',
   },
   {
+    key: 'qa.asr.model',
+    env: 'ASR_MODEL',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) model',
+    help: 'faster-whisper model size/name (default "base"). Cap at "base" on an 8 GB card — a larger model competes with synth for VRAM on ASR_DEVICE=cuda. Changing the model restarts the sidecar.',
+    type: 'string',
+    default: 'base',
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
     key: 'qa.speaker.autoRepair',
     env: 'SEG_SPK_AUTO_REPAIR',
     group: 'qa-gates',

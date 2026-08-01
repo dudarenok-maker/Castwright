@@ -21,9 +21,9 @@ const { MODELS_STATUS } = vi.hoisted(() => ({
   MODELS_STATUS: {
     runtime: { installedOnDisk: true, pythonFound: true, process: 'ready' },
     engines: {
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'ready', packageBroken: false },
-      coqui: { state: 'not-installed', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'not-installed', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {
@@ -787,6 +787,51 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     expect(within(row).queryByRole('button', { name: /load model/i })).toBeNull();
   });
 
+  /* #2010 (m1) — the everyday "package uninstalled, weights still on disk"
+     cell: inventory's disk-only installState still says 'package-missing',
+     but the live probe has confirmed the fault is 'missing' (never
+     installed), not 'broken'. Before this fix the badge read installState
+     alone and said "Needs repair" right next to an "Install" toggle — badge
+     and button disagreeing about which fault this row has. Assert BOTH the
+     badge and the toggle here, not just one, so a fix that repoints only one
+     of them can't pass. */
+  it('a live-confirmed "missing" fault renders "Not installed" on the badge, agreeing with the Install toggle', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'package-missing',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: {
+        ...MODELS_STATUS.engines,
+        qwen: { state: 'package-missing', packageBroken: true, packageFault: 'missing' },
+      },
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    await waitFor(() =>
+      expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Install/),
+    );
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).not.toHaveTextContent(/Repair/);
+    expect(within(row).getByText(/not installed/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/needs repair/i)).toBeNull();
+  });
+
   it('weights-missing row shows "Weights missing"', async () => {
     mockInventory.mockResolvedValue({
       ...INVENTORY,
@@ -836,11 +881,51 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
        body reads, #1647) — set qwen package-missing there too so it stays Repair. */
     vi.mocked(api.getModelsStatus).mockResolvedValue({
       ...MODELS_STATUS,
-      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false, packageFault: 'ok' } },
     });
     renderManager();
     const row = await screen.findByTestId('model-row-qwen-base');
     expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Repair/);
+  });
+
+  /* #2010 (Major 2) — packageFault is now the single source of the
+     install-vs-repair verb, so it must win over both packageBroken and the
+     disk-only `state` when the sidecar has live-confirmed the package is
+     genuinely missing. Before this fix, engineInstallLabel read packageBroken
+     (which fires for state 'ready' whenever the live probe disagrees with
+     disk at all, missing or broken alike) and labeled this row "Repair" while
+     the Setup checker's matching copy already said "Install", contradicting
+     the button — the exact regression independent review found. */
+  it('a live-confirmed "missing" fault labels the installer action "Install", not "Repair", even when state is "ready"', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        {
+          id: 'qwen-base',
+          kind: 'tts',
+          label: 'Qwen3-TTS Base (0.6B)',
+          present: true,
+          sizeBytes: 1_283_457_024,
+          diskPath: 'hub/models--Qwen',
+          loaded: false,
+          installState: 'ready',
+          isDefaultEngine: false,
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.getModelsStatus).mockResolvedValue({
+      ...MODELS_STATUS,
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'ready', packageBroken: true, packageFault: 'missing' } },
+    });
+    renderManager();
+    const row = await screen.findByTestId('model-row-qwen-base');
+    await waitFor(() =>
+      expect(within(row).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Install/),
+    );
+    expect(within(row).getByTestId('model-install-toggle-qwen-base')).not.toHaveTextContent(/Repair/);
   });
 
   /* Regression (#1647): the toggle label and the installer card body must derive
@@ -870,7 +955,7 @@ describe('ModelManagerView — health honesty + repair + tier grouping', () => {
     });
     vi.mocked(api.getModelsStatus).mockResolvedValue({
       ...MODELS_STATUS,
-      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false } },
+      engines: { ...MODELS_STATUS.engines, qwen: { state: 'package-missing', packageBroken: false, packageFault: 'ok' } },
     });
     renderManager();
     const row = await screen.findByTestId('model-row-qwen-base');

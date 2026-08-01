@@ -442,6 +442,15 @@ export interface BookStateResponse {
       the cast Status pill reads "Fallback (Kokoro)". Empty / undefined when no
       audio has rendered or nothing fell back. */
   renderedFallbackByCharacter?: Record<string, string>;
+  /** #2023 — orphaned characterId → who actually rendered it. Keyed by a
+      manuscript `characterId` with NO entry in this book's cast at all (a
+      cast/analysis id drift, e.g. a romanisation mismatch) that was
+      substituted with the narrator, aggregated across any rendered chapter.
+      Distinct from `renderedFallbackByCharacter` above, which is keyed by a
+      REAL cast id whose configured ENGINE changed — this is a wrong-CHARACTER
+      substitution, not an engine one. Empty / undefined when nothing has
+      substituted. */
+  orphanedCharacterFallbacks?: Record<string, { characterId: string; voiceName?: string }>;
   /** #650 — render-time sentence→speaker map per rendered chapter
       (`{ [chapterId]: { [sentenceId]: characterId } }`), recovered from each
       chapter's `<slug>.segments.json`. The Generate view diffs it against the

@@ -784,6 +784,9 @@ export function Layout() {
         /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
            map clears stale entries when a re-render dropped the fallback. */
         dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
+        /* #2023 — orphaned-characterId render-time substitution. Empty map
+           clears stale entries the same way its sibling above does. */
+        dispatch(castActions.setOrphanedCharacterFallbacks(res.orphanedCharacterFallbacks ?? {}));
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,

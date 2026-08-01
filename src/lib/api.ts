@@ -7422,6 +7422,7 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
    described in the contract. Do NOT hand-edit — change openapi.yaml and run
    `npm run openapi:types`. */
 export type EngineHealthState = ApiComponents['schemas']['EngineStatus']['state'];
+export type PackageFault = ApiComponents['schemas']['EngineStatus']['packageFault'];
 export type RuntimeProcessState = ApiComponents['schemas']['RuntimeStatus']['process'];
 /* NeedsAnswer is a UI key-set label (the wizard's guided-question answer
    key), not a wire field on any /api/setup/* response — openapi.yaml has no
@@ -7511,9 +7512,9 @@ export async function mockGetModelsStatus(): Promise<ModelsStatus> {
       // The Model Manager's row toggle label is now single-sourced from here
       // (see engineInstallLabel in model-manager.tsx), so any drift from the
       // inventory would surface as a label/card mismatch.
-      kokoro: { state: 'ready', packageBroken: false },
-      qwen: { state: 'ready', packageBroken: false },
-      coqui: { state: 'ready', packageBroken: false },
+      kokoro: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      qwen: { state: 'ready', packageBroken: false, packageFault: 'ok' },
+      coqui: { state: 'ready', packageBroken: false, packageFault: 'ok' },
     },
     info: { gpu: 'CPU — no GPU detected', vramTotalMb: null },
     recommendation: {

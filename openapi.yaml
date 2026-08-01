@@ -5700,6 +5700,13 @@ components:
                 description: >-
                   Human-readable QA reasons for a suspect segment. Segment-QA
                   reasons always; ASR reasons only when the ASR verdict was drift.
+              renderedFallbackCharacterId:
+                type: string
+                description: >-
+                  #2023 — the cast character id that ACTUALLY spoke this
+                  segment when `characterId` above is an orphaned id (no cast
+                  entry at all) substituted with the narrator. Absent on every
+                  normally-resolved segment.
         lufs:
           $ref: '#/components/schemas/ChapterLoudness'
           nullable: true
@@ -6958,6 +6965,27 @@ components:
             `resolveVoiceStatus` so the cast Status pill reads
             "Fallback (Kokoro)". Empty/absent when nothing fell back.
           additionalProperties: { type: string }
+        orphanedCharacterFallbacks:
+          type: object
+          description: |
+            #2023 — orphaned characterId → who actually rendered it. Keyed by
+            a manuscript `characterId` that has NO entry in this book's cast at
+            all (e.g. a cast/analysis id-romanisation drift) and so was
+            substituted with the narrator, aggregated across any rendered
+            chapter. Distinct from `renderedFallbackByCharacter` above (which
+            is keyed by a REAL cast id whose configured ENGINE changed) — this
+            is a wrong-CHARACTER substitution, not an engine one. Empty/absent
+            when nothing has substituted.
+          additionalProperties:
+            type: object
+            required: [characterId]
+            properties:
+              characterId:
+                type: string
+                description: The cast character id that actually spoke the line (usually the narrator).
+              voiceName:
+                type: string
+                description: The voice name actually sent to the provider, when recorded.
         changeLog:
           type: array
           nullable: true
@@ -7419,7 +7447,7 @@ components:
 
     EngineStatus:
       type: object
-      required: [state, packageBroken]
+      required: [state, packageBroken, packageFault]
       properties:
         state:
           type: string
@@ -7430,6 +7458,21 @@ components:
             Package present on disk but fails to IMPORT in the sidecar.
             Sidecar-up-only — false when the sidecar is down, which is NOT a
             first-run "fine" guarantee.
+        packageFault:
+          type: string
+          enum: [ok, missing, broken]
+          description: |
+            #1999 — same two live signals as packageBroken (a real import
+            attempt vs. the find_spec probe), classified into WHICH fault
+            applies rather than just whether one does: "missing" (the
+            package isn't on the venv path) vs. "broken" (present but a real
+            import raised). "ok" also covers "unknown" (sidecar down, older
+            sidecar, or nothing has tried to import this engine yet) — never
+            a fault on its own. Lets every consumer — the Setup checker, the
+            Admin console's diagnostics row, and Model Manager's own
+            Install/Repair buttons (`engineInstallLabel` and the three
+            install cards) — name the same fault instead of re-deriving a
+            possibly-disagreeing verdict.
 
     EngineRecommendation:
       type: object

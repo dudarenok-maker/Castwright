@@ -2394,6 +2394,14 @@ class CoquiEngine(Engine):
         identically instead of one path hitting XTTS's low-fidelity
         low-level-API defaults.
 
+        `enable_text_splitting=True` needs spacy (`requirements/base.txt`
+        declares plain `spacy`, #2017) — `get_spacy_lang` raises `ImportError`
+        without it. Belt-and-braces: an `ImportError` from the inference call
+        is caught and retried with `enable_text_splitting=False`, logged
+        loudly rather than silently, so a stale/broken venv degrades instead
+        of 500ing outright. Do NOT flip the primary `True` above to `False`
+        — this catch is a fallback, not the fix.
+
         Returns (audio, sample_rate).
         """
         # A loud guard, not `assert self._tts is not None` (GATE 1 MIN-2):
@@ -2419,14 +2427,58 @@ class CoquiEngine(Engine):
                 ("top_p", 0.85),
             )
         }
-        result = tts_model.inference(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-            enable_text_splitting=True,
-            **inference_settings,
-        )
+        try:
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=True,
+                **inference_settings,
+            )
+        except ImportError as e:
+            # Belt-and-braces (#2017): `enable_text_splitting=True` reaches
+            # upstream's `get_spacy_lang`, which raises ImportError if spacy
+            # isn't installed. `requirements/base.txt` now declares `spacy`,
+            # so this should never fire in a properly-provisioned venv — but
+            # if it does (a stale/broken install), degrade LOUDLY rather than
+            # 500ing outright. `enable_text_splitting=False` skips sentence
+            # splitting entirely, which risks the `assert text_tokens.shape[-1]
+            # < gpt_max_text_tokens` in `xtts.py:516` on very long input — a
+            # real but rarer failure than every cloned-voice render 500ing.
+            #
+            # `ja` is a known-and-tracked exception to "reinstall fixes it"
+            # (#2038): plain `spacy` deliberately excludes the `[ja]` extra
+            # (SudachiPy + sudachidict-core, 68.9 MB of the 92.5 MB total),
+            # so a Japanese line hitting this path has spacy installed and
+            # working — the "missing or broken" / "reinstall" message is
+            # simply wrong for this one language, and would send an operator
+            # in a circle. Name the real cause instead.
+            if language == "ja":
+                log.error(
+                    "Coqui text-splitting import failed for a Japanese line "
+                    "(%s) — spacy is installed, but SudachiPy/sudachidict-core "
+                    "(the `spacy[ja]` extra) is deliberately not, per #2038; "
+                    "retrying WITHOUT sentence splitting "
+                    "(enable_text_splitting=False).",
+                    e,
+                )
+            else:
+                log.error(
+                    "Coqui text-splitting import failed (%s) — spacy missing or "
+                    "broken in the sidecar venv; retrying WITHOUT sentence "
+                    "splitting (enable_text_splitting=False). Reinstall the "
+                    "sidecar requirements to restore text-splitting.",
+                    e,
+                )
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=False,
+                **inference_settings,
+            )
         sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         return result["wav"], sample_rate
 
@@ -7366,7 +7418,10 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
             return (None, None, None)
         allocated = torch.cuda.memory_allocated() / 1_000_000.0
         reserved = torch.cuda.memory_reserved() / 1_000_000.0
-        total = torch.cuda.get_device_properties(0).total_memory / 1_000_000.0
+        # #1997 — `allocated`/`reserved` above already read the CURRENT device
+        # (torch's no-arg default); `total` must match, or the ratio this feeds
+        # to the recycle watchdog mixes two different cards on a multi-GPU box.
+        total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0
         return (allocated, reserved, total)
     except Exception:
         return (None, None, None)
@@ -8884,7 +8939,12 @@ def debug_memory() -> dict[str, Any]:
                 "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
                 # total card size — `reserved_mb` crossing this is the spill line
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
-                "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
+                # #1997 review (M1) — `allocated_mb`/`reserved_mb` above already
+                # read the CURRENT device (no-arg calls); `total_mb` must match,
+                # or an operator sees two different totals disagree between this
+                # endpoint and /health once _cuda_vram_mb() was fixed to be
+                # current-device-consistent but this sibling reading wasn't.
+                "total_mb": torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0,
             }
             # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
             # staging buffers for H2D/D2H copies). torch's caching host

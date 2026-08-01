@@ -1073,6 +1073,30 @@ describe('castSlice — setRenderedFallback (fe-16)', () => {
   });
 });
 
+describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
+  it('overwrites the orphaned-fallback map from the book-state hydrate', () => {
+    const start = { characters: [makeChar('narrator')], orphanedCharacterFallbacks: {} };
+    const next = castSlice.reducer(
+      start,
+      castActions.setOrphanedCharacterFallbacks({
+        mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks).toEqual({
+      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+    });
+  });
+
+  it('clears stale entries when the new map is empty (post-fix re-render)', () => {
+    const start = {
+      characters: [makeChar('narrator')],
+      orphanedCharacterFallbacks: { mayrin: { characterId: 'narrator' } },
+    };
+    const next = castSlice.reducer(start, castActions.setOrphanedCharacterFallbacks({}));
+    expect(next.orphanedCharacterFallbacks).toEqual({});
+  });
+});
+
 describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, plan 101 + fs-11)', () => {
   it('applyNotLinked appends the symmetric entry; dedups on repeat', () => {
     const start = baseState([makeChar('eliza')]);

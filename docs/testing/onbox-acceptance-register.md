@@ -73,7 +73,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 29 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +83,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**46 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**48 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -218,7 +218,10 @@ asserts which voice reached the provider.
   behind it — the clone **derive** failed without shared FFmpeg libraries
   (#1967) — and that is now fixed and merged (PR #1978, 2026-07-31), so
   E-03…E-07 are runnable on a stock static-FFmpeg box without any hot patch.
-  Their first run doubles as A26 item 1. History of the
+  **E-04 specifically is no longer blocked on a fix** — the code-level fix for
+  its `ImportError` shape (#2017) landed in PR #2039 — so what remains of its
+  debt is a re-run of the reproduction (46-char control, 245-char Russian
+  line) on real Coqui weights, not an outstanding bug. Their first run doubles as A26 item 1. History of the
   first blocker follows, kept because it is what the run-2 result confirms:
   Coqui/XTTS could not load in a
   sidecar that had already served ECAPA `/embed`, and cloning always calls
@@ -266,6 +269,12 @@ asserts which voice reached the provider.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.
+- **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
+  a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+  / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
+  orphaned-characterId line) and C-05b (a designed narrator's substitution is
+  recorded + surfaced) — see the run sheet's `Result (C-05a)`/`Result (C-05b)`
+  lines. Sharpens what C-05 needs to test; the Section C headcount is unchanged.
 
 **Two findings that are NOT defects, recorded so they are not re-filed.** (1)
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
@@ -616,6 +625,37 @@ judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 > knowing before running the forced case. Note the box also had two agent pytest suites
 > holding ~2 GB of cuda:0 at the time, so this is a contended-card datapoint, not a clean one.
 
+> **Correction 2026-08-01 — that datapoint was contention, not a card-size limit.** The
+> caveat above understated it. Re-run on a **quiet** box the same mixed Qwen+Coqui chapter
+> **completed 71/71** with `audioEngines {qwen: 3, coqui: 1}`. Measured footprints via
+> `POST /load` + `/health`:
+>
+> | state | cuda:0 | cuda:1 |
+> |---|---|---|
+> | Qwen 0.6B alone | 0 MB | 1,845 MB |
+> | Qwen **+** Coqui, both resident | 0 MB | **3,758 MB** |
+> | sidecar fresh, **nothing loaded** | **5,743 MB** | 393 MB |
+>
+> Both engines together are **3.7 GB** — they fit an 8 GB card with room to spare. That
+> last row is the tell: a brand-new sidecar with zero models resident, and cuda:0 already
+> two-thirds full. The holder was another worktree's real-GPU Qwen pytest suite
+> (`wt-1975-batch-inlock-load`, ~5.4 GB across **both** cards). The refusal itself was
+> correct and self-describing — `NoCapacityError … deviceKey: 'cuda:0', blockers: []`, where
+> `blockers: []` means "something I cannot see holds this card", since the placement
+> controller only knows its own engines.
+>
+> **So A19's question is still entirely open** — the unforced case does *not* reliably spill
+> on an 8 GB card, and the earlier reading that it did was measuring a foreign process.
+> Caveat in the other direction: our own peak across a 1,588-sample trace was **6,727 MB**
+> (Qwen + Coqui + Whisper ASR together), which on an 8 GB card leaves little headroom — so
+> co-residency is genuinely tight, just not the 6.7 GB-at-idle that was observed.
+>
+> **Box policy since 2026-08-01 (owner's call):** renders are pinned to the 16 GB 5070 Ti
+> via `COQUI_DEVICE=cuda:1` / `QWEN_DEVICE=cuda:1` / `ASR_DEVICE=cuda:1` in the git-ignored
+> `server/.env`, leaving cuda:0 free for other worktrees' PR suites. **A19's forced-evict run
+> must temporarily undo those pins**, or it will not exercise the single-8 GB-card scenario
+> this row is about.
+
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
   character that falls back to Coqui. Force the evict to fail: point
@@ -896,7 +936,9 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
 *Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
 
-### A27 · A present-but-unimportable Kokoro or Qwen package surfaces as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986) · **no GPU needed, sidecar venv only**
+---
+
+### A27 · A missing Kokoro/Qwen package surfaces as Install, a present-but-unimportable one as Repair ([#1965](https://github.com/dudarenok-maker/Castwright/issues/1965), PR #1986; missing-variant copy corrected and Setup-checker coverage added by [#1999](https://github.com/dudarenok-maker/Castwright/issues/1999), PR #2010) · **no GPU needed, sidecar venv only**
 
 The whole point of `*_import_ok` is a package that `find_spec` finds and a real
 `import` cannot load — the #1944 speechbrain shape. **That state cannot be
@@ -922,25 +964,63 @@ separate run sheet (the ticket body plus the paired tests are the spec).
   load control) so the import chokepoint actually runs. It must fail *and* be
   recorded: re-poll `/health` and observe `kokoro_import_ok: false` while
   `kokoro_package_installed` stays `true` — the two disagreeing is the signal.
-- **Observe the two user-facing surfaces.** Model Manager's Kokoro card must
-  offer **Repair** (not "install", and not a silent healthy row —
+- **Observe the two user-facing surfaces.** Model Manager's
+  Kokoro card must offer **Repair** (not "install", and not a silent healthy row —
   `installState: 'package-missing'` off a `true` find_spec is the tell), and the
   Admin console's **Voice engine** row (`GET /api/diagnostics`, rendered at
-  `src/views/admin.tsx:232` — this row is the *only* surface that shows this
-  string; the Setup checker's copy comes from a different endpoint and is not
-  under test here) must read
+  `src/views/admin.tsx:232` — this row is the *only* surface that shows this exact
+  string; the Setup checker's copy comes from a different endpoint, checked
+  separately below) must read
   `reachable · Kokoro package will not import — repair in Model Manager`.
 - **Then check the *missing* variant, and check it AFTER a load attempt.** On a
   venv with no `kokoro_onnx` at all, force a Kokoro load and re-poll: both live
   signals are now known and both are `false` — the attempt records
   `kokoro_import_ok: false` (the ImportError) while `kokoro_package_installed`
   is `false` too — yet they describe one fault, not two. The Voice engine row
-  must read `reachable · Kokoro package missing — repair in Model Manager` and
-  must **not** say "will not import". This is the exact cell PR #1986's review
-  found inverted: "will not import" here sends the operator to repair a package
-  that was simply never installed. (A *successful* import still outranks a
-  `false` find_spec — if `kokoro_import_ok` is `true` the row is `ok` whatever
-  the probe says, since a real import that returned is the stronger evidence.)
+  must read `reachable · Kokoro package missing — install in Model Manager` and
+  must **not** say "will not import" or "repair". (#1999/PR #2010 corrected this
+  row's own verb from "repair" to "install" — a stale expectation here would
+  fail a runner against *correct* behaviour, which is exactly what this update
+  fixes.) This is also the exact cell PR #1986's original review found inverted:
+  "will not import" here sends the operator to repair a package that was simply
+  never installed. (A *successful* import still outranks a `false` find_spec —
+  if `kokoro_import_ok` is `true` the row is `ok` whatever the probe says, since
+  a real import that returned is the stronger evidence.)
+- **Check Model Manager too, in this same missing state** (#2010 m1 — the
+  reviewer's own repro cell). The Kokoro row must offer **Install**, not
+  Repair, and its badge must agree with its toggle: the badge must read as
+  not-yet-installed (e.g. "Not installed") and must **not** read "Needs
+  repair" next to an "Install" button. Before the m1 fix the row's badge read
+  the disk-only inventory state while the toggle read the live packageFault
+  probe, so this exact cell showed "Needs repair" beside "Install" — a runner
+  following only the bullets above would have no criterion telling them
+  whether that mismatch was expected. It is not: badge and toggle must always
+  name the same fault.
+- **Now check the Setup checker surface too** (`GET /api/setup/readiness`,
+  `server/src/routes/setup-diagnosis.ts`'s `diagnoseTts` — out of scope for this
+  row before #1999/PR #2010, in scope now, since it is the surface that PR
+  actually changed and the one whose trigger cannot be manufactured in CI). With
+  only Kokoro broken (the "will not import" state above) and Qwen untouched, its
+  `blockers.tts` must read *"The Kokoro package is present but will not import in
+  the voice engine runtime."* with remediation *"Repair Kokoro in Model
+  Manager."* — naming the engine in both. With only Kokoro missing (the "install"
+  state above), it must read *"The Kokoro package is missing from the voice
+  engine runtime."* with remediation *"Install Kokoro in Model Manager."*, and
+  the response's `blockers.tts.action.kind` must be `kokoro-install` — not
+  absent, which would leave the instruction with nothing to click.
+- **Then the mixed-fault case — the one a runner is most likely to hit and
+  least likely to interpret correctly.** Break `qwen_tts/__init__.py` too (its
+  own repeat of the steps below) so Kokoro is *missing* (no `kokoro_onnx` at
+  all) and Qwen is *broken* (present, import raises) at the same time. The
+  Setup checker must name **Qwen**, not Kokoro: *"The Qwen package is present
+  but will not import…"* / *"Repair Qwen in Model Manager."* — a live-confirmed
+  broken package is the fault the user cannot infer on their own, and outranks
+  a merely-missing one regardless of which engine has which. (Pre-#2010 review
+  this precedence was inverted — Kokoro's plain "not installed" was named
+  instead, and Qwen's real breakage went unmentioned entirely. The Admin
+  console's Voice engine row is unaffected by this precedence question — it
+  already names *both* engines when both are at fault, as its own STANDARD_TTS
+  loop; only the Setup checker's single-blocker copy has to choose one.)
 - **Confirm Coqui stays out of the diagnostics row.** On a box with Coqui
   deliberately not installed, the Voice engine row must remain `ok` — Coqui is
   opt-in and its absence is not a fault.
@@ -1025,7 +1105,145 @@ and A20, which already stage a mixed-engine render on this same card.
 
 ---
 
-### A29 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
+### A29 · `qa.asr.model` reaches the sidecar AND every server-side reader (PR #2008, closes [#1988](https://github.com/dudarenok-maker/Castwright/issues/1988), [#1989](https://github.com/dudarenok-maker/Castwright/issues/1989)) · **no GPU needed, sidecar venv only**
+
+Registering `ASR_MODEL` as the `qa.asr.model` registry knob made a UI-set
+override reach the sidecar via the generic restart-sidecar env-injection loop,
+but the PR's own independent review found it did **not** reach the server's
+own Node-side Whisper-model readers — `whisperRepoDir()` / `whisperModelPresent()`
+/ `detectWhisperInstallStateOnDisk()` (`model-paths.ts`, `whisper-install-detect.ts`)
+cached `process.env.ASR_MODEL` in a module-load-time constant, so Model
+Manager's sizing, install-state, and **Remove** all still targeted `base`
+regardless of what was actually configured and loaded. This was verified as a
+real defect (not just a review claim) by reverting the fix and watching the
+paired tests go red — see the PR's mutation-verification comment — but the
+full failure mode needs the real sidecar + a real Hugging Face download to
+observe end to end, which no unit test can substitute for.
+
+- **Prerequisite:** comment out `ASR_MODEL` in `server/.env` first, if it's
+  set. `server/.env.example`'s generated block ships `ASR_MODEL=base`
+  uncommented; on a box seeded from that file, the value is present as a real
+  env var, and `resolver.ts` gives env unconditional precedence with
+  `locked: true` — Advanced Configuration would show the knob disabled with
+  an env pill, making step 1 below unperformable.
+- Set **Content-QA (Whisper) model** to a non-default value (e.g. `small`) in
+  Advanced Configuration and let the sidecar restart. Confirm from the sidecar
+  log / `/health` that `faster-whisper` actually loaded `small`, not `base`.
+- Open Model Manager: the Whisper row must report `small`'s on-disk size and
+  path, not `base`'s.
+- Click **Remove**. It must delete the `small` snapshot directory and leave
+  any pre-existing `base` snapshot untouched — the inverse of the pre-fix
+  behaviour, which deleted `base` and left the model actually in use on disk.
+- Run the in-app installer (Account → Models → Whisper → Install) with
+  `small` configured and confirm `install-whisper.mjs` fetches `small` (its
+  `[install-whisper]` step lines / the resulting HF cache snapshot name), not
+  `base` — pinning that the installer spawn now receives an explicit
+  `--model` flag carrying the live value rather than falling back to its own
+  `process.env.ASR_MODEL || 'base'` default. Confirm the install card's own
+  copy also names `small`, not a hard-coded `base` (m1 fix).
+- **Separately**, confirm the documented CLI path
+  (`node server/tts-sidecar/scripts/install-whisper.mjs`, no flags) fetches
+  `base` in this scenario, not `small` — it has no access to
+  `user-settings.json`, so it cannot see the UI override; only the in-app
+  installer (which always passes `--model`) reflects the configured model.
+  This is expected, not a defect — it's why the script's usage comment now
+  says to pass `--model` explicitly for a UI-configured, non-default model.
+
+*Needs:* the sidecar venv with `faster-whisper` installable, network access
+for the HF download of a second model size, and write access to the HF hub
+cache to seed/inspect both `base` and the configured model's snapshots. No GPU
+required. *Criteria:* this row plus PR #2008's description of the failure
+scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
+Remove click.
+
+---
+
+### A30 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+
+PR #2032 (hardened further by the independent pre-merge review that produced
+this row) closes three "a gate that silently stopped asserting" defects in
+`server/tts-sidecar/tests/golden/compare.py`'s bless guards and in
+`test_golden_regression.py`'s `_make_kokoro`. All three files' pure-function
+gating tests (`test_golden_compare.py`, `test_instruct_bless_gating.py`,
+`test_make_kokoro_gating.py`) are mutation-verified and run in the fast
+`test:sidecar` tier — but two behaviours only a real bless run against real
+weights can prove, and neither was exercised on real hardware for this PR:
+
+- **A guard that never blocks honest work.** Every guard added/hardened here
+  (`bless_guard`'s G1/G2, `bless_guard_thresholds`'s tolerances check and its
+  new `previously_blessed` disambiguation) is proven only against synthetic
+  fixtures. The thing that would make it a *rubber stamp in the other
+  direction* — refusing a bless that changed nothing real, or demanding
+  `GOLDEN_REBLESS_THRESHOLDS=1`/`GOLDEN_REBLESS_CONTENT=1` on a routine,
+  uncontended re-bless — has never been observed end to end.
+- **`_make_kokoro` against a real `KokoroEngine`.** `test_make_kokoro_gating.py`
+  pins the classifier wiring (`synthesise_or_skip` / `prereq.py`) with a
+  stubbed engine; #1987's actual claim — a genuine CUDA/model-corruption
+  failure during Kokoro warm-up now FAILS the test instead of reading as a
+  green SKIP — has not been forced against the real engine.
+
+- **Prerequisite:** Kokoro weights installed
+  (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx` +
+  `voices-v1.0.bin`), sidecar venv bootstrapped. A single 8 GB card is
+  sufficient (Kokoro is the ~1 GB fallback engine); CUDA is not required —
+  `ASR_DEVICE=cpu`/CPU Kokoro also exercises this.
+- Run `npm run test:golden-audio -- --bless --sidecar-only` on a clean,
+  **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
+  contention warning should print nothing). Confirm it completes and writes
+  `kokoro-baseline.json` / `instruct-baseline.json` **without**
+  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set on a
+  routine, uncontended re-bless. **Amended by #2045 F1/F2** (`instruct-
+  baseline.json`'s `identity`/`loudness_dbfs` guard, added by #2035 after
+  this row was written, is noise-tolerant, not silent-or-refuse like
+  `tolerances`): `kokoro-baseline.json`'s `transcript`/`text_edits` and
+  `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
+  (or the guard is broken); `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
+  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=0.015 /
+  `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
+  printed a `[golden-bless] identity moved ...` / `[golden-bless]
+  loudness_dbfs moved ...` line for each one that did — the echo is the
+  part a `git diff` alone can't confirm, and it's the accept-path half of
+  the guard real hardware is uniquely placed to exercise (both the
+  ROUTINE-bless-doesn't-need-the-flag half AND the noise-gets-echoed half
+  need a REAL measurement pair with real noise between them — a synthetic
+  fixture can only assert the arithmetic, never that actual noise clears
+  epsilon on a real box). `blessed_at`-adjacent housekeeping fields may
+  also move as before.
+- Then force one refusal for real: hand-edit a committed baseline to null out
+  its `transcript` (or delete its `tolerances` key) exactly as a bad
+  merge-resolution would, re-run the same `--bless` command, and confirm it
+  refuses with the expected `GOLDEN_REBLESS_*` message and leaves the file
+  byte-identical to before the attempt — then revert the hand-edit.
+  This is the "#2003/#1995 shape, on a real file, via the real CLI entry
+  point" check the unit tests can only approximate with `tmp_path` fixtures.
+- **Amended by #2045 F1/F2:** also force one WINDOW-sized refusal on
+  `instruct-baseline.json`'s `identity` block (hand-edit one committed
+  `identity.cosine.<emotion>` figure by clearly more than
+  `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
+  command, and confirm it refuses (not just accepts-and-echoes) with the
+  expected `GOLDEN_REBLESS_THRESHOLDS` message and leaves the file
+  byte-identical — then revert the hand-edit. This is the boundary the
+  noise-tolerant epsilon exists to draw; the routine-bless bullet above
+  only exercises the accept side.
+- Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
+  (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
+  normally (expect pass), then deliberately break the engine (e.g. rename
+  the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM) and
+  confirm the run now **FAILS** rather than SKIPping — the #1987 defect this
+  PR closed. Restore the weights afterward.
+
+*Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
+stable, reproducible value (no concurrent GPU work), and permission to
+hand-edit a baseline JSON for the refusal drill (revert before committing).
+*Criteria:* this row; PR #2032's own mutation-verification table is the
+synthetic-fixture half of the evidence, this row is the real-file half.
+*Cost:* short — one clean bless, one deliberately-broken bless, one
+deliberately-broken Kokoro run; well under an hour total.
+
+---
+
+### A31 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
 
 The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
 test binding it to the render's own oracle, an e2e walkthrough. What no suite

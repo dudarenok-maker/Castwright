@@ -50,6 +50,7 @@ from tests.golden.compare import (  # noqa: E402
     model_sha256,
     rms,
 )
+from tests.golden.prereq import synthesise_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.golden
 
@@ -69,6 +70,16 @@ MIN_RMS = 0.01
 ASR_MODEL_NAME = "base"
 ASR_DEVICE_NAME = "cpu"
 ASR_LANGUAGE = "en"
+# #2004: the content-drift check runs at TOLERANCE 0, so a third unpinned
+# input matters just as much as model/device -- `main.WhisperEngine.
+# _compute_type()` also reads `ASR_COMPUTE_TYPE` (int8 vs int8_float16 vs
+# float32 changes greedy-decode output), but pre-#2004 `_make_whisper()`
+# left it ambient. This is the CPU default `_compute_type()` resolves to
+# when ASR_COMPUTE_TYPE is unset and the device family is "cpu" (matching
+# ASR_DEVICE_NAME above) -- pinned outright so a stray ambient value in an
+# operator's shell fails loudly with a named reason instead of silently
+# becoming content drift.
+ASR_COMPUTE_TYPE_NAME = "int8"
 
 
 def _load_json(path: Path) -> dict:
@@ -78,32 +89,48 @@ def _load_json(path: Path) -> dict:
 
 def _make_kokoro() -> "main.KokoroEngine":
     """Build a real KokoroEngine and force a load, skipping the whole module
-    when the package or weights aren't present."""
+    when the package or weights aren't present.
+
+    #1987: the warm-up synth used to wrap ANY `RuntimeError` in a blanket
+    `pytest.skip(...)`, so a CUDA error, a bad voice substitution, or model
+    corruption during warm-up all reported a green SKIP instead of a
+    failure. `synthesise_or_skip` (the same classifier #1911 built for the
+    identical Coqui swallow) narrows the skip to "the kokoro-onnx package
+    itself is absent from this box" and lets everything else propagate."""
     engine = main.KokoroEngine()
     if not os.path.isfile(engine._model_path) or not os.path.isfile(engine._voices_path):
         pytest.skip(
             f"Kokoro weights not found at {engine._model_path} / {engine._voices_path} — "
             "run server/tts-sidecar/scripts/install-kokoro.ps1 to bless/run the golden gate."
         )
-    try:
-        # First synth triggers _ensure_loaded; a missing kokoro-onnx package
-        # raises RuntimeError which we turn into a skip.
-        engine.synthesize("v1", engine.FALLBACK_VOICE, "Warm up.")
-    except RuntimeError as e:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Kokoro engine unavailable: {e}")
+    # First synth triggers _ensure_loaded.
+    synthesise_or_skip(engine, "v1", engine.FALLBACK_VOICE, "Warm up.")
     return engine
 
 
 def _make_whisper() -> "main.WhisperEngine":
-    """Build a real WhisperEngine pinned to the exact model/device/language
-    the recorded `transcript` baseline was measured under (#1911 s2e).
+    """Build a real WhisperEngine pinned to the exact model/device/compute-type
+    the recorded `transcript` baseline was measured under (#1911 s2e, compute
+    type added by #2004).
 
     Set OUTRIGHT (`os.environ[...] =`), not `setdefault` — a stray ambient
-    ASR_MODEL/ASR_DEVICE in the caller's shell must not silently apply to
-    this box's golden run; the recorded baseline is meaningless under a
-    different model or device family, so this asserts rather than skips."""
+    ASR_MODEL/ASR_DEVICE/ASR_COMPUTE_TYPE in the caller's shell must not
+    silently apply to this box's golden run; the recorded baseline is
+    meaningless under a different model, device family, or compute type, so
+    this asserts rather than skips.
+
+    The `_compute_type` check is skipped (not asserted-false) when `engine`
+    doesn't expose it at all — `test_golden_sanity_gating.py` calls this
+    function against a `_StubWhisperEngine` stand-in (real `_model_name` /
+    `_device` attributes, deliberately no `_compute_type`) to drive the
+    content-drift gate's OWN logic without a real model; that stub's
+    contract predates #2004 and doesn't claim to cover the compute-type
+    pin, so `hasattr` keeps this function usable by both without changing
+    the stub. A REAL `main.WhisperEngine` always has `_compute_type`, so
+    the golden run itself is unaffected."""
     os.environ["ASR_MODEL"] = ASR_MODEL_NAME
     os.environ["ASR_DEVICE"] = ASR_DEVICE_NAME
+    os.environ["ASR_COMPUTE_TYPE"] = ASR_COMPUTE_TYPE_NAME
     engine = main.WhisperEngine()
     assert engine._model_name == ASR_MODEL_NAME, (
         f"ASR_MODEL resolved to {engine._model_name!r}, expected {ASR_MODEL_NAME!r} — "
@@ -114,6 +141,13 @@ def _make_whisper() -> "main.WhisperEngine":
         f"ASR_DEVICE resolved to device family {family!r}, expected {ASR_DEVICE_NAME!r} — "
         "the recorded transcript baseline does not apply to a different device."
     )
+    if hasattr(engine, "_compute_type"):
+        compute_type = engine._compute_type()
+        assert compute_type == ASR_COMPUTE_TYPE_NAME, (
+            f"ASR_COMPUTE_TYPE resolved to {compute_type!r}, expected {ASR_COMPUTE_TYPE_NAME!r} — "
+            "the recorded transcript baseline does not apply to a different compute type "
+            "(int8 vs int8_float16 vs float32 changes greedy-decode output)."
+        )
     return engine
 
 
@@ -122,6 +156,30 @@ def _kokoro_onnx_version() -> Optional[str]:
         import importlib.metadata as md
 
         return md.version("kokoro-onnx")
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _faster_whisper_version() -> Optional[str]:
+    """#2004: `kokoro-baseline.json`'s `metadata` already stamps
+    `kokoro_onnx_version` + `model_sha256` "so a model bump is legible" (the
+    file's own `_comment`). The content-drift baseline had no equivalent —
+    `pip install -U faster-whisper` (or an upstream `ctranslate2` bump) shifts
+    every transcript with zero diagnostic on a tolerance-0 gate. Mirrors
+    `_kokoro_onnx_version` above."""
+    try:
+        import importlib.metadata as md
+
+        return md.version("faster-whisper")
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _ctranslate2_version() -> Optional[str]:
+    try:
+        import importlib.metadata as md
+
+        return md.version("ctranslate2")
     except Exception:  # pragma: no cover
         return None
 
@@ -170,6 +228,11 @@ def _bless(engine: "main.KokoroEngine", whisper: "main.WhisperEngine", fixture: 
     baseline["metadata"] = {
         "kokoro_onnx_version": _kokoro_onnx_version(),
         "model_sha256": model_sha256(engine._model_path),
+        # #2004: stamp the ASR stack too, mirroring the synth-side fields
+        # above — a bump here is what actually moves a transcript, so it
+        # needs to be just as legible as a Kokoro weights/version bump.
+        "faster_whisper_version": _faster_whisper_version(),
+        "ctranslate2_version": _ctranslate2_version(),
         # blessed_at intentionally left for the committer to stamp — the
         # harness has no clock and must stay reproducible.
         "blessed_at": baseline.get("metadata", {}).get("blessed_at"),

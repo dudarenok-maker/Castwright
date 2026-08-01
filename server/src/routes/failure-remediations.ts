@@ -175,13 +175,28 @@ export const FAILURE_REMEDIATIONS = {
        UnresolvableClonedVoiceError's message (see generation.ts's short-
        circuit before describeSynthesisError, mirroring the isStall/
        isRecycleStorm precedent) — this static copy is the fallback shown by
-       the offline Help view. */
+       the offline Help view.
+
+       #1979 — the `derive-failed` clause below is worded from
+       UnresolvableClonedVoiceError.fromList's own live remedy ("re-run the
+       clone for <engine> and check the sidecar log", clone-voice-resolver.ts)
+       rather than a second, drifting phrasing — engine name dropped to keep
+       this copy reason-neutral like the rest of it.
+
+       #2023 — the `misattributed-substitution` reason (a healthy cloned
+       narrator refusing to borrow an orphaned characterId's line) has no
+       cast row to reassign and nothing wrong with the voice to repair, so
+       its own remedy ("re-attribute … in the Manuscript view",
+       clone-voice-resolver.ts's `fromList`) is added alongside the others
+       here too, for the same reason-neutral, list-every-possible-fix
+       precedent the `derive-failed` clause set. */
     userMessage:
       "A cloned voice in this chapter can't be used as itself — a real person's voice is never " +
       'substituted with another. See the reason above for which voice and why.',
     remediation:
-      "Re-upload the voice's sample, restore consent, switch the book to the engine the voice was " +
-      'cloned for, or reassign the character — then generate again.',
+      "Re-upload the voice's sample, restore consent, re-run the clone and check the sidecar log, " +
+      'switch the book to the engine the voice was cloned for, re-attribute the affected sentence(s) ' +
+      'in the Manuscript view, or reassign the character — then generate again.',
   },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */

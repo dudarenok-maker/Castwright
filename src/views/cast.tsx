@@ -107,6 +107,10 @@ interface Props {
    preloaded test stores), keeping the selector cheap. */
 const EMPTY_FALLBACK_MAP: Record<string, string> = {};
 
+/* #2023 — same stable-reference trick as EMPTY_FALLBACK_MAP above, for the
+   orphaned-characterId fallback map. */
+const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, { characterId: string; voiceName?: string }> = {};
+
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
    provenance chip last. Absent statuses are skipped, so a given cast only
@@ -222,6 +226,17 @@ export function CastView({
      design-lifecycle pill. */
   const renderedFallbackByCharacter = useAppSelector(
     (s) => s.cast.renderedFallbackByCharacter ?? EMPTY_FALLBACK_MAP,
+  );
+  /* #2023 — orphaned characterId → who actually rendered it, hydrated from
+     book-state alongside renderedFallbackByCharacter above. Surfaced as an
+     advisory banner below (never a per-row pill: an orphaned id has no cast
+     row of its own to attach one to). */
+  const orphanedCharacterFallbacks = useAppSelector(
+    (s) => s.cast.orphanedCharacterFallbacks ?? EMPTY_ORPHANED_FALLBACK_MAP,
+  );
+  const orphanedFallbackIds = useMemo(
+    () => Object.keys(orphanedCharacterFallbacks).sort(),
+    [orphanedCharacterFallbacks],
   );
   /* PR4 — read pinned tiers from the store so the roster badge updates live
      after dispatch(castActions.updateCharacter). The store is the single
@@ -919,6 +934,37 @@ export function CastView({
               See report <IconChevR className="w-3.5 h-3.5" />
             </span>
           </button>
+        )}
+
+        {/* #2023 — orphaned-characterId advisory. A rendered chapter attributed
+            one or more lines to an id with no entry in this book's cast at all
+            (a cast/analysis id drift); the render silently fell back to the
+            narrator for those lines rather than failing. Purely informational —
+            falling back may well be the right behaviour — so this never blocks
+            anything; it just makes the substitution visible, which is the bug
+            this closes (previously logged once per orphan id per render and
+            surfaced nowhere else). */}
+        {orphanedFallbackIds.length > 0 && (
+          <div
+            role="status"
+            data-testid="orphaned-character-fallback-banner"
+            className="w-full mb-4 p-4 rounded-3xl border border-amber-200 bg-amber-50/60 flex items-center gap-4 text-left"
+          >
+            <span className="w-10 h-10 rounded-full bg-amber-100 grid place-items-center text-amber-700 shrink-0">
+              <IconAlertTri className="w-5 h-5" />
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-ink">
+                {orphanedFallbackIds.length} character id{orphanedFallbackIds.length === 1 ? '' : 's'}{' '}
+                not found in this book's cast
+              </p>
+              <p className="text-xs text-ink/65 mt-0.5">
+                "{orphanedFallbackIds.join('", "')}" — rendered in the narrator's voice instead of
+                the intended character. Usually a mismatch between the analysis and the cast; check
+                the manuscript's attributions for these ids.
+              </p>
+            </div>
+          </div>
         )}
 
         {/* fe-16 — non-English on-ramp. Russian (and any future non-English

@@ -10,6 +10,7 @@ import {
   fasterWhisperInstalled,
   detectWhisperInstallStateOnDisk,
 } from './whisper-install-detect.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 
 const REPO_NAME = 'models--Systran--faster-whisper-base';
 
@@ -58,6 +59,20 @@ describe('whisperModelPresent', () => {
   it('is false on an empty cache', () => {
     expect(whisperModelPresent()).toBe(false);
   });
+
+  it('resolves its default through the qa.asr.model REGISTRY OVERRIDE, not just env (PR #2008 review, Major 1)', () => {
+    /* Before the fix, whisperModelPresent()'s default was a module-load-time
+       `process.env.ASR_MODEL` const, so a registry override (set from
+       Advanced Configuration, with no ASR_MODEL env var present) was
+       invisible here — the probe kept checking 'base' regardless. */
+    seedModel('model.bin'); // seeds Systran/faster-whisper-base
+    _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+    try {
+      expect(whisperModelPresent()).toBe(false); // 'base' is present, 'small' isn't
+    } finally {
+      _resetUserSettingsCache();
+    }
+  });
 });
 
 describe('fasterWhisperInstalled', () => {
@@ -86,5 +101,16 @@ describe('detectWhisperInstallStateOnDisk', () => {
     seedVenvPackage();
     seedModel('model.bin');
     expect(detectWhisperInstallStateOnDisk(repoRoot)).toBe('ready');
+  });
+
+  it("→ 'model-missing' for an overridden qa.asr.model even though the DEFAULT base is ready (PR #2008 review, Major 1)", () => {
+    seedVenvPackage();
+    seedModel('model.bin'); // seeds Systran/faster-whisper-base only
+    _setUserSettingsCacheForTest({ configOverrides: { 'qa.asr.model': 'small' } });
+    try {
+      expect(detectWhisperInstallStateOnDisk(repoRoot)).toBe('model-missing');
+    } finally {
+      _resetUserSettingsCache();
+    }
   });
 });

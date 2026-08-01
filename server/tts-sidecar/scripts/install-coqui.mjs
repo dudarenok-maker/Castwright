@@ -118,6 +118,20 @@ function runCapture(python, pyArgs, env) {
  * Coqui render paths — so the opt-in install must provide them. They carry no torch
  * pin, so a normal `-c constraints` install is safe (no --no-deps: cutlet's
  * transitive deps are wanted).
+ *
+ * Why spacy rides in this same step (#2017): `CoquiEngine._infer_from_latents`
+ * passes `enable_text_splitting=True` (config-faithful, mirrors `Xtts.synthesize`'s
+ * own build), so a cloned-voice render at/above `tokenizer.char_limits[lang]`
+ * reaches upstream's `get_spacy_lang`, which raises ImportError without spacy
+ * installed. spacy is reached only via this same opt-in Coqui/XTTS path — never
+ * by Qwen or Kokoro — so it belongs here, not in the shared manifest (measured
+ * 22.3 MB / 16 packages the CPU-only and Kokoro-only installs would otherwise pay
+ * for a library they never import). Plain `spacy`, NOT `spacy[ja]` — 22.3 MB / 16
+ * packages vs. 92.5 MB / 18, of which 68.9 MB is `sudachidict-core` alone (needed
+ * only for Japanese). Plain spacy covers ar/en/es/hi/zh (zh confirmed working
+ * here, despite the upstream error message naming `spacy[ja]` generically);
+ * Japanese stays broken on purpose — tracked as #2038 (fs-59's call). No torch
+ * pin either, so it shares the phonemizers' `-c constraints` install.
  */
 export function coquiPipInstallSteps(constraints) {
   return [
@@ -133,10 +147,20 @@ export function coquiPipInstallSteps(constraints) {
         'FAIL: pip install torchcodec failed. coqui-tts import needs it present on torch>=2.9.',
     },
     {
-      label: 'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite)...',
-      args: ['-m', 'pip', 'install', 'pypinyin', 'cutlet', 'unidic-lite', '-c', constraints],
+      label: 'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite) + spacy (text splitting, #2017)...',
+      args: [
+        '-m',
+        'pip',
+        'install',
+        'pypinyin',
+        'cutlet',
+        'unidic-lite',
+        'spacy>=3.8,<4.0',
+        '-c',
+        constraints,
+      ],
       failMsg:
-        'FAIL: pip install XTTS CJK phonemizers failed. zh needs pypinyin; ja needs cutlet + a MeCab dict (unidic-lite).',
+        'FAIL: pip install XTTS CJK phonemizers/spacy failed. zh needs pypinyin; ja needs cutlet + a MeCab dict (unidic-lite); cloned-voice text-splitting needs spacy.',
     },
   ];
 }
@@ -207,8 +231,9 @@ function main() {
   const baseTxt = join(SIDECAR_DIR, 'requirements', 'base.txt');
   const constraints = writeSanitizedConstraintsFile(baseTxt);
   // No -U: base.txt already pins compatible versions; upgrading on every run could
-  // pull a broken coqui-tts release. torchcodec + the CJK phonemizers are required
-  // too (see coquiPipInstallSteps' rationale) — installed here, NOT the base overlay.
+  // pull a broken coqui-tts release. torchcodec, the CJK phonemizers, and spacy
+  // are required too (see coquiPipInstallSteps' rationale) — installed here, NOT
+  // the base overlay.
   for (const { label, args, failMsg } of coquiPipInstallSteps(constraints)) {
     step(label);
     if (run(python, args, env) !== 0) {

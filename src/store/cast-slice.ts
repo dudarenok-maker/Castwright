@@ -60,6 +60,13 @@ export interface CastState {
       pill. Optional (absent on pre-fe-16 preloaded test stores) — selectors
       read it through a `?? {}` guard. */
   renderedFallbackByCharacter?: Record<string, string>;
+  /** #2023 — orphaned characterId → who actually rendered it. Hydrated from
+      the book-state GET alongside `renderedFallbackByCharacter` above, but
+      keyed by a manuscript id with NO cast entry at all (substituted with
+      the narrator) rather than a real cast id whose engine changed. Optional
+      for the same reason as its sibling — selectors read it through a
+      `?? {}` guard. */
+  orphanedCharacterFallbacks?: Record<string, { characterId: string; voiceName?: string }>;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -68,7 +75,11 @@ export interface CastState {
    characters between click and async hydration. Hydration via
    `hydrateFromAnalysis` / `setCharacters` (from the layout's getBookState
    handler) is the only legitimate source for a real book. */
-const initialState: CastState = { characters: [], renderedFallbackByCharacter: {} };
+const initialState: CastState = {
+  characters: [],
+  renderedFallbackByCharacter: {},
+  orphanedCharacterFallbacks: {},
+};
 
 export const castSlice = createSlice({
   name: 'cast',
@@ -82,6 +93,14 @@ export const castSlice = createSlice({
        case clears stale entries (e.g. after a fresh render with no fallback). */
     setRenderedFallback: (s, a: PayloadAction<Record<string, string>>) => {
       s.renderedFallbackByCharacter = a.payload ?? {};
+    },
+    /* #2023 — overwrite the orphaned-characterId fallback map from the
+       book-state GET, mirroring setRenderedFallback above. */
+    setOrphanedCharacterFallbacks: (
+      s,
+      a: PayloadAction<Record<string, { characterId: string; voiceName?: string }>>,
+    ) => {
+      s.orphanedCharacterFallbacks = a.payload ?? {};
     },
     declineMatch: (s, a: PayloadAction<string>) => {
       const c = s.characters.find((x) => x.id === a.payload);
