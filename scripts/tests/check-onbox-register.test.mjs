@@ -895,9 +895,15 @@ test('an unreadable glance table is an error, not a silent pass', () => {
 
 test('unreadable group sections are an error, not a silent pass', () => {
   const errors = checkLiveView(buildRegister(), buildLiveView({ sectionClass: 'grp' }));
-  assert.ok(
-    errors.some((e) => e.startsWith('Live view: no `<section class="group…">` blocks')),
-    `expected the unreadable-sections error, got: ${JSON.stringify(errors)}`,
+  // deepEqual, not `.some`: the branch bails out early precisely so it does
+  // not then also report every group as missing a section. `.some` left that
+  // early return unpinned (PR #2080 review round 2, #2).
+  assert.deepEqual(
+    errors,
+    [
+      'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    ],
+    `expected exactly the unreadable-sections error, got: ${JSON.stringify(errors)}`,
   );
 });
 
@@ -1079,4 +1085,97 @@ test('a row filed under the wrong group section names both sections', () => {
     errors.some((e) => e.includes("Live view's Group B section is missing row B1")),
     `expected the missing-row error to name Group B, got: ${JSON.stringify(errors)}`,
   );
+});
+
+// --- Round 2 findings (PR #2080) ---
+
+// #1: the shape filter used to DROP a non-conforming `num` before comparison,
+// so a live-view row the register does not have vanished from the check
+// entirely. The markdown side rejects the identical violation loudly.
+test('a live-view row with an invalid row ID is reported, not silently dropped', () => {
+  for (const bad of ['A31b', 'A3.1', 'a3', 'A 3']) {
+    const liveView = buildLiveView({ rowsA: ['A1', 'A2', bad], headerA: 2 });
+    const errors = checkLiveView(buildRegister(), liveView);
+    assert.ok(
+      errors.some((e) => e.includes(`has a row numbered "${bad}"`)),
+      `expected ${bad} to be reported, got: ${JSON.stringify(errors)}`,
+    );
+  }
+});
+
+// #5: the split marker was positional, so moving `class` after `id` re-opened
+// F2's fold — the one attribute variation that degraded silently rather than
+// failing loudly.
+test('a group section is parsed with its class attribute after other attributes', () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group" id="gb">',
+    '<section id="gb" data-x="1" class="group">',
+  );
+  assert.deepEqual(checkLiveView(buildRegister(), liveView), []);
+});
+
+test('a modifier-classed Blocked section is parsed whole even with class last', () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group is-blocked" id="blocked">',
+    '<section id="blocked" class="group is-blocked">',
+  );
+  // Its `—` row must not leak into Group B, the section above it.
+  assert.deepEqual(checkLiveView(buildRegister(), liveView), []);
+});
+
+// #4: widening the marker to `class="group[^"]*"` also matched sibling names.
+test('a sibling class like "grouping" is not mistaken for a group section', () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group" id="gb">',
+    '<section class="grouping" id="nav"><span class="gtag">A</span></section>\n\n  <section class="group" id="gb">',
+  );
+  assert.deepEqual(
+    checkLiveView(buildRegister(), liveView),
+    [],
+    'a decoy section must not register as a duplicate Group A',
+  );
+});
+
+// #6: comments, both directions. Commenting a section out removes it from the
+// published page; commenting a row out does not add one.
+test('a commented-out group section is reported as missing', () => {
+  const liveView = buildLiveView().replace(
+    /<section class="group" id="gb">([\s\S]*?)<\/section>/,
+    '<!-- <section class="group" id="gb">$1</section> -->',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.includes('Live view: no group section for Group B.'),
+    `expected the commented-out section to read as missing, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('a commented-out row is not counted as a real one', () => {
+  const liveView = buildLiveView().replace(
+    '<summary><span class="num">A2</span><span class="iname">t</span></summary>',
+    '<summary><span class="num">A2</span><span class="iname">t</span></summary>\n      <!-- <summary><span class="num">A9</span><span class="iname">t</span></summary> -->',
+  );
+  assert.deepEqual(checkLiveView(buildRegister(), liveView), []);
+});
+
+// #7: `<tr>` was matched exactly, so an ADDED glance row carrying any
+// attribute was invisible — the same brittleness the section marker had.
+test('an added glance row carrying an attribute is still seen', () => {
+  const liveView = buildLiveView().replace(
+    '<tr><td>—</td>',
+    '<tr class="dim"><td><a href="#gz">Z</a></td><td>Setup Z</td><td>5</td></tr>\n      <tr><td>—</td>',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) => e.startsWith('Live view: glance table has a Group Z row')),
+    `expected the extra glance row to be seen, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2, survivor 1: no test fed checkLiveView a markdown without the heading.
+test('a markdown with no "At a glance" section reports that, and nothing else', () => {
+  const register = buildRegister().replace('## At a glance', '## Summary');
+  assert.deepEqual(checkLiveView(register, buildLiveView()), [
+    'No "## At a glance" section in the markdown — cannot check the live view against it.',
+  ]);
 });

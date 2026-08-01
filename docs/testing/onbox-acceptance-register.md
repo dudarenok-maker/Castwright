@@ -50,13 +50,20 @@ right file is always to hand.
 
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that must be **recomputed** on every edit. Rows can be right while the
-summary strip lies. `npm run check:onbox-register` now verifies the owed total,
-the per-group counts and the row IDs across both files, so an edit here that
-misses the live view fails CI. Two things it does *not* cover: the rest of the
-summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stays
-a manual recompute; and the published page itself — it only ever reads the
-source file, so "was it published, and was it the right file?" is procedure, not
-a gate.
+summary strip lies. `npm run check:onbox-register` verifies the owed total, the
+per-group counts and the row IDs across both files, so **adding or removing a
+row here and missing the live view fails CI**. Know its edges, because two of
+them are wide:
+
+- **A wording-only edit does not fail.** Rewording a row, recording a run
+  result, changing a hardware note or a criteria link — the most common edit
+  this register gets — changes nothing the check compares. The live view mirrors
+  that prose in its own row bodies and will silently fall behind.
+- **The rest of the summary strip is unchecked** — oldest debt, and the
+  group/blocked/unconfirmed tallies. Recompute those by hand.
+- **The published page is invisible to it.** It only ever reads the source file,
+  so "was it published at all, and was it the right file?" is procedure, not a
+  gate.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:

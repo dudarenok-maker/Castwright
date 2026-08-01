@@ -340,6 +340,16 @@ export function checkRegister(text) {
 // publish at all, leaves no trace in the repo. That half is a documented
 // procedure, not a mechanical gate — see the register's "Live view" section.
 
+// Blanks HTML comments before anything else parses the live view. Both
+// directions matter and both were wrong without it (PR #2080 review round 2):
+// a commented-out row was counted as a real one, and commenting out a whole
+// group section — which removes it from the published page — was invisible.
+// Blanking rather than deleting keeps the comment's own `<section>`/`<span>`
+// text from being read while leaving the surrounding structure intact.
+function stripHtmlComments(html) {
+  return html.replace(/<!--[\s\S]*?-->/g, '');
+}
+
 // Strips tags and collapses whitespace, so a cell's text can be compared
 // regardless of the markup inside it (the C group's setup cell wraps a
 // `<span lang="ru">`, and every glance-table letter is wrapped in an `<a>`).
@@ -360,7 +370,9 @@ function parseLiveViewGlance(html) {
   const groups = new Map();
   const malformedLetters = [];
   const duplicateLetters = new Set();
-  for (const rowMatch of tableMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+  // `<tr\b[^>]*>`, not a bare `<tr>`: a row carrying any attribute was
+  // previously invisible, so an ADDED group row went unreported (round 2, #7).
+  for (const rowMatch of tableMatch[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)) {
     const cells = [...rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) =>
       htmlCellText(c[1]),
     );
@@ -389,27 +401,46 @@ function parseLiveViewGlance(html) {
 // `BLK` and `?` sections) are skipped — the markdown's own glance table marks
 // their rows with `—` and excludes them from the owed total too.
 //
-// The split marker matches the whole class attribute, not the literal
-// `class="group"`: the real file's last two sections carry modifier classes
-// (`class="group is-blocked"`, `class="group is-soft"`). A marker ending at the
-// closing quote missed both, folding their content — and the trailing
-// `<footer>` — into the PRECEDING group's block, so the `gtag` filter above
-// never actually saw them and a lettered row added to either would have been
-// attributed to the wrong group (PR #2080 review, F2). It also meant a purely
-// cosmetic modifier class on any other section made its whole row list read as
-// "extra rows the register does not have".
+// The split marker matches a whole `<section>` tag whose class list CONTAINS
+// `group`, wherever the class attribute sits among the others. Two rounds of
+// review narrowed it to this:
+//   - `<section class="group"` (round 1) missed the real file's modifier-class
+//     sections (`class="group is-blocked"`, `class="group is-soft"`), folding
+//     their content — and the trailing `<footer>` — into the PRECEDING group's
+//     block. The `gtag` filter never saw them, a lettered row added to either
+//     was attributed to the wrong group, and a cosmetic modifier class on any
+//     other section made its whole row list read as "extra rows" (F2).
+//   - `<section class="group[^"]*"` (round 2) fixed that but matched sibling
+//     names like `class="grouping"` / `class="group-nav"`, and was still
+//     positional: `<section id="blocked" class="group is-blocked">` re-opened
+//     the fold SILENTLY, which is the one attribute variation that degraded
+//     quietly rather than failing loudly (#4, #5).
+// `(?:\s[^"]*)?` requires whitespace after `group`, so `grouping` no longer
+// matches; the leading `[^>]*` makes attribute order irrelevant.
 function parseLiveViewSections(html) {
   const sections = new Map();
   const duplicateLetters = new Set();
-  const blocks = html.split(/<section class="group[^"]*"/).slice(1);
+  const invalidRowIds = [];
+  const blocks = html.split(/<section\b[^>]*\bclass="group(?:\s[^"]*)?"[^>]*>/).slice(1);
   for (const block of blocks) {
     const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
     if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
     const letter = tagMatch[1].trim();
     const countMatch = block.match(/<span class="gcount">(\d+) rows?<\/span>/);
-    const rowIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)]
-      .map((m) => m[1].trim())
-      .filter((id) => /^[A-Z]\d+$/.test(id));
+    const allIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)].map((m) =>
+      m[1].trim(),
+    );
+    const rowIds = allIds.filter((id) => /^[A-Z]\d+$/.test(id));
+    // A `num` that is neither a row ID nor the `—` used by the Blocked and
+    // Unconfirmed sections is REPORTED, not dropped. Silently filtering it was
+    // the inverse of the markdown side, which rejects the same convention
+    // violation loudly (`### A19b` → invalidRowHeadings): a live-view row
+    // numbered `A31b`, `a32` or `A&nbsp;32` used to vanish from the comparison
+    // entirely, so the page carried a row the register did not and the check
+    // stayed green (round 2, #1).
+    for (const id of allIds) {
+      if (!/^[A-Z]\d+$/.test(id) && id !== '—') invalidRowIds.push({ letter, id });
+    }
     // Same last-writer-wins hazard as the glance table above: two sections
     // carrying the same `gtag` would leave only one visible, and the page
     // would render the group twice with nothing reporting it.
@@ -419,7 +450,7 @@ function parseLiveViewSections(html) {
       rowIds,
     });
   }
-  return { sections, duplicateLetters };
+  return { sections, duplicateLetters, invalidRowIds };
 }
 
 // Compares the live view against the markdown. Returns human-readable error
@@ -428,8 +459,9 @@ function parseLiveViewSections(html) {
 // Every extraction failure below is an error rather than a skip. A regex that
 // stops matching after a markup change would otherwise turn this whole check
 // into a vacuous pass — which is the exact shape of bug it exists to catch.
-export function checkLiveView(markdownText, liveViewHtml) {
+export function checkLiveView(markdownText, rawLiveViewHtml) {
   const errors = [];
+  const liveViewHtml = stripHtmlComments(rawLiveViewHtml);
   const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
   // Same bail-out as checkRegister, for the same reason: an unterminated fence
   // blanks the rest of the markdown, so every comparison below would read the
@@ -504,8 +536,16 @@ export function checkLiveView(markdownText, liveViewHtml) {
   }
 
   // The group sections and their rows.
-  const { sections: lvSections, duplicateLetters: duplicateSectionLetters } =
-    parseLiveViewSections(liveViewHtml);
+  const {
+    sections: lvSections,
+    duplicateLetters: duplicateSectionLetters,
+    invalidRowIds,
+  } = parseLiveViewSections(liveViewHtml);
+  for (const { letter, id } of invalidRowIds) {
+    errors.push(
+      `Live view: Group ${letter} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
+    );
+  }
   if (lvSections.size === 0) {
     errors.push(
       'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
