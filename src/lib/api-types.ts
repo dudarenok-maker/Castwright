@@ -7396,6 +7396,23 @@ export interface operations {
                 };
                 content?: never;
             };
+            /**
+             * @description Start path only: analysis is running for this book (re-analysis
+             *     rewrites the cast), OR a single-character design already owns the
+             *     book's shared `designBusy` registry (mirrors `POST .../design-
+             *     voice/stream`'s own 409 for the reverse case — the two design
+             *     surfaces are mutually exclusive).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
         };
     };
     getCastDesignStatus: {
