@@ -785,16 +785,32 @@ qwenVoiceRouter.post(
        character's tagged emotions then re-register as missing demand, so the
        cast's "Design full cast → Emotion variants" scope re-mints the ones the
        user still wants from the new base. */
-    const qwenSlot = character.overrideTtsVoices?.qwen;
-    if (qwenSlot?.variants && Object.keys(qwenSlot.variants).length > 0) {
-      const staleVariantIds = Object.values(qwenSlot.variants)
-        .map((v) => v?.name)
-        .filter((n): n is string => !!n);
-      delete qwenSlot.variants;
-      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
-      for (const variantId of staleVariantIds) {
-        await tearDownEmotionVariant(variantId);
+    let staleVariantIds: string[] = [];
+    /* Narrow by design. The artifact moves and the sidecar evict above stay OUTSIDE
+       this lock: that fetch has no AbortSignal, so a hung sidecar would otherwise
+       stall every cast write for this book. Global order: no other lock is held
+       here (cast is last — see cast-lock.ts rule 4). */
+    await withCastLock(located.bookDir, async () => {
+      const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
+      const freshChar = fresh?.characters?.find((c) => c.id === characterId);
+      if (!fresh || !freshChar) return; // deleted mid-promotion — artifacts already moved
+      const freshSlot = freshChar.overrideTtsVoices?.qwen;
+      /* KEEP this guard — it is the current behaviour (qwen-voice.ts:788) and it
+         encloses the write. Without it every promote-voice writes cast.json and
+         takes the lock even when the character has no emotion variants, which is
+         the common path. Evaluated against the FRESH slot, per rule 2. */
+      if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
+        staleVariantIds = Object.values(freshSlot.variants)
+          .map((v) => v?.name)
+          .filter((n): n is string => !!n);
+        delete freshSlot.variants;
+        await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
+    });
+    /* Teardown stays outside: filesystem work, and holding the lock across it
+       reintroduces exactly the stall this narrowing avoids. */
+    for (const variantId of staleVariantIds) {
+      await tearDownEmotionVariant(variantId);
     }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the

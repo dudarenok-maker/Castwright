@@ -908,6 +908,111 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
   });
 });
 
+/* #1981, Task 7 — promote-voice's stale-variants teardown write races
+   POST /voice-library/:voiceUuid/assign for a DIFFERENT character of the same
+   book. Unlocked, each side's own `readJson` can land before the other side's
+   write, so whichever side writes LAST replays a `characters` snapshot that
+   predates the other's write and silently drops it — which side loses
+   depends on interleaving (measured: promote-voice's own teardown was the
+   one lost, not assign's), so both survival assertions below matter, not
+   just one. Locked, promote-voice re-reads fresh cast.json inside
+   `withCastLock`, so both mutations survive regardless of interleaving.
+
+   The sidecar `fetch` in promote-voice's own prologue (the eviction call) is
+   already `fetchMock` — a synchronous-resolving stub wired for the whole
+   file (see the root `beforeEach` above) — so, per Task 1's finding, both
+   requests' reads still land together and a bare `Promise.all` interleaves
+   deterministically; no extra delay/gate harness is needed here. `nopersona`
+   is given no override to start (the default fixture), so a survived assign
+   is unambiguous: any `overrideTtsVoices.qwen` on it after the race can only
+   have come from the concurrent assign. */
+describe('#1981 — promote-voice races /assign for a different character', () => {
+  let raceVoiceLibraryRouter: typeof import('./voice-library.js').voiceLibraryRouter;
+  let vl: typeof import('../workspace/voice-library.js');
+  let mounted = false;
+
+  beforeAll(async () => {
+    const [{ voiceLibraryRouter }, voiceLibMod] = await Promise.all([
+      import('./voice-library.js'),
+      import('../workspace/voice-library.js'),
+    ]);
+    raceVoiceLibraryRouter = voiceLibraryRouter;
+    vl = voiceLibMod;
+    /* Mount once — this describe's beforeAll only runs once, but guard
+       anyway since `app` is the file-shared instance every other describe
+       also exercises. */
+    if (!mounted) {
+      app.use('/api/voice-library', raceVoiceLibraryRouter);
+      mounted = true;
+    }
+  });
+
+  it('#1981 — keeps both promote-voice’s variant teardown and a concurrent /assign on a different character', async () => {
+    const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'), 'EMBEDDING');
+    writeFileSync(
+      join(qwenDir(), 'qwen-v_maerin-preview.json'),
+      JSON.stringify({ voiceId: 'qwen-v_maerin-preview', instruct: 'a brand new take' }),
+    );
+    /* maerin needs a non-empty `variants` map or promote-voice never takes
+       the cast lock at all (Task 7 brief — the write is guarded on
+       `variants` being non-empty). */
+    const withVariants = characters.map((c) =>
+      c.id === 'maerin'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-v_maerin',
+                variants: { angry: { name: 'qwen-v_maerin__angry' } },
+              },
+            },
+          }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withVariants }),
+    );
+
+    const raceVoiceUuid = 'race-assign-promote-1';
+    await vl.writeEntry({
+      voiceUuid: raceVoiceUuid,
+      name: 'Race Assign Voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const [resPromote, resAssign] = await Promise.all([
+      request(app)
+        .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+        .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY }),
+      request(app)
+        .post(`/api/voice-library/${raceVoiceUuid}/assign`)
+        .send({ bookId, characterId: 'nopersona' }),
+    ]);
+
+    expect(resPromote.status).toBe(200);
+    expect(resAssign.status).toBe(200);
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
+    /* promote-voice's own mutation survived: variants dropped, base kept. */
+    expect(maerinQwen.qwen.variants).toBeUndefined();
+    expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
+    /* assign's own mutation survived too — the lost-update this test pins. */
+    const nopersonaQwen = nopersona.overrideTtsVoices as { qwen?: { libraryUuid?: string } } | undefined;
+    expect(nopersonaQwen?.qwen?.libraryUuid).toBe(raceVoiceUuid);
+  });
+});
+
 describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (fs-34)', () => {
   const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 
