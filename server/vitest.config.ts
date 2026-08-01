@@ -129,6 +129,15 @@ export default defineConfig({
       'dist/**',
       'src/test-setup.ts',
       'src/**/*.golden.test.ts',
+      /* PR #2049 review, Finding 6 — vitest-retry-hazard-reporter.test.ts's
+         runVitestOnFixture() writes throwaway wire-test fixtures under this
+         directory and deletes them in a `finally` block; a kill between
+         write and cleanup could leave one behind. Excluding it here means a
+         surviving `__wire-fixtures__/*.test.ts` is structurally invisible to
+         THIS suite regardless — `vitest.config.wire-fixtures.ts` is the only
+         config that ever includes it, and only that config is what
+         runVitestOnFixture() spawns against. */
+      'src/__wire-fixtures__/**',
       ...SLOW_FILES_TO_EXCLUDE,
     ],
     testTimeout: 15_000,

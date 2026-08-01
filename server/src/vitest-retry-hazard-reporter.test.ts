@@ -16,7 +16,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import type { Reporter, TestCase } from 'vitest/node';
 
 const SERVER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -107,22 +107,35 @@ describe('retryHazardReporter (#2028)', () => {
    `reporters:` line entirely left all four tests above green — the exact
    "data, not wire" gap commit 3 of this PR (#2025) closes for the mojibake
    echo, reproduced here for this reporter. Spawns the REAL vitest CLI
-   against the REAL, on-disk server/vitest.config.ts — not a reconstructed
-   copy — the same principle setupGateFixture() uses for the release-notes
-   gate's own CLI tests. */
-const VITEST_BIN = resolve(SERVER_ROOT, 'node_modules', 'vitest', 'vitest.mjs');
+   against a REAL, on-disk config — not a reconstructed copy — the same
+   principle setupGateFixture() uses for the release-notes gate's own CLI
+   tests.
 
-/** Write `fixtureRelPath` (relative to server/src/, so it matches the
-    `include: ['src/**\/*.{test,spec}.ts']` glob) under the real server/src/
-    tree, run the real vitest CLI against just that file with `envOverrides`
-    layered onto (or deleted from, via an explicit `undefined`) the current
-    env, and delete the fixture afterwards regardless of outcome. */
+   Finding 6 (PR #2049 review) — the fixture is NOT written into the real
+   server/src/ tree: it lands under src/__wire-fixtures__/, which
+   server/vitest.config.ts EXCLUDES outright, so a fixture that survives a
+   kill between write and `finally` cleanup can never poison the real
+   suite. Running it at all needs vitest.config.wire-fixtures.ts, the one
+   config that DOES include that directory — see its own doc comment for
+   why it still proves the real config's retry/reporters behaviour rather
+   than a copy of it. */
+const VITEST_BIN = resolve(SERVER_ROOT, 'node_modules', 'vitest', 'vitest.mjs');
+const WIRE_FIXTURES_CONFIG = resolve(SERVER_ROOT, 'vitest.config.wire-fixtures.ts');
+const WIRE_FIXTURES_DIR = resolve(SERVER_ROOT, 'src', '__wire-fixtures__');
+
+/** Write `fixtureName` under src/__wire-fixtures__/ (creating the directory
+    if needed), run the real vitest CLI — via vitest.config.wire-fixtures.ts,
+    the only config that includes that directory — against just that file
+    with `envOverrides` layered onto (or deleted from, via an explicit
+    `undefined`) the current env, and delete the fixture afterwards
+    regardless of outcome. */
 function runVitestOnFixture(
-  fixtureRelPath: string,
+  fixtureName: string,
   fixtureBody: string,
   envOverrides: Record<string, string | undefined>,
 ) {
-  const fixturePath = resolve(SERVER_ROOT, 'src', fixtureRelPath);
+  mkdirSync(WIRE_FIXTURES_DIR, { recursive: true });
+  const fixturePath = resolve(WIRE_FIXTURES_DIR, fixtureName);
   writeFileSync(fixturePath, fixtureBody);
   try {
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -130,11 +143,11 @@ function runVitestOnFixture(
       if (value === undefined) delete env[key];
       else env[key] = value;
     }
-    return spawnSync('node', [VITEST_BIN, 'run', `src/${fixtureRelPath}`], {
-      cwd: SERVER_ROOT,
-      encoding: 'utf8',
-      env,
-    });
+    return spawnSync(
+      'node',
+      [VITEST_BIN, 'run', '--config', WIRE_FIXTURES_CONFIG, `src/__wire-fixtures__/${fixtureName}`],
+      { cwd: SERVER_ROOT, encoding: 'utf8', env },
+    );
   } finally {
     rmSync(fixturePath, { force: true });
   }
@@ -148,18 +161,26 @@ it('fails once then passes, to trigger a real vitest retry', () => {
 });
 `;
 
+// Finding 5 (PR #2049 review) — a nested vitest invocation is slow
+// under contention (a real 5.2s measured under partial pool load on a
+// developer box, well over what an idle run needs), so this gets its own
+// explicit, generous timeout rather than sharing the file's 15s default.
 describe('retryHazardReporter — real wiring (#2028, PR #2049 review F2)', () => {
-  it('a real retried-then-passed run prints [retry-hazard] via the ACTUAL on-disk config', () => {
-    const out = runVitestOnFixture(
-      '__wire_fixture_retry_hazard__.test.ts',
-      RETRY_THEN_PASS_FIXTURE,
-      { GITHUB_ACTIONS: undefined },
-    );
-    const combined = `${out.stdout ?? ''}${out.stderr ?? ''}`;
-    expect(combined).toContain('[retry-hazard]');
-    expect(combined).toContain('__wire_fixture_retry_hazard__.test.ts');
-    expect(combined).toContain('fails once then passes, to trigger a real vitest retry');
-  });
+  it(
+    'a real retried-then-passed run prints [retry-hazard] via the ACTUAL on-disk config',
+    { timeout: 30_000 },
+    () => {
+      const out = runVitestOnFixture(
+        '__wire_fixture_retry_hazard__.test.ts',
+        RETRY_THEN_PASS_FIXTURE,
+        { GITHUB_ACTIONS: undefined },
+      );
+      const combined = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+      expect(combined).toContain('[retry-hazard]');
+      expect(combined).toContain('__wire_fixture_retry_hazard__.test.ts');
+      expect(combined).toContain('fails once then passes, to trigger a real vitest retry');
+    },
+  );
 });
 
 /* F1 (PR #2049 review) — same "data, not wire" defect shape, for vitest's
@@ -167,28 +188,43 @@ describe('retryHazardReporter — real wiring (#2028, PR #2049 review F2)', () =
    when the resolved `reporters` array is EMPTY, so setting one
    unconditionally silently suppressed it in CI (verify.yml runs `vitest
    run` directly in server/, so this is the live gating path). Spawns the
-   real CLI exactly like the F2 describe block above. */
+   real CLI exactly like the F2 describe block above.
+
+   Finding 5 (PR #2049 review) — this used to be ONE `it` running TWO
+   sequential nested vitest processes against the file's shared 15s
+   testTimeout; split into two `it`s, each with its own generous explicit
+   timeout, so contention on one spawn can't starve the other's budget. */
 const OUTRIGHT_FAIL_FIXTURE = `it('deliberately fails outright, no rescue', () => {
   expect(1).toBe(2);
 });
 `;
 
 describe('github-actions reporter — real wiring under CI (#2028, PR #2049 review F1)', () => {
-  it("GITHUB_ACTIONS=true restores the built-in github-actions reporter's ::error annotation", () => {
-    const withCi = runVitestOnFixture(
-      '__wire_fixture_gha_on__.test.ts',
-      OUTRIGHT_FAIL_FIXTURE,
-      { GITHUB_ACTIONS: 'true' },
-    );
-    expect(`${withCi.stdout ?? ''}${withCi.stderr ?? ''}`).toContain('::error');
+  it(
+    "GITHUB_ACTIONS=true restores the built-in github-actions reporter's ::error annotation",
+    { timeout: 30_000 },
+    () => {
+      const withCi = runVitestOnFixture(
+        '__wire_fixture_gha_on__.test.ts',
+        OUTRIGHT_FAIL_FIXTURE,
+        { GITHUB_ACTIONS: 'true' },
+      );
+      expect(`${withCi.stdout ?? ''}${withCi.stderr ?? ''}`).toContain('::error');
+    },
+  );
 
-    // And the toggle is real, not a vitest-global behaviour our config can't
-    // affect either way: outside CI the built-in reporter never fires.
-    const withoutCi = runVitestOnFixture(
-      '__wire_fixture_gha_off__.test.ts',
-      OUTRIGHT_FAIL_FIXTURE,
-      { GITHUB_ACTIONS: undefined },
-    );
-    expect(`${withoutCi.stdout ?? ''}${withoutCi.stderr ?? ''}`).not.toContain('::error');
-  });
+  // And the toggle is real, not a vitest-global behaviour our config can't
+  // affect either way: outside CI the built-in reporter never fires.
+  it(
+    'outside CI, the built-in github-actions reporter never fires',
+    { timeout: 30_000 },
+    () => {
+      const withoutCi = runVitestOnFixture(
+        '__wire_fixture_gha_off__.test.ts',
+        OUTRIGHT_FAIL_FIXTURE,
+        { GITHUB_ACTIONS: undefined },
+      );
+      expect(`${withoutCi.stdout ?? ''}${withoutCi.stderr ?? ''}`).not.toContain('::error');
+    },
+  );
 });

@@ -157,6 +157,13 @@ server/repro-*.mts
 server/repro-*.txt
 server/roster.json
 
+# Throwaway fixtures runVitestOnFixture() (vitest-retry-hazard-reporter.test.ts)
+# writes live during a test run and deletes in a `finally` block — a kill
+# between write and cleanup could leave one behind. server/vitest.config.ts's
+# `exclude` already keeps this directory structurally invisible to the real
+# suite regardless; this is defense in depth against an accidental commit.
+server/src/__wire-fixtures__/
+
 # Self-contained HTML artifacts rendered by the html-artifacts skill (plans,
 # reports, mockups). Local scratch output, never committed.
 artifacts/
