@@ -120,11 +120,19 @@ function libraryUuidForClonedCharacter(character: Character, engine: TtsEngine):
     by the real per-character check (`engine` = the character's resolved
     render engine, Decision 4) and `castOnEngine` (`engine` = each
     routed-engine-excluded clone-capable candidate, Decision 5). Returns
-    `undefined` when no library
-    uuid can be resolved at all — this plan has no "misconfigured" verdict of
-    its own (the render's equivalent, `clone-voice-resolver.ts`'s
-    `misconfigured` reason, is out of scope — Decision 2's "what stays
-    invisible"). */
+    `undefined` when no library uuid can be resolved at all — this plan has no
+    "misconfigured" verdict of its own.
+
+    That is a KNOWN GAP, not a covered case: the render does not ignore this
+    state, it hard-fails it (`clone-voice-resolver.ts`'s `misconfigured`
+    reason), so the gate is silent where the chapter will die. Filed as #2054.
+
+    Do NOT justify it with Decision 2's "what stays invisible" — that section
+    accepts DISK-integrity gaps only (`.pt` and clip-file existence) and says
+    in terms that "every state #1980 is about is metadata-visible". An
+    unresolvable `libraryUuid` is metadata. Closing it needs a seventh
+    `CloneUnready` value and a CTA row, i.e. a plan change — which is why it
+    is an issue rather than a line of code here. */
 function buildInput(
   character: Character,
   engine: TtsEngine,
