@@ -210,9 +210,14 @@ Files: `server/tts-sidecar/main.py`, `server/tts-sidecar/tests/test_qwen3.py`.
 
 ## Round 1 outcome (2026-08-01)
 
-All four lanes shipped. **13 issues closed across 5 PRs**, and **15 filed** —
-so the queue moved roughly sideways on count. That is the headline finding of
-the round, not a footnote: see "What Round 1 changed about the plan" below.
+All four lanes shipped. **12 pre-existing issues closed across 5 PRs**, and
+**14 filed** — 13 of which are still open (#2065 was filed and fixed inside
+the same round).
+
+**The open queue went 54 → 60**: 17 bugs + 37 chores at the start, 17 bugs +
+43 chores at the end. It did not move sideways; it grew by six. That is the
+headline finding of the round, not a footnote — see "What Round 1 changed
+about the plan" below.
 
 | PR | Closes | Lane |
 |---|---|---|
