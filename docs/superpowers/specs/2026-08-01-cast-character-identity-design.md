@@ -400,17 +400,20 @@ touches. Everything else this design lands in —
 `render-integrity/aggregate.ts` — is untouched by the lock branch. Verified by
 `git diff --name-only main...HEAD` on that branch.
 
+The lock branch's full changed set is route modules plus the lock module
+itself. Notably it does **not** touch `analysis.ts`, so §4.4's Class-5 concern
+does not arise.
+
 Consequences:
 
-- §4.5 is a one-line change (swap the private `slugify` for `safeId`) in the
-  one contended file. Whichever lands second rebases; the conflict is trivial.
-- **The lock branch should merge first** regardless, because §4.4's caller
-  sites in `analysis.ts` are lock sites in that design's Class 5, and building
-  against the pre-lock shape means re-verifying afterwards.
+- **Merge order does not matter.** §4.5 is a one-line change (swap the private
+  `slugify` for `safeId`) in the one contended file. Whichever branch lands
+  second resolves a trivial conflict there; neither blocks the other.
 - The repair script (§4.8) writes `cast.json` from **outside the server
-  process**, which no in-process mutex covers. It must be run with the server
-  stopped; that is a stated precondition of the script and it should refuse to
-  `--apply` if it can reach a live server on the configured port.
+  process**, which no in-process mutex covers — this holds whether or not the
+  lock has landed. Running with the server stopped is a stated precondition of
+  the script, and it should refuse to `--apply` if it can reach a live server
+  on the configured port.
 
 ## 11. Open questions
 
