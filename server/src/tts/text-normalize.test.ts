@@ -122,6 +122,19 @@ describe('softenDashes', () => {
       const once = softenDashes('— Кто бы это ни был.');
       expect(softenDashes(once)).toBe(once);
     });
+
+    /* Pins the dominant Russian dialogue-attribution shape (dash-open line,
+       comma, dash-attribution, verb + name) as it stands today: a doubled
+       comma with no space between them. This is PRE-EXISTING behaviour, not
+       a regression introduced by the leading-dash fix above — the prior
+       code produced the same doubled comma, since it ran the identical ", "
+       substitution for every dash regardless of position. Not fixed here
+       (out of scope for #2026 defect 2); tracked on #2059 for whether `,,`
+       should collapse to `,`. This test exists so the shape is visible
+       rather than accidental. */
+    it('produces a doubled comma on a dash-open + dash-attribution line (pre-existing, tracked on #2059, not fixed here)', () => {
+      expect(softenDashes('— Привет, — сказал Антон.')).toBe('... Привет,, сказал Антон.');
+    });
   });
 });
 

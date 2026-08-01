@@ -871,16 +871,25 @@ def _qwen_synth_is_degenerate(text: str, audio_ms: float) -> bool:
 # a model reload/recycle, because nothing about the resident model needs
 # fixing.
 #
-# Known gap, left for a follow-up rather than guessed at here: this floor
-# only catches a render that comes back IMPLAUSIBLY SHORT. The language-
-# collapse cases above (Finnish/English) may render at a roughly PLAUSIBLE
-# duration with entirely wrong content — no duration-only heuristic can see
-# that, and setting a duration CEILING to catch a hallucinated-tail addition
-# would need a real healthy-duration baseline for short (2-3 word) Coqui
-# utterances this guard doesn't have, so it is not attempted here to avoid a
-# false-positive footgun. Catching that class needs content verification
-# (e.g. the existing ASR-based segment QA gate), which is a separate,
-# heavier mechanism than "mirror the Qwen knob shape" and stays out of scope.
+# Known, DEFINITIONAL gap, not an oversight to guess at later: this floor
+# only catches a render that comes back IMPLAUSIBLY SHORT, and the language-
+# collapse cases above (Finnish/English) DO render at a roughly plausible
+# duration — measured, not hedged. A healthy two-word Russian line probed on
+# this same box ran ~200 ms/speakable char (2.411 s for
+# `C:\fixtures\fs38\_EARCHECK\garble-cause\5-STOCK-two-words-only.mp3`),
+# roughly 10x this floor's 20 ms/char, and the reported collapses were
+# themselves fluent, multi-word utterances — nothing that intelligible
+# renders in under a quarter-second, so neither would ever have tripped a
+# duration check even working exactly as designed. These cases are outside
+# THIS guard's detection envelope by construction. Setting a duration
+# CEILING to catch the related hallucinated-tail symptom (also uncaught
+# here, since it makes a render LONGER, not shorter) would need a real
+# healthy-duration baseline for short (2-3 word) Coqui utterances this guard
+# doesn't have, so it is not attempted here to avoid a false-positive
+# footgun. Catching plausible-duration language-collapse needs content
+# verification (e.g. the existing ASR-based segment QA gate,
+# `server/src/tts/segment-asr-qa.ts`) — a separate, heavier mechanism than
+# "mirror the Qwen knob shape" — tracked as #2055, not attempted here.
 _COQUI_DEGEN_MIN_TEXT_LEN = _QWEN_DEGEN_MIN_TEXT_LEN
 _COQUI_DEGEN_MS_PER_CHAR = _QWEN_DEGEN_MS_PER_CHAR
 # Total attempts before shipping (or, if still degenerate, raising) — mirrors
