@@ -267,11 +267,12 @@ def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_p
     """#2045 F1: an exact-equality guard on `identity` refuses on every
     HONEST re-bless -- `instruct-baseline.json`'s own `metadata.notes`
     records ~0.0014 run-to-run identity spread. A committed `whisper: 0.014`
-    against this run's measured `0.01` is a 0.004 move -- comfortably below
-    `IDENTITY_COSINE_EPSILON` (0.015) and in the same order as the recorded
-    noise floor -- so the write must PROCEED with no flag needed, and the
-    move must be echoed to stdout (#2035's Acceptance: surfaced loudly
-    enough that it cannot pass unnoticed) rather than silently absorbed."""
+    against this run's measured `0.01` is a 0.004 move -- below
+    `IDENTITY_COSINE_EPSILON` (0.005, ~3.6x the observed 0.0014 noise floor)
+    and in the same order as the recorded noise -- so the write must PROCEED
+    with no flag needed, and the move must be echoed to stdout (#2035's
+    Acceptance: surfaced loudly enough that it cannot pass unnoticed) rather
+    than silently absorbed."""
     noisy_identity = {
         "anchor": "neutral",
         "cosine": {"whisper": 0.014, "sad": 0.005, "excited": 0.005, "angry": 0.007},
@@ -291,6 +292,40 @@ def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_p
     assert "identity" in out and "cosine.whisper" in out, (
         f"expected the noise-sized identity move to be echoed to stdout, got: {out!r}"
     )
+
+
+def test_bless_refuses_an_identity_move_the_old_arbitrary_epsilon_would_have_masked(
+    monkeypatch, tmp_path
+) -> None:
+    """#2045 F1 defect (independent review): `IDENTITY_COSINE_EPSILON` was
+    shipped as `0.015` -- "10% of `identity_cosine_max` (0.15)" -- but
+    nothing in the assert path diffs a fresh measurement against the
+    committed `identity` block at all (the assertion is an absolute
+    ceiling, `dist > tol["identity_cosine_max"]`), so "10% of 0.15" had no
+    real relationship to identity's actual noise. Against the real signal
+    (`instruct-baseline.json`'s own recorded ~0.0014 run-to-run spread),
+    0.015 was ~10.7x the noise floor -- enough to silently swallow a 0.008
+    move (0.64x the committed 0.0125 identity value itself) as "noise". The
+    recalibrated epsilon (0.005, ~3.6x the noise floor) must refuse this
+    same 0.008 move without the flag -- proving the old value would have
+    hidden a real regression the new one catches."""
+    committed_identity = {
+        "anchor": "neutral",
+        # 0.01 + 0.008 = 0.018 -- an 0.008 move from _measured()'s 0.01.
+        "cosine": {"whisper": 0.018, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+        "max": 0.018,
+    }
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=committed_identity
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    before = path.read_bytes()
+
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+        instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only identity differs
+
+    assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
 
 
 def test_bless_refuses_and_leaves_the_file_untouched_when_loudness_dbfs_would_move(

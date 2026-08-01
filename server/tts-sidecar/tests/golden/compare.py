@@ -51,16 +51,30 @@ FIRST_BLESS_MAX_WER = 0.35
 # instruct-baseline.json are raw stochastic measurements (4dp / 2dp) — NOT
 # quantised like `tolerances` (`max(0.15, id_max+0.10)`, a flat `4.0`,
 # `max(1.0, rtf*1.5)`), which is why an exact-equality guard is correct for
-# `tolerances` but refuses on every honest re-bless of the other two:
-# `instruct-baseline.json`'s own `metadata.notes` records ~0.0014 run-to-run
-# identity spread (0.0125 committed vs ~0.0139 spike). Each epsilon below is
-# 10% of the window the field feeds — `identity_cosine_max` (0.15) and
-# `loudness_dbfs_abs` (4.0) as committed today — cross-checked against that
-# spread: 0.015 sits ~10.7x above the observed 0.0014 noise floor, so a
-# genuine re-bless's noise clears it easily while a move approaching the
-# window itself does not.
-IDENTITY_COSINE_EPSILON = 0.015  # 10% of the committed identity_cosine_max (0.15)
-LOUDNESS_DBFS_EPSILON = 0.4  # 10% of the committed loudness_dbfs_abs (4.0)
+# `tolerances` but refuses on every honest re-bless of the other two.
+#
+# The two epsilons are derived differently, because the two fields feed the
+# assertion differently (#2045 F1 follow-up, independent review of #2045
+# itself): `LOUDNESS_DBFS_EPSILON` really is 10% of the window the field
+# feeds — `test_live_instruct_golden` diffs a fresh measurement against
+# `baseline["loudness_dbfs"][e]` at tolerance `loudness_dbfs_abs` (4.0), so
+# the committed figure genuinely IS the centre of that ±4.0 dB window, and
+# 10% of it (0.4) is a principled fraction of the thing being measured
+# against. `identity` has no such window: the assertion is `dist >
+# tol["identity_cosine_max"]`, an absolute ceiling derived from `id_max +
+# 0.10` at bless time, not a diff against the committed `identity` block —
+# `identity_cosine_max` (0.15) is the ceiling of a DIFFERENT, floored value,
+# not a window `identity` itself feeds, so "10% of 0.15" was arbitrary.
+# Calibrated instead off `instruct-baseline.json`'s own recorded run-to-run
+# spread (`metadata.notes`: 0.0125 committed vs ~0.0139 spike, i.e. ~0.0014
+# noise): 0.005 sits ~3.6x above that noise floor -- enough headroom that a
+# genuine re-bless's noise clears it comfortably (the committed 0.014-vs-0.01
+# fixture in test_instruct_bless_gating.py moves 0.004, well inside 0.005),
+# while a move that starts eating into the 0.10 headroom the ceiling floor
+# grants no longer slides through silently the way the old 0.015 (1.2x the
+# entire committed 0.0125 value) did.
+IDENTITY_COSINE_EPSILON = 0.005  # ~3.6x the observed 0.0014 run-to-run identity noise floor
+LOUDNESS_DBFS_EPSILON = 0.4  # 10% of the committed loudness_dbfs_abs (4.0) -- the window loudness_dbfs feeds
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 

@@ -201,7 +201,7 @@ def _bless(measured: dict) -> None:
     which independent review found makes #1995 worse: the operator reaches
     for `GOLDEN_REBLESS_THRESHOLDS=1` on a ROUTINE bless, and that same flag
     covers `tolerances`, silently re-authorising exactly the kind of change
-    #1995 exists to catch. `IDENTITY_COSINE_EPSILON` (0.015) /
+    #1995 exists to catch. `IDENTITY_COSINE_EPSILON` (0.005) /
     `LOUDNESS_DBFS_EPSILON` (0.4) let a within-epsilon move through --
     `describe_measurement_move` then reports what moved and by how much, and
     this function PRINTS it, so the move is loud rather than silent (#2035's

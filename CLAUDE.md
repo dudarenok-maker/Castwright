@@ -304,8 +304,11 @@ Design rationale:
   identically: `tolerances` is quantised, so an EXACT change refuses
   outright; `identity`/`loudness_dbfs` are noisy (~0.0014 run-to-run
   identity spread per the committed baseline's own `metadata.notes`), so a
-  move under a field-specific `epsilon` (`compare.IDENTITY_COSINE_EPSILON` /
-  `LOUDNESS_DBFS_EPSILON`, each ≈10% of the window the field feeds) is
+  move under a field-specific `epsilon` (`compare.LOUDNESS_DBFS_EPSILON` is
+  10% of the ±`loudness_dbfs_abs` window the field is diffed against;
+  `compare.IDENTITY_COSINE_EPSILON` has no equivalent window — `identity`
+  feeds an absolute ceiling, not a diff — so it's calibrated instead off the
+  committed baseline's own ~0.0014 run-to-run noise) is
   WRITTEN and echoed to stdout rather than refused — an exact-equality
   guard on those two was found to refuse on every honest re-bless, which
   trained an operator to reach for the shared flag on a ROUTINE bless and
