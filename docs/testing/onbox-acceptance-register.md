@@ -1193,17 +1193,27 @@ weights can prove, and neither was exercised on real hardware for this PR:
   `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
   (or the guard is broken); `instruct-baseline.json`'s `identity`/
   `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
-  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=0.015 /
+  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=**0.005** /
   `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
-  printed a `[golden-bless] identity moved ...` / `[golden-bless]
-  loudness_dbfs moved ...` line for each one that did — the echo is the
-  part a `git diff` alone can't confirm, and it's the accept-path half of
-  the guard real hardware is uniquely placed to exercise (both the
-  ROUTINE-bless-doesn't-need-the-flag half AND the noise-gets-echoed half
-  need a REAL measurement pair with real noise between them — a synthetic
-  fixture can only assert the arithmetic, never that actual noise clears
-  epsilon on a real box). `blessed_at`-adjacent housekeeping fields may
-  also move as before.
+  printed a `[golden-bless] identity moved ... within epsilon ... (noise)`
+  / `[golden-bless] loudness_dbfs moved ...` line for each one that did —
+  the echo is the part a `git diff` alone can't confirm, and it's the
+  accept-path half of the guard real hardware is uniquely placed to
+  exercise (both the ROUTINE-bless-doesn't-need-the-flag half AND the
+  noise-gets-echoed half need a REAL measurement pair with real noise
+  between them — a synthetic fixture can only assert the arithmetic, never
+  that actual noise clears epsilon on a real box). `blessed_at`-adjacent
+  housekeeping fields may also move as before.
+- **This run is also the only thing that retires the identity epsilon's
+  open question** (#2066). `IDENTITY_COSINE_EPSILON` moved 0.015 → 0.005
+  because 0.015 was derived from an unrelated ceiling (`identity_cosine_max`
+  = 0.15) rather than from measured noise. 0.005 is ≈3.6× the **single**
+  run-to-run delta recorded anywhere in the repo (`metadata.notes`' ~0.0014)
+  — one observed figure, on one leaf, while the guard refuses on the `max`
+  across five. Nothing in-repo measures the per-leaf distribution. So record
+  the **actual per-leaf deltas** you observe here, not just pass/fail: if any
+  single leaf routinely clears 0.005, the constant is too tight and this
+  gate refuses honest work. That measurement is the deliverable.
 - Then force one refusal for real: hand-edit a committed baseline to null out
   its `transcript` (or delete its `tolerances` key) exactly as a bad
   merge-resolution would, re-run the same `--bless` command, and confirm it

@@ -40,8 +40,9 @@ def _write_baseline(
 ) -> Path:
     """`blessed` controls whether the fixture carries the `identity` /
     `loudness_dbfs` / `rtf` measurement blocks -- `_bless()` reads
-    `any(k in baseline for k in ("rtf", "identity", "loudness_dbfs",
-    "tolerances"))` as its "has this baseline ever been blessed" signal
+    `any(baseline.get(k) is not None for k in ("rtf", "identity",
+    "loudness_dbfs", "tolerances"))` as its "has this baseline ever been
+    blessed" signal
     (#2045 F5; NOT `identity` alone -- circular for `label="identity"`,
     the defect #2035's first revision shipped; NOT `rtf` alone either -- a
     narrower but still real single-key blind spot the SECOND revision
@@ -209,7 +210,7 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
     file) could silently re-record it. A committed identity cosine
     (`whisper: 0.06`) that differs from what this run measured
     (`whisper: 0.01` in `_measured`) by 0.05 -- well beyond
-    `IDENTITY_COSINE_EPSILON` (0.015), i.e. WINDOW-sized, not noise -- must
+    `IDENTITY_COSINE_EPSILON` (0.005), i.e. WINDOW-sized, not noise -- must
     refuse, same all-or-nothing shape as the `tolerances` guard, including
     that a refusal on `identity` must leave `tolerances`/`loudness_dbfs`/rtf
     entirely unwritten too."""
