@@ -51,6 +51,7 @@ import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { spliceChapterSegments, secToByteOffset, type SegmentReplacement } from '../audio/splice-chapter.js';
 import {
   buildSynthReplacements,
@@ -446,6 +447,12 @@ chapterQaRepairRouter.post(
         if (!stillSuspect.includes(i)) stillSuspect.push(i);
       }
 
+      /* #2040 — resolve a re-recorded segment's characterId through the
+         book's retired-id history before treating it as orphaned. Loaded
+         once for this repair pass, not per segment/attempt inside `synth`
+         below. Never throws (see loadCastIdHistory's own doc comment). */
+      const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+
       const replacements: SegmentReplacement[] = await buildSynthReplacements({
         segments: segFile.segments,
         targetIndices: safeTargetIndices,
@@ -513,6 +520,7 @@ chapterQaRepairRouter.post(
             const r = await synthesiseChapter({
               sentences: subset,
               cast: cast.characters,
+              castIdHistory,
               provider,
               modelKey,
               engine,

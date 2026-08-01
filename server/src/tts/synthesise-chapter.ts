@@ -561,6 +561,16 @@ export async function collectGroupEmbeddings(
 export interface SynthesiseChapterOpts {
   sentences: SentenceOutput[];
   cast: CastCharacter[];
+  /** #2040 — the book's `supersededBy` map (cast-id-history.json's own field,
+      `{ [supersededId]: currentId }`), used to resolve a sentence group's
+      characterId through a retired/aliased id before treating it as
+      orphaned. `synthesiseChapter` has no book-directory parameter, so it
+      cannot load `cast-id-history.json` itself — the caller loads it once
+      (via `loadCastIdHistory(bookDir)`, `store/cast-id-history.ts`) and
+      passes `.supersededBy` through here. Absent → `{}`, which still
+      recovers the normalised-id tier (case/separator drift) but not a true
+      cross-letter alias. */
+  castIdHistory?: Readonly<Record<string, string>>;
   provider: TtsProvider;
   modelKey: TtsModelKey;
   /** The run's DEFAULT engine — used for any character that doesn't carry its
@@ -1270,6 +1280,7 @@ export async function synthesiseChapter(
   const {
     sentences,
     cast,
+    castIdHistory = {},
     provider,
     modelKey,
     engine,
@@ -1477,11 +1488,12 @@ export async function synthesiseChapter(
   /* #2040 — resolve a group's characterId through superseded ids before
      treating it as orphaned. castById stays for the exact-id fast paths that
      legitimately want strict identity. synthesiseChapter has no book-dir
-     parameter, so the id-history side-table (cast-id-history.json) cannot be
-     loaded cheaply here — history defaults to {}, which still recovers the
-     normalised-id tier (case/separator drift), the wave's main recovery for
-     this call path. */
-  const castResolver = buildCastResolver(cast);
+     parameter, so it cannot load cast-id-history.json itself — callers that
+     have a bookDir (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
+     load it once and pass `.supersededBy` through as `castIdHistory`; absent,
+     it defaults to {}, which still recovers the normalised-id tier
+     (case/separator drift) but not a true cross-letter alias. */
+  const castResolver = buildCastResolver(cast, castIdHistory);
 
   /* fs-38 Wave 3c, Task 23 — resolve the narrator's REAL cast row when one
      exists, instead of trusting the caller's `narratorCharacterId` blindly.

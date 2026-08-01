@@ -4,19 +4,19 @@
    superseded/encoding-drifted character id renders in the right voice
    instead of silently falling back to the narrator.
 
-   `synthesiseChapter` has no book-directory parameter, so it cannot cheaply
-   load `cast-id-history.json` (Task 2) — the resolver is built here with the
-   default `history = {}` (see task-4-report.md). That still recovers the
-   NORMALISED-id tier (case/separator drift between two ids minted for the
-   same character by different code paths, e.g. cast-create's `the_torment`
-   vs the analyzer's `the-torment` — see `character-id.ts`'s own docstring
-   example), which is what both tests below exercise; true cross-letter
-   aliases (e.g. a typo'd id recorded in cast-id-history.json) require a real
-   `history` map and are covered at the sites that DO have book-dir access
-   (Task 5's revisions.ts / aggregate.ts / chapter-qa-repair.ts /
-   build-synth-replacement.ts).
+   `synthesiseChapter` itself has no book-directory parameter, so it cannot
+   load `cast-id-history.json` (Task 2) directly — callers that DO have a
+   bookDir (generation.ts, chapter-splice.ts, chapter-qa-repair.ts) load it
+   once via `loadCastIdHistory(bookDir)` and pass `.supersededBy` through as
+   the new `castIdHistory` option, defaulting to `{}`. The first test below
+   is the headline regression case (Заказ Коалфолла: `mayrin` vs `mairin`,
+   letter-level drift only the history tier can recover); the second pins
+   the NORMALISED-id tier (case/separator drift, e.g. cast-create's
+   `the_torment` vs the analyzer's `the-torment` — see `character-id.ts`'s
+   own docstring example), which recovers even with the default `{}` — the
+   two tiers are independent and both need coverage.
 
-   Third case is the safety-gate regression guard: before this fix, converting
+   Fourth case is the safety-gate regression guard: before this fix, converting
    `:1526`'s `rendersNarrator` alone (without also converting `:1519`'s
    `inChapterCharacterIds`) would have made a resolvable group's ORIGINAL raw
    id fail to appear in the cloned-voice pre-pass's validated set — see the
@@ -63,12 +63,51 @@ afterEach(() => {
 });
 
 describe('#2040 orphaned characterId resolves through the cast resolver', () => {
-  it('renders in the resolved character voice, not the narrator (normalised-id tier)', async () => {
+  it('renders in the aliased character voice, not the narrator (history tier: castIdHistory)', async () => {
+    // The headline regression case (Заказ Коалфолла): cast holds the
+    // CANONICAL id 'mairin'; the sentence group's raw attribution is
+    // 'mayrin' — a genuine letter-level typo/drift, NOT recoverable by the
+    // normalised-id tier (normaliseIdKey never merges ids whose letters
+    // differ — see character-id.ts's own docstring). Only resolvable via a
+    // real `castIdHistory` map, exactly as generation.ts/chapter-splice.ts/
+    // chapter-qa-repair.ts thread it in from `loadCastIdHistory(bookDir)`.
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator' },
+      {
+        id: 'mairin',
+        name: 'Мэйрин',
+        gender: 'female',
+        overrideTtsVoices: { kokoro: { name: 'kokoro-mairin' } },
+      },
+    ];
+    const provider = makeProvider();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'mayrin')],
+      cast,
+      castIdHistory: { mayrin: 'mairin' },
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].voiceName).toBe('kokoro-mairin');
+    const body = result.segments.find((s) => s.kind !== 'title');
+    // The raw attribution is preserved on the segment (existing contract —
+    // revisions.ts's drift detector and srv-36 anchors key off it)…
+    expect(body?.characterId).toBe('mayrin');
+    // …but this was a REAL resolution, not an orphan substitution: the
+    // #2023 fallback-stamp field must stay unset.
+    expect(body?.renderedFallbackCharacterId).toBeUndefined();
+  });
+
+  it('renders in the resolved character voice, not the narrator (normalised-id tier, no history needed)', async () => {
     // Cast carries the CANONICAL id 'mairin'; the sentence group's raw
     // attribution is 'Mairin' (case drift — the exact shape the
     // normalised-id tier exists to recover, per character-id.ts's own
-    // docstring). No history is wired at this site (see file banner), so
-    // this deliberately does not exercise the history tier.
+    // docstring). Deliberately passes NO `castIdHistory` — proving the
+    // default `{}` still recovers this tier on its own.
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator' },
       {

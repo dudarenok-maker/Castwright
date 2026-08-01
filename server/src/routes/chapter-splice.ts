@@ -35,6 +35,7 @@ import { pcmDurationSec } from '../tts/pcm.js';
 import { applyGainToPcm } from '../tts/gain-pcm.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter } from '../tts/synthesise-chapter.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
@@ -352,6 +353,11 @@ chapterSpliceRouter.post(
         // abort/register/decode side effects.
         const sentences = rerecordSentences;
 
+        /* #2040 — resolve a sentence group's characterId through the book's
+           retired-id history before treating it as orphaned. Loaded once for
+           this splice operation, not per segment inside `synth` below. Never
+           throws (see loadCastIdHistory's own doc comment). */
+        const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
         replacements = await buildSynthReplacements({
           segments: segFile.segments,
           targetIndices,
@@ -365,6 +371,7 @@ chapterSpliceRouter.post(
             const r = await synthesiseChapter({
               sentences: subset,
               cast: cast.characters,
+              castIdHistory,
               provider,
               modelKey,
               engine,
