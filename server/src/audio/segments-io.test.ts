@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  collectOrphanedCharacterFallbacks,
   collectRenderedFallbackEngines,
   collectRenderedInstructHashesByChapter,
   collectRenderedQwenVoiceNames,
@@ -26,6 +27,16 @@ function writeSegments(slug: string, characterSnapshots: Record<string, object>)
   writeFileSync(
     join(bookDir, 'audio', `${slug}.segments.json`),
     JSON.stringify({ chapterId: Number(slug.slice(0, 2)), characterSnapshots }),
+  );
+}
+
+/** #2023 — write a segments.json with a raw `segments[]` array (rather than
+    `characterSnapshots`), for the orphaned-characterId aggregator, which
+    reads per-SEGMENT fields, not the per-character snapshot map. */
+function writeSegmentsArray(slug: string, segments: Array<Record<string, unknown>>) {
+  writeFileSync(
+    join(bookDir, 'audio', `${slug}.segments.json`),
+    JSON.stringify({ chapterId: Number(slug.slice(0, 2)), segments }),
   );
 }
 
@@ -81,6 +92,68 @@ describe('collectRenderedFallbackEngines (fe-16)', () => {
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
       new Set(['qwen-marlow']),
     );
+  });
+});
+
+describe('collectOrphanedCharacterFallbacks (#2023 Piece 1)', () => {
+  it('maps an orphaned characterId to who actually rendered it + the voice used', async () => {
+    writeSegmentsArray('01-one', [
+      {
+        characterId: 'mayrin',
+        sentenceIds: [1],
+        renderedFallbackCharacterId: 'narrator',
+        voiceName: 'qwen-oduvan',
+        baseVoiceName: 'qwen-oduvan',
+      },
+      { characterId: 'narrator', sentenceIds: [2], voiceName: 'qwen-oduvan' },
+    ]);
+    await expect(collectOrphanedCharacterFallbacks(bookDir, chapters)).resolves.toEqual({
+      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+    });
+  });
+
+  it('omits voiceName when the render recorded none', async () => {
+    writeSegmentsArray('01-one', [
+      { characterId: 'coalfall', sentenceIds: [1], renderedFallbackCharacterId: 'narrator' },
+    ]);
+    await expect(collectOrphanedCharacterFallbacks(bookDir, chapters)).resolves.toEqual({
+      coalfall: { characterId: 'narrator', voiceName: undefined },
+    });
+  });
+
+  it('returns an empty map when nothing was substituted', async () => {
+    writeSegmentsArray('01-one', [
+      { characterId: 'narrator', sentenceIds: [1], voiceName: 'qwen-oduvan' },
+    ]);
+    await expect(collectOrphanedCharacterFallbacks(bookDir, chapters)).resolves.toEqual({});
+  });
+
+  it('returns an empty map when no audio dir / segments exist', async () => {
+    rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+    await expect(collectOrphanedCharacterFallbacks(bookDir, chapters)).resolves.toEqual({});
+  });
+
+  it('does not collide with collectRenderedFallbackEngines\'s cast-id keyspace', async () => {
+    // Same chapter renders BOTH a real cast character's Qwen→Kokoro engine
+    // fallback (keyed by its own cast id, in characterSnapshots) and an
+    // orphaned-id substitution (keyed by the orphaned id, in segments[]) —
+    // the two aggregators must read their own disjoint parts and never clash.
+    writeFileSync(
+      join(bookDir, 'audio', '01-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        characterSnapshots: { wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' } },
+        segments: [
+          { characterId: 'ghost-character', sentenceIds: [1], renderedFallbackCharacterId: 'narrator' },
+        ],
+      }),
+    );
+    await expect(collectRenderedFallbackEngines(bookDir, chapters)).resolves.toEqual({
+      wren: 'kokoro',
+    });
+    await expect(collectOrphanedCharacterFallbacks(bookDir, chapters)).resolves.toEqual({
+      'ghost-character': { characterId: 'narrator', voiceName: undefined },
+    });
   });
 });
 

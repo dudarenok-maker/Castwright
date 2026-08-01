@@ -314,6 +314,47 @@ describe('book-state router — renderedFallbackByCharacter (fe-16)', () => {
   });
 });
 
+describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () => {
+  /* Sibling aggregator to renderedFallbackByCharacter above, but keyed by an
+     ORPHANED characterId (no cast entry at all — a cast/analysis id drift)
+     that was substituted with the narrator, rather than a real cast id whose
+     configured ENGINE changed. Before this fix nothing on the wire ever
+     named the substitution; the GET response stayed `{}` even after a
+     render that substituted dozens of segments. */
+  it('returns {} when no segments files exist', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.orphanedCharacterFallbacks).toEqual({});
+  });
+
+  it('maps an orphaned characterId to who actually rendered it + the voice used', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [
+          {
+            characterId: 'mayrin',
+            sentenceIds: [1],
+            renderedFallbackCharacterId: 'narrator',
+            voiceName: 'qwen-oduvan',
+            baseVoiceName: 'qwen-oduvan',
+          },
+          { characterId: 'narrator', sentenceIds: [2], voiceName: 'qwen-oduvan' },
+        ],
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.orphanedCharacterFallbacks).toEqual({
+      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+    });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+  });
+});
+
 describe('book-state router — renderedTextByChapter (#1105)', () => {
   /* The GET ships a per-chapter sentence→textHash map recovered from each rendered
      chapter's segments file, so the Generate view can flag a chapter whose text was

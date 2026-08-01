@@ -57,7 +57,17 @@ export interface BrokenClonedVoice {
     | 'engine-unavailable'
     | 'derive-failed'
     | 'misconfigured'
-    | 'wrong-engine';
+    | 'wrong-engine'
+    /* #2023 — a healthy cloned voice that would otherwise borrow an
+       orphaned characterId's line (no cast entry at all — this is a
+       manuscript-attribution problem, not an availability one). Every
+       OTHER reason above means the clone itself can't render as itself
+       right now; this one means it renders fine but must not stand in for
+       someone else's dialogue. Kept as its own reason rather than folded
+       into `engine-unavailable`/`misconfigured` precisely so `fromList`
+       never prints the availability-repair remedies (re-enable an engine,
+       restore a voice) for a problem neither fixes. */
+    | 'misattributed-substitution';
   /** fs-38 Wave 3c, Task 18 — which engine this voice was being resolved on,
       set for the three reasons whose remedy text below actually names an
       engine: `engine-unavailable` (Task 18), `wrong-engine` (GATE 1 I-2),
@@ -72,6 +82,12 @@ export interface BrokenClonedVoice {
       the one to SWITCH THE BOOK TO; for `derive-failed` it is the one to
       RE-RUN THE CLONE FOR. */
   engine?: CloneEngine;
+  /** #2023 — set only for `misattributed-substitution`: the orphaned
+      characterId whose sentence group would have borrowed this (healthy)
+      cloned voice. Lets `fromList` name the actual mis-attributed id in
+      the message instead of just the cloned character's own name, which
+      by itself gives no clue which line is at fault. */
+  orphanedCharacterId?: string;
 }
 
 /** Task 18 + GATE 1 I-2 — the shared engine-label builder for the remedy
@@ -139,6 +155,14 @@ export class UnresolvableClonedVoiceError extends Error {
     // `hasWrongEngine` is already declared above — do not repeat it.
     const hasDeriveFailed = broken.some((b) => b.reason === 'derive-failed');
     const hasEngineUnavailable = broken.some((b) => b.reason === 'engine-unavailable');
+    /* #2023 — misattributed-substitution is its own remedy family (see
+       `BrokenClonedVoice.orphanedCharacterId`'s doc comment): the voice
+       itself is healthy, so it must never trigger the availability
+       catch-all below, and the orphaned id has no cast row at all, so it
+       must never get the generic "reassign the character(s)" tail either —
+       both `hasOtherReason` and the tail's own guard exclude it. */
+    const hasMisattributed = broken.some((b) => b.reason === 'misattributed-substitution');
+    const hasOnlyMisattributed = broken.every((b) => b.reason === 'misattributed-substitution');
     /* #1967 — `derive-failed` gets its own clause below, so it must NOT also
        trigger the availability catch-all; and the catch-all only names an
        engine to re-enable when one was actually reported unavailable. Before
@@ -146,7 +170,10 @@ export class UnresolvableClonedVoiceError extends Error {
        perfectly healthy engine, because engineLabelFor filters on REASON and
        fell back to 'Qwen' when it matched nothing. */
     const hasOtherReason = broken.some(
-      (b) => b.reason !== 'wrong-engine' && b.reason !== 'derive-failed',
+      (b) =>
+        b.reason !== 'wrong-engine' &&
+        b.reason !== 'derive-failed' &&
+        b.reason !== 'misattributed-substitution',
     );
     const remedies: string[] = [];
     if (hasOtherReason) {
@@ -173,10 +200,40 @@ export class UnresolvableClonedVoiceError extends Error {
          `fromList` unit-test shape), so that copy is unchanged. */
       remedies.push(`switch the book to ${engineLabelFor(broken, 'wrong-engine')}`);
     }
-    remedies.push('reassign the character(s)');
+    if (hasMisattributed) {
+      /* #2023 — the actual fix: re-attribute the manuscript line, not
+         "reassign the character" (there is no cast row for an orphaned id
+         to reassign) and not any availability repair (the voice is fine). */
+      const clause = 're-attribute the affected sentence(s) to the correct character in the Manuscript view';
+      remedies.push(remedies.length === 0 ? clause.charAt(0).toUpperCase() + clause.slice(1) : clause);
+    }
+    // #2023 — only add when at least one broken entry has a cast row to
+    // reassign; an orphaned characterId's misattributed-substitution has
+    // none, so the tail would be actively wrong advice for it.
+    if (!hasOnlyMisattributed) remedies.push('reassign the character(s)');
+    /* #2023 — the generic header claims the voice is "unavailable", which is
+       false for misattributed-substitution: the voice is healthy, it's just
+       barred from speaking a line attributed to someone else. Only swap the
+       header when every broken entry is this reason — a mixed list (not
+       reachable from the current caller, which always throws single-entry)
+       falls back to the generic wording rather than picking one framing for
+       a mix of genuinely-unavailable and merely-misattributed voices. */
+    const header = hasOnlyMisattributed
+      ? `A cloned voice must never speak a line attributed to another character — this line's own ` +
+        `characterId has no entry in this book's cast, so it would otherwise borrow the voice below`
+      : `Cloned voice(s) unavailable — a cloned voice must never be substituted with another`;
     const message =
-      `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: ` +
-      broken.map((b) => `"${b.name}" (${b.reason})`).join(', ') +
+      `${header}: ` +
+      broken
+        .map(
+          (b) =>
+            `"${b.name}" (${b.reason}${
+              b.reason === 'misattributed-substitution' && b.orphanedCharacterId
+                ? `, orphaned characterId "${b.orphanedCharacterId}"`
+                : ''
+            })`,
+        )
+        .join(', ') +
       `. ${remedies.join('; ')}.`;
     const e = new UnresolvableClonedVoiceError(broken[0]?.name ?? '');
     return Object.assign(e, { message, broken: [...broken] });

@@ -45,6 +45,14 @@ describe('coquiPipInstallSteps', () => {
     expect(cjk!.args).not.toContain('--no-deps');
   });
 
+  it('installs spacy (text-splitting, #2017) alongside the CJK phonemizers, not the base manifest', () => {
+    const cjk = steps.find((s: { args: string[] }) => s.args.includes('pypinyin'));
+    expect(cjk, 'CJK phonemizer step must exist').toBeTruthy();
+    expect(cjk!.args.some((a: string) => a.startsWith('spacy'))).toBe(true);
+    // Plain spacy, never the [ja] extra (SudachiPy/sudachidict-core, #2038).
+    expect(cjk!.args.some((a: string) => a.startsWith('spacy[ja]'))).toBe(false);
+  });
+
   it('never passes -U / --upgrade (must not perturb the pinned torch/coqui)', () => {
     for (const s of steps as { args: string[] }[]) {
       expect(s.args).not.toContain('-U');

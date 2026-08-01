@@ -5614,6 +5614,13 @@ components:
                 description: >-
                   Human-readable QA reasons for a suspect segment. Segment-QA
                   reasons always; ASR reasons only when the ASR verdict was drift.
+              renderedFallbackCharacterId:
+                type: string
+                description: >-
+                  #2023 — the cast character id that ACTUALLY spoke this
+                  segment when `characterId` above is an orphaned id (no cast
+                  entry at all) substituted with the narrator. Absent on every
+                  normally-resolved segment.
         lufs:
           $ref: '#/components/schemas/ChapterLoudness'
           nullable: true
@@ -6872,6 +6879,27 @@ components:
             `resolveVoiceStatus` so the cast Status pill reads
             "Fallback (Kokoro)". Empty/absent when nothing fell back.
           additionalProperties: { type: string }
+        orphanedCharacterFallbacks:
+          type: object
+          description: |
+            #2023 — orphaned characterId → who actually rendered it. Keyed by
+            a manuscript `characterId` that has NO entry in this book's cast at
+            all (e.g. a cast/analysis id-romanisation drift) and so was
+            substituted with the narrator, aggregated across any rendered
+            chapter. Distinct from `renderedFallbackByCharacter` above (which
+            is keyed by a REAL cast id whose configured ENGINE changed) — this
+            is a wrong-CHARACTER substitution, not an engine one. Empty/absent
+            when nothing has substituted.
+          additionalProperties:
+            type: object
+            required: [characterId]
+            properties:
+              characterId:
+                type: string
+                description: The cast character id that actually spoke the line (usually the narrator).
+              voiceName:
+                type: string
+                description: The voice name actually sent to the provider, when recorded.
         changeLog:
           type: array
           nullable: true

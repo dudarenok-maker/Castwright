@@ -47,8 +47,21 @@ INT16_FULL_SCALE = 32768.0
 # able to spuriously refuse a legitimate first bless for no detection gain.
 FIRST_BLESS_MAX_WER = 0.35
 
-_SMART_APOSTROPHE = "\u2019"  # RIGHT SINGLE QUOTATION MARK -- written as a Python escape, never a literal glyph (see r_unicode_regex_class memory note)
-_POSSESSIVE_RE = re.compile(r"'s\b")
+# #2045 F1 (independent review of #2035): `identity`/`loudness_dbfs` in
+# instruct-baseline.json are raw stochastic measurements (4dp / 2dp) — NOT
+# quantised like `tolerances` (`max(0.15, id_max+0.10)`, a flat `4.0`,
+# `max(1.0, rtf*1.5)`), which is why an exact-equality guard is correct for
+# `tolerances` but refuses on every honest re-bless of the other two:
+# `instruct-baseline.json`'s own `metadata.notes` records ~0.0014 run-to-run
+# identity spread (0.0125 committed vs ~0.0139 spike). Each epsilon below is
+# 10% of the window the field feeds — `identity_cosine_max` (0.15) and
+# `loudness_dbfs_abs` (4.0) as committed today — cross-checked against that
+# spread: 0.015 sits ~10.7x above the observed 0.0014 noise floor, so a
+# genuine re-bless's noise clears it easily while a move approaching the
+# window itself does not.
+IDENTITY_COSINE_EPSILON = 0.015  # 10% of the committed identity_cosine_max (0.15)
+LOUDNESS_DBFS_EPSILON = 0.4  # 10% of the committed loudness_dbfs_abs (4.0)
+
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -142,16 +155,30 @@ def model_sha256(path: str) -> Optional[str]:
 
 def normalize_words(text: str) -> list[str]:
     """Tokenise `text` for content-drift comparison: NFKC -> casefold ->
-    strip possessive 's / stray apostrophes -> replace non-alphanumeric with
-    a space -> split. Deliberately NOT `segment-asr-qa.ts`'s `normalizeForWer`
-    — no contraction expansion, no integer-to-word spelling (see #1911 §2d:
-    under `bless_guard`'s G2 cap, adding those buys zero spare capacity, so
-    they are skipped to save ~12 lines and a second copy of production's
-    number table)."""
+    replace non-alphanumeric with a space -> split. Deliberately NOT
+    `segment-asr-qa.ts`'s `normalizeForWer` — no contraction expansion, no
+    integer-to-word spelling (see #1911 §2d: under `bless_guard`'s G2 cap,
+    adding those buys zero spare capacity, so they are skipped to save ~12
+    lines and a second copy of production's number table).
+
+    #2005: earlier revisions also stripped possessive `'s` / stray
+    apostrophes before this step, mirroring `segment-asr-qa.ts:276-277`.
+    That mirror was incomplete — production expands contractions BEFORE
+    stripping `'s` (so only a genuine possessive ever reaches the strip),
+    while this function never expanded contractions at all. The result
+    collapsed `'s` **contractions** too: `he's` / `it's` / `that's` all
+    normalised to `he` / `it` / `that`, so a regression that drops or adds
+    `'s` scored 0 edits on a gate whose whole purpose is single-word drift
+    (live on the committed `abbreviations` fixture: `Aldric's`). Per this
+    module's own stricter-than-production rationale (see the module
+    docstring), and since the drift check compares Whisper transcript to
+    Whisper transcript (both sides carry the same apostrophe-splitting
+    quirk, so it cancels — see #1911's identical argument for dropping
+    integer-spelling normalisation), the fix is to drop the strip rather
+    than add contraction expansion: an apostrophe is now just punctuation
+    that falls out via `_NON_ALNUM_RE`, splitting `he's` into `he`, `s` —
+    two tokens, not silently swallowed into `he`."""
     s = unicodedata.normalize("NFKC", text or "").casefold()
-    s = s.replace(_SMART_APOSTROPHE, "'")
-    s = _POSSESSIVE_RE.sub("", s)
-    s = s.replace("'", "")
     s = _NON_ALNUM_RE.sub(" ", s)
     return s.split()
 
@@ -296,62 +323,184 @@ def bless_guard(
     return None
 
 
+def _flatten_leaves(d: dict, prefix: str = "") -> dict:
+    """Flatten a dict nested at most one level deep (as `tolerances` /
+    `identity` / `loudness_dbfs` all are) into `{"dotted.key": leaf_value}`
+    pairs, so a nested dict (`identity`'s `cosine` sub-dict) and a flat one
+    (`loudness_dbfs`, `tolerances`) can be diffed leaf-by-leaf with the same
+    code."""
+    out: dict = {}
+    for k, v in d.items():
+        key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            out.update(_flatten_leaves(v, prefix=key))
+        else:
+            out[key] = v
+    return out
+
+
+def _is_number(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _leaf_diffs(existing: dict, computed: dict) -> dict:
+    """Per-leaf absolute difference between two (possibly one-level-nested)
+    dicts, dotted-key flattened. A leaf present on only one side, or whose
+    value isn't numeric on BOTH sides (e.g. `identity`'s `anchor` string
+    leaf, if it ever changed), is reported as `float('inf')` — never
+    mistaken for in-tolerance noise, however large `epsilon` is set, and
+    never silently dropped from the comparison."""
+    e_flat = _flatten_leaves(existing)
+    c_flat = _flatten_leaves(computed)
+    diffs: dict = {}
+    for key in sorted(set(e_flat) | set(c_flat)):
+        e_val = e_flat.get(key)
+        c_val = c_flat.get(key)
+        if _is_number(e_val) and _is_number(c_val):
+            diffs[key] = abs(e_val - c_val)
+        elif e_val == c_val:
+            diffs[key] = 0.0
+        else:
+            diffs[key] = math.inf
+    return diffs
+
+
+def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsilon: float) -> Optional[str]:
+    """Human-readable summary of every leaf that moved between `existing`
+    and `computed`, for the caller to print when a noise-tolerant
+    (`epsilon > 0`) bless field is WRITTEN despite `existing != computed` —
+    #2045 F1: the guard accepting a within-epsilon move silently was exactly
+    the failure mode #2035's Acceptance ruled out ("surfaced loudly enough
+    that it cannot pass unnoticed"), and the accept path is the half of a
+    guard that mutation testing routinely leaves uncovered (see #2025 in a
+    sibling lane). Returns `None` when there is nothing to report: `existing`
+    is `None` (first bless, nothing to compare against) or every leaf is
+    identical. Lists every moved leaf, not just the largest, so an operator
+    scanning bless output sees exactly which keys moved."""
+    if existing is None:
+        return None
+    diffs = _leaf_diffs(existing, computed)
+    moved = {k: v for k, v in diffs.items() if v > 0}
+    if not moved:
+        return None
+    parts = ", ".join(f"{k}: +/-{v:.4f}" for k, v in sorted(moved.items(), key=lambda kv: -kv[1]))
+    return f"within epsilon {epsilon} (noise) -- {parts}"
+
+
 def bless_guard_thresholds(
     existing: Optional[dict],
     computed: dict,
     *,
     previously_blessed: bool = False,
     allow_rebless_thresholds: bool = False,
+    label: str = "tolerances",
+    epsilon: float = 0.0,
 ) -> Optional[str]:
-    """Refuse a `--bless` write that would change a baseline's `tolerances`
-    block — a THRESHOLD, not a measurement (#1995). `instruct-baseline.json`
-    mixes measurements (identity cosines, loudness, rtf) with thresholds
-    derived from them (`identity_cosine_max`, `rtf_max`, ...); a bless run
-    performed for an unrelated reason must not silently move the ceiling to
+    """Refuse a `--bless` write that would change a baseline's assertion
+    reference — a THRESHOLD *or a recorded measurement an assertion is
+    diffed against*, neither of which is a free measurement (#1995, widened
+    by #2035, made noise-tolerant by #2045 F1). `instruct-baseline.json`
+    mixes bare measurements (rtf, the per-item breakdown) with values that
+    later assertions compare a fresh run TO — thresholds derived from them
+    (`identity_cosine_max`, `rtf_max`, ...) as well as the recorded
+    `identity` cosines and `loudness_dbfs` figures themselves
+    (`test_instruct_golden.py`'s per-emotion drift check diffs a fresh
+    measurement against `baseline["loudness_dbfs"][e]` — that recorded
+    figure is the CENTRE of a drift window, not just data). A bless run
+    performed for an unrelated reason must not silently move any of these to
     whatever THIS run happened to measure (observed: rtf_max 1.0 -> 1.31
     under GPU contention, recorded by a bless that was about something else
-    entirely).
+    entirely). This same guard call protects all three fields — `_bless()`
+    calls it once per field (`label="tolerances"`, `label="identity"`,
+    `label="loudness_dbfs"`), each all-or-nothing: a refusal on any one
+    field raises before ANY field is written, mirroring `bless_guard`'s
+    G1/G2 no-partial-write shape.
 
-    `existing` is the CURRENTLY COMMITTED `tolerances` dict (or None when
-    there is no committed `tolerances` block at all); `computed` is what
-    this bless run would write. Pure: the caller reads
+    **`epsilon` (#2045 F1).** The comparison is `max(leaf diff) <= epsilon`,
+    not raw equality — leaves are flattened via `_leaf_diffs`, so a leaf
+    that only exists on one side, or a non-numeric leaf that changed (e.g.
+    `identity`'s `anchor` string), always reports `inf` and therefore always
+    exceeds any `epsilon`. The default `epsilon=0.0` makes this EXACTLY the
+    old equality check for `tolerances` (a diff of 0 on every leaf, or
+    refuse) — `tolerances` is quantised (`max(0.15, id_max+0.10)`, a flat
+    `4.0`, `max(1.0, rtf*1.5)`), so an exact match IS the correct bar there;
+    a re-bless with the same inputs computes byte-identical tolerances.
+    `identity`/`loudness_dbfs` are raw stochastic measurements with real
+    run-to-run noise (`instruct-baseline.json`'s own `metadata.notes`:
+    ~0.0014 identity spread) — an exact-equality guard on THOSE refuses on
+    every honest re-bless, which is worse than the #1995 hole this whole
+    mechanism exists to close: it trains an operator to reach for
+    `GOLDEN_REBLESS_THRESHOLDS=1` on a ROUTINE bless, and that flag also
+    covers `tolerances`, so the routine habit re-opens #1995 one flag deep.
+    Callers pass a field-specific `epsilon` (`compare.IDENTITY_COSINE_EPSILON`,
+    `compare.LOUDNESS_DBFS_EPSILON`) for those two; a within-epsilon move is
+    WRITTEN, not refused — the caller is expected to also call
+    `describe_measurement_move` and print its result so the move is loud,
+    per #2035's Acceptance ("surfaced loudly enough that it cannot pass
+    unnoticed"), even though this function itself only decides refuse/accept
+    and never prints.
+
+    `existing` is the CURRENTLY COMMITTED dict for `label` (or None when
+    there is no committed block at all for it); `computed` is what this
+    bless run would write. Pure: the caller reads
     `GOLDEN_REBLESS_THRESHOLDS` from the environment and passes it as
     `allow_rebless_thresholds` — this function never touches os.environ.
+    #2035 deliberately reuses this single flag rather than minting a second
+    one: `identity`/`loudness_dbfs` live in the same baseline file, are
+    guarded by this same function, and are the same *kind* of judgement
+    call ("I know this bless run legitimately changed the reference point
+    by more than noise") as a `tolerances` change — splitting the escape
+    hatch per-field would add a flag without adding a distinct decision.
 
     Mirrors `bless_guard`'s G1 shape (refuse a silent change, escape via an
-    explicit flag) but for the ceiling(s) rather than the transcript.
+    explicit flag) but for a reference figure rather than the transcript.
 
-    A missing `tolerances` block is ambiguous on its own: it is either a
-    genuine first bless (nothing recorded yet — the ORIGINAL, and still the
-    common, case for `existing is None`) or a PREVIOUSLY blessed baseline
-    that lost its `tolerances` key (e.g. a hand-resolved merge conflict) —
-    the exact #2003 shape, reproduced inside this guard by an earlier
-    revision of this fix. `existing is None` alone cannot tell those apart,
-    so the caller passes `previously_blessed` — its own
-    `bool(baseline.get("identity"))`, the file's existing definition of
-    "has this baseline ever been blessed" (`test_instruct_golden.py`'s
-    unblessed-SKIP already uses that same signal). A never-blessed baseline
-    (`previously_blessed=False`) is accepted with no flag, same as before;
-    a previously-blessed baseline missing `tolerances`
+    A missing `label` block is ambiguous on its own: it is either a genuine
+    first bless (nothing recorded yet — the ORIGINAL, and still the common,
+    case for `existing is None`) or a PREVIOUSLY blessed baseline that lost
+    its `label` key (e.g. a hand-resolved merge conflict) — the exact #2003
+    shape, reproduced inside this guard by an earlier revision of this fix.
+    `existing is None` alone cannot tell those apart, so the caller passes
+    `previously_blessed` — see `test_instruct_golden.py`'s `_bless()` for
+    the exact probe and its history (#2045 F1/F5): an early revision read
+    `bool(baseline.get("identity"))`, circular for `label="identity"`
+    specifically since that field IS one of the three being guarded; the
+    next revision narrowed to `bool(baseline.get("rtf"))` alone on the
+    theory that `rtf` is never itself a guarded field, which is true but
+    still left a SINGLE-key blind spot — a merge conflict is exactly as
+    likely to drop `rtf` as `identity`, and losing it alone would fail
+    ALL THREE guards open at once, a WIDER blast radius than the bug just
+    fixed. The current probe is `any(...)` across all four keys
+    (`rtf`/`identity`/`loudness_dbfs`/`tolerances`) — as long as ONE
+    survives a corruption, the probe still reads correctly. A
+    never-blessed baseline (`previously_blessed=False`) is accepted with no
+    flag, same as before; a previously-blessed baseline missing `label`
     (`previously_blessed=True`) now fails CLOSED via the same flag as any
-    other threshold change."""
+    other reference-figure change."""
     if existing is None:
         if not previously_blessed:
             return None
         if allow_rebless_thresholds:
             return None
         return (
-            "refusing to bless: baseline has been blessed before but its "
-            "'tolerances' key is missing (e.g. a hand-resolved merge "
+            f"refusing to bless: baseline has been blessed before but its "
+            f"'{label}' key is missing (e.g. a hand-resolved merge "
             f"conflict) -- computed {computed!r} would be written blind -- "
             "set GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
         )
-    if existing == computed:
+    diffs = _leaf_diffs(existing, computed)
+    max_diff = max(diffs.values()) if diffs else 0.0
+    if max_diff <= epsilon:
         return None
     if allow_rebless_thresholds:
         return None
+    changed = ", ".join(
+        f"{k}: {'inf' if v == math.inf else f'{v:.4f}'}"
+        for k, v in sorted(diffs.items(), key=lambda kv: -kv[1])
+        if v > 0
+    )
     return (
-        "refusing to bless: tolerances would change from the recorded "
-        f"baseline (was {existing!r}, now {computed!r}) -- set "
+        f"refusing to bless: {label} would move beyond epsilon {epsilon} "
+        f"({changed}) -- was {existing!r}, now {computed!r} -- set "
         "GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
     )

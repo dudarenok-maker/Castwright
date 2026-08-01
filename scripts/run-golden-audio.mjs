@@ -25,7 +25,17 @@
 //                          move it (e.g. `rtf_max`) is REFUSED unless
 //                          GOLDEN_REBLESS_THRESHOLDS=1 is also set, so an
 //                          unrelated Kokoro-content bless can't silently
-//                          loosen it — see compare.bless_guard_thresholds.
+//                          loosen it. The same file's `identity`/
+//                          `loudness_dbfs` are guarded too, but noise-
+//                          tolerantly: they're raw stochastic measurements
+//                          (unlike the quantised `tolerances`), so a
+//                          within-epsilon re-bless move is WRITTEN and
+//                          echoed to stdout ("[golden-bless] identity moved
+//                          ...") rather than refused — only a move large
+//                          enough to meaningfully re-centre the window it
+//                          feeds needs the same GOLDEN_REBLESS_THRESHOLDS=1
+//                          flag — see compare.bless_guard_thresholds and
+//                          compare.describe_measurement_move.
 //                          To re-capture the Suite B INPUT fixture (not its
 //                          baseline), run
 //                          server/tts-sidecar/tests/golden/capture_assembly_fixture.py.
