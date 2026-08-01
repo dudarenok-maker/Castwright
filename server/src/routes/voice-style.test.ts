@@ -180,6 +180,35 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-style/generate', () =>
     expect(cast.characters.find((c) => c.id === 'wren')?.voiceStyle).toBe('persona-for-wren');
     expect(cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe('persona-for-marlow');
   });
+
+  /* #1981 fix round 3 — /generate's OWN written=false path (mirrors the
+     written=false test for /generate-all further down this file). While the
+     LLM call is "in flight" (inside the mocked generateVoiceStylePersona,
+     before it resolves), a concurrent edit removes the target character from
+     cast.json — simulating an unlink/merge landing between /generate's
+     pre-lock read and writeVoiceStylePersona's own fresh read. The persist
+     must not resurrect the character, and the route must report the same
+     404 an unknown character gets up front, not a false 200. */
+  it('#1981 — 404s when the character vanishes while the LLM call is in flight, and does not resurrect it', async () => {
+    generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => {
+      const path = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+      const onDisk = JSON.parse(readFileSync(path, 'utf8')) as {
+        characters: Array<{ id: string }>;
+      };
+      writeFileSync(
+        path,
+        JSON.stringify({ characters: onDisk.characters.filter((ch) => ch.id !== c.id) }),
+      );
+      return `persona-for-${c.id}`;
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/wren/);
+
+    const cast = readCast();
+    expect(cast.characters.find((c) => c.id === 'wren')).toBeUndefined();
+  });
 });
 
 describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {
