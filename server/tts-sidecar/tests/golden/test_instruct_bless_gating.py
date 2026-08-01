@@ -184,6 +184,8 @@ def test_bless_needs_no_flag_when_measurements_keep_tolerances_pinned(monkeypatc
 
 
 # ── #2035: identity / loudness_dbfs are assertion references too, same guard ──
+# ── #2045 F1: ...but noise-tolerant -- a WINDOW-sized move refuses, a
+#    NOISE-sized move (< epsilon) is accepted AND echoed to stdout. ──
 
 
 def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
@@ -194,15 +196,16 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
     `identity` block itself was, pre-#2035, never guarded -- a bless run for
     an unrelated reason (e.g. a Kokoro-only re-bless that still touches this
     file) could silently re-record it. A committed identity cosine
-    (`whisper: 0.01`) that differs from what this run measured
-    (`whisper: 0.01` in `_measured`, but the FIXTURE below is deliberately
-    different: `0.02`) must refuse, same all-or-nothing shape as the
-    `tolerances` guard -- including that a refusal on `identity` must leave
-    `tolerances`/`loudness_dbfs`/rtf entirely unwritten too."""
+    (`whisper: 0.06`) that differs from what this run measured
+    (`whisper: 0.01` in `_measured`) by 0.05 -- well beyond
+    `IDENTITY_COSINE_EPSILON` (0.015), i.e. WINDOW-sized, not noise -- must
+    refuse, same all-or-nothing shape as the `tolerances` guard, including
+    that a refusal on `identity` must leave `tolerances`/`loudness_dbfs`/rtf
+    entirely unwritten too."""
     differing_identity = {
         "anchor": "neutral",
-        "cosine": {"whisper": 0.02, "sad": 0.005, "excited": 0.005, "angry": 0.007},
-        "max": 0.02,
+        "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+        "max": 0.06,
     }
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=differing_identity
@@ -220,8 +223,8 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
 def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path) -> None:
     differing_identity = {
         "anchor": "neutral",
-        "cosine": {"whisper": 0.02, "sad": 0.005, "excited": 0.005, "angry": 0.007},
-        "max": 0.02,
+        "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+        "max": 0.06,
     }
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=differing_identity
@@ -235,13 +238,44 @@ def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path) -> None
     assert written["identity"]["cosine"]["whisper"] == 0.01
 
 
+def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_path, capsys) -> None:
+    """#2045 F1: an exact-equality guard on `identity` refuses on every
+    HONEST re-bless -- `instruct-baseline.json`'s own `metadata.notes`
+    records ~0.0014 run-to-run identity spread. A committed `whisper: 0.014`
+    against this run's measured `0.01` is a 0.004 move -- comfortably below
+    `IDENTITY_COSINE_EPSILON` (0.015) and in the same order as the recorded
+    noise floor -- so the write must PROCEED with no flag needed, and the
+    move must be echoed to stdout (#2035's Acceptance: surfaced loudly
+    enough that it cannot pass unnoticed) rather than silently absorbed."""
+    noisy_identity = {
+        "anchor": "neutral",
+        "cosine": {"whisper": 0.014, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+        "max": 0.014,
+    }
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=noisy_identity
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+
+    instruct._bless(_measured(rtf=0.5))  # no flag set, no raise -- must not refuse
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["identity"]["cosine"]["whisper"] == 0.01  # the write proceeded
+    out = capsys.readouterr().out
+    assert "identity" in out and "cosine.whisper" in out, (
+        f"expected the noise-sized identity move to be echoed to stdout, got: {out!r}"
+    )
+
+
 def test_bless_refuses_and_leaves_the_file_untouched_when_loudness_dbfs_would_move(
     monkeypatch, tmp_path
 ) -> None:
     """`baseline["loudness_dbfs"][e]` is the CENTRE of the ±`loudness_dbfs_abs`
     drift window `test_live_instruct_golden` measures a fresh run against --
     an assertion reference, not free data. A committed loudness figure that
-    differs from this run's measurement must refuse."""
+    differs from this run's measurement by 1.0 dB -- beyond
+    `LOUDNESS_DBFS_EPSILON` (0.4), i.e. WINDOW-sized -- must refuse."""
     differing_loudness = {"whisper": -29.0, "neutral": -20.0}  # measured has whisper: -30.0
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=differing_loudness
@@ -254,6 +288,27 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_loudness_dbfs_would_mo
         instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only loudness_dbfs differs
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
+
+
+def test_bless_accepts_and_echoes_a_noise_sized_loudness_dbfs_move(monkeypatch, tmp_path, capsys) -> None:
+    """A committed `whisper: -30.1` against this run's measured `-30.0` is a
+    0.1 dB move -- comfortably below `LOUDNESS_DBFS_EPSILON` (0.4), i.e.
+    noise -- so the write must proceed with no flag needed, and echo."""
+    noisy_loudness = {"whisper": -30.1, "neutral": -20.0}
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=noisy_loudness
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+
+    instruct._bless(_measured(rtf=0.5))  # no flag set, no raise -- must not refuse
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["loudness_dbfs"]["whisper"] == -30.0  # the write proceeded
+    out = capsys.readouterr().out
+    assert "loudness_dbfs" in out and "whisper" in out, (
+        f"expected the noise-sized loudness_dbfs move to be echoed to stdout, got: {out!r}"
+    )
 
 
 def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path) -> None:

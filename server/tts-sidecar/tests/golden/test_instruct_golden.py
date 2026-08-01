@@ -50,7 +50,12 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
-from tests.golden.compare import bless_guard_thresholds  # noqa: E402
+from tests.golden.compare import (  # noqa: E402
+    IDENTITY_COSINE_EPSILON,
+    LOUDNESS_DBFS_EPSILON,
+    bless_guard_thresholds,
+    describe_measurement_move,
+)
 
 pytestmark = pytest.mark.golden
 
@@ -175,7 +180,7 @@ def _measure(engine) -> dict:
 def _bless(measured: dict) -> None:
     """Record measurements AND (guarded) the derived tolerances, identity
     cosines, and per-emotion loudness. #1995 guarded `tolerances` (a
-    THRESHOLD, not a measurement); #2035 widens the same guard to
+    THRESHOLD, not a measurement); #2035 widened the same guard to
     `identity` and `loudness_dbfs` -- both are *assertion references* too:
     `test_live_instruct_golden`'s per-emotion drift check diffs a fresh
     measurement against `baseline["loudness_dbfs"][e]`, so that recorded
@@ -184,14 +189,27 @@ def _bless(measured: dict) -> None:
     `identity_cosine_max` the same way. A bless run performed for an
     unrelated reason (e.g. re-blessing kokoro-baseline.json's transcripts in
     the same `--sidecar-only --bless` invocation) must not silently
-    re-centre any of the three. `bless_guard_thresholds` refuses (raises, no
-    write at all) unless each field's computed value matches what's already
-    committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set -- one shared flag
-    for all three fields (see the function's docstring for why a second flag
-    would add friction without adding a distinct decision). All three guards
-    run before any field is written, so a refusal on one leaves the file
-    completely untouched -- the same all-or-nothing shape as
-    `test_golden_regression._bless`'s G1/G2.
+    re-centre any of the three.
+
+    **#2045 F1: `identity`/`loudness_dbfs` are noise-tolerant, `tolerances`
+    is not.** `tolerances` is quantised (`max(0.15, id_max+0.10)`, a flat
+    `4.0`, `max(1.0, rtf*1.5)`), so exact equality is the right bar and
+    `epsilon` stays at `bless_guard_thresholds`' default `0.0`. `identity`/
+    `loudness_dbfs` are raw stochastic measurements — `instruct-baseline.
+    json`'s own `metadata.notes` records ~0.0014 identity run-to-run spread
+    -- so an exact-equality guard on THOSE refuses on every honest re-bless,
+    which independent review found makes #1995 worse: the operator reaches
+    for `GOLDEN_REBLESS_THRESHOLDS=1` on a ROUTINE bless, and that same flag
+    covers `tolerances`, silently re-authorising exactly the kind of change
+    #1995 exists to catch. `IDENTITY_COSINE_EPSILON` (0.015) /
+    `LOUDNESS_DBFS_EPSILON` (0.4) let a within-epsilon move through --
+    `describe_measurement_move` then reports what moved and by how much, and
+    this function PRINTS it, so the move is loud rather than silent (#2035's
+    Acceptance: "surfaced loudly enough that it cannot pass unnoticed") even
+    though the write proceeds. A beyond-epsilon move still refuses exactly
+    like `tolerances` does. All three guards run before any field is
+    written, so a refusal on one leaves the file completely untouched -- the
+    same all-or-nothing shape as `test_golden_regression._bless`'s G1/G2.
 
     `previously_blessed=bool(baseline.get("rtf"))` disambiguates a genuine
     first bless (nothing recorded yet) from a previously blessed baseline
@@ -226,20 +244,28 @@ def _bless(measured: dict) -> None:
 
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
     previously_blessed = bool(baseline.get("rtf"))
-    for label, existing_val, computed_val in (
-        ("tolerances", baseline.get("tolerances"), computed_tolerances),
-        ("identity", baseline.get("identity"), computed_identity),
-        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness),
-    ):
+    # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
+    # equality is correct there, see this function's own docstring above.
+    guard_specs = (
+        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0),
+        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON),
+        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON),
+    )
+    for label, existing_val, computed_val, epsilon in guard_specs:
         guard_reason = bless_guard_thresholds(
             existing_val,
             computed_val,
             previously_blessed=previously_blessed,
             allow_rebless_thresholds=allow_rebless_thresholds,
             label=label,
+            epsilon=epsilon,
         )
         if guard_reason is not None:
             raise AssertionError(guard_reason)
+        if epsilon > 0:
+            echo = describe_measurement_move(existing_val, computed_val, epsilon=epsilon)
+            if echo is not None:
+                print(f"[golden-bless] {label} moved {echo}")
 
     baseline["tolerances"] = computed_tolerances
     baseline["identity"] = computed_identity
