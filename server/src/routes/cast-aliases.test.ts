@@ -500,3 +500,138 @@ describe('#1981 — two add-alias calls for one book overlap', () => {
     expect(y.aliases).toEqual(['Yara']);
   });
 });
+
+/* #1981 review fix round — the review found unlink-alias's and repoint-alias's
+   locks unproven: Task 6's mutation-verify shimmed the whole module, so it
+   only ever reddened the add-alias test above and left these two with no
+   coverage. Own dedicated race + own individually-scoped mutation check
+   each (below), matching the add-alias race's symmetric-preamble shape:
+   both characters carry exactly one alias each and no series/journal/cache
+   entanglement, so neither concurrent call gets a head start. */
+describe('#1981 — two unlink-alias calls for one book overlap', () => {
+  const RACE_TITLE = 'Cast Aliases Unlink Race Book';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: 'm_aliases_unlink_race_test',
+        title: RACE_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'src-p', name: 'Source P', role: 'character', color: 'unset', aliases: ['AliasP'] },
+          { id: 'src-q', name: 'Source Q', role: 'character', color: 'unset', aliases: ['AliasQ'] },
+        ],
+      }),
+    );
+  });
+
+  it('keeps both new characters when two unlink-alias calls for one book overlap', async () => {
+    const [resP, resQ] = await Promise.all([
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/unlink-alias`)
+        .send({ sourceCharacterId: 'src-p', aliasName: 'AliasP' }),
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/unlink-alias`)
+        .send({ sourceCharacterId: 'src-q', aliasName: 'AliasQ' }),
+    ]);
+    expect(resP.status).toBe(200);
+    expect(resQ.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[] }> };
+    const ids = cast.characters.map((c) => c.id);
+    expect(ids).toContain('aliasp');
+    expect(ids).toContain('aliasq');
+    expect(cast.characters.find((c) => c.id === 'src-p')?.aliases).toEqual([]);
+    expect(cast.characters.find((c) => c.id === 'src-q')?.aliases).toEqual([]);
+  });
+});
+
+describe('#1981 — two repoint-alias calls for one book overlap', () => {
+  const RACE_TITLE = 'Cast Aliases Repoint Race Book';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: 'm_aliases_repoint_race_test',
+        title: RACE_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'src-m', name: 'Source M', role: 'character', color: 'unset', aliases: ['AliasM'] },
+          { id: 'tgt-m', name: 'Target M', role: 'character', color: 'unset', aliases: [] },
+          { id: 'src-n', name: 'Source N', role: 'character', color: 'unset', aliases: ['AliasN'] },
+          { id: 'tgt-n', name: 'Target N', role: 'character', color: 'unset', aliases: [] },
+        ],
+      }),
+    );
+  });
+
+  it('keeps both repoints when two repoint-alias calls for one book overlap', async () => {
+    const [resM, resN] = await Promise.all([
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/repoint-alias`)
+        .send({ sourceCharacterId: 'src-m', aliasName: 'AliasM', targetCharacterId: 'tgt-m' }),
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/repoint-alias`)
+        .send({ sourceCharacterId: 'src-n', aliasName: 'AliasN', targetCharacterId: 'tgt-n' }),
+    ]);
+    expect(resM.status).toBe(200);
+    expect(resN.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[] }> };
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    expect(byId['src-m'].aliases).toEqual([]);
+    expect(byId['tgt-m'].aliases).toEqual(['AliasM']);
+    expect(byId['src-n'].aliases).toEqual([]);
+    expect(byId['tgt-n'].aliases).toEqual(['AliasN']);
+  });
+});

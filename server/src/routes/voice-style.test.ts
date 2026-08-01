@@ -104,8 +104,9 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voice-style-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ voiceStyleRouter }, { makeBookId }] = await Promise.all([
+  const [{ voiceStyleRouter }, { castAliasesRouter }, { makeBookId }] = await Promise.all([
     import('./voice-style.js'),
+    import('./cast-aliases.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
@@ -113,6 +114,9 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', voiceStyleRouter);
+  /* #1981 review fix round — cast-aliases mounted too, for the
+     generate-all-vs-add-alias race test at the bottom of this file. */
+  app.use('/api/books', castAliasesRouter);
 });
 
 beforeEach(() => {
@@ -281,6 +285,118 @@ describe('voice-style routes apply the persona GPU plan', () => {
     expect(generateVoiceStylePersona).toHaveBeenCalledTimes(2); // narrator skipped
     for (const call of generateVoiceStylePersona.mock.calls) {
       expect(call[1]).toEqual(prep);
+    }
+  });
+});
+
+/* #1981 review fix round — the site the review flagged as holding the book's
+   cast lock across the WHOLE batch. Proves the fix by racing a full
+   /generate-all (several characters, each generator call artificially
+   delayed) against a concurrent add-alias on the same book, and asserting
+   the add-alias resolves quickly — nowhere near the total batch duration.
+   Under the pre-fix-round design (one withCastLock wrapping
+   preparePersonaBatch + every generateVoiceStylePersona call + the final
+   write), the add-alias's own withCastLock call couldn't even START until
+   the whole batch released the lock, so it would have taken >= the full
+   batch duration to land — impossible to distinguish from "eventually
+   correct" without a timing assertion, which is exactly why this needs its
+   own dedicated test rather than folding into the plain correctness checks
+   above. Own isolated book (own bookId/app reuse, own cast.json) so the
+   extra characters and the artificial LLM delay can't disturb the timing-
+   sensitive assertions above or its own repeat runs. */
+describe('#1981 — /generate-all no longer holds the book lock across the whole batch', () => {
+  const RACE_TITLE = 'Voice Style Batch Race Book';
+  const BATCH_CHARACTER_IDS = ['echo', 'foxtrot', 'golf', 'hotel'];
+  const PERSONA_DELAY_MS = 150;
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+  });
+
+  beforeEach(() => {
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: `m_${raceBookId}`,
+        title: RACE_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: 1,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          ...BATCH_CHARACTER_IDS.map((id) => ({
+            id,
+            name: id,
+            role: 'character',
+            color: 'unset',
+            aliases: [],
+          })),
+        ],
+      }),
+    );
+  });
+
+  it('lets a concurrent add-alias land quickly instead of waiting for the whole batch', async () => {
+    generateVoiceStylePersona.mockReset();
+    generateVoiceStylePersona.mockImplementation(
+      (c: { id: string }) =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => resolve(`persona-for-${c.id}`), PERSONA_DELAY_MS);
+        }),
+    );
+
+    const genAllPromise = request(app).post(
+      `/api/books/${raceBookId}/cast/voice-style/generate-all`,
+    );
+    genAllPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+    // Let generate-all reach (and start) its first LLM call.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const start = Date.now();
+    const addAliasRes = await request(app)
+      .post(`/api/books/${raceBookId}/cast/add-alias`)
+      .send({ characterId: 'echo', aliasName: 'Fast' });
+    const elapsed = Date.now() - start;
+
+    expect(addAliasRes.status).toBe(200);
+    /* The whole batch (4 characters × 150ms delayed generator) takes >=
+       600ms. Under the pre-fix design that whole span was one held lock, so
+       add-alias's own write couldn't even begin until then. 400ms is
+       generous headroom above the new per-character-lock latency (waiting
+       on at most ONE character's own brief lock, a few ms) while staying
+       comfortably under the batch total. */
+    expect(elapsed).toBeLessThan(400);
+
+    const genAllRes = await genAllPromise;
+    expect(genAllRes.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[]; voiceStyle?: string }> };
+    const echo = cast.characters.find((c) => c.id === 'echo')!;
+    expect(echo.aliases).toEqual(['Fast']);
+    for (const id of BATCH_CHARACTER_IDS) {
+      expect(cast.characters.find((c) => c.id === id)?.voiceStyle).toBe(`persona-for-${id}`);
     }
   });
 });
