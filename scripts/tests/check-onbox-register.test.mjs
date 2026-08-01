@@ -785,7 +785,7 @@ ${rowSpans(rowsA)}
 ${rowSpans(rowsB)}
   </section>
 
-  <section class="${sectionClass}" id="blocked">
+  <section class="${sectionClass} is-blocked" id="blocked">
     <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">1 row</span></h3>
       <summary><span class="num">—</span><span class="iname">something</span></summary>
   </section>
@@ -825,7 +825,7 @@ test('a row present in the register but missing from the live view is caught', (
   );
   assert.ok(
     errors.includes(
-      'Live view is missing row A3 — present in the register, absent from the live view.',
+      "Live view's Group A section is missing row A3 — present in the register, absent from that section.",
     ),
     `expected the missing-row error, got: ${JSON.stringify(errors)}`,
   );
@@ -834,7 +834,9 @@ test('a row present in the register but missing from the live view is caught', (
 test('a row in the live view that the register does not have is caught', () => {
   const errors = checkLiveView(buildRegister(), buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }));
   assert.ok(
-    errors.some((e) => e.startsWith('Live view has row A3 that the register does not.')),
+    errors.some((e) =>
+      e.startsWith("Live view's Group A section has row A3 that the register's Group A does not."),
+    ),
     `expected the extra-row error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -847,7 +849,7 @@ test('two offsetting row errors are both reported, not cancelled in the total', 
     `expected the missing-row error, got: ${JSON.stringify(errors)}`,
   );
   assert.ok(
-    errors.some((e) => e.includes('has row A3 that the register does not')),
+    errors.some((e) => e.includes('Group A section has row A3')),
     `expected the extra-row error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -894,17 +896,42 @@ test('an unreadable glance table is an error, not a silent pass', () => {
 test('unreadable group sections are an error, not a silent pass', () => {
   const errors = checkLiveView(buildRegister(), buildLiveView({ sectionClass: 'grp' }));
   assert.ok(
-    errors.some((e) => e.startsWith('Live view: no `<section class="group">` blocks')),
+    errors.some((e) => e.startsWith('Live view: no `<section class="group…">` blocks')),
     `expected the unreadable-sections error, got: ${JSON.stringify(errors)}`,
   );
 });
 
-test('the Blocked section and its em-dash rows are ignored on both sides', () => {
-  // buildLiveView's Blocked section carries a `—` row and a `BLK` gtag; the
-  // default register's glance table carries a `—` Blocked row. Neither may
-  // contribute to a count, so the default pair passing is the assertion — this
-  // pins it explicitly against a future parser that starts counting them.
-  assert.deepEqual(checkLiveView(buildRegister(), buildLiveView()), []);
+// The real file's Blocked and Unconfirmed sections carry MODIFIER classes
+// (`class="group is-blocked"` / `is-soft`). A split marker ending at the
+// closing quote missed both, folding their content into the preceding group's
+// block — so the gtag filter never saw them and their rows were attributed to
+// whichever group happened to precede them (PR #2080 review, F2). These two
+// pin the modifier-class handling itself rather than re-asserting the happy
+// path, which the first test in this block already covers.
+test('a group section with a modifier class is still parsed as its own section', () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group" id="gb">',
+    '<section class="group is-hot" id="gb">',
+  );
+  assert.deepEqual(
+    checkLiveView(buildRegister(), liveView),
+    [],
+    'a cosmetic modifier class must not make a section unreadable',
+  );
+});
+
+test("a modifier-classed Blocked section's rows never land in another group", () => {
+  // Its `—` row becomes a real row ID. If the Blocked section were folded into
+  // Group B's block (the F2 bug), this would surface as an extra B-section row.
+  const liveView = buildLiveView().replace(
+    '<span class="num">—</span><span class="iname">something</span>',
+    '<span class="num">Z9</span><span class="iname">something</span>',
+  );
+  assert.deepEqual(
+    checkLiveView(buildRegister(), liveView),
+    [],
+    'the Blocked section must be skipped whole, not merged into the group above it',
+  );
 });
 
 // The fixtures above can only prove the arithmetic. This one proves the
@@ -920,4 +947,136 @@ test('the real register and its real live view agree', () => {
     'utf8',
   );
   assert.deepEqual(checkLiveView(md, lv), []);
+});
+
+// --- Branches added or left uncovered by the first round (PR #2080 review) ---
+
+// F1: Map.set is last-writer-wins on both surfaces, so a repeated letter kept
+// exactly one of two contradicting rows — and WHICH one depended on their
+// order. Wrong-count-first is the direction that used to pass.
+test('a group repeated in the live-view glance table is caught, wrong count first', () => {
+  const liveView = buildLiveView().replace(
+    '<tr><td><a href="#gb">B</a></td><td>Setup B</td><td>1</td></tr>',
+    '<tr><td><a href="#gb">B</a></td><td>Setup B</td><td>99</td></tr>\n      <tr><td><a href="#gb">B</a></td><td>Setup B</td><td>1</td></tr>',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) =>
+      e.startsWith('Live view: Group B appears more than once in the glance table.'),
+    ),
+    `expected the duplicate-glance-row error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('a group section repeated in the live view is caught', () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group" id="gb">',
+    '<section class="group" id="gb-copy">\n    <h3 class="gtitle"><span class="gtag">B</span> Setup B <span class="gcount">1 row</span></h3>\n      <summary><span class="num">B1</span><span class="iname">t</span></summary>\n  </section>\n\n  <section class="group" id="gb">',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) => e.startsWith('Live view: more than one group section carries the gtag B.')),
+    `expected the duplicate-section error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('a malformed live-view glance row is reported on its own', () => {
+  const liveView = buildLiveView().replace(
+    '<tr><td><a href="#ga">A</a></td><td>Setup A</td><td>2</td></tr>',
+    '<tr><td><a href="#ga">A</a></td><td>Setup A</td><td>2026-01-01</td><td>2</td></tr>',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.includes(
+      'Live view: the glance-table row for Group A could not be parsed — expected exactly three cells, the last a bare integer.',
+    ),
+    `expected the malformed-row error, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e === 'Live view: Group A is missing from the glance table.'),
+    `a malformed row must not also report as missing, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test("a group in the register's glance table but missing from the live view's is caught", () => {
+  const liveView = buildLiveView().replace(
+    '<tr><td><a href="#gb">B</a></td><td>Setup B</td><td>1</td></tr>',
+    '',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.includes('Live view: Group B is missing from the glance table.'),
+    `expected the missing-glance-row error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test("a group in the live view's glance table that the register's does not have is caught", () => {
+  const liveView = buildLiveView().replace(
+    '<tr><td>—</td>',
+    '<tr><td><a href="#gz">Z</a></td><td>Setup Z</td><td>1</td></tr>\n      <tr><td>—</td>',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) =>
+      e.startsWith(
+        "Live view: glance table has a Group Z row that the register's glance table does not.",
+      ),
+    ),
+    `expected the extra-glance-row error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('a group header with no row count is caught', () => {
+  const liveView = buildLiveView().replace('<span class="gcount">2 rows</span>', '');
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) => e.startsWith("Live view: Group A's header has no")),
+    `expected the missing-gcount error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test("a live-view group section the register's body does not have is caught", () => {
+  const liveView = buildLiveView().replace(
+    '<section class="group is-blocked" id="blocked">',
+    '<section class="group" id="gz">\n    <h3 class="gtitle"><span class="gtag">Z</span> Setup Z <span class="gcount">1 row</span></h3>\n      <summary><span class="num">Z1</span><span class="iname">t</span></summary>\n  </section>\n\n  <section class="group is-blocked" id="blocked">',
+  );
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) =>
+      e.startsWith("Live view has a Group Z section that the register's body does not."),
+    ),
+    `expected the extra-section error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// F5: an unterminated fence blanks the rest of the markdown, so without this
+// bail-out every live-view comparison ran against a truncated register and
+// demanded the deletion of sections that were perfectly fine.
+test('an unterminated fence in the register bails out instead of condemning real sections', () => {
+  const register = buildRegister().replace('## Group B — setup b', '```\n\n## Group B — setup b');
+  const errors = checkLiveView(register, buildLiveView());
+  assert.equal(
+    errors.length,
+    1,
+    `expected exactly the fence error, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    errors[0].startsWith('Cannot check the live view: the register has an unterminated fenced'),
+    `expected the fence bail-out, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// F6: a row filed under the wrong section produced two messages that read as
+// contradicting each other, with nothing saying where the row actually sat.
+test('a row filed under the wrong group section names both sections', () => {
+  const liveView = buildLiveView({ rowsA: ['A1', 'A2', 'B1'], rowsB: [] });
+  const errors = checkLiveView(buildRegister(), liveView);
+  assert.ok(
+    errors.some((e) => e.includes("Live view's Group A section has row B1")),
+    `expected the extra-row error to name Group A, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    errors.some((e) => e.includes("Live view's Group B section is missing row B1")),
+    `expected the missing-row error to name Group B, got: ${JSON.stringify(errors)}`,
+  );
 });

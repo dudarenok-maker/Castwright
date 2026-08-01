@@ -356,9 +356,10 @@ function htmlCellText(html) {
 // Unconfirmed rows and the header row are skipped without special-casing.
 function parseLiveViewGlance(html) {
   const tableMatch = html.match(/<table class="glance">([\s\S]*?)<\/table>/);
-  if (!tableMatch) return { groups: null, malformedLetters: [] };
+  if (!tableMatch) return { groups: null, malformedLetters: [], duplicateLetters: new Set() };
   const groups = new Map();
   const malformedLetters = [];
+  const duplicateLetters = new Set();
   for (const rowMatch of tableMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
     const cells = [...rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) =>
       htmlCellText(c[1]),
@@ -371,9 +372,14 @@ function parseLiveViewGlance(html) {
       malformedLetters.push(letter);
       continue;
     }
+    // Map.set is last-writer-wins, so a repeated letter would silently keep
+    // only one of two contradicting rows — and which one it kept would depend
+    // on their order. The markdown parser guards exactly this
+    // (duplicateTableLetters); mirroring it here keeps the two symmetrical.
+    if (groups.has(letter)) duplicateLetters.add(letter);
     groups.set(letter, Number(lastCell));
   }
-  return { groups, malformedLetters };
+  return { groups, malformedLetters, duplicateLetters };
 }
 
 // Parses the live view's group sections into letter → { headerCount, rowIds }.
@@ -382,9 +388,20 @@ function parseLiveViewGlance(html) {
 // right bucket. Sections whose `gtag` is not a single uppercase letter (the
 // `BLK` and `?` sections) are skipped — the markdown's own glance table marks
 // their rows with `—` and excludes them from the owed total too.
+//
+// The split marker matches the whole class attribute, not the literal
+// `class="group"`: the real file's last two sections carry modifier classes
+// (`class="group is-blocked"`, `class="group is-soft"`). A marker ending at the
+// closing quote missed both, folding their content — and the trailing
+// `<footer>` — into the PRECEDING group's block, so the `gtag` filter above
+// never actually saw them and a lettered row added to either would have been
+// attributed to the wrong group (PR #2080 review, F2). It also meant a purely
+// cosmetic modifier class on any other section made its whole row list read as
+// "extra rows the register does not have".
 function parseLiveViewSections(html) {
   const sections = new Map();
-  const blocks = html.split(/<section class="group"/).slice(1);
+  const duplicateLetters = new Set();
+  const blocks = html.split(/<section class="group[^"]*"/).slice(1);
   for (const block of blocks) {
     const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
     if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
@@ -393,12 +410,16 @@ function parseLiveViewSections(html) {
     const rowIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)]
       .map((m) => m[1].trim())
       .filter((id) => /^[A-Z]\d+$/.test(id));
+    // Same last-writer-wins hazard as the glance table above: two sections
+    // carrying the same `gtag` would leave only one visible, and the page
+    // would render the group twice with nothing reporting it.
+    if (sections.has(letter)) duplicateLetters.add(letter);
     sections.set(letter, {
       headerCount: countMatch ? Number(countMatch[1]) : null,
       rowIds,
     });
   }
-  return sections;
+  return { sections, duplicateLetters };
 }
 
 // Compares the live view against the markdown. Returns human-readable error
@@ -409,7 +430,16 @@ function parseLiveViewSections(html) {
 // into a vacuous pass — which is the exact shape of bug it exists to catch.
 export function checkLiveView(markdownText, liveViewHtml) {
   const errors = [];
-  const { text: fenceStrippedText } = stripFences(markdownText);
+  const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
+  // Same bail-out as checkRegister, for the same reason: an unterminated fence
+  // blanks the rest of the markdown, so every comparison below would read the
+  // live view against a truncated register and demand the deletion of sections
+  // that are perfectly fine. checkRegister already reports the fence itself.
+  if (unterminatedFenceLine !== null) {
+    return [
+      `Cannot check the live view: the register has an unterminated fenced code block opened at line ${unterminatedFenceLine}, so everything after it was ignored.`,
+    ];
+  }
   const sections = splitSections(fenceStrippedText);
   const glanceSection = sections.find((s) => s.title === 'At a glance');
   if (!glanceSection) {
@@ -431,12 +461,21 @@ export function checkLiveView(markdownText, liveViewHtml) {
   }
 
   // The glance table, letter by letter.
-  const { groups: lvGroups, malformedLetters } = parseLiveViewGlance(liveViewHtml);
+  const {
+    groups: lvGroups,
+    malformedLetters,
+    duplicateLetters: duplicateGlanceLetters,
+  } = parseLiveViewGlance(liveViewHtml);
   if (lvGroups === null) {
     errors.push(
       'Live view: no `<table class="glance">` found — the per-group counts could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
     );
   } else {
+    for (const letter of duplicateGlanceLetters) {
+      errors.push(
+        `Live view: Group ${letter} appears more than once in the glance table. Remove the duplicate row — only one of them is being checked, and which one depends on their order.`,
+      );
+    }
     for (const letter of malformedLetters) {
       errors.push(
         `Live view: the glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
@@ -465,12 +504,18 @@ export function checkLiveView(markdownText, liveViewHtml) {
   }
 
   // The group sections and their rows.
-  const lvSections = parseLiveViewSections(liveViewHtml);
+  const { sections: lvSections, duplicateLetters: duplicateSectionLetters } =
+    parseLiveViewSections(liveViewHtml);
   if (lvSections.size === 0) {
     errors.push(
-      'Live view: no `<section class="group">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+      'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
     );
     return errors;
+  }
+  for (const letter of duplicateSectionLetters) {
+    errors.push(
+      `Live view: more than one group section carries the gtag ${letter}. The page renders that group twice — remove the duplicate section.`,
+    );
   }
   for (const [letter, mdNumbers] of mdBodyGroups) {
     const section = lvSections.get(letter);
@@ -491,14 +536,17 @@ export function checkLiveView(markdownText, liveViewHtml) {
     const found = new Set(section.rowIds);
     const missing = [...expected].filter((id) => !found.has(id));
     const extra = [...found].filter((id) => !expected.has(id));
+    // Both messages name the SECTION the comparison was made in. Without it a
+    // row filed under the wrong group reads as two contradicting errors — "X is
+    // missing" and "X is extra" — with nothing saying where it actually sits.
     if (missing.length > 0) {
       errors.push(
-        `Live view is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from the live view.`,
+        `Live view's Group ${letter} section is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from that section.`,
       );
     }
     if (extra.length > 0) {
       errors.push(
-        `Live view has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register does not. A row published from an unmerged branch is the usual cause.`,
+        `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
     if (section.rowIds.length !== found.size) {

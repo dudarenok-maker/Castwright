@@ -52,8 +52,11 @@ The live view carries derived figures — owed count, per-group counts, oldest
 debt — that must be **recomputed** on every edit. Rows can be right while the
 summary strip lies. `npm run check:onbox-register` now verifies the owed total,
 the per-group counts and the row IDs across both files, so an edit here that
-misses the live view fails CI; what it *cannot* see is the published page, only
-its source.
+misses the live view fails CI. Two things it does *not* cover: the rest of the
+summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stays
+a manual recompute; and the published page itself — it only ever reads the
+source file, so "was it published, and was it the right file?" is procedure, not
+a gate.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
