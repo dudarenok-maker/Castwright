@@ -135,8 +135,18 @@ Files: `server/tts-sidecar/tests/golden/compare.py`,
 
 ### Lane 2 · `fix/scripts-release-gate-retry`
 
+**Status: shipped, PR #2049.** All three issues landed; independent review
+returned two rounds of findings — nine in the first pass and a further ten in
+the re-review — every one addressed with a follow-up commit on the same
+branch (a Narrow, not Global, application of #2028's retry:0; a
+`github-actions`/`agent` reporter-selection fix so the config no longer
+silently overrides two of vitest's own auto-selected reporters; fixture
+isolation so a killed wire test can't poison the suite it protects; and
+doc-accuracy corrections). See the PR for the full finding-by-finding record.
+
 Files: `scripts/release-notes-gate.mjs`, `scripts/bump-version.mjs`,
-`server/vitest.config.ts`, `CONTRIBUTING.md`.
+`server/vitest.config.ts`, `server/vitest.config.wire-fixtures.ts`,
+`server/src/workspace/file-lock.test.ts`, `CONTRIBUTING.md`.
 
 - **#2028** — `retry: 1` on the whole server suite re-runs against state the
   failed attempt already mutated, so **a genuine red-phase test can go green**.

@@ -606,6 +606,24 @@ The compact version:
    inline test timeouts. (`scripts/check-no-budget-poll.mjs` is the automated
    gate; run it locally with `node scripts/check-no-budget-poll.mjs`.)
 
+**Mutation-verifying a server test against module-level state (#2028).**
+`server/vitest.config.ts` sets `retry: 1` for the whole server suite (pool
+contention mitigation — see the comment above `maxWorkers` there). For a test
+that asserts on module-level mutable state keyed by a fixed string (a
+`Map`/`Set`/counter at module scope, or a fixture keyed by a fixed path), that
+retry does **not** re-run a clean attempt: attempt 1 fails and leaks its
+mutation, attempt 2 reads state attempt 1 already touched, and can pass **for
+the wrong reason** — a genuine red-phase test reporting green. When
+mutation-verifying a red-phase test that touches shared module/fixture state,
+confirm it goes red with `npx vitest run --retry=0 <file>`, not the default
+`npx vitest run <file>` — the retry can silently absorb the exact failure
+you're trying to prove. `server/vitest.config.ts`'s `retryHazardReporter`
+prints a `[retry-hazard]` line for any test that needed a retry to pass, as a
+backstop for the case where this gets missed — treat that line as a prompt to
+re-run with `--retry=0` and judge whether it's a genuine transient (route
+through `quarantinedIt`, `docs/testing/flaky-register.md`) or a red-phase test
+the retry hid.
+
 ## Releasing
 
 A release is a performance going out the door, so it gets the same care as one.
@@ -717,7 +735,7 @@ The marker is **span-scoped and positional**: it excuses only the occurrences of
 
 **A literal must be a single whitespace-free word that contains the span and extends past it** — quote the whole surrounding word (`CAFÉ™`), never the flagged characters on their own and never with a space around them. Both halves of that rule are enforced, and either one alone would be a hole: a literal carrying **any** whitespace (a space, a tab, a non-breaking space) is rejected outright and excuses nothing, and a literal that merely equals the span excuses nothing either. A marker naming just `É™` — or ` É™` — suppresses nothing at all, not even its own copy in the marker line, and the failure output says so rather than letting you think it worked. The reason is that a literal is excused at **every** occurrence, so accepting a bare span would blind the file to it wholesale, and a flagged span standing alone between spaces is by construction a real mangle rather than the accent-beside-punctuation false positive the marker exists for. That is also why the space matters so much: the dominant corrupted shape is a mangled dash, arrow, ellipsis or emoji sitting between spaces, so "a space plus the span" would otherwise have been a legal literal for most of a corrupted file at once. Measured on the 242-span file this gate was built for, that one marker excused 155 of the 242 spans.
 
-The gate prints a paste-able marker line **only when a valid literal genuinely exists** around the span. When it cannot, it tells you which of the three reasons applies: the span stands alone, with no surrounding word to name at all; the word around it carries a `"` or a `-->` that cannot go inside the marker's own quoting (reword it, or re-encode); or the flagged span *itself* straddles a whitespace character, so no literal containing it can be whitespace-free. That last one is not exotic — a doubly-encoded non-breaking space is `Â` + NBSP and a doubly-encoded Cyrillic `Р` is `Ð` + NBSP, so a corrupted Russian endonym is un-allowlistable by construction. Re-encoding is the answer there; it always was. One shape is ignored outright, on purpose: a marker that is not complete on one line (scanning to the next `-->` anywhere in the file let an unterminated marker harvest every unrelated quoted phrase after it).
+The gate prints a paste-able marker line **only when a valid literal genuinely exists** around the span. When it cannot, it tells you which of the three reasons applies: the span stands alone, with no surrounding word to name at all; the word around it carries a `"` or a `-->` that cannot go inside the marker's own quoting (reword it, or re-encode); or the flagged span *itself* straddles a whitespace character, so no literal containing it can be whitespace-free. That last one is not exotic — a doubly-encoded non-breaking space is `Â` + NBSP and a doubly-encoded Cyrillic `Р` is `Ð` + NBSP, so a corrupted Russian endonym is un-allowlistable by construction. Re-encoding is the answer there; it always was. One shape is ignored outright, on purpose: a marker that is not complete on one line (scanning to the next `-->` anywhere in the file let an unterminated marker harvest every unrelated quoted phrase after it). **This three-reasons diagnostic is specific to `docs/release-notes-next.md` (#2025).** A `RELEASE_NOTES.md` failure never reaches it: the gate already knows a marker can't be used in that file (see below) and short-circuits straight to the re-encode / `--force` advice, naming none of the three reasons — because there is nothing to paste there regardless of which reason would have applied.
 
 **There is no fence exemption (#1990).** A marker anywhere in the file — inside a <code>```</code> or `~~~` fenced block, a four-space-indented block, a fence nested in a blockquote — is honoured exactly like plain prose. An earlier version tried to skip markers inside a backtick-fenced block specifically, so that documenting this syntax in a gated file could not arm it; in practice the skip only tracked <code>```</code> lines by parity, so a `~~~` fence, an indented block, a blockquote-nested fence, and even just an unrelated earlier line that merely *starts* with a backtick fence all left a marker armed anyway. Proper fence tracking is a markdown-parsing problem this gate has no business owning, and every patch would have left another shape, so fence-awareness was deleted outright instead. What replaces it: the gate **echoes every marker it honours on every run that reaches the file, pass or fail**, so an accidental arming is visible rather than silent — for example:
 
