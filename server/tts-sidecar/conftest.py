@@ -23,6 +23,13 @@ os.environ.setdefault("COQUI_PIN_IMPORT_ORDER", "0")
 # regression test (test_qwen_degeneracy_guard.py) re-enables it explicitly.
 os.environ.setdefault("QWEN_DEGEN_GUARD", "0")
 
+# Same rationale, Coqui side (#2026 defect 3, main.py `_COQUI_DEGEN_GUARD_ENABLED`)
+# — the suite's fake CoquiEngine forwards also emit non-realistic short audio
+# that would otherwise read as degenerate and trip the retry loop. Default it
+# OFF suite-wide; the dedicated regression test (test_coqui_degeneracy_guard.py)
+# re-enables it explicitly.
+os.environ.setdefault("COQUI_DEGEN_GUARD", "0")
+
 # Capacity-aware GPU admission (main.py `_capacity_admission_enabled`) defaults ON
 # in production (#1720), but most route tests exercise a GPU-configured engine
 # with a faked/absent CUDA runtime, so the real free-VRAM probe can't fit them and

@@ -77,6 +77,52 @@ describe('softenDashes', () => {
   it('leaves regular hyphens alone', () => {
     expect(softenDashes('well-known cold-eyed boy')).toBe('well-known cold-eyed boy');
   });
+
+  describe('a leading dash (#2026 defect 2 — the dialogue-opener convention)', () => {
+    /* On-box measurement (issue #2026): a leading em-dash produced no
+       audible pause (+0.14s vs no dash at all), while the SAME sentence's
+       mid-sentence dash was honoured normally (+1.53s). Converting a
+       leading dash to a leading comma — what the pre-fix code did, since it
+       ran the exact same ", " substitution regardless of position — can
+       never fix this: there's no preceding word for a position-zero comma
+       to pause after. An ellipsis doesn't have that problem, so a leading
+       dash gets "... " instead. */
+    it('replaces a leading em-dash (the Russian dialogue marker) with an ellipsis, not a comma', () => {
+      expect(softenDashes('— Кто бы это ни был, пусть стучит.')).toBe(
+        '... Кто бы это ни был, пусть стучит.',
+      );
+    });
+
+    it('replaces a leading en-dash the same way', () => {
+      expect(softenDashes('– Wait here.')).toBe('... Wait here.');
+    });
+
+    it('collapses any amount of leading whitespace before the dash (no double space after)', () => {
+      expect(softenDashes('  —   Кто бы это ни был.')).toBe('... Кто бы это ни был.');
+    });
+
+    it('is general, not Russian-specific — the same leading-dash convention in French and Spanish', () => {
+      expect(softenDashes('— Bonjour, comment ça va ?')).toBe('... Bonjour, comment ça va ?');
+      expect(softenDashes('— ¿Qué pasó aquí?')).toBe('... ¿Qué pasó aquí?');
+    });
+
+    it('does not touch a dash that is NOT at the very start (interior behaviour is unchanged)', () => {
+      expect(softenDashes('он сказал — Кто бы это ни был.')).toBe(
+        'он сказал, Кто бы это ни был.',
+      );
+    });
+
+    it('handles a leading dash AND a later interior dash in the same line', () => {
+      expect(softenDashes('— Кто бы это ни был — подумал он.')).toBe(
+        '... Кто бы это ни был, подумал он.',
+      );
+    });
+
+    it('is idempotent — a second pass is a no-op (no dash character survives the first)', () => {
+      const once = softenDashes('— Кто бы это ни был.');
+      expect(softenDashes(once)).toBe(once);
+    });
+  });
 });
 
 describe('stripUnsafeForTts', () => {
@@ -155,6 +201,15 @@ describe('normaliseForTts (composed)', () => {
   it('is idempotent across the composed pipeline', () => {
     const once = normaliseForTts('THE HAZE—then.');
     expect(normaliseForTts(once)).toBe(once);
+  });
+
+  it('#2026 defect 2 — the leading dash of a Russian dialogue line survives the FULL wire-text pipeline as an ellipsis, not a leading comma', () => {
+    /* This is the actual call shape synthesiseChapter uses at the wire
+       boundary (normaliseForTts(group.text, langCode)) — the acceptance
+       criterion asks for a test on the wire TEXT, not the audio. */
+    expect(normaliseForTts('— Кто бы это ни был, пусть стучит.', 'ru')).toBe(
+      '... Кто бы это ни был, пусть стучит.',
+    );
   });
 
   it('strips unsafe bytes AND title-cases AND softens dashes in a single pass', () => {

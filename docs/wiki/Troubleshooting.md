@@ -270,6 +270,26 @@ turn it off is to isolate a suspected false-positive on unusual text, and you
 should turn it straight back on afterwards. The detection thresholds
 themselves are fixed and not adjustable.
 
+### A Coqui line came out silent or nearly empty (Coqui degeneracy guard)
+
+Same idea as the Qwen guard above, on the XTTS path (#2026). XTTS's decoder
+has no fixed seed, so it can very occasionally emit an implausibly short,
+near-empty render for a substantial line — a bad stochastic draw rather than
+a broken model. Castwright watches for this: whenever a substantial line
+renders implausibly short, it retries once with a fresh sample, and if the
+retry is still degenerate it fails the request loudly rather than shipping
+the bad audio — there's no model reload or engine recycle here, since
+nothing about the resident model needs fixing, only the sample. This guard
+is **on by default** and needs no action — a stray short line usually just
+re-renders correctly on Retry. It lives in **Advanced Settings → Voice
+engine & device → "Coqui degeneracy guard"** (a sidecar restart applies a
+change); the only reason to turn it off is to isolate a suspected
+false-positive on unusual text, and you should turn it straight back on
+afterwards. The detection thresholds themselves are fixed and not
+adjustable. Note this guard catches only an implausibly SHORT render — a
+rare full language-collapse (fluent audio in the wrong language) isn't
+duration-anomalous and isn't caught by this guard.
+
 ### Generation is much slower than usual
 
 The usual culprit is a crowded GPU. Check it isn't sharing the card with something heavy (games, a second model), and keep only one heavy voice engine loaded — unload the analyzer Ollama or a second engine from the model pills. Rendering on the Higher-quality (1.7B) tier is also simply slower by design — that is expected, not a fault. Castwright now watches for a voice engine that has gone quiet without crashing and restarts it on its own, so a stalled render usually recovers by itself; if it doesn't pick back up within a minute or two, restart the voice engine yourself from its pill. The Admin view's Resource trends panel shows the per-chapter speed history.

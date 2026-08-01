@@ -845,6 +845,69 @@ def _qwen_synth_is_degenerate(text: str, audio_ms: float) -> bool:
     return audio_ms < n * _QWEN_DEGEN_MS_PER_CHAR
 
 
+# --- Coqui XTTS output-degeneracy guard (#2026 defect 3, mirrors the Qwen guard
+# above) ---
+# fs-38 Wave 3 on-box acceptance (issue #2026) found XTTS v2 rarely collapses a
+# short Russian utterance entirely: `Хорошее олово.` -> Whisper auto-detected
+# FINNISH ("Karosia olleet tämän tämän"), `Тёплое море.` -> ENGLISH ("Job
+# player, Moria"). Short isolated lines separately draw hallucinated trailing
+# artifacts (`испортишь отливку.` -> "испортишь отливку, ПАА!"). `tts.qwen
+# .degenGuard` already exists for Qwen's OWN failure mode (a persistent
+# VRAM-churn meta-tensor corruption that makes the resident Base model emit
+# near-empty audio); there was no Coqui equivalent.
+#
+# Same registry-knob shape (`tts.coqui.degenGuard` / `COQUI_DEGEN_GUARD`,
+# default on) and the same "duration implausible for the given speakable text"
+# detection idea as `_qwen_synth_is_degenerate` above — reusing the identical
+# `_QWEN_DEGEN_MIN_TEXT_LEN`-shaped min-length gate and the identical
+# conservative 20 ms/speakable-char floor (Coqui's own healthy Russian
+# baseline measured on this same issue is ~100 ms/char — a stock voice's
+# `Кто бы это ни был, пусть стучит.` rendered in 2.41 s for 24 speakable
+# letters — so 20 ms/char stays comfortably conservative for Coqui too, not
+# just Qwen). Adapted where the two engines' failure modes actually differ:
+# XTTS's decoder is stochastic (no fixed seed, unlike a corrupted resident
+# Qwen Base), so a degenerate draw is a per-call sampling fluke, not a broken
+# model — recovery here is a plain RE-SYNTH (a fresh stochastic draw), never
+# a model reload/recycle, because nothing about the resident model needs
+# fixing.
+#
+# Known gap, left for a follow-up rather than guessed at here: this floor
+# only catches a render that comes back IMPLAUSIBLY SHORT. The language-
+# collapse cases above (Finnish/English) may render at a roughly PLAUSIBLE
+# duration with entirely wrong content — no duration-only heuristic can see
+# that, and setting a duration CEILING to catch a hallucinated-tail addition
+# would need a real healthy-duration baseline for short (2-3 word) Coqui
+# utterances this guard doesn't have, so it is not attempted here to avoid a
+# false-positive footgun. Catching that class needs content verification
+# (e.g. the existing ASR-based segment QA gate), which is a separate,
+# heavier mechanism than "mirror the Qwen knob shape" and stays out of scope.
+_COQUI_DEGEN_MIN_TEXT_LEN = _QWEN_DEGEN_MIN_TEXT_LEN
+_COQUI_DEGEN_MS_PER_CHAR = _QWEN_DEGEN_MS_PER_CHAR
+# Total attempts before shipping (or, if still degenerate, raising) — mirrors
+# `_QWEN_DEGEN_SYNTH_ATTEMPTS`'s "one retry" shape. No self-recycle escalation
+# here (see docstring above): a stochastic-decode fluke needs a fresh SAMPLE,
+# not a fresh PROCESS, so there is nothing a code-44 recycle would fix.
+_COQUI_DEGEN_SYNTH_ATTEMPTS = 2
+
+
+def _coqui_speakable_len(text: str) -> int:
+    """Count of speech-bearing characters — letters (any script incl. Cyrillic)
+    and digits. Same definition and rationale as `_qwen_speakable_len` (kept as
+    its own function rather than a shared import so the Coqui guard has no
+    compile-time dependency on Qwen's internals)."""
+    return sum(1 for c in text if c.isalnum())
+
+
+def _coqui_synth_is_degenerate(text: str, audio_ms: float) -> bool:
+    """True when a Coqui XTTS synth returned implausibly little audio for its
+    input. Same shape as `_qwen_synth_is_degenerate` — see the constants above
+    for what differs (and what deliberately doesn't) between the two engines."""
+    n = _coqui_speakable_len(text)
+    if n < _COQUI_DEGEN_MIN_TEXT_LEN:
+        return False
+    return audio_ms < n * _COQUI_DEGEN_MS_PER_CHAR
+
+
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
 # socket buffers flush within a couple of ms, but we give a generous
@@ -954,6 +1017,16 @@ def _parse_bool(value: Optional[str], default: bool) -> bool:
 # only when overridden off, so this Python default still governs the untouched
 # case.
 _QWEN_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("QWEN_DEGEN_GUARD"), True)
+
+# Master switch for the Coqui output-degeneracy guard (#2026 defect 3 — see the
+# constants + helpers near `_COQUI_DEGEN_MS_PER_CHAR`). Same rationale as the
+# Qwen switch above: default ON in production, but `tests/conftest.py` sets
+# `COQUI_DEGEN_GUARD=0` suite-wide so the unit suite's minimal fakes (which
+# emit non-realistic short audio) don't read as degenerate; the dedicated
+# degeneracy regression test re-enables it explicitly. Surfaced as the
+# `tts.coqui.degenGuard` Advanced-Settings knob (registry key, env
+# `COQUI_DEGEN_GUARD`, default true).
+_COQUI_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("COQUI_DEGEN_GUARD"), True)
 
 
 # --- Process-memory instrumentation + reclaim (host-RAM leak guard) ---
@@ -2077,9 +2150,55 @@ class CoquiEngine(Engine):
                 # both forwards below re-read `self._tts` under the lock and
                 # fail LOUD rather than asserting if they lost that race.
                 self._ensure_loaded(model)
-                return self._synthesize_claimed(model, voice, text, language)
+                return self._synthesize_degen_guarded(model, voice, text, language)
             finally:
                 self._last_used = time.monotonic()
+
+    def _synthesize_degen_guarded(
+        self, model: str, voice: str, text: str, language: Optional[str] = None
+    ) -> SynthResult:
+        """Wraps `_synthesize_claimed` with the Coqui output-degeneracy guard
+        (#2026 defect 3 — see `_coqui_synth_is_degenerate`'s module-level
+        docstring for the detection rationale and how it differs from the
+        Qwen guard's own escalation).
+
+        Called from inside `synthesize`'s `_in_flight.claim()` block, so a
+        retry here needs no re-`_ensure_loaded()` of its own: the model can't
+        be evicted out from under an in-flight claim, and XTTS's forward
+        itself is already guarded by `_synth_lock` inside `_synthesize_claimed`
+        (both branches). Each attempt is a fresh call — for the cloned-voice
+        branch that re-reads the cached latents (cheap, no re-derive) and
+        re-runs the GPU forward with a fresh stochastic draw; for the
+        catalogue branch, just a fresh forward.
+        """
+        for attempt in range(1, _COQUI_DEGEN_SYNTH_ATTEMPTS + 1):
+            result = self._synthesize_claimed(model, voice, text, language)
+            audio_ms = _audio_duration_ms(np.frombuffer(result.pcm, dtype="<i2"), result.sample_rate)
+            if not _COQUI_DEGEN_GUARD_ENABLED or not _coqui_synth_is_degenerate(text, audio_ms):
+                return result
+            if attempt < _COQUI_DEGEN_SYNTH_ATTEMPTS:
+                log.warning(
+                    "coqui synth degenerate (attempt %d/%d): voice=%s text_len=%d "
+                    "audio_ms=%.0f — implausibly short audio for the input; "
+                    "retrying with a fresh stochastic draw (no reload needed).",
+                    attempt, _COQUI_DEGEN_SYNTH_ATTEMPTS, voice, len(text), audio_ms,
+                )
+                continue
+            log.warning(
+                "coqui synth STILL degenerate after %d attempts: voice=%s text_len=%d "
+                "audio_ms=%.0f — no model reload/recycle to try (XTTS's failure "
+                "here is a per-call sampling fluke, not a corrupted resident "
+                "model); failing this request loud rather than shipping it.",
+                _COQUI_DEGEN_SYNTH_ATTEMPTS, voice, len(text), audio_ms,
+            )
+            raise RuntimeError(
+                f"Coqui synth degenerate (implausibly short audio: {audio_ms:.0f}ms "
+                f"for {len(text)} chars) persisted across {_COQUI_DEGEN_SYNTH_ATTEMPTS} "
+                "attempts."
+            )
+        # Unreachable (the final attempt always returns or raises above); present so
+        # a static analyzer sees a definite return on every path.
+        raise AssertionError("unreachable: degeneracy loop exited without returning")
 
     def _synthesize_claimed(
         self, model: str, voice: str, text: str, language: Optional[str] = None
