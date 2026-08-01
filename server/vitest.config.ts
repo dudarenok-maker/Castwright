@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import type { Reporter, TestCase } from 'vitest/node';
+import { isAgent } from 'std-env';
 
 /* Server-side test harness. Node environment (no jsdom) — most suites are
    pure helpers + supertest against Express routers. Tests that shell out
@@ -188,22 +189,34 @@ export default defineConfig({
     maxWorkers,
     retry: 1,
     // ops-46 (#2028) — see retryHazardReporter above for why retry:1 stays
-    // and what this adds on top of it. Vitest only appends its OWN built-in
-    // 'github-actions' reporter (inline PR annotations + the "Flaky Tests"
-    // $GITHUB_STEP_SUMMARY panel) when the resolved `reporters` array is
-    // EMPTY — setting one explicitly, unconditionally, silently suppressed
-    // that panel on every CI run of this suite (verify.yml runs `vitest run`
-    // directly in server/). Reproduced against installed vitest 4.1.9 with
-    // GITHUB_ACTIONS=true: an empty `reporters` config prints `::error
-    // file=…,line=…::…` inline annotations and writes a rendered "Flaky
-    // Tests" summary; `['default', retryHazardReporter]` prints neither.
-    // Re-adding 'github-actions' explicitly under CI restores both — the
-    // console.warn from retryHazardReporter is additive there, not a
-    // replacement for it; locally (no GITHUB_ACTIONS), where the built-in
-    // reporter never fires anyway, retryHazardReporter is the only signal.
+    // and what this adds on top of it. Vitest only auto-selects its OWN
+    // built-in reporters when the resolved `reporters` array is EMPTY —
+    // setting one explicitly, unconditionally, silently overrode TWO
+    // separate auto-selections (PR #2049 review, Findings 1 and 4):
+    //   1. The base reporter: vitest's own resolver pushes
+    //      `[isAgent ? 'agent' : 'default', {}]` — 'agent' under an AI
+    //      coding agent (std-env's isAgent, true here under CLAUDECODE —
+    //      also Cursor, Replit, Codex, etc.), 'default' otherwise.
+    //      Hardcoding 'default' in both ternary arms below silently
+    //      downgraded every agent-driven local run.
+    //   2. 'github-actions' (inline PR annotations + the "Flaky Tests"
+    //      $GITHUB_STEP_SUMMARY panel), appended only when GITHUB_ACTIONS
+    //      is 'true'; verify.yml runs `vitest run` directly in server/, so
+    //      suppressing it silenced that panel on every CI run of this
+    //      suite. Reproduced against installed vitest 4.1.9: with an empty
+    //      `reporters` config and GITHUB_ACTIONS=true, both an inline
+    //      `::error file=…,line=…::…` annotation and a rendered "Flaky
+    //      Tests" summary appear; with the old unconditional
+    //      `['default', retryHazardReporter]`, neither did.
+    // Mirroring both selections below keeps this config's behaviour
+    // identical to what an EMPTY `reporters` array would already do, plus
+    // retryHazardReporter layered on top — never a downgrade from it. No
+    // sibling config has this bug: vitest.config.slow.ts,
+    // vitest.config.golden.ts and the root frontend config all leave
+    // `reporters` unset.
     reporters:
       process.env.GITHUB_ACTIONS === 'true'
-        ? ['default', 'github-actions', retryHazardReporter]
-        : ['default', retryHazardReporter],
+        ? [isAgent ? 'agent' : 'default', 'github-actions', retryHazardReporter]
+        : [isAgent ? 'agent' : 'default', retryHazardReporter],
   },
 });
