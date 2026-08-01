@@ -67,18 +67,39 @@ describe('engine-device-state', () => {
    dependency) — it directly encodes the rule text for the one file this PR
    touches. */
 describe('engine-device-state.ts never imports from routes/ (#2013 layering guard)', () => {
-  it('this module has no static, dynamic, or type-only import from ../routes/', () => {
+  it('this module has no literal-quoted static, dynamic, or type-only import from ../routes/ (residual gaps in the comment below)', () => {
     const thisFile = fileURLToPath(import.meta.url).replace(/\.test\.ts$/, '.ts');
     const src = readFileSync(thisFile, 'utf8');
     /* Independent review (PR #2048, finding F5) — the prior two-regex form
        used `['"]` only, so a dynamic `import(`../routes/...`)` (backtick
-       template literal, no interpolation) sailed through undetected. Proven
-       live: `gpu/sidecar-vram-sample.ts:41` already reaches a route module
-       this exact way, so backtick dynamic import is the established local
-       idiom, not an exotic case. Collapsed to ONE regex over the whole
-       quote class (`'`, `"`, and backtick) instead of separately matching
-       `from '...'` / `import('...')` shapes — a path preceded by EITHER
-       keyword, in any of the three quote styles, now trips it. */
+       template literal, no interpolation) sailed through undetected.
+       `gpu/sidecar-vram-sample.ts:41` establishes that a dynamic import INTO
+       `routes/` is itself a live local pattern (`await
+       import('../routes/sidecar-health.js')`, single-quoted) — the backtick
+       variant of that same shape was simply unguarded, a hole worth closing
+       on its own merits. It is NOT because a backtick precedent exists
+       anywhere in this codebase: it doesn't (`git grep -n 'import(`' --
+       server/src/gpu/` returns nothing) — an earlier draft of this comment
+       claimed line 41 used a backtick too, which was false and has been
+       corrected. Collapsed to ONE regex over the whole quote class (`'`,
+       `"`, and backtick) instead of separately matching `from '...'` /
+       `import('...')` shapes — a path preceded by EITHER keyword, in any of
+       the three quote styles, now trips it.
+
+       Residual (independent review, PR #2048, finding F5, follow-up) — this
+       is a literal-string regex, not an import-graph tool, so it still stays
+       silent on: string concatenation (`'../rou' + 'tes/'`), an interpolated
+       template segment, a variable/constant holding the path, a backslash
+       separator (`..\\routes\\`), a path reached via `../../routes/`, a
+       no-trailing-slash `'../routes'`, and any re-export chained through an
+       intermediate module — this guard reads only this one file. It is
+       fail-closed the other way too: the regex also fires on a COMMENT that
+       happens to contain a backtick path like `` `../routes/x` `` — this
+       repo's own idiom for citing a path in prose — so a maintainer
+       documenting this very rule in a comment using that shape would trip a
+       false positive. Today this file's own comments only ever write
+       `` `routes/…` `` (no leading `../`), so it currently passes, but that's
+       incidental, not guaranteed by anything the regex enforces. */
     const hit = /['"`]\.\.\/routes\//.test(src);
     expect(hit).toBe(false);
   });
