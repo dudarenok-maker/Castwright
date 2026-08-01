@@ -71,23 +71,29 @@ const maxWorkers = lowConcurrency ? 1 : 2;
    the full writeup and the `--retry=0` verification convention this
    reporter exists to surface.
 
-   Deliberately NOT flipped to retry:0 or scoped per-file here. Both were
-   considered and rejected for THIS change:
-   - Global removal is unsafe blind, and not hypothetical: surveyed
-     2026-08-01 via `npx vitest run --retry=0` against this exact suite on
-     unmodified `main` — it reddens `src/routes/voices.test.ts` ("writes
-     ONLY to the anchor book's series..."), deterministically, on the FIRST
-     attempt, every time. That test is currently green in every gating run
-     purely because retry:1 papers over it. Dropping retry here would
-     redden every lane's CI on a file this change does not own.
-   - Per-file retry:0 (e.g. on the file-lock.ts spec that surfaced #2028)
-     requires editing files under server/src/**, which this change does
-     not own either.
-   So retry:1 stays, and the gap is closed by observability instead: any
-   test that fails on attempt 1 and only passes after a retry prints a
-   `[retry-hazard]` line below, naming the file and test, so it can no
-   longer pass silently. A human then re-runs it with `--retry=0` to judge
-   whether it's a genuine transient (route through quarantinedIt,
+   #2028's Acceptance offered two deliberate options, Narrow or Global — this
+   PR ships **Narrow**, not neither:
+   - Narrow: server/src/workspace/file-lock.test.ts's `describe('withKeyLock',
+     { retry: 0 }, ...)` — withKeyLock's module-level `chains` Map is exactly
+     the shape #2028 describes, and that file is where the hazard was found
+     landing #2001. A red-phase test against that state is never silently
+     rescued by the suite-wide retry.
+   - Global was surveyed rather than assumed, and rejected on the evidence:
+     surveyed 2026-08-01 via `npx vitest run --retry=0` against this exact
+     suite on unmodified `main` — it reddens `src/routes/voices.test.ts`
+     ("writes ONLY to the anchor book's series..."), deterministically, on
+     the FIRST attempt, every time. That test is currently green in every
+     gating run purely because retry:1 papers over it, and that leak is
+     unrelated to this change and out of scope to fix here — filed as
+     #2046. Dropping retry suite-wide would have reddened every lane's CI on
+     that file until #2046 is root-caused.
+   retryHazardReporter below is additive on top of Narrow, not a replacement
+   for it: Narrow covers file-lock.test.ts specifically; every OTHER file
+   still runs under the suite-wide retry:1, and for those, any test that
+   fails on attempt 1 and only passes after a retry prints a `[retry-hazard]`
+   line below, naming the file and test, so it can no longer pass silently
+   there either. A human then re-runs it with `--retry=0` to judge whether
+   it's a genuine transient (route through quarantinedIt,
    docs/testing/flaky-register.md) or a red-phase test the retry hid (this
    issue's failure mode) — exactly the survey the "drop retry globally"
    option needed, now running on every CI invocation instead of once by
