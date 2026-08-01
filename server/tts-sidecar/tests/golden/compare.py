@@ -376,7 +376,24 @@ def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsil
     sibling lane). Returns `None` when there is nothing to report: `existing`
     is `None` (first bless, nothing to compare against) or every leaf is
     identical. Lists every moved leaf, not just the largest, so an operator
-    scanning bless output sees exactly which keys moved."""
+    scanning bless output sees exactly which keys moved.
+
+    **The label reflects the ACTUAL move, not the caller's intent** (fix for
+    an independent review finding on #2045 F1 itself: the first revision
+    unconditionally printed "within epsilon ... (noise)" for every move this
+    function was called on, including a move `bless_guard_thresholds` only
+    let through because `allow_rebless_thresholds` was set — a window-sized
+    or larger move, mislabelled as noise the one place an operator would
+    have caught it). This function only ever runs on a move the guard already
+    decided to WRITE, but that decision has two distinct reasons: the move
+    was genuinely `<= epsilon` (real noise), or it was forced through despite
+    being beyond epsilon via the flag. Recomputing `max(moved.values()) <=
+    epsilon` here — independently of whatever the guard decided — tells the
+    two apart and labels accordingly: `within epsilon` for a real noise-sized
+    move, or an unmistakably loud `BEYOND epsilon ... (FORCED by
+    GOLDEN_REBLESS_THRESHOLDS)` for a forced one, so the flag's one intended
+    use (a genuine `tolerances`-only re-bless) can never quietly launder an
+    unrelated large identity/loudness move as noise."""
     if existing is None:
         return None
     diffs = _leaf_diffs(existing, computed)
@@ -384,7 +401,10 @@ def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsil
     if not moved:
         return None
     parts = ", ".join(f"{k}: +/-{v:.4f}" for k, v in sorted(moved.items(), key=lambda kv: -kv[1]))
-    return f"within epsilon {epsilon} (noise) -- {parts}"
+    max_diff = max(moved.values())
+    if max_diff <= epsilon:
+        return f"within epsilon {epsilon} (noise) -- {parts}"
+    return f"BEYOND epsilon {epsilon} (FORCED by GOLDEN_REBLESS_THRESHOLDS) -- {parts}"
 
 
 def bless_guard_thresholds(

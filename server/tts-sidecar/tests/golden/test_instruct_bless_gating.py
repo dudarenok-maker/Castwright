@@ -231,7 +231,15 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
 
 
-def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path) -> None:
+def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path, capsys) -> None:
+    """#2045 F1 defect (independent review of the shipped fix): this is a
+    WINDOW-sized move (0.05, well beyond `IDENTITY_COSINE_EPSILON`) that only
+    gets written because `GOLDEN_REBLESS_THRESHOLDS=1` forced the guard
+    through -- the shipped `describe_measurement_move` unconditionally
+    labelled every echoed move "within epsilon ... (noise)" regardless of
+    whether it actually was, so this exact scenario printed a large,
+    flag-forced re-centre as if it were routine noise, the one line meant to
+    make it loud. Must say BEYOND/FORCED, never "noise"."""
     differing_identity = {
         "anchor": "neutral",
         "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
@@ -247,6 +255,12 @@ def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path) -> None
 
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["identity"]["cosine"]["whisper"] == 0.01
+    out = capsys.readouterr().out
+    assert "identity" in out and "cosine.whisper" in out
+    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_THRESHOLDS" in out, (
+        f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
+    )
+    assert "(noise)" not in out
 
 
 def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_path, capsys) -> None:
@@ -322,7 +336,10 @@ def test_bless_accepts_and_echoes_a_noise_sized_loudness_dbfs_move(monkeypatch, 
     )
 
 
-def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path) -> None:
+def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path, capsys) -> None:
+    """#2045 F1 defect (independent review of the shipped fix): a 1.0 dB
+    move -- beyond `LOUDNESS_DBFS_EPSILON` (0.4) -- only written because the
+    flag forced it through. Must be echoed BEYOND/FORCED, never as noise."""
     differing_loudness = {"whisper": -29.0, "neutral": -20.0}
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=differing_loudness
@@ -334,6 +351,12 @@ def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path) ->
 
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["loudness_dbfs"]["whisper"] == -30.0
+    out = capsys.readouterr().out
+    assert "loudness_dbfs" in out and "whisper" in out
+    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_THRESHOLDS" in out, (
+        f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
+    )
+    assert "(noise)" not in out
 
 
 # ── #2035 follow-up: the previously_blessed probe must not be `identity` ───
