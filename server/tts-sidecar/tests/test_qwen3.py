@@ -478,12 +478,18 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_design_audition(
 
     stop = threading.Thread(target=engine.unload, daemon=True)
     stop.start()
-    stop.join(0.5)
-    assert not stop.is_alive(), (
-        "unload() was blocked behind the parked audition-forward Base load"
-    )
-
-    release.set()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked audition-forward Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — otherwise it stays wedged in `release.wait(5)` and a
+        # later test can trip over its leaked side effects (a false red that
+        # misdirects a bisect of the real failure). See finding 5, PR #2064
+        # review.
+        release.set()
     t.join(5)
     assert not t.is_alive(), "design_voice thread did not finish within 5s"
     assert design_errors == [], f"design_voice raised: {design_errors!r}"
@@ -649,12 +655,15 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_clone_voice(
 
     stop = threading.Thread(target=engine.unload, daemon=True)
     stop.start()
-    stop.join(0.5)
-    assert not stop.is_alive(), (
-        "unload() was blocked behind the parked clone_voice Base load"
-    )
-
-    release.set()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked clone_voice Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
     t.join(5)
     assert not t.is_alive(), "clone_voice thread did not finish within 5s"
     assert clone_errors == [], f"clone_voice raised: {clone_errors!r}"
@@ -729,12 +738,15 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_distil(
 
     stop = threading.Thread(target=engine.unload, daemon=True)
     stop.start()
-    stop.join(0.5)
-    assert not stop.is_alive(), (
-        "unload() was blocked behind the parked mint_variant distil Base load"
-    )
-
-    release.set()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked mint_variant distil Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
     t.join(5)
     assert not t.is_alive(), "mint_variant thread did not finish within 5s"
     assert mint_errors == [], f"mint_variant raised: {mint_errors!r}"
@@ -825,12 +837,15 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_audition(
 
     stop = threading.Thread(target=engine.unload, daemon=True)
     stop.start()
-    stop.join(0.5)
-    assert not stop.is_alive(), (
-        "unload() was blocked behind the parked mint_variant audition Base load"
-    )
-
-    release.set()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked mint_variant audition Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
     t.join(5)
     assert not t.is_alive(), "mint_variant thread did not finish within 5s"
     assert mint_errors == [], f"mint_variant raised: {mint_errors!r}"

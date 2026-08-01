@@ -5638,6 +5638,14 @@ class QwenEngine(Engine):
                         # itself hold `_synth_lock` for the whole cold load.
                         design = self._design
                         if design is None:
+                            # see #2070 — `unload_design()` is called
+                            # unconditionally from synthesize()/
+                            # synthesize_batch() (not gated on
+                            # `_design_in_flight`), so an ordinary render of
+                            # another voice can land here mid-design, and the
+                            # gap this raise closes spans a full 0.6B cold
+                            # load (seconds to tens of seconds), not a narrow
+                            # Stop-only race.
                             raise RuntimeError(
                                 "Qwen VoiceDesign model was unloaded before "
                                 "this design could render — reload it and "
@@ -5787,12 +5795,19 @@ class QwenEngine(Engine):
         # `_ensure_base_loaded` can run a full cold load (unbounded — a real
         # weights pull), and `/unload` also takes `_synth_lock`, so doing that
         # pull INSIDE the lock would hold a Stop off for its whole duration.
-        # Unlike synthesize()/synthesize_batch, clone_voice is a user-initiated
-        # ONE-SHOT action with no `withTtsRetry` net on the Node side, so a
-        # raise here surfaces straight to the user for an extremely narrow
-        # race window. Keep the old "reload and proceed" shape instead — the
-        # in-lock re-ensure below is a cheap no-op on the (overwhelming)
-        # common path and only pays the cold-reload cost in the rare gap.
+        # The raise-vs-silent-reload split across these #2021/#2022 sites does
+        # NOT track "has a `withTtsRetry` net" — that net only exists on the
+        # Node side for synthesize()/synthesize_batch()
+        # (server/src/tts/synthesise-chapter.ts), yet design_voice's design-
+        # and audition-forward and mint_variant's 1.7B anchoring forward all
+        # raise despite having none either. The real discriminator is whether
+        # the site already had a pre-ensure BEFORE #2021: sites that did
+        # (design_voice's two forwards, mint_variant's 1.7B forward) keep
+        # raising on a losing race; sites that never had one — clone_voice
+        # here, and mint_variant's distil/audition phases below — keep the
+        # old "reload and proceed" shape. Keep it here too: the in-lock
+        # re-ensure below is a cheap no-op on the (overwhelming) common path
+        # and only pays the cold-reload cost in the rare gap.
         self._ensure_base_loaded(device=device)
         with self._synth_lock:
             self._ensure_base_loaded(device=device)
@@ -5961,10 +5976,18 @@ class QwenEngine(Engine):
         _phase("distilling")
         _t = time.perf_counter()
         # Re-ensure BEFORE the lock (#2021 — same rationale as clone_voice):
-        # mint_variant is a user-initiated one-shot with no `withTtsRetry` net,
-        # so this stays "reload and proceed" (silent in-lock re-ensure) rather
-        # than raise-on-race, while still moving the common-case cold load out
-        # from under `_synth_lock`.
+        # the split here isn't "has a `withTtsRetry` net" (mint_variant has
+        # none on the Node side, same as clone_voice) — it's whether THIS
+        # site already had a pre-ensure before #2021. This distil phase (and
+        # the audition phase ~40 lines below) never did, so both keep "reload
+        # and proceed" (silent in-lock re-ensure) rather than raise-on-race,
+        # while still moving the common-case cold load out from under
+        # `_synth_lock`. Note the consequence within this one call: the 1.7B
+        # anchoring forward above (around line 5931) already had a pre-ensure
+        # and so RAISES on a losing race, while this distil phase and the
+        # audition phase below silently reload on the same shape of race —
+        # one `mint_variant` call runs two different policies back to back;
+        # don't be surprised by it.
         self._ensure_base_loaded()
         with self._synth_lock:
             self._ensure_base_loaded()
