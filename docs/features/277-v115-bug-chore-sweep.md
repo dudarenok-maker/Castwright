@@ -286,8 +286,17 @@ Two conclusions for Rounds 2 and 3:
   this round; once a half-applied verification mutation was misread as damage,
   and once a mid-cleanup probe file was nearly deleted out from under its owner.
 
-## Round 2 — four lanes, 8 issues (after Round 1 merges)
+## Round 2 — five lanes, 9 issues (after Round 1 merges)
 
+- **#2046** — **SHIPPED.** `voices.test.ts`'s series-scope test was
+  deterministically red under `--retry=0`; three describes performed
+  workspace-wide override writes that legitimately reach the cross-series book
+  but cleaned up only the two same-series ones. Diagnosed as **isolation, not a
+  scope leak** — the received value's qwen slot held an earlier test's name
+  rather than the one the failing test writes, which proves the production
+  `seriesFilter` never touched that book. *Benefit (technical):* removes a red
+  test from behind the retry mask and unblocks #2063 and any future tightening
+  of `retry`. Its own lane — touches one test file, overlapping nothing.
 - **#2011** — an ASR content-QA failure aborts the whole chapter render; the
   structurally identical embed pass 60 lines below is explicitly non-fatal.
   *Benefit (user):* a QA hiccup stops costing an entire chapter.
