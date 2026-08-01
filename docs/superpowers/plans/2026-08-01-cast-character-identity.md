@@ -20,6 +20,20 @@ Playwright (e2e), Express routes.
 [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../specs/2026-08-01-cast-character-identity-design.md).
 Read it before Task 1 — the section references below are to that file.
 
+## How to read the test snippets
+
+Some test bodies below are given as **named cases with the fixture and the
+expectation spelled out in comments**, not as runnable code — specifically in
+Tasks 4, 5 and 12, where the fixture must be built with the harness the
+neighbouring test file already uses (`synthesise-chapter`'s chapter/cast
+builders, `build-synth-replacement`'s segFile fixtures).
+
+**Those comments are a specification, not the deliverable.** Ship real
+assertions. A test whose body is only comments, or that asserts nothing, is a
+defect and will be rejected at review. Read the sibling test file first, reuse
+its fixture builders, and turn each `// EXPECT:` line into an actual `expect`.
+Every other task's snippets are runnable as written and should be used verbatim.
+
 ## Global Constraints
 
 - **Never edit `src/lib/api-types.ts` by hand.** It is generated: change
