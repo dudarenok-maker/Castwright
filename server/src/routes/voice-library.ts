@@ -495,8 +495,14 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    was a false negative in the cast-time check, not a cosmetic one.
    Staleness of a failed artifact is meaningless: nothing will re-derive it
    until the failure itself is cleared (see the retry route), so there is
-   nothing to report as merely "stale" underneath it. */
-function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
+   nothing to report as merely "stale" underneath it.
+
+   Plan 276 Task 8 — exported so the co-oracle contract test
+   (`server/src/tts/clone-readiness-contract.test.ts`) can route its client
+   side through the REAL transform rather than a reimplementation. See that
+   file's header for why a reimplementation would be blind to exactly the
+   class of bug this function exists to fix. */
+export function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
   let result = entry;
   const qwen = entry.engines.qwen;
   if (qwen && qwen.status !== 'failed' && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
