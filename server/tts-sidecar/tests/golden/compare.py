@@ -356,10 +356,19 @@ def bless_guard_thresholds(
     its `label` key (e.g. a hand-resolved merge conflict) — the exact #2003
     shape, reproduced inside this guard by an earlier revision of this fix.
     `existing is None` alone cannot tell those apart, so the caller passes
-    `previously_blessed` — its own `bool(baseline.get("identity"))`, the
-    file's existing definition of "has this baseline ever been blessed"
-    (`test_instruct_golden.py`'s unblessed-SKIP already uses that same
-    signal, for all three guarded fields, `identity` included). A
+    `previously_blessed` — its own `bool(baseline.get("rtf"))`, the file's
+    definition of "has this baseline ever been blessed" for ALL THREE
+    guarded fields. It deliberately does NOT read `baseline.get("identity")`
+    for this: an earlier revision of this fix did, and independent review
+    found that circular for `label="identity"` specifically — that field IS
+    one of the three being guarded, so a baseline that lost exactly its
+    `identity` key (the #2003 scenario, applied to this field) made the
+    probe itself read as "never blessed" and the guard never fired. `rtf`
+    is written unconditionally by every bless and is never itself a guarded
+    field, so it has no equivalent blind spot. (`test_instruct_golden.py`'s
+    unblessed-SKIP is a separate question — "is there recorded data to
+    assert against" — and still reads `baseline.get("identity")` directly;
+    that has no corresponding circularity and is unaffected.) A
     never-blessed baseline (`previously_blessed=False`) is accepted with no
     flag, same as before; a previously-blessed baseline missing `label`
     (`previously_blessed=True`) now fails CLOSED via the same flag as any

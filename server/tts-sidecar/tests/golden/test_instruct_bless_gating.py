@@ -35,22 +35,30 @@ def _write_baseline(
     tolerances: dict | None,
     identity: dict | None = None,
     loudness_dbfs: dict | None = None,
+    omit_identity: bool = False,
 ) -> Path:
     """`blessed` controls whether the fixture carries the `identity` /
     `loudness_dbfs` / `rtf` measurement blocks -- `_bless()` reads
-    `baseline.get("identity")` as its "has this baseline ever been blessed"
-    signal (the same one `test_live_instruct_golden`'s unblessed-SKIP
-    uses), so `blessed=False` is what a GENUINE never-before-blessed
-    baseline looks like, and `blessed=True, tolerances=None` is the
-    #2003-shaped hole: previously blessed, but its `tolerances` key was
-    lost (e.g. a hand-resolved merge conflict). Conflating the two was the
-    bug this file's tests originally pinned as intended behaviour.
+    `baseline.get("rtf")` as its "has this baseline ever been blessed"
+    signal (deliberately NOT `identity` -- see `_bless()`'s own docstring
+    for why that was circular for `label="identity"` specifically, the
+    defect independent review found in #2035's first revision), so
+    `blessed=False` is what a GENUINE never-before-blessed baseline looks
+    like, and `blessed=True, tolerances=None` is the #2003-shaped hole:
+    previously blessed, but its `tolerances` key was lost (e.g. a
+    hand-resolved merge conflict). Conflating the two was the bug this
+    file's tests originally pinned as intended behaviour.
 
     `identity`/`loudness_dbfs` default to exactly what `_measured()` below
     computes, so a test that only varies `rtf` (the pre-#2035 tests) still
     exercises a baseline that is self-consistent on the OTHER two guarded
     fields and doesn't spuriously need the flag for them. A test targeting
-    the identity/loudness_dbfs guard passes an explicitly DIFFERENT dict."""
+    the identity/loudness_dbfs guard passes an explicitly DIFFERENT dict.
+    `omit_identity=True` drops `identity` specifically while keeping
+    `loudness_dbfs`/`rtf`/`tolerances` -- the #2003-shaped hole applied to
+    `identity` itself, which is the scenario that exposed the circular
+    probe: `rtf` (still present) correctly reports "previously blessed"
+    even though `identity` (the field under test) is the one that's gone."""
     path = tmp_path / "instruct-baseline.json"
     data: dict = {
         "description": "test fixture",
@@ -58,11 +66,12 @@ def _write_baseline(
         "model": "1.7b",
     }
     if blessed:
-        data["identity"] = identity if identity is not None else {
-            "anchor": "neutral",
-            "cosine": {"whisper": 0.01, "sad": 0.005, "excited": 0.005, "angry": 0.007},
-            "max": 0.01,
-        }
+        if not omit_identity:
+            data["identity"] = identity if identity is not None else {
+                "anchor": "neutral",
+                "cosine": {"whisper": 0.01, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+                "max": 0.01,
+            }
         data["loudness_dbfs"] = loudness_dbfs if loudness_dbfs is not None else {
             "whisper": -30.0,
             "neutral": -20.0,
@@ -259,3 +268,51 @@ def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path) ->
 
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["loudness_dbfs"]["whisper"] == -30.0
+
+
+# ── #2035 follow-up: the previously_blessed probe must not be `identity` ───
+# itself, or the identity guard can never detect its own #2003-shaped hole.
+
+
+def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_identity(
+    monkeypatch, tmp_path
+) -> None:
+    """The #2003-shaped hole, applied to `identity` itself (found by
+    independent review of #2035's first revision): the FIRST fix used
+    `previously_blessed = bool(baseline.get("identity"))` as the probe for
+    ALL three guarded fields. That is circular for `label="identity"` --
+    it IS the field being guarded, so a baseline that lost exactly its
+    `identity` key (this fixture: `omit_identity=True`, everything else
+    populated) makes the probe itself read "never blessed" and the guard
+    for `identity` never fires, silently re-recording it from whatever this
+    run measured. `rtf` (still present here) is the correct probe -- it is
+    written unconditionally by every bless and is never itself guarded, so
+    it has no equivalent blind spot. Fixed by reading `baseline.get("rtf")`
+    instead. Must refuse and leave the file completely untouched, same
+    all-or-nothing shape as every other guard refusal in this file."""
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_identity=True
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    before = path.read_bytes()
+
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+        instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only identity is missing
+
+    assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
+
+
+def test_bless_allows_a_previously_blessed_missing_identity_with_the_flag(
+    monkeypatch, tmp_path
+) -> None:
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_identity=True
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+
+    instruct._bless(_measured(rtf=0.5))
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["identity"]["cosine"]["whisper"] == 0.01

@@ -193,13 +193,26 @@ def _bless(measured: dict) -> None:
     completely untouched -- the same all-or-nothing shape as
     `test_golden_regression._bless`'s G1/G2.
 
-    `previously_blessed=bool(baseline.get("identity"))` disambiguates a
-    genuine first bless (no `identity` recorded yet) from a previously
-    blessed baseline that lost one of these keys (e.g. a hand-resolved
-    merge conflict) -- `existing is None` alone cannot tell those apart, and
-    conflating them was the exact #2003 shape reproduced inside this guard.
-    `baseline.get("identity")` is the same signal `test_live_instruct_golden`
-    already uses below for its own unblessed-SKIP."""
+    `previously_blessed=bool(baseline.get("rtf"))` disambiguates a genuine
+    first bless (nothing recorded yet) from a previously blessed baseline
+    that lost one of the GUARDED keys (e.g. a hand-resolved merge conflict)
+    -- `existing is None` alone cannot tell those apart, and conflating them
+    was the exact #2003 shape reproduced inside this guard.
+
+    The probe deliberately reads `rtf`, NOT `identity` (a bug an earlier
+    revision of this fix shipped, found by independent review): `rtf` is
+    written unconditionally by every bless and is never itself one of the
+    three guarded fields, so it is safe to use as a "has this baseline ever
+    been blessed" signal for ALL of them, `identity` included. Using
+    `baseline.get("identity")` as the probe was circular specifically for
+    `label="identity"` -- that field IS the one being guarded, so a baseline
+    that lost exactly its `identity` key (the #2003 scenario, applied to
+    this field) made the probe read as a genuine first bless and the guard
+    never fired, silently re-recording identity from whatever this box
+    measured. `test_live_instruct_golden`'s own unblessed-SKIP below still
+    reads `baseline.get("identity")` directly -- that is a different
+    question ("is there recorded data to assert against") with no
+    corresponding circularity, so it is unaffected."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
@@ -212,7 +225,7 @@ def _bless(measured: dict) -> None:
     computed_loudness = measured["loudness_dbfs"]
 
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
-    previously_blessed = bool(baseline.get("identity"))
+    previously_blessed = bool(baseline.get("rtf"))
     for label, existing_val, computed_val in (
         ("tolerances", baseline.get("tolerances"), computed_tolerances),
         ("identity", baseline.get("identity"), computed_identity),
