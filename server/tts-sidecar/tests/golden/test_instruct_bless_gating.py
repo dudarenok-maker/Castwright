@@ -36,18 +36,21 @@ def _write_baseline(
     identity: dict | None = None,
     loudness_dbfs: dict | None = None,
     omit_identity: bool = False,
+    omit_rtf: bool = False,
 ) -> Path:
     """`blessed` controls whether the fixture carries the `identity` /
     `loudness_dbfs` / `rtf` measurement blocks -- `_bless()` reads
-    `baseline.get("rtf")` as its "has this baseline ever been blessed"
-    signal (deliberately NOT `identity` -- see `_bless()`'s own docstring
-    for why that was circular for `label="identity"` specifically, the
-    defect independent review found in #2035's first revision), so
-    `blessed=False` is what a GENUINE never-before-blessed baseline looks
-    like, and `blessed=True, tolerances=None` is the #2003-shaped hole:
-    previously blessed, but its `tolerances` key was lost (e.g. a
-    hand-resolved merge conflict). Conflating the two was the bug this
-    file's tests originally pinned as intended behaviour.
+    `any(k in baseline for k in ("rtf", "identity", "loudness_dbfs",
+    "tolerances"))` as its "has this baseline ever been blessed" signal
+    (#2045 F5; NOT `identity` alone -- circular for `label="identity"`,
+    the defect #2035's first revision shipped; NOT `rtf` alone either -- a
+    narrower but still real single-key blind spot the SECOND revision
+    shipped, since a merge conflict is just as likely to drop `rtf` as
+    `identity`), so `blessed=False` is what a GENUINE never-before-blessed
+    baseline looks like, and `blessed=True, tolerances=None` is the
+    #2003-shaped hole: previously blessed, but its `tolerances` key was
+    lost (e.g. a hand-resolved merge conflict). Conflating the two was the
+    bug this file's tests originally pinned as intended behaviour.
 
     `identity`/`loudness_dbfs` default to exactly what `_measured()` below
     computes, so a test that only varies `rtf` (the pre-#2035 tests) still
@@ -56,9 +59,16 @@ def _write_baseline(
     the identity/loudness_dbfs guard passes an explicitly DIFFERENT dict.
     `omit_identity=True` drops `identity` specifically while keeping
     `loudness_dbfs`/`rtf`/`tolerances` -- the #2003-shaped hole applied to
-    `identity` itself, which is the scenario that exposed the circular
-    probe: `rtf` (still present) correctly reports "previously blessed"
-    even though `identity` (the field under test) is the one that's gone."""
+    `identity` itself, the scenario that exposed the FIRST circular probe.
+    Under the current `any(...)` probe this fixture correctly reports
+    "previously blessed" via the surviving `rtf`/`loudness_dbfs`/
+    `tolerances` keys, same as it did under the narrower `rtf`-only probe
+    -- this fixture shape doesn't distinguish the two; see
+    `omit_rtf` below for the fixture that does. `omit_rtf=True` drops
+    `rtf` specifically while keeping `identity`/`loudness_dbfs`/
+    `tolerances` -- the scenario the SECOND (still single-key) probe got
+    wrong: `bool(baseline.get("rtf"))` alone reads "never blessed" here
+    even though three of the four guarded keys are intact."""
     path = tmp_path / "instruct-baseline.json"
     data: dict = {
         "description": "test fixture",
@@ -76,7 +86,8 @@ def _write_baseline(
             "whisper": -30.0,
             "neutral": -20.0,
         }
-        data["rtf"] = {"batched": 0.5}
+        if not omit_rtf:
+            data["rtf"] = {"batched": 0.5}
     if tolerances is not None:
         data["tolerances"] = tolerances
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -371,3 +382,54 @@ def test_bless_allows_a_previously_blessed_missing_identity_with_the_flag(
 
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["identity"]["cosine"]["whisper"] == 0.01
+
+
+# ── #2045 F5: the `rtf`-only probe removed the CIRCULARITY but kept a ──────
+# single-key blind spot -- losing `rtf` alone must still be correctly read
+# as "previously blessed" by the OTHER fields' guards. Note this can only be
+# observed on a field whose OWN key is also missing (the `existing is None`
+# branch is the only branch that consults `previously_blessed` at all) --
+# so these fixtures omit `identity` (or `loudness_dbfs`) TOGETHER WITH
+# `rtf`, and check THAT field's guard, not `tolerances` (whose key survives
+# intact here and so never even reaches the `previously_blessed` check).
+
+
+def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_both_rtf_and_identity(
+    monkeypatch, tmp_path
+) -> None:
+    """Under the narrower `bool(baseline.get("rtf"))` probe (#2045 F1's
+    revision, before F5), a baseline that lost BOTH `rtf` and `identity` --
+    while `loudness_dbfs`/`tolerances` survive -- read as "never blessed"
+    (`baseline.get("rtf")` is None), so the identity guard's `existing is
+    None` branch took the no-op first-bless path and silently re-recorded
+    identity with no flag, even though this baseline plainly WAS blessed
+    before (evidenced by the surviving `loudness_dbfs`/`tolerances`). The
+    current `any(...)` probe reads "previously blessed" via those surviving
+    keys and refuses correctly."""
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_rtf=True, omit_identity=True
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    before = path.read_bytes()
+
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+        instruct._bless(_measured(rtf=0.5))  # rtf pinned so tolerances/loudness_dbfs stay quiet
+
+    assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
+
+
+def test_bless_allows_a_previously_blessed_missing_both_rtf_and_identity_with_the_flag(
+    monkeypatch, tmp_path
+) -> None:
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_rtf=True, omit_identity=True
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+
+    instruct._bless(_measured(rtf=0.5))
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["identity"]["cosine"]["whisper"] == 0.01  # the previously-missing key is now written
+    assert written["rtf"]["batched"] == 0.5  # ditto

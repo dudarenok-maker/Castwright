@@ -461,19 +461,18 @@ def bless_guard_thresholds(
     its `label` key (e.g. a hand-resolved merge conflict) — the exact #2003
     shape, reproduced inside this guard by an earlier revision of this fix.
     `existing is None` alone cannot tell those apart, so the caller passes
-    `previously_blessed` — its own `bool(baseline.get("rtf"))`, the file's
-    definition of "has this baseline ever been blessed" for ALL THREE
-    guarded fields. It deliberately does NOT read `baseline.get("identity")`
-    for this: an earlier revision of this fix did, and independent review
-    found that circular for `label="identity"` specifically — that field IS
-    one of the three being guarded, so a baseline that lost exactly its
-    `identity` key (the #2003 scenario, applied to this field) made the
-    probe itself read as "never blessed" and the guard never fired. `rtf`
-    is written unconditionally by every bless and is never itself a guarded
-    field, so it has no equivalent blind spot. (`test_instruct_golden.py`'s
-    unblessed-SKIP is a separate question — "is there recorded data to
-    assert against" — and still reads `baseline.get("identity")` directly;
-    that has no corresponding circularity and is unaffected.) A
+    `previously_blessed` — see `test_instruct_golden.py`'s `_bless()` for
+    the exact probe and its history (#2045 F1/F5): an early revision read
+    `bool(baseline.get("identity"))`, circular for `label="identity"`
+    specifically since that field IS one of the three being guarded; the
+    next revision narrowed to `bool(baseline.get("rtf"))` alone on the
+    theory that `rtf` is never itself a guarded field, which is true but
+    still left a SINGLE-key blind spot — a merge conflict is exactly as
+    likely to drop `rtf` as `identity`, and losing it alone would fail
+    ALL THREE guards open at once, a WIDER blast radius than the bug just
+    fixed. The current probe is `any(...)` across all four keys
+    (`rtf`/`identity`/`loudness_dbfs`/`tolerances`) — as long as ONE
+    survives a corruption, the probe still reads correctly. A
     never-blessed baseline (`previously_blessed=False`) is accepted with no
     flag, same as before; a previously-blessed baseline missing `label`
     (`previously_blessed=True`) now fails CLOSED via the same flag as any

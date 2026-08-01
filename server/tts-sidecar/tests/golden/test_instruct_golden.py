@@ -211,26 +211,32 @@ def _bless(measured: dict) -> None:
     written, so a refusal on one leaves the file completely untouched -- the
     same all-or-nothing shape as `test_golden_regression._bless`'s G1/G2.
 
-    `previously_blessed=bool(baseline.get("rtf"))` disambiguates a genuine
-    first bless (nothing recorded yet) from a previously blessed baseline
-    that lost one of the GUARDED keys (e.g. a hand-resolved merge conflict)
-    -- `existing is None` alone cannot tell those apart, and conflating them
-    was the exact #2003 shape reproduced inside this guard.
+    `previously_blessed` disambiguates a genuine first bless (nothing
+    recorded yet) from a previously blessed baseline that lost one of the
+    GUARDED keys (e.g. a hand-resolved merge conflict) -- `existing is None`
+    alone cannot tell those apart, and conflating them was the exact #2003
+    shape reproduced inside this guard.
 
-    The probe deliberately reads `rtf`, NOT `identity` (a bug an earlier
-    revision of this fix shipped, found by independent review): `rtf` is
-    written unconditionally by every bless and is never itself one of the
-    three guarded fields, so it is safe to use as a "has this baseline ever
-    been blessed" signal for ALL of them, `identity` included. Using
-    `baseline.get("identity")` as the probe was circular specifically for
-    `label="identity"` -- that field IS the one being guarded, so a baseline
-    that lost exactly its `identity` key (the #2003 scenario, applied to
-    this field) made the probe read as a genuine first bless and the guard
-    never fired, silently re-recording identity from whatever this box
-    measured. `test_live_instruct_golden`'s own unblessed-SKIP below still
-    reads `baseline.get("identity")` directly -- that is a different
-    question ("is there recorded data to assert against") with no
-    corresponding circularity, so it is unaffected."""
+    **#2045 F5**: the probe is `any(k in baseline for k in ("rtf",
+    "identity", "loudness_dbfs", "tolerances"))` -- ANY of the four,
+    not one. An earlier revision of this fix used `bool(baseline.
+    get("identity"))`, which independent review found circular for
+    `label="identity"` specifically (that field IS one of the three being
+    guarded, so losing exactly `identity` made the probe read "never
+    blessed" and the identity guard never fired). The very next revision
+    narrowed the probe to `bool(baseline.get("rtf"))` alone on the theory
+    that `rtf` is never itself a guarded field -- true, but STILL a single
+    key: a merge conflict is exactly as likely to drop `rtf` as `identity`,
+    and dropping `rtf` alone would have made ALL THREE guards read "never
+    blessed" simultaneously, a WIDER blast radius than the bug it fixed
+    (merely a less likely trigger). `any(...)` across all four closes that:
+    as long as ONE of them survives a corruption, every guard's probe still
+    correctly reads "previously blessed". `test_live_instruct_golden`'s own
+    unblessed-SKIP below still reads `baseline.get("identity")` directly --
+    that answers a DIFFERENT question ("is there recorded data to assert
+    against", not "is a re-bless of a specific field safe") with no
+    corresponding circularity or blind spot, so it is deliberately left as
+    is rather than aligned to the same probe."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
@@ -243,7 +249,7 @@ def _bless(measured: dict) -> None:
     computed_loudness = measured["loudness_dbfs"]
 
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
-    previously_blessed = bool(baseline.get("rtf"))
+    previously_blessed = any(k in baseline for k in ("rtf", "identity", "loudness_dbfs", "tolerances"))
     # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
     # equality is correct there, see this function's own docstring above.
     guard_specs = (
@@ -296,6 +302,18 @@ def test_live_instruct_golden():
         pytest.skip("GOLDEN_BLESS set — recorded instruct-baseline.json (not asserting this run).")
 
     baseline = _load_json(BASELINE_PATH)
+    # #2045 F5: this reads `identity` specifically, NOT `_bless()`'s
+    # `any(...)` probe above -- deliberately, not an oversight. `_bless()`'s
+    # probe answers "has this baseline EVER been blessed" (any one of the
+    # four guarded/written keys survives a corruption), which is the right
+    # question for deciding whether an omission is a first bless or #2003
+    # corruption. This SKIP answers a narrower, different question: "do I
+    # have `identity` data to assert against" -- the loop right below reads
+    # `tol["identity_cosine_max"]` via `measured["identity"]` and
+    # `base_L = baseline["loudness_dbfs"]`, so `identity` specifically
+    # (not `rtf`, not `tolerances` alone) is what this test needs present.
+    # No circularity here to fix: unlike `_bless()`'s guard, this is a
+    # read-only skip check, not itself deciding whether to write `identity`.
     if not baseline.get("identity"):
         pytest.skip(
             "instruct-baseline.json is unblessed. Bless on a GPU box: "
