@@ -217,21 +217,34 @@ def _bless(measured: dict) -> None:
     alone cannot tell those apart, and conflating them was the exact #2003
     shape reproduced inside this guard.
 
-    **#2045 F5**: the probe is `any(k in baseline for k in ("rtf",
-    "identity", "loudness_dbfs", "tolerances"))` -- ANY of the four,
+    **#2045 F5**: the probe is `any(baseline.get(k) is not None for k in
+    ("rtf", "identity", "loudness_dbfs", "tolerances"))` -- ANY of the four,
     not one. An earlier revision of this fix used `bool(baseline.
     get("identity"))`, which independent review found circular for
     `label="identity"` specifically (that field IS one of the three being
     guarded, so losing exactly `identity` made the probe read "never
-    blessed" and the identity guard never fired). The very next revision
+    blessed" and the identity guard never fired). The next revision
     narrowed the probe to `bool(baseline.get("rtf"))` alone on the theory
     that `rtf` is never itself a guarded field -- true, but STILL a single
     key: a merge conflict is exactly as likely to drop `rtf` as `identity`,
     and dropping `rtf` alone would have made ALL THREE guards read "never
     blessed" simultaneously, a WIDER blast radius than the bug it fixed
-    (merely a less likely trigger). `any(...)` across all four closes that:
+    (merely a less likely trigger). `any(...)` across all four closed that:
     as long as ONE of them survives a corruption, every guard's probe still
-    correctly reads "previously blessed". `test_live_instruct_golden`'s own
+    correctly reads "previously blessed" -- but that revision shipped as
+    `any(k in baseline for k in (...))`, presence rather than truthiness, and
+    independent review of #2045 itself (F5, second pass) found THAT refuses
+    the one shape `instruct-baseline.json`'s own `description` field
+    prescribes for a documented first bless: all four keys present but
+    explicitly `null` ("Unblessed (entries null) => the assert test SKIPs.").
+    `k in baseline` reads that as "previously blessed" and every guard
+    demands the flag for a scaffold that was never blessed at all. The fix
+    is `baseline.get(k) is not None` -- `None` (missing OR explicit null)
+    reads as absent, anything else (including a non-null falsy value, were
+    one ever recorded) reads as present, so it still catches a genuinely
+    DROPPED key (the merge-conflict shape this probe exists for) while no
+    longer refusing an honestly-scaffolded, never-blessed baseline.
+    `test_live_instruct_golden`'s own
     unblessed-SKIP below still reads `baseline.get("identity")` directly --
     that answers a DIFFERENT question ("is there recorded data to assert
     against", not "is a re-bless of a specific field safe") with no
@@ -249,7 +262,9 @@ def _bless(measured: dict) -> None:
     computed_loudness = measured["loudness_dbfs"]
 
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
-    previously_blessed = any(k in baseline for k in ("rtf", "identity", "loudness_dbfs", "tolerances"))
+    previously_blessed = any(
+        baseline.get(k) is not None for k in ("rtf", "identity", "loudness_dbfs", "tolerances")
+    )
     # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
     # equality is correct there, see this function's own docstring above.
     guard_specs = (

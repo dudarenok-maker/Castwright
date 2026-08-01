@@ -504,9 +504,18 @@ def bless_guard_thresholds(
     still left a SINGLE-key blind spot — a merge conflict is exactly as
     likely to drop `rtf` as `identity`, and losing it alone would fail
     ALL THREE guards open at once, a WIDER blast radius than the bug just
-    fixed. The current probe is `any(...)` across all four keys
-    (`rtf`/`identity`/`loudness_dbfs`/`tolerances`) — as long as ONE
-    survives a corruption, the probe still reads correctly. A
+    fixed. That revision shipped as `any(k in baseline for k in (...))`
+    across all four keys — presence, not truthiness — which fixed the
+    single-key blind spot but introduced a different one: `k in baseline`
+    reads an explicit `null` the same as a real value, so the documented
+    first-bless scaffold shape (`instruct-baseline.json`'s own
+    `description`: "Unblessed (entries null) => the assert test SKIPs.")
+    reads as "previously blessed" and every guard refuses a genuine first
+    bless. The current probe is `any(baseline.get(k) is not None for k in
+    (...))` across all four keys (`rtf`/`identity`/`loudness_dbfs`/
+    `tolerances`) — as long as ONE survives a corruption with a non-null
+    value, the probe still reads "previously blessed" correctly, and an
+    all-null scaffold correctly reads as never blessed. A
     never-blessed baseline (`previously_blessed=False`) is accepted with no
     flag, same as before; a previously-blessed baseline missing `label`
     (`previously_blessed=True`) now fails CLOSED via the same flag as any

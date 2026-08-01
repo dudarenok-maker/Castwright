@@ -316,10 +316,12 @@ Design rationale:
   refusing beyond their own bar need `GOLDEN_REBLESS_THRESHOLDS=1`,
   including when a previously-blessed baseline lost one of its keys
   outright (same merge-conflict shape as above; disambiguated from a
-  genuine first bless via `any(k in baseline for k in ("rtf", "identity",
-  "loudness_dbfs", "tolerances"))`, not any single key — a single-key probe
-  was tried twice and both times left a narrower version of the same
-  blind spot), so an unrelated bless (e.g. one only meant to re-record
+  genuine first bless via `any(baseline.get(k) is not None for k in ("rtf",
+  "identity", "loudness_dbfs", "tolerances"))`, not any single key and not
+  bare `k in baseline` — a single-key probe was tried twice and both times
+  left a narrower version of the same blind spot, and a bare presence check
+  refuses the documented first-bless scaffold shape (all four keys present
+  but `null`) — so an unrelated bless (e.g. one only meant to re-record
   Kokoro transcripts) can't silently loosen a throughput/identity/loudness
   ceiling, or re-centre identity/loudness beyond noise, to whatever the
   blessing box happened to measure.

@@ -491,3 +491,49 @@ def test_bless_allows_a_previously_blessed_missing_both_rtf_and_identity_with_th
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["identity"]["cosine"]["whisper"] == 0.01  # the previously-missing key is now written
     assert written["rtf"]["batched"] == 0.5  # ditto
+
+
+# ── #2045 F5 second pass: `k in baseline` refuses the documented first ─────
+# bless (independent review of #2045 itself). `instruct-baseline.json`'s own
+# `description` field prescribes the never-blessed scaffold as all four
+# guarded keys present but explicitly `null` -- "Unblessed (entries null) =>
+# the assert test SKIPs." A bare `k in baseline` presence check reads that
+# shape as "previously blessed" (the keys ARE present, just null), so a
+# genuine first bless of a baseline scaffolded exactly per its own docs
+# demanded the flag on all three guards. The fix reads
+# `baseline.get(k) is not None`.
+
+
+def test_bless_allows_a_first_bless_of_the_documented_all_null_scaffold(monkeypatch, tmp_path) -> None:
+    """Reproduces `instruct-baseline.json`'s own documented "Unblessed"
+    shape verbatim: all four guarded keys present with an explicit `null`
+    value, not omitted. This must be treated exactly like a genuinely
+    never-blessed baseline (`blessed=False` in `_write_baseline`) -- no
+    flag needed, every field written."""
+    path = tmp_path / "instruct-baseline.json"
+    path.write_text(
+        json.dumps(
+            {
+                "description": "Unblessed (entries null) => the assert test SKIPs.",
+                "voice": "qwen-test",
+                "model": "1.7b",
+                "tolerances": None,
+                "identity": None,
+                "loudness_dbfs": None,
+                "rtf": None,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+
+    instruct._bless(_measured(rtf=0.873))
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["tolerances"]["rtf_max"] == 1.31
+    assert written["identity"]["cosine"]["whisper"] == 0.01
+    assert written["loudness_dbfs"]["whisper"] == -30.0
+    assert written["rtf"]["batched"] == 0.873
