@@ -499,6 +499,31 @@ test('bump-version refuses on a conflict marker in --notes-file, even with --for
   }
 });
 
+// PR #2049 review, F5 — the conflict check (#2018) was a NEW early exit
+// added in this same PR, and it originally ran BEFORE pre-flight 6b's
+// mojibake echo: a --notes-file carrying both a conflict marker and an
+// armed `allow` marker died naming only the conflict, with the armed marker
+// never echoed that run — silently regressing #1990's "an armed marker is
+// never silent" property. Fixed by computing 6b (and its echo) before 6a.
+test('bump-version echoes an armed marker even when a conflict marker is what fails the run', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-conflict-and-marker-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.1\n\nFixes:\n` +
+        `- ships with a ${CAFE} badge.\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+    assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('bump-version does not false-positive on a RELEASE_NOTES.md with no conflict markers', () => {
   const dir = setupRepo('1.0.0');
   try {

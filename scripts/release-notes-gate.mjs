@@ -257,7 +257,7 @@ export function findConflictMarkers(text) {
  * checkMojibake, there is no legitimate reason for one of these two lines to
  * appear in a shipped release-notes file, so every call site treats a
  * failure here as unconditional — see this file's CLI and
- * bump-version.mjs's pre-flights 5c/6b, all of which refuse regardless of
+ * bump-version.mjs's pre-flights 5d/6a, all of which refuse regardless of
  * --force or --dry-run.
  */
 export function checkConflictMarkers(text, label) {
@@ -576,25 +576,32 @@ if (invokedHref && import.meta.url === invokedHref) {
     if (!existsSync(targetPath)) continue;
     const text = readFileSync(targetPath, 'utf8');
 
-    // #2018 — checked first and unconditionally: no allowlist, no --force,
-    // markers are never legitimate content.
+    // #1990 — compute the mojibake check and echo any honoured marker BEFORE
+    // either failure branch below (#2018's conflict check included), so "an
+    // armed marker is never silent" holds even on a run that fails for a
+    // DIFFERENT reason. This ordering is load-bearing, not incidental (PR
+    // #2049 review, F5): #2018 added the conflict check as a new early exit
+    // in this same PR, and it originally sat ahead of this block — a file
+    // carrying both a conflict marker and an armed marker died naming only
+    // the conflict, with the armed marker never echoed that run.
+    // "Reaches" matters (PR #2007 review, Minor 3): this loop exits the
+    // whole process on the first failing target, so a marker armed in a
+    // LATER target on a run where an earlier one fails is never echoed on
+    // that run — publication is blocked either way, so this doesn't
+    // reintroduce a silent arming, but it does mean "every run" is not
+    // literally every run.
+    const mojibakeRes = checkMojibake(text, label);
+    const echo = formatHonouredEcho(label, mojibakeRes.honoured);
+    if (echo) process.stdout.write(`${echo}\n`);
+
+    // #2018 — unconditional: no allowlist, no --force, markers are never
+    // legitimate content.
     const conflictRes = checkConflictMarkers(text, label);
     if (!conflictRes.ok) {
       process.stderr.write(`[release-notes-gate] ${conflictRes.reason}\n`);
       process.exit(1);
     }
 
-    const mojibakeRes = checkMojibake(text, label);
-    // #1990 — echo every honoured marker on every run that reaches this
-    // target, pass or fail, so an accidental arming (e.g. one hiding in what
-    // looked like a fenced block) is never silent. "Reaches" matters (PR
-    // #2007 review, Minor 3): this loop exits the whole process on the first
-    // failing target, so a marker armed in a LATER target on a run where an
-    // earlier one fails is never echoed on that run — publication is
-    // blocked either way, so this doesn't reintroduce a silent arming, but
-    // it does mean "every run" is not literally every run.
-    const echo = formatHonouredEcho(label, mojibakeRes.honoured);
-    if (echo) process.stdout.write(`${echo}\n`);
     if (!mojibakeRes.ok) {
       process.stderr.write(`[release-notes-gate] ${mojibakeRes.reason}\n`);
       process.exit(1);

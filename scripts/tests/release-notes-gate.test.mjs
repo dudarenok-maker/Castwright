@@ -876,3 +876,29 @@ test('the CLI passes on a clean RELEASE_NOTES.md with no conflict markers', () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// PR #2049 review, F5 — the conflict check (#2018) was a NEW early exit added
+// in this same PR, and it originally ran BEFORE the mojibake echo: a target
+// carrying both a conflict marker and an armed `allow` marker died naming
+// only the conflict, with the armed marker never echoed that run — silently
+// regressing #1990's "an armed marker is never silent" property for exactly
+// the files it's meant to cover. The fix computes the mojibake check (and
+// prints its echo) before EITHER failure branch, so the echo survives
+// regardless of which check is what ultimately fails the run.
+test('an armed marker is still echoed even when a conflict marker is what fails the run', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.0\n\n` +
+        `- Ships with a ${CAFE} badge.\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md contains 2 unresolved git conflict marker/);
+    assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

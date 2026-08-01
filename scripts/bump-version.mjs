@@ -465,10 +465,13 @@ async function main() {
   if (existsSync(notesPath)) {
     const notesText = readFileSync(notesPath, 'utf8');
 
-    // Pre-flight 5b (#2018): unresolved git conflict markers must never ship.
-    // Unlike every other pre-flight in this file, this one dies UNCONDITIONALLY
-    // — no --force, no --dry-run downgrade — because there is no legitimate
-    // reason for a marker to be here (see checkConflictMarkers' doc comment).
+    // Pre-flight 5d (#2018): unresolved git conflict markers must never ship.
+    // Runs inside the same `if (existsSync(notesPath))` gate as 5c, ahead of
+    // its mojibake check, so a conflict is caught before mojibake even scans
+    // the file. Unlike every other pre-flight in this file, this one dies
+    // UNCONDITIONALLY — no --force, no --dry-run downgrade — because there is
+    // no legitimate reason for a marker to be here (see checkConflictMarkers'
+    // doc comment).
     const conflictCheck = checkConflictMarkers(notesText, 'RELEASE_NOTES.md');
     if (!conflictCheck.ok) die(conflictCheck.reason);
 
@@ -496,17 +499,23 @@ async function main() {
         );
     }
 
-    // Pre-flight 6a (#2018): same unconditional conflict-marker refusal as
-    // pre-flight 5b above, for the technical notes file.
-    const conflictCheck = checkConflictMarkers(notesFileText, args.notesFile);
-    if (!conflictCheck.ok) die(conflictCheck.reason);
-
     // Pre-flight 6b (#1956): the technical notes are fed verbatim into the
     // tag annotation / GitHub release body — a mojibake mangle here ships
-    // straight to the public releases page.
+    // straight to the public releases page. Computed (and echoed) BEFORE
+    // pre-flight 6a below so "an armed marker is never silent" (#1990) holds
+    // even when 6a's conflict check is what ultimately dies (PR #2049
+    // review, F5) — 6a originally ran first, so a notes file carrying both a
+    // conflict marker and an armed marker died naming only the conflict,
+    // with the armed marker never echoed that run.
     const mojibakeCheck = checkMojibake(notesFileText, args.notesFile);
     const echo = formatHonouredEcho(args.notesFile, mojibakeCheck.honoured);
     if (echo) info(echo);
+
+    // Pre-flight 6a (#2018): same unconditional conflict-marker refusal as
+    // pre-flight 5d above, for the technical notes file.
+    const conflictCheck = checkConflictMarkers(notesFileText, args.notesFile);
+    if (!conflictCheck.ok) die(conflictCheck.reason);
+
     if (!mojibakeCheck.ok) {
       if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
       else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
