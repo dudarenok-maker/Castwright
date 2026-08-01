@@ -304,8 +304,11 @@ Design rationale:
   identically: `tolerances` is quantised, so an EXACT change refuses
   outright; `identity`/`loudness_dbfs` are noisy (~0.0014 run-to-run
   identity spread per the committed baseline's own `metadata.notes`), so a
-  move under a field-specific `epsilon` (`compare.IDENTITY_COSINE_EPSILON` /
-  `LOUDNESS_DBFS_EPSILON`, each ≈10% of the window the field feeds) is
+  move under a field-specific `epsilon` (`compare.LOUDNESS_DBFS_EPSILON` is
+  10% of the ±`loudness_dbfs_abs` window the field is diffed against;
+  `compare.IDENTITY_COSINE_EPSILON` has no equivalent window — `identity`
+  feeds an absolute ceiling, not a diff — so it's calibrated instead off the
+  committed baseline's own ~0.0014 run-to-run noise) is
   WRITTEN and echoed to stdout rather than refused — an exact-equality
   guard on those two was found to refuse on every honest re-bless, which
   trained an operator to reach for the shared flag on a ROUTINE bless and
@@ -313,10 +316,12 @@ Design rationale:
   refusing beyond their own bar need `GOLDEN_REBLESS_THRESHOLDS=1`,
   including when a previously-blessed baseline lost one of its keys
   outright (same merge-conflict shape as above; disambiguated from a
-  genuine first bless via `any(k in baseline for k in ("rtf", "identity",
-  "loudness_dbfs", "tolerances"))`, not any single key — a single-key probe
-  was tried twice and both times left a narrower version of the same
-  blind spot), so an unrelated bless (e.g. one only meant to re-record
+  genuine first bless via `any(baseline.get(k) is not None for k in ("rtf",
+  "identity", "loudness_dbfs", "tolerances"))`, not any single key and not
+  bare `k in baseline` — a single-key probe was tried twice and both times
+  left a narrower version of the same blind spot, and a bare presence check
+  refuses the documented first-bless scaffold shape (all four keys present
+  but `null`) — so an unrelated bless (e.g. one only meant to re-record
   Kokoro transcripts) can't silently loosen a throughput/identity/loudness
   ceiling, or re-centre identity/loudness beyond noise, to whatever the
   blessing box happened to measure.

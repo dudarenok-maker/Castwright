@@ -563,3 +563,32 @@ def test_describe_measurement_move_reports_every_moved_leaf():
     assert desc is not None
     assert "whisper" in desc
     assert "neutral" not in desc  # unchanged leaf isn't reported as "moved"
+
+
+def test_describe_measurement_move_labels_a_within_epsilon_move_as_noise():
+    existing = {"whisper": -30.0}
+    computed = {"whisper": -30.1}  # 0.1 move, epsilon 0.4 -- genuinely noise
+    desc = describe_measurement_move(existing, computed, epsilon=0.4)
+    assert desc is not None
+    assert desc.startswith("within epsilon")
+    assert "BEYOND" not in desc and "FORCED" not in desc
+
+
+def test_describe_measurement_move_labels_a_beyond_epsilon_move_as_forced_not_noise():
+    """#2045 F1 defect (independent review of the shipped fix): the shipped
+    `describe_measurement_move` unconditionally formatted every move as
+    "within epsilon ... (noise)", even one that only reaches this function
+    because `bless_guard_thresholds` was forced through via
+    `allow_rebless_thresholds` despite being WELL beyond epsilon -- the
+    reviewer's repro was a 0.13 identity move (8.7x the 0.015 epsilon of the
+    time) echoed as "within epsilon 0.015 (noise)". The label must reflect
+    the actual move, not the caller's decision to accept it: a move beyond
+    epsilon must say BEYOND/FORCED, never "noise"."""
+    existing = {"cosine": {"whisper": 0.0125}}
+    computed = {"cosine": {"whisper": 0.1425}}  # 0.13 move, 8.7x epsilon 0.015
+    desc = describe_measurement_move(existing, computed, epsilon=0.015)
+    assert desc is not None
+    assert desc.startswith("BEYOND epsilon")
+    assert "FORCED" in desc and "GOLDEN_REBLESS_THRESHOLDS" in desc
+    assert "noise" not in desc
+    assert "cosine.whisper" in desc
