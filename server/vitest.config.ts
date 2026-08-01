@@ -79,15 +79,21 @@ const maxWorkers = lowConcurrency ? 1 : 2;
      the shape #2028 describes, and that file is where the hazard was found
      landing #2001. A red-phase test against that state is never silently
      rescued by the suite-wide retry.
-   - Global was surveyed rather than assumed, and rejected on the evidence:
-     surveyed 2026-08-01 via `npx vitest run --retry=0` against this exact
-     suite on unmodified `main` — it reddens `src/routes/voices.test.ts`
+   - Global was surveyed rather than assumed, and rejected on the evidence
+     AS OF 2026-08-01: surveyed via `npx vitest run --retry=0` against this
+     exact suite on unmodified `main` — it reddened `src/routes/voices.test.ts`
      ("writes ONLY to the anchor book's series..."), deterministically, on
-     the FIRST attempt, every time. That test is currently green in every
-     gating run purely because retry:1 papers over it, and that leak is
-     unrelated to this change and out of scope to fix here — filed as
-     #2046. Dropping retry suite-wide would have reddened every lane's CI on
-     that file until #2046 is root-caused.
+     the FIRST attempt, every time. That test was green in every gating run
+     purely because retry:1 papered over it, so dropping retry suite-wide
+     would have reddened every lane's CI on that file.
+     **That specific blocker is now discharged**: #2046 root-caused it as
+     test-fixture pollution (three describes cleaned two of the three books
+     their workspace-wide writes touched — NOT a production scope leak) and
+     fixed it, so that file is green under `--retry=0`. This does not by
+     itself make Global safe: the 2026-08-01 survey named one red file, and
+     nothing has re-surveyed the suite since. Re-run the survey before
+     re-opening the Narrow-vs-Global call — do not read the discharged
+     blocker as a green light.
    retryHazardReporter below is additive on top of Narrow, not a replacement
    for it: Narrow covers file-lock.test.ts specifically; every OTHER file
    still runs under the suite-wide retry:1, and for those, any test that
