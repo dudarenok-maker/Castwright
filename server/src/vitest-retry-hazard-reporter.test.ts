@@ -15,6 +15,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync, rmSync } from 'node:fs';
 import type { Reporter, TestCase } from 'vitest/node';
 
 const SERVER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,5 +97,67 @@ describe('retryHazardReporter (#2028)', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+/* F2 (PR #2049 review) — every test above calls onTestCaseResult() with a
+   HAND-BUILT fake TestCase, which pins the predicate but never the
+   INSTALLATION: whether `reporters:` in the real, on-disk vitest.config.ts
+   actually wires retryHazardReporter into a real vitest run. Deleting the
+   `reporters:` line entirely left all four tests above green — the exact
+   "data, not wire" gap commit 3 of this PR (#2025) closes for the mojibake
+   echo, reproduced here for this reporter. Spawns the REAL vitest CLI
+   against the REAL, on-disk server/vitest.config.ts — not a reconstructed
+   copy — the same principle setupGateFixture() uses for the release-notes
+   gate's own CLI tests. */
+const VITEST_BIN = resolve(SERVER_ROOT, 'node_modules', 'vitest', 'vitest.mjs');
+
+/** Write `fixtureRelPath` (relative to server/src/, so it matches the
+    `include: ['src/**\/*.{test,spec}.ts']` glob) under the real server/src/
+    tree, run the real vitest CLI against just that file with `envOverrides`
+    layered onto (or deleted from, via an explicit `undefined`) the current
+    env, and delete the fixture afterwards regardless of outcome. */
+function runVitestOnFixture(
+  fixtureRelPath: string,
+  fixtureBody: string,
+  envOverrides: Record<string, string | undefined>,
+) {
+  const fixturePath = resolve(SERVER_ROOT, 'src', fixtureRelPath);
+  writeFileSync(fixturePath, fixtureBody);
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const [key, value] of Object.entries(envOverrides)) {
+      if (value === undefined) delete env[key];
+      else env[key] = value;
+    }
+    return spawnSync('node', [VITEST_BIN, 'run', `src/${fixtureRelPath}`], {
+      cwd: SERVER_ROOT,
+      encoding: 'utf8',
+      env,
+    });
+  } finally {
+    rmSync(fixturePath, { force: true });
+  }
+}
+
+const RETRY_THEN_PASS_FIXTURE = `let attempt = 0;
+it('fails once then passes, to trigger a real vitest retry', () => {
+  attempt += 1;
+  if (attempt === 1) throw new Error('deliberate first-attempt failure');
+  expect(attempt).toBe(2);
+});
+`;
+
+describe('retryHazardReporter — real wiring (#2028, PR #2049 review F2)', () => {
+  it('a real retried-then-passed run prints [retry-hazard] via the ACTUAL on-disk config', () => {
+    const out = runVitestOnFixture(
+      '__wire_fixture_retry_hazard__.test.ts',
+      RETRY_THEN_PASS_FIXTURE,
+      { GITHUB_ACTIONS: undefined },
+    );
+    const combined = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+    expect(combined).toContain('[retry-hazard]');
+    expect(combined).toContain('__wire_fixture_retry_hazard__.test.ts');
+    expect(combined).toContain('fails once then passes, to trigger a real vitest retry');
   });
 });
