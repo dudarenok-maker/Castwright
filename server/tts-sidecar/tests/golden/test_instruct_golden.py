@@ -173,18 +173,29 @@ def _measure(engine) -> dict:
 
 
 def _bless(measured: dict) -> None:
-    """Record measurements AND (guarded) the derived tolerances. #1995: the
-    `tolerances` block is a THRESHOLD, not a measurement -- a bless run
-    performed for an unrelated reason (e.g. re-blessing kokoro-baseline.json's
-    transcripts in the same `--sidecar-only --bless` invocation) must not
-    silently move it to whatever THIS run measured. `bless_guard_thresholds`
-    refuses (raises, no write at all -- same all-or-nothing shape as
-    `test_golden_regression._bless`'s G1/G2) unless the computed tolerances
-    match what's already committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set.
+    """Record measurements AND (guarded) the derived tolerances, identity
+    cosines, and per-emotion loudness. #1995 guarded `tolerances` (a
+    THRESHOLD, not a measurement); #2035 widens the same guard to
+    `identity` and `loudness_dbfs` -- both are *assertion references* too:
+    `test_live_instruct_golden`'s per-emotion drift check diffs a fresh
+    measurement against `baseline["loudness_dbfs"][e]`, so that recorded
+    figure is the CENTRE of a ±`loudness_dbfs_abs` drift window, not free
+    data; the recorded `identity` cosines feed `computed_tolerances`'
+    `identity_cosine_max` the same way. A bless run performed for an
+    unrelated reason (e.g. re-blessing kokoro-baseline.json's transcripts in
+    the same `--sidecar-only --bless` invocation) must not silently
+    re-centre any of the three. `bless_guard_thresholds` refuses (raises, no
+    write at all) unless each field's computed value matches what's already
+    committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set -- one shared flag
+    for all three fields (see the function's docstring for why a second flag
+    would add friction without adding a distinct decision). All three guards
+    run before any field is written, so a refusal on one leaves the file
+    completely untouched -- the same all-or-nothing shape as
+    `test_golden_regression._bless`'s G1/G2.
 
     `previously_blessed=bool(baseline.get("identity"))` disambiguates a
     genuine first bless (no `identity` recorded yet) from a previously
-    blessed baseline that lost its `tolerances` key (e.g. a hand-resolved
+    blessed baseline that lost one of these keys (e.g. a hand-resolved
     merge conflict) -- `existing is None` alone cannot tell those apart, and
     conflating them was the exact #2003 shape reproduced inside this guard.
     `baseline.get("identity")` is the same signal `test_live_instruct_golden`
@@ -197,19 +208,29 @@ def _bless(measured: dict) -> None:
         "loudness_dbfs_abs": 4.0,
         "rtf_max": round(max(1.0, measured["rtf"] * 1.5), 2),
     }
+    computed_identity = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
+    computed_loudness = measured["loudness_dbfs"]
+
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
-    guard_reason = bless_guard_thresholds(
-        baseline.get("tolerances"),
-        computed_tolerances,
-        previously_blessed=bool(baseline.get("identity")),
-        allow_rebless_thresholds=allow_rebless_thresholds,
-    )
-    if guard_reason is not None:
-        raise AssertionError(guard_reason)
+    previously_blessed = bool(baseline.get("identity"))
+    for label, existing_val, computed_val in (
+        ("tolerances", baseline.get("tolerances"), computed_tolerances),
+        ("identity", baseline.get("identity"), computed_identity),
+        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness),
+    ):
+        guard_reason = bless_guard_thresholds(
+            existing_val,
+            computed_val,
+            previously_blessed=previously_blessed,
+            allow_rebless_thresholds=allow_rebless_thresholds,
+            label=label,
+        )
+        if guard_reason is not None:
+            raise AssertionError(guard_reason)
 
     baseline["tolerances"] = computed_tolerances
-    baseline["identity"] = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
-    baseline["loudness_dbfs"] = measured["loudness_dbfs"]
+    baseline["identity"] = computed_identity
+    baseline["loudness_dbfs"] = computed_loudness
     baseline["rtf"] = {"batched": measured["rtf"]}
     # blessed_at left for the committer to stamp — the harness has no clock.
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")

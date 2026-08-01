@@ -302,47 +302,64 @@ def bless_guard_thresholds(
     *,
     previously_blessed: bool = False,
     allow_rebless_thresholds: bool = False,
+    label: str = "tolerances",
 ) -> Optional[str]:
-    """Refuse a `--bless` write that would change a baseline's `tolerances`
-    block — a THRESHOLD, not a measurement (#1995). `instruct-baseline.json`
-    mixes measurements (identity cosines, loudness, rtf) with thresholds
-    derived from them (`identity_cosine_max`, `rtf_max`, ...); a bless run
-    performed for an unrelated reason must not silently move the ceiling to
-    whatever THIS run happened to measure (observed: rtf_max 1.0 -> 1.31
-    under GPU contention, recorded by a bless that was about something else
-    entirely).
+    """Refuse a `--bless` write that would change a baseline's assertion
+    reference — a THRESHOLD *or a recorded measurement an assertion is
+    diffed against*, neither of which is a free measurement (#1995, widened
+    by #2035). `instruct-baseline.json` mixes bare measurements (rtf, the
+    per-item breakdown) with values that later assertions compare a fresh
+    run TO — thresholds derived from them (`identity_cosine_max`, `rtf_max`,
+    ...) as well as the recorded `identity` cosines and `loudness_dbfs`
+    figures themselves (`test_instruct_golden.py`'s per-emotion drift check
+    diffs a fresh measurement against `baseline["loudness_dbfs"][e]` — that
+    recorded figure is the CENTRE of a drift window, not just data). A bless
+    run performed for an unrelated reason must not silently move any of
+    these to whatever THIS run happened to measure (observed: rtf_max
+    1.0 -> 1.31 under GPU contention, recorded by a bless that was about
+    something else entirely). This same guard call protects all three
+    fields — `_bless()` calls it once per field (`label="tolerances"`,
+    `label="identity"`, `label="loudness_dbfs"`), each all-or-nothing: a
+    refusal on any one field raises before ANY field is written, mirroring
+    `bless_guard`'s G1/G2 no-partial-write shape.
 
-    `existing` is the CURRENTLY COMMITTED `tolerances` dict (or None when
-    there is no committed `tolerances` block at all); `computed` is what
-    this bless run would write. Pure: the caller reads
+    `existing` is the CURRENTLY COMMITTED dict for `label` (or None when
+    there is no committed block at all for it); `computed` is what this
+    bless run would write. Pure: the caller reads
     `GOLDEN_REBLESS_THRESHOLDS` from the environment and passes it as
     `allow_rebless_thresholds` — this function never touches os.environ.
+    #2035 deliberately reuses this single flag rather than minting a second
+    one: `identity`/`loudness_dbfs` live in the same baseline file, are
+    guarded by this same function, and are the same *kind* of judgement
+    call ("I know this bless run legitimately changed the reference point")
+    as a `tolerances` change — splitting the escape hatch per-field would
+    add a flag without adding a distinct decision.
 
     Mirrors `bless_guard`'s G1 shape (refuse a silent change, escape via an
-    explicit flag) but for the ceiling(s) rather than the transcript.
+    explicit flag) but for a reference figure rather than the transcript.
 
-    A missing `tolerances` block is ambiguous on its own: it is either a
-    genuine first bless (nothing recorded yet — the ORIGINAL, and still the
-    common, case for `existing is None`) or a PREVIOUSLY blessed baseline
-    that lost its `tolerances` key (e.g. a hand-resolved merge conflict) —
-    the exact #2003 shape, reproduced inside this guard by an earlier
-    revision of this fix. `existing is None` alone cannot tell those apart,
-    so the caller passes `previously_blessed` — its own
-    `bool(baseline.get("identity"))`, the file's existing definition of
-    "has this baseline ever been blessed" (`test_instruct_golden.py`'s
-    unblessed-SKIP already uses that same signal). A never-blessed baseline
-    (`previously_blessed=False`) is accepted with no flag, same as before;
-    a previously-blessed baseline missing `tolerances`
+    A missing `label` block is ambiguous on its own: it is either a genuine
+    first bless (nothing recorded yet — the ORIGINAL, and still the common,
+    case for `existing is None`) or a PREVIOUSLY blessed baseline that lost
+    its `label` key (e.g. a hand-resolved merge conflict) — the exact #2003
+    shape, reproduced inside this guard by an earlier revision of this fix.
+    `existing is None` alone cannot tell those apart, so the caller passes
+    `previously_blessed` — its own `bool(baseline.get("identity"))`, the
+    file's existing definition of "has this baseline ever been blessed"
+    (`test_instruct_golden.py`'s unblessed-SKIP already uses that same
+    signal, for all three guarded fields, `identity` included). A
+    never-blessed baseline (`previously_blessed=False`) is accepted with no
+    flag, same as before; a previously-blessed baseline missing `label`
     (`previously_blessed=True`) now fails CLOSED via the same flag as any
-    other threshold change."""
+    other reference-figure change."""
     if existing is None:
         if not previously_blessed:
             return None
         if allow_rebless_thresholds:
             return None
         return (
-            "refusing to bless: baseline has been blessed before but its "
-            "'tolerances' key is missing (e.g. a hand-resolved merge "
+            f"refusing to bless: baseline has been blessed before but its "
+            f"'{label}' key is missing (e.g. a hand-resolved merge "
             f"conflict) -- computed {computed!r} would be written blind -- "
             "set GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
         )
@@ -351,7 +368,7 @@ def bless_guard_thresholds(
     if allow_rebless_thresholds:
         return None
     return (
-        "refusing to bless: tolerances would change from the recorded "
+        f"refusing to bless: {label} would change from the recorded "
         f"baseline (was {existing!r}, now {computed!r}) -- set "
         "GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
     )
