@@ -223,7 +223,25 @@ function clientInputFor(row: Row, entry: VoiceLibraryEntry | null): CloneReadine
       : undefined;
   return {
     entryFound: !!entry,
-    consentRevoked: !!transformed?.consent?.revokedAt,
+    /* row.consentRevoked, NOT `!!transformed?.consent?.revokedAt`. The real
+       adapter (clone-readiness-selectors.ts) DOES derive this from the
+       entry, and `makeEntry` stamps the entry's own consent.revokedAt from
+       this same row field whenever entryFound is true — so for every row
+       where an entry exists, this is byte-identical to the entry-derived
+       value. The two diverge ONLY when entryFound is false, where an
+       entry-derived read is necessarily `false` (there is no entry to hold
+       a consent record) regardless of what this field says — which would
+       make rule 1 vs rule 2 precedence structurally untestable here: no
+       real caller, client or render, can ever observe "entry missing AND
+       consent revoked" (revocation lives inside the entry that's absent),
+       so an entry-derived read would silently swallow the 1v2 doubly-broken
+       row below. Reading the row field directly keeps that row meaningful:
+       it exercises cloneReadiness's actual rule ordering, compared against
+       the render's answer for "entry missing" (fixed at 'misconfigured'
+       regardless of any consent belief) — a rule-1/rule-2 swap changes the
+       client's answer to 'revoked', which is NOT an accepted pairing with
+       'misconfigured', so `verdictsAgree` reddens. */
+    consentRevoked: row.consentRevoked,
     slotStatus,
     hasMaster: !!transformed?.master,
     transcript: transformed?.master?.transcript,
