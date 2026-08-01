@@ -48,3 +48,9 @@ faster-whisper>=1.0,<2.0
 # keeps the OPT-IN Coqui (installed later via the Model Manager) on a compatible
 # transformers — coqui-tts imports a 4.x-only private util (isin_mps_friendly).
 transformers>=4.45,<5.0
+
+# spacy (sentence splitting for Coqui/XTTS's enable_text_splitting=True, #2017)
+# is NOT here: it is reached only via the opt-in Coqui/XTTS clone path, same
+# tier as coqui-tts itself, so it installs in install-coqui.mjs instead — see
+# that script's coquiPipInstallSteps() for the rationale and the plain-spacy-
+# vs-spacy[ja] sizing.
