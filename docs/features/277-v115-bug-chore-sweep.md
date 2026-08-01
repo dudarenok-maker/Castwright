@@ -104,6 +104,16 @@ Rounds 2–3 would otherwise run headfirst into**, so they go first.
 
 ### Lane 1 · `chore/sidecar-golden-gate-fidelity`
 
+**Status: shipped, PR #2045.** All three issues landed; independent Opus
+review of the PR returned seven findings (six requiring follow-up commits on
+the same branch, one — the `hasattr` narrowness objection — cleared on
+inspection). Notably, the #2035 guard's first revision shipped as an
+exact-equality refusal on `identity`/`loudness_dbfs`, which review found
+refuses on every honest re-bless (those are raw stochastic measurements, not
+quantised thresholds like `tolerances`) — replaced with a noise-tolerant
+hybrid (echo-and-accept below an epsilon, refuse above it) before merge. See
+the PR for the full finding-by-finding record.
+
 Files: `server/tts-sidecar/tests/golden/compare.py`,
 `test_golden_regression.py`, the golden baselines.
 

@@ -1185,10 +1185,25 @@ weights can prove, and neither was exercised on real hardware for this PR:
   **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
   contention warning should print nothing). Confirm it completes and writes
   `kokoro-baseline.json` / `instruct-baseline.json` **without**
-  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set — i.e. the
-  guards stay silent on a routine bless where nothing actually drifted.
-  `git diff` those two files afterward: only `blessed_at`-adjacent /
-  measurement noise should move, no `tolerances` or `transcript` values.
+  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set on a
+  routine, uncontended re-bless. **Amended by #2045 F1/F2** (`instruct-
+  baseline.json`'s `identity`/`loudness_dbfs` guard, added by #2035 after
+  this row was written, is noise-tolerant, not silent-or-refuse like
+  `tolerances`): `kokoro-baseline.json`'s `transcript`/`text_edits` and
+  `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
+  (or the guard is broken); `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
+  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=0.015 /
+  `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
+  printed a `[golden-bless] identity moved ...` / `[golden-bless]
+  loudness_dbfs moved ...` line for each one that did — the echo is the
+  part a `git diff` alone can't confirm, and it's the accept-path half of
+  the guard real hardware is uniquely placed to exercise (both the
+  ROUTINE-bless-doesn't-need-the-flag half AND the noise-gets-echoed half
+  need a REAL measurement pair with real noise between them — a synthetic
+  fixture can only assert the arithmetic, never that actual noise clears
+  epsilon on a real box). `blessed_at`-adjacent housekeeping fields may
+  also move as before.
 - Then force one refusal for real: hand-edit a committed baseline to null out
   its `transcript` (or delete its `tolerances` key) exactly as a bad
   merge-resolution would, re-run the same `--bless` command, and confirm it
@@ -1196,6 +1211,15 @@ weights can prove, and neither was exercised on real hardware for this PR:
   byte-identical to before the attempt — then revert the hand-edit.
   This is the "#2003/#1995 shape, on a real file, via the real CLI entry
   point" check the unit tests can only approximate with `tmp_path` fixtures.
+- **Amended by #2045 F1/F2:** also force one WINDOW-sized refusal on
+  `instruct-baseline.json`'s `identity` block (hand-edit one committed
+  `identity.cosine.<emotion>` figure by clearly more than
+  `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
+  command, and confirm it refuses (not just accepts-and-echoes) with the
+  expected `GOLDEN_REBLESS_THRESHOLDS` message and leaves the file
+  byte-identical — then revert the hand-edit. This is the boundary the
+  noise-tolerant epsilon exists to draw; the routine-bless bullet above
+  only exercises the accept side.
 - Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
   (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
   normally (expect pass), then deliberately break the engine (e.g. rename
