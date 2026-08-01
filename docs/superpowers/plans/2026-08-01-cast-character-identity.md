@@ -3,15 +3,20 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop `#2040`'s silent narrator substitution by making `cast.json` the
-authoritative character identity, recording every superseded analyzer id as an
-alias, and resolving every render-derived `characterId` lookup through that
-alias set.
+authoritative character identity, recording every superseded id in a per-book
+history side-table, and resolving every render-derived `characterId` lookup
+through it.
 
 **Architecture:** One new pure helper (`normaliseIdKey`) and one new resolver
-module (`buildCastResolver`) replace eight raw `castById.get()` joins. A new
-`idAliases` field on `Character` accumulates superseded ids; three write paths
-in the analysis pipeline are hardened so it survives, and a new early remap pass
-keeps the prior cast's ids instead of adopting the analyzer's fresh ones.
+module (`buildCastResolver`) replace eight raw `castById.get()` joins. The id
+history lives in `.audiobook/cast-id-history.json` — **not** as a field on
+`Character` — written through a single `retireCharacterId()` choke point. A new
+early remap pass keeps the prior cast's ids instead of adopting the analyzer's
+fresh ones.
+
+**Numbering note:** Task 9 no longer exists; it was folded into Task 8 when the
+design changed. Tasks run 1-8, then 10-20. The gap is deliberate — do not
+renumber, the ledger references these numbers.
 
 **Tech Stack:** TypeScript, Node 20+, Vitest (server + frontend), Zod schemas,
 Playwright (e2e), Express routes.
@@ -36,10 +41,13 @@ Every other task's snippets are runnable as written and should be used verbatim.
 
 ## Global Constraints
 
-- **Never edit `src/lib/api-types.ts` by hand.** It is generated: change
-  `openapi.yaml`, then run `npm run openapi:types`.
-- **`aliases` and `idAliases` are different fields.** `aliases` holds display
-  names; `idAliases` holds ids. Never match one against the other.
+- **Do NOT add a field to `Character`, `characterSchema`, `openapi.yaml` or
+  `api-types.ts`.** The id history is a side-table for a reason: three review
+  rounds found five separate places that rebuild a `Character` from an explicit
+  field list and silently drop an unknown field. Putting it back on the record
+  reintroduces all five.
+- **`aliases` (display names) and the id history (ids) are different things.**
+  Never match one against the other.
 - **The resolver never matches on names.** Name matching happens only at
   merge/repair time (spec §4.2). The resolver is ids-only (spec §4.3).
 - **Frozen `<slug>.segments.json` files are never rewritten to migrate ids**
@@ -59,10 +67,11 @@ Every other task's snippets are runnable as written and should be used verbatim.
 | `server/src/util/character-id.test.ts` | **new** — its unit tests |
 | `server/src/store/cast-resolve.ts` | **new** — `buildCastResolver`, ids-only, tie-safe |
 | `server/src/store/cast-resolve.test.ts` | **new** — resolver tier + tie tests |
-| `server/src/handoff/schemas.ts` | add `idAliases` to `characterSchema` |
-| `openapi.yaml` | add `idAliases` to `Character` |
-| `server/src/workspace/preserve-cast-voices.ts` | union `idAliases` on client writes |
-| `server/src/store/merge-analysis-cast.ts` | union `idAliases`; collision union; widen name fallback |
+| `server/src/store/cast-id-history.ts` | **new** — the side-table + `retireCharacterId` choke point |
+| `server/src/store/cast-id-history.test.ts` | **new** — its unit tests |
+| `server/src/store/cast-id-history.survival.test.ts` | **new** — reparse + client-PUT survival guard |
+| `server/src/routes/cast-merge.ts` | report the retired `sourceId` |
+| `server/src/store/merge-analysis-cast.ts` | report retirements from 3 collapse paths; widen name fallback |
 | `server/src/routes/analysis.ts` | the early remap pass (both paths) |
 | `server/src/routes/cast-create.ts` | mint via `safeId` |
 | `server/src/tts/synthesise-chapter.ts` | 4 join sites → resolver |
@@ -71,7 +80,7 @@ Every other task's snippets are runnable as written and should be used verbatim.
 | `server/src/routes/chapter-qa-repair.ts` | 1 join site → resolver |
 | `server/src/audio/build-synth-replacement.ts` | `findDivergentSentences` → resolver |
 | `server/src/audio/segments-io.ts` | widen the orphan collector |
-| `src/store/cast-slice.ts` | carry `idAliases` through hydration |
+| `src/store/cast-slice.ts` | banner classification state |
 | `src/views/cast.tsx` | banner split + un-record action |
 | `scripts/repair-cast-id-drift.mjs` | **new** — the repair pass |
 | `scripts/tests/repair-cast-id-drift.test.mjs` | **new** — its pure-helper tests |
@@ -163,99 +172,97 @@ git add server/src/util/character-id.ts server/src/util/character-id.test.ts
 git commit -m "feat(server): add normaliseIdKey for encoding-equivalent character ids"
 ```
 
-### Task 2: `idAliases` on the schema and the API contract
+### Task 2: the id-history side-table and its choke point
 
 **Files:**
-- Modify: `server/src/handoff/schemas.ts` (`characterSchema`, near `aliases`)
-- Modify: `openapi.yaml` (`Character`, line ~6451; `aliases` at ~6462)
-- Regenerate: `src/lib/api-types.ts`
-- Test: `server/src/handoff/schemas.test.ts` (create if absent)
+- Create: `server/src/store/cast-id-history.ts`
+- Test: `server/src/store/cast-id-history.test.ts`
 
 **Interfaces:**
-- Produces: `Character.idAliases?: string[]` on both the Zod and OpenAPI shapes.
+- Produces:
+  ```ts
+  export interface CastIdHistory { schema: 1; supersededBy: Record<string, string> }
+  export function castIdHistoryPath(bookDir: string): string;
+  export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>;
+  export async function retireCharacterId(bookDir: string, from: string, to: string): Promise<void>;
+  ```
 
-**Why this task exists separately:** `characterSchema` is `.strict()`. Until the
-field is declared, any cast.json carrying `idAliases` fails validation — so this
-must land before anything writes one.
+**Why this replaces the original Task 2.** An earlier version of this plan put
+an `idAliases: string[]` field on `Character` and changed `characterSchema`,
+`openapi.yaml` and `api-types.ts`. Three review rounds found five separate
+places that rebuild a `Character` from an explicit field list and silently drop
+it. The history now lives in its own per-book file, so **no schema or
+API-contract change is needed at all** - do not add a `Character` field.
+
+Read spec section 4.1 before starting.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { describe, it, expect } from 'vitest';
-import { characterSchema } from './schemas.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadCastIdHistory, retireCharacterId } from './cast-id-history.js';
 
-describe('characterSchema idAliases', () => {
-  it('accepts a character carrying idAliases', () => {
-    const parsed = characterSchema.parse({
-      id: 'mairin', name: 'Мэйрин', role: 'supporting', color: 'slot-3',
-      idAliases: ['mayrin'],
-    });
-    expect(parsed.idAliases).toEqual(['mayrin']);
+let dir: string;
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cih-')); });
+
+describe('cast id history', () => {
+  it('returns an empty history when the file does not exist', async () => {
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
   });
 
-  it('still accepts a character without it', () => {
-    expect(() =>
-      characterSchema.parse({ id: 'ren', name: 'Рен', role: 'supporting', color: 'slot-1' }),
-    ).not.toThrow();
+  it('records a retirement', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mairin' });
+  });
+
+  it('is idempotent', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mairin' });
+  });
+
+  it('no-ops when from === to', async () => {
+    await retireCharacterId(dir, 'mairin', 'mairin');
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+  });
+
+  it('REPOINTS an existing entry whose target is now retired', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    await retireCharacterId(dir, 'mairin', 'mairin-final');
+    // resolution must stay a single O(1) lookup - no transitive chasing
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({
+      mayrin: 'mairin-final',
+      mairin: 'mairin-final',
+    });
   });
 });
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
 
-Run: `cd server && npx vitest run src/handoff/schemas.test.ts`
-Expected: FAIL — `.strict()` rejects the unrecognised key `idAliases`.
+Run: `cd server && npx vitest run src/store/cast-id-history.test.ts`
+Expected: FAIL - module not found.
 
-- [ ] **Step 3: Add the field to the Zod schema**
+- [ ] **Step 3: Implement**
 
-In `server/src/handoff/schemas.ts`, directly below the existing `aliases` entry:
+Write `.audiobook/cast-id-history.json` via the same `writeJsonAtomic` helper
+the rest of `server/src/workspace` uses. `loadCastIdHistory` returns
+`{ schema: 1, supersededBy: {} }` on a missing or unparseable file - this is a
+lookup side-table and must never throw a book's render.
 
-```ts
-    /* Every analyzer-assigned or previously-persisted id seen for this
-       character (#2040). The analyzer is non-deterministic about ids across
-       runs, and several paths rename a persisted id; a frozen segments.json or
-       a stale analysis cache may still reference any of them. Read through
-       this set via store/cast-resolve.ts — never match it against `aliases`,
-       which holds display NAMES. */
-    idAliases: z.array(z.string()).optional(),
-```
+- [ ] **Step 4: Run it and confirm it passes**
 
-- [ ] **Step 4: Add it to the OpenAPI contract**
+Run: `cd server && npx vitest run src/store/cast-id-history.test.ts`
+Expected: PASS, 5 tests.
 
-In `openapi.yaml` under `Character.properties`, mirroring `aliases`:
-
-```yaml
-        idAliases:
-          type: array
-          items:
-            type: string
-          description: >-
-            Superseded character ids previously used for this character.
-            Render-time lookups resolve through this set so a frozen
-            segments.json referencing an old id still finds its cast member.
-```
-
-- [ ] **Step 5: Regenerate the client types and confirm the field appears**
+- [ ] **Step 5: Commit**
 
 ```bash
-npm run openapi:types
-git diff --stat src/lib/api-types.ts
-```
-
-Expected: `src/lib/api-types.ts` shows `idAliases?: string[]`. If the diff is
-empty the generator did not pick it up — fix `openapi.yaml` rather than editing
-the generated file.
-
-- [ ] **Step 6: Run tests and typecheck**
-
-Run: `cd server && npx vitest run src/handoff/schemas.test.ts` → PASS.
-Run: `npm run typecheck` from the repo root → clean.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add server/src/handoff/schemas.ts server/src/handoff/schemas.test.ts openapi.yaml src/lib/api-types.ts
-git commit -m "feat(server,frontend): declare idAliases on the Character contract"
+git add server/src/store/cast-id-history.ts server/src/store/cast-id-history.test.ts
+git commit -m "feat(server): add the per-book character id history side-table"
 ```
 
 ### Task 3: `buildCastResolver`
@@ -265,15 +272,20 @@ git commit -m "feat(server,frontend): declare idAliases on the Character contrac
 - Test: `server/src/store/cast-resolve.test.ts`
 
 **Interfaces:**
-- Consumes: `normaliseIdKey` (Task 1)
+- Consumes: `normaliseIdKey` (Task 1); the `supersededBy` map shape from Task 2.
 - Produces:
   ```ts
   export interface CastResolution { character: CastRecord; viaAlias?: string }
-  export function buildCastResolver(cast: readonly CastRecord[]): {
-    resolve(characterId: string): CastResolution | undefined;
-  }
+  export function buildCastResolver(
+    cast: readonly CastRecord[],
+    history?: Readonly<Record<string, string>>,
+  ): { resolve(characterId: string): CastResolution | undefined };
   ```
   where `CastRecord = { id: string } & Record<string, unknown>`.
+
+`history` defaults to `{}`. That default is what makes Wave 1 useful on its own:
+with an empty history the normalised tier alone still recovers 68 of the 188
+orphaned segments.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -283,42 +295,45 @@ import { buildCastResolver } from './cast-resolve.js';
 
 const cast = [
   { id: 'narrator', name: 'Narrator' },
-  { id: 'mairin', name: 'Мэйрин', idAliases: ['mayrin'] },
+  { id: 'mairin', name: 'Мэйрин' },
   { id: 'the_torment', name: 'Torment' },
 ];
+const history = { mayrin: 'mairin' };
 
 describe('buildCastResolver', () => {
   it('tier 1: exact id', () => {
-    expect(buildCastResolver(cast).resolve('mairin')?.character.id).toBe('mairin');
+    expect(buildCastResolver(cast, history).resolve('mairin')?.character.id).toBe('mairin');
   });
 
-  it('tier 2: exact alias, and reports viaAlias', () => {
-    const r = buildCastResolver(cast).resolve('mayrin');
+  it('tier 2: history hit, and reports viaAlias', () => {
+    const r = buildCastResolver(cast, history).resolve('mayrin');
     expect(r?.character.id).toBe('mairin');
     expect(r?.viaAlias).toBe('mayrin');
   });
 
-  it('tier 3: normalised id — the wave-1 recovery, with no alias recorded', () => {
+  it('tier 3: normalised id — the wave-1 recovery, with an EMPTY history', () => {
     const r = buildCastResolver(cast).resolve('the-torment');
     expect(r?.character.id).toBe('the_torment');
     expect(r?.viaAlias).toBe('the-torment');
   });
 
-  it('tier 4: normalised alias', () => {
-    const c = [{ id: 'x', name: 'X', idAliases: ['foo_bar'] }];
-    expect(buildCastResolver(c).resolve('foo-bar')?.character.id).toBe('x');
+  it('tier 4: normalised history key', () => {
+    const r = buildCastResolver([{ id: 'x', name: 'X' }], { foo_bar: 'x' }).resolve('foo-bar');
+    expect(r?.character.id).toBe('x');
   });
 
-  it('an exact id BEATS another row alias-claiming it', () => {
-    const c = [
-      { id: 'unknown-male', name: 'Unknown Male' },
-      { id: 'timkin', name: 'Timkin', idAliases: ['unknown-male'] },
-    ];
-    expect(buildCastResolver(c).resolve('unknown-male')?.character.id).toBe('unknown-male');
+  it('a history entry whose target is NOT a live cast id does not resolve', () => {
+    expect(buildCastResolver(cast, { ghost: 'deleted-character' }).resolve('ghost')).toBeUndefined();
+  });
+
+  it('an exact live id BEATS a history entry claiming it', () => {
+    const c = [{ id: 'unknown-male', name: 'Unknown Male' }, { id: 'timkin', name: 'Timkin' }];
+    const r = buildCastResolver(c, { 'unknown-male': 'timkin' }).resolve('unknown-male');
+    expect(r?.character.id).toBe('unknown-male');
   });
 
   it('returns undefined on a genuine miss', () => {
-    expect(buildCastResolver(cast).resolve('nobody')).toBeUndefined();
+    expect(buildCastResolver(cast, history).resolve('nobody')).toBeUndefined();
   });
 
   it('returns undefined on a NORMALISED tie rather than guessing', () => {
@@ -342,41 +357,45 @@ type CastRecord = { id: string } & Record<string, unknown>;
 
 export interface CastResolution {
   character: CastRecord;
-  /** Set when the id matched through an alias or a normalised key rather than
-      an exact id — callers may want to report the reconciliation. */
+  /** Set when the id matched through the history or a normalised key rather
+      than an exact live id — callers may want to report the reconciliation. */
   viaAlias?: string;
 }
 
-const aliasesOf = (c: CastRecord): string[] =>
-  Array.isArray(c.idAliases) ? (c.idAliases.filter((a) => typeof a === 'string') as string[]) : [];
-
-/** Resolve a `characterId` from manuscript attribution or a frozen render
-    against the book's cast, reading through superseded ids (#2040).
+/** Resolve a `characterId` coming from manuscript attribution or a frozen
+    render against the book's cast, reading through superseded ids (#2040).
     IDS ONLY — display names are never consulted; name matching belongs to the
-    merge/repair matcher (spec §4.2). */
-export function buildCastResolver(cast: readonly CastRecord[]): {
-  resolve(characterId: string): CastResolution | undefined;
-} {
+    merge/repair matcher (spec section 4.2). */
+export function buildCastResolver(
+  cast: readonly CastRecord[],
+  history: Readonly<Record<string, string>> = {},
+): { resolve(characterId: string): CastResolution | undefined } {
   const byId = new Map<string, CastRecord>();
-  const byAlias = new Map<string, CastRecord>();
   /* Normalised maps carry `null` on collision so a tie falls through to the
      orphan path instead of silently rendering one character as another —
      strictly worse than the narrator substitution it would replace. */
   const byNormId = new Map<string, CastRecord | null>();
-  const byNormAlias = new Map<string, CastRecord | null>();
 
   const put = (m: Map<string, CastRecord | null>, k: string, c: CastRecord) => {
-    if (m.has(k) && m.get(k)?.id !== c.id) m.set(k, null);
-    else if (!m.has(k)) m.set(k, c);
+    if (m.has(k)) { if (m.get(k)?.id !== c.id) m.set(k, null); }
+    else m.set(k, c);
   };
 
   for (const c of cast) {
     if (!byId.has(c.id)) byId.set(c.id, c);
     put(byNormId, normaliseIdKey(c.id), c);
-    for (const a of aliasesOf(c)) {
-      if (!byAlias.has(a)) byAlias.set(a, c);
-      put(byNormAlias, normaliseIdKey(a), c);
-    }
+  }
+
+  /* A history entry only counts when its TARGET is still a live cast id — a
+     retirement pointing at a character that has since been deleted must not
+     resurrect it. */
+  const byHistory = new Map<string, CastRecord>();
+  const byNormHistory = new Map<string, CastRecord | null>();
+  for (const [from, to] of Object.entries(history)) {
+    const target = byId.get(to);
+    if (!target) continue;
+    if (!byHistory.has(from)) byHistory.set(from, target);
+    put(byNormHistory, normaliseIdKey(from), target);
   }
 
   return {
@@ -384,15 +403,15 @@ export function buildCastResolver(cast: readonly CastRecord[]): {
       const exact = byId.get(characterId);
       if (exact) return { character: exact };
 
-      const alias = byAlias.get(characterId);
-      if (alias) return { character: alias, viaAlias: characterId };
+      const hist = byHistory.get(characterId);
+      if (hist) return { character: hist, viaAlias: characterId };
 
       const key = normaliseIdKey(characterId);
       const normId = byNormId.get(key);
       if (normId) return { character: normId, viaAlias: characterId };
 
-      const normAlias = byNormAlias.get(key);
-      if (normAlias) return { character: normAlias, viaAlias: characterId };
+      const normHist = byNormHistory.get(key);
+      if (normHist) return { character: normHist, viaAlias: characterId };
 
       return undefined;
     },
@@ -403,14 +422,15 @@ export function buildCastResolver(cast: readonly CastRecord[]): {
 - [ ] **Step 4: Run it and confirm it passes**
 
 Run: `cd server && npx vitest run src/store/cast-resolve.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add server/src/store/cast-resolve.ts server/src/store/cast-resolve.test.ts
-git commit -m "feat(server): add cast resolver reading through superseded character ids"
+git commit -m "feat(server): add cast resolver reading through the character id history"
 ```
+
 
 ### Task 4: convert the four `synthesise-chapter.ts` join sites
 
@@ -433,7 +453,7 @@ import { describe, it, expect } from 'vitest';
 
 describe('#2040 orphaned characterId resolves through an alias', () => {
   it('renders in the aliased character voice, not the narrator', async () => {
-    // cast: narrator + { id: 'mairin', idAliases: ['mayrin'], designed voice }
+    // cast: narrator + { id: 'mairin', designed voice }; history { mayrin: 'mairin' }
     // groups: one group with characterId 'mayrin'
     // EXPECT: the group renders with Мэйрин's voice
     // EXPECT: its segment carries NO renderedFallbackCharacterId
@@ -536,7 +556,8 @@ import { describe, it, expect } from 'vitest';
 import { findDivergentSentences } from './build-synth-replacement.js';
 
 describe('#2040 findDivergentSentences tolerates alias-only differences', () => {
-  const cast = [{ id: 'mairin', name: 'Мэйрин', idAliases: ['mayrin'] }];
+  const cast = [{ id: 'mairin', name: 'Мэйрин' }];
+  const history = { mayrin: 'mairin' };
 
   it('does NOT report divergence when the two ids are the same character', () => {
     // segFile segment: characterId 'mayrin'; current sentence: characterId 'mairin'
@@ -602,76 +623,50 @@ git add server/src/routes/revisions.ts server/src/audio/render-integrity/aggrega
 git commit -m "fix(server): resolve character ids through aliases in drift, QA and splice joins"
 ```
 
-### Task 6: keep `idAliases` across a client cast write
+### Task 6: the survival guard
 
 **Files:**
-- Modify: `server/src/workspace/preserve-cast-voices.ts`
-- Test: `server/src/workspace/preserve-cast-voices.test.ts` (exists — extend it)
+- Test: `server/src/store/cast-id-history.survival.test.ts` (new)
+- Modify only if the guard fails: `server/src/routes/book-state.ts` (`applyReparse`)
 
 **Interfaces:**
-- Consumes: nothing new.
+- Consumes: Task 2's `loadCastIdHistory` / `retireCharacterId`.
 
-`PRESERVED_DESIGN_FIELDS` uses fill-the-gap semantics. `idAliases` needs a
-**union** instead — the set accumulates and must never shrink through a client
-round-trip (spec §4.1).
+**This task is the entire justification for section 4.1's shape, expressed as a
+test.** Under the previous field-based design two paths destroyed the data: a
+client cast `PUT` (which rebuilds rows from a 3-field allow-list) and
+`applyReparse` (which rebuilds a carryover row from `{id, name}` + `aliases` +
+`PRESERVED_VOICE_FIELDS`, then `rm`s `cast.json`). The side-table should make
+both harmless **with no production change at all**. Prove it - and if some
+cleanup path does delete the file, exclude it there.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the guard**
 
 ```ts
-it('#2040 — a client write omitting idAliases does not erase it', () => {
-  const existing = [{ id: 'mairin', idAliases: ['mayrin'] }];
-  const incoming = [{ id: 'mairin', name: 'Мэйрин' }];
-  expect(preserveDesignedVoicesOnCastWrite(existing, incoming)[0].idAliases).toEqual(['mayrin']);
+it('a client cast PUT leaves the id history intact', async () => {
+  // seed history { mayrin: 'mairin' }, PUT a cast payload that knows nothing
+  // about it, then assert loadCastIdHistory still returns the entry.
 });
 
-it('#2040 — unions rather than replacing when the client sends a subset', () => {
-  const existing = [{ id: 'mairin', idAliases: ['mayrin', 'meyrin'] }];
-  const incoming = [{ id: 'mairin', idAliases: ['mayrin'] }];
-  expect(preserveDesignedVoicesOnCastWrite(existing, incoming)[0].idAliases)
-    .toEqual(['mayrin', 'meyrin']);
+it('a reparse leaves the id history intact', async () => {
+  // seed history, run applyReparse (which rm's cast.json), then assert the
+  // history survives - this is the path that destroyed the field design.
 });
 ```
 
-- [ ] **Step 2: Run and confirm both fail**
+Build both fixtures with the harness the neighbouring `book-state` tests use.
+Per the plan's "How to read the test snippets" section, ship real assertions.
 
-Run: `cd server && npx vitest run src/workspace/preserve-cast-voices.test.ts`
-Expected: FAIL — `idAliases` is `undefined` in the first, `['mayrin']` in the second.
+- [ ] **Step 2: Run them.** If they pass with no production change, that is the
+      expected result and it is the whole point of the design - say so in the
+      report rather than inventing a change. If either fails, a cleanup path is
+      deleting the file: exclude `cast-id-history.json` there and re-run.
 
-- [ ] **Step 3: Implement the union**
-
-Inside `preserveDesignedVoicesOnCastWrite`, after the `PRESERVED_DESIGN_FIELDS`
-loop and beside the `voiceUuid` rule:
-
-```ts
-/* #2040 — idAliases accumulates superseded analyzer ids and is what makes a
-   frozen segments.json resolve. A client round-trip that omits or narrows it
-   must not shrink the set, so this is a UNION, not the fill-the-gap semantics
-   PRESERVED_DESIGN_FIELDS uses. */
-const oldAliases = Array.isArray(old.idAliases) ? (old.idAliases as string[]) : [];
-const incAliases = Array.isArray(merged.idAliases) ? (merged.idAliases as string[]) : [];
-const union = [...new Set([...incAliases, ...oldAliases])];
-if (union.length) merged.idAliases = union;
-```
-
-- [ ] **Step 4: Run and confirm both pass**
-
-Run: `cd server && npx vitest run src/workspace/preserve-cast-voices.test.ts` → PASS.
-
-- [ ] **Step 5: Carry the field through redux**
-
-In `src/store/cast-slice.ts`, make `overlaySnapshotEntry` / `hydrateFromAnalysis`
-preserve `idAliases` the same way they already preserve `aliases`. Add a
-frontend test asserting a hydrate does not drop it.
-
-- [ ] **Step 6: Run the frontend suite**
-
-Run: `npm test` from the repo root → green.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add server/src/workspace/preserve-cast-voices.ts server/src/workspace/preserve-cast-voices.test.ts src/store/cast-slice.ts src/store/cast-slice.test.ts
-git commit -m "fix(server,frontend): union idAliases across cast writes and hydration"
+git add server/src/store/cast-id-history.survival.test.ts
+git commit -m "test(server): pin that the character id history survives reparse and cast writes"
 ```
 
 ### Task 7: Wave 1 gate
@@ -698,143 +693,37 @@ resolve; the other 9 ids still do not. **Do not modify any book.**
 found an earlier version of this wave to be inert. The three parts of the id
 invariant are not independent niceties — Task 8 without Task 10 is a no-op.
 
-### Task 8: `applyRewriteToPriorCast` records the superseded id
+### Task 8: record every retirement through the choke point
 
 **Files:**
-- Modify: `server/src/store/merge-analysis-cast.ts:224-275`
-- Test: `server/src/store/merge-analysis-cast.test.ts` (extend)
-
-- [ ] **Step 1: Write the failing tests**
-
-```ts
-it('#2040 — records the old id when a rewrite renames a row', () => {
-  const { priorCast } = applyRewriteToPriorCast(
-    [{ id: 'mairin', name: 'Мэйрин', voiceState: 'tuned' }],
-    { mairin: 'mayrin' },
-  );
-  expect(priorCast[0].id).toBe('mayrin');
-  expect(priorCast[0].idAliases).toEqual(['mairin']);
-});
-
-it('#2040 — on a COLLISION, unions the loser id AND the loser aliases', () => {
-  const { priorCast } = applyRewriteToPriorCast(
-    [
-      { id: 'brann', name: 'Бранн', voiceState: 'tuned' },
-      { id: 'brann-weir', name: 'Бранн', voiceState: 'generated', idAliases: ['brann_weir'] },
-    ],
-    { brann: 'brann-canonical', 'brann-weir': 'brann-canonical' },
-  );
-  expect(priorCast).toHaveLength(1);
-  expect(priorCast[0].id).toBe('brann-canonical');
-  expect(new Set(priorCast[0].idAliases))
-    .toEqual(new Set(['brann', 'brann-weir', 'brann_weir']));
-});
-```
-
-- [ ] **Step 2: Run and confirm both fail**
-
-Run: `cd server && npx vitest run src/store/merge-analysis-cast.test.ts -t "#2040"`
-Expected: FAIL — `idAliases` undefined; the loser's set is discarded.
-
-- [ ] **Step 3: Implement**
-
-In `applyRewriteToPriorCast`, when building `remapped`, append `originalId`;
-and in the collision branch, before discarding the loser, union
-`{loser.id} ∪ loser.idAliases` into the winner. The dedup collapse **is** the
-collision branch, so the second half is the one that fixes RC3's live path.
-
-- [ ] **Step 4: Run and confirm both pass, then the file's whole suite**
-
-Run: `cd server && npx vitest run src/store/merge-analysis-cast.test.ts` → PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add server/src/store/merge-analysis-cast.ts server/src/store/merge-analysis-cast.test.ts
-git commit -m "fix(server): record superseded ids when a rewrite renames a cast row"
-```
-
-### Task 9: the merge unions `idAliases` — the anti-placebo task
-
-**Files:**
-- Modify: `server/src/store/merge-analysis-cast.ts:163-194`
-- Test: `server/src/store/merge-analysis-cast.test.ts` (extend)
+- Modify: `server/src/store/merge-analysis-cast.ts` - `applyRewriteToPriorCast:224-275`, `dedupePriorCastByName:405-425`, the name-fallback branch at `:163-194`
+- Modify: `server/src/routes/cast-merge.ts:142-146` (`performCastMerge`)
+- Test: extend `merge-analysis-cast.test.ts` and `cast-merge.test.ts`
 
 **Interfaces:**
-- Consumes: Task 8's output shape.
+- Consumes: Task 2's `retireCharacterId`.
 
-Without this, Task 8's aliases are discarded eight lines later at
-`analysis.ts:4767` → `:4775`, and Task 8's unit tests stay green while the
-feature does nothing. That is the exact placebo shape this repo has been bitten
-by; this task is what makes Task 8 real.
+Read spec section 4.4's call-site list. There are five, and
+**`dedupePriorCastByName` runs first** (`analysis.ts:2822`/`:5224`, ahead of
+`applyRewriteToPriorCast` at `:4767`/`:5920`) - it is the first chance to lose
+an id, not the last.
 
-- [ ] **Step 1: Write the failing tests**
+These functions are currently pure and synchronous. Do **not** make them do
+file I/O. Have each **return** the retirements it performed, and record them at
+the route level where `bookDir` is in scope. That keeps them unit-testable and
+keeps the write on one path.
 
-```ts
-it('#2040 — preserves idAliases on the id-matched branch', () => {
-  const out = mergeAnalysisResultWithExistingCast(
-    [{ id: 'mairin', name: 'Мэйрин', idAliases: ['mayrin'], voiceState: 'tuned' }],
-    [{ id: 'mairin', name: 'Мэйрин', role: 'supporting', color: 'slot-2' }],
-  );
-  expect(out[0].idAliases).toEqual(['mayrin']);
-});
-
-it('#2040 — preserves them on the NAME-FALLBACK branch and records the drift', () => {
-  const out = mergeAnalysisResultWithExistingCast(
-    [{ id: 'mairin', name: 'Мэйрин', idAliases: ['meyrin'], voiceState: 'tuned' }],
-    [{ id: 'mayrin', name: 'Мэйрин', role: 'supporting', color: 'slot-2' }],
-  );
-  const row = out.find((c) => c.name === 'Мэйрин')!;
-  expect(new Set(row.idAliases)).toEqual(new Set(['meyrin', 'mairin']));
-});
-```
-
-- [ ] **Step 2: Run and confirm both fail**
-
-Run: `cd server && npx vitest run src/store/merge-analysis-cast.test.ts -t "idAliases"`
-Expected: FAIL — `merged = { ...f }` rebuilds from the fresh row, dropping the field.
-
-- [ ] **Step 3: Implement, mirroring the `aliases` union at `:180-181`**
-
-Immediately after the existing `aliases` union inside the `overlaid` map:
-
-```ts
-/* #2040 — idAliases must survive the merge. This function rebuilds every row
-   from the FRESH roster and overlays only PRESERVED_VOICE_FIELDS, so without
-   this union every re-analysis erases the accumulated alias set — and with it
-   every frozen segments.json's ability to resolve. When `old` was matched
-   under a DIFFERENT id (the name-fallback branch), that id is itself now
-   superseded and joins the set. */
-const priorIds = Array.isArray(old.idAliases) ? (old.idAliases as string[]) : [];
-const supersededByDrift = old.id !== f.id ? [old.id] : [];
-const idAliases = [
-  ...new Set([
-    ...(Array.isArray(merged.idAliases) ? (merged.idAliases as string[]) : []),
-    ...priorIds,
-    ...supersededByDrift,
-  ]),
-].filter((a) => a !== f.id);
-if (idAliases.length) merged.idAliases = idAliases;
-```
-
-- [ ] **Step 4: Run and confirm both pass**
-
-Run: `cd server && npx vitest run src/store/merge-analysis-cast.test.ts` → PASS.
-
-- [ ] **Step 5: Add the end-to-end guard**
-
-Add a test that drives a full analysis run (using the harness the existing
-`analysis` route tests use) over a book whose `cast.json` already carries
-`idAliases`, and asserts the written `cast.json` still carries them. This is the
-only test in the plan that fails if the merge drops the field — Tasks 8 and 9's
-unit tests are green either way.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add server/src/store/merge-analysis-cast.ts server/src/store/merge-analysis-cast.test.ts server/src/routes/analysis.idaliases.test.ts
-git commit -m "fix(server): union idAliases through the analysis cast merge"
-```
+- [ ] **Step 1: Write the failing tests** - one per call site, asserting the returned retirement list:
+  - `applyRewriteToPriorCast` plain rename reports `{ from: 'mairin', to: 'mayrin' }`
+  - its collision path reports the loser's id rather than silently dropping it at `:274`
+  - `dedupePriorCastByName` reports the loser's id rather than merely pushing it to its `dropped` log array
+  - the merge's name-fallback reports the superseded `old.id`
+  - `performCastMerge` reports `sourceId`
+- [ ] **Step 2: Run them, confirm each fails.**
+- [ ] **Step 3: Implement** - thread a retirement list out of each function; call `retireCharacterId` once per entry at the route level.
+- [ ] **Step 4: Add the end-to-end guard** - run a full analysis over a book whose history already has an entry, and assert the history still has it AND gained the new one. This is the test that would have caught all three rounds of inertness.
+- [ ] **Step 5: Run `cd server && npm run test:server`** - green.
+- [ ] **Step 6: Commit** - `fix(server): record every character-id retirement in the id history`
 
 ### Task 10: the early remap pass — main path
 
@@ -998,9 +887,9 @@ will reintroduce a real `unknown-male` row. Exact-id-wins then reroutes Timkin's
 21 frozen segments to the background bucket with no tie and no warning — 55
 segments corpus-wide (spec §4.4).
 
-- [ ] **Step 1: Write the failing test** — when a fresh roster introduces a row whose id equals an existing `idAliases` entry on another character, that entry is removed from the other character.
+- [ ] **Step 1: Write the failing test** — when a fresh roster introduces a live row whose id is a KEY in the history, that entry is dropped and the affected segments are reported.
 - [ ] **Step 2: Run, confirm it fails.**
-- [ ] **Step 3: Implement the displacement** in the merge, after the union in Task 9: strip any `idAliases` entry that collides with a live fresh id.
+- [ ] **Step 3: Implement the displacement** — after the merge settles the roster, drop any history key that is now a live cast id, and surface those segments as *needs your decision*.
 - [ ] **Step 4: Run the suite → green.**
 - [ ] **Step 5: Commit** — `fix(server): drop a superseded id alias when a live character reclaims it`
 
@@ -1044,7 +933,7 @@ a stamp either: the "auto-reconciled" list would be empty by construction
 - [ ] **Step 1: Write the frontend failing tests** — two banner sections render from the classified data, and the "not the same character" action dispatches a reject.
 - [ ] **Step 2: Run, confirm they fail.**
 - [ ] **Step 3: Implement the split**: *auto-reconciled* (informational, collapsed) and *needs your decision* (actionable, showing the closest candidate).
-- [ ] **Step 4: Implement the reject** — it removes the `idAliases` entry **and** writes a `notLinkedTo` edge, so the next re-analysis's name matcher does not simply re-record it (spec §4.6). Without the edge the un-record is not durable.
+- [ ] **Step 4: Implement the reject** — it removes the history entry **and** writes a `notLinkedTo` edge, so the next re-analysis's name matcher does not simply re-record it (spec §4.6). Without the edge the un-record is not durable.
 - [ ] **Step 5: Add an e2e spec** under `e2e/` covering both banner states.
 - [ ] **Step 6: Run `npm test` and `npm run test:e2e` → green.**
 - [ ] **Step 7: Commit** — `feat(frontend,server): split the orphaned-id banner and make rejecting a match durable`
