@@ -376,6 +376,76 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
   });
 
+  it('#2023 Piece 2: a HEALTHY cloned narrator still refuses to speak an orphaned-characterId line', async () => {
+    /* Distinct from the IMPORTANT-1 case above: THAT case only proves the
+       gate fires when the cloned narrator is itself BROKEN (qwenUnavailable).
+       This one proves the gate ALSO fires when the cloned voice is perfectly
+       healthy and available — the actual guarantee gap #2023 found: every
+       affected narrator in the five wrong-voice-audio books was a healthy
+       cloned or designed voice, so "the resolver pre-pass would have caught
+       it anyway" was never true. A real person's voice must never be
+       substituted for another character's attributed line, healthy or not. */
+    const provider = makeProvider();
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: { name: 'Narrator (unused)', libraryUuid: 'lib-narrator-clone', provenance: 'cloned' },
+        },
+      },
+    ];
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-narrator-clone' ? baseEntry({ voiceUuid: 'lib-narrator-clone' }) : null,
+    );
+    const deriveEngineArtifact = vi.fn();
+
+    let thrown: UnresolvableClonedVoiceError | undefined;
+    try {
+      await synthesiseChapter({
+        sentences: [sentence(1, 'ghost')],
+        cast: narratorCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        // Qwen IS available this run (no qwenUnavailable) and the cloned
+        // voice IS healthy (ptExists true, no consent revocation, no stale
+        // artifact) — the resolver pre-pass alone would let this render.
+        cloneResolverDepsOverride: {
+          readEntry,
+          ptExists: async () => true,
+          deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
+        },
+      });
+    } catch (e) {
+      thrown = e as UnresolvableClonedVoiceError;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    // #2023 fix round 2 — the review's exact finding: this call site used to
+    // throw the BARE constructor unconditionally, which hardcodes "the Qwen
+    // engine is not available this run… Re-enable Qwen or reassign the
+    // character" — every clause false here (Qwen IS available, the voice IS
+    // healthy, and 'ghost' has no cast row to reassign). Pin the accurate
+    // reason and message instead.
+    expect(thrown?.broken).toEqual([
+      { name: 'Narrator', reason: 'misattributed-substitution', orphanedCharacterId: 'ghost' },
+    ]);
+    expect(thrown?.message).toContain('orphaned characterId "ghost"');
+    expect(thrown?.message).toContain(
+      'Re-attribute the affected sentence(s) to the correct character in the Manuscript view',
+    );
+    expect(thrown?.message).not.toContain('Re-enable Qwen');
+    expect(thrown?.message).not.toContain('unavailable this');
+    expect(thrown?.message).not.toContain('reassign the character(s)');
+
+    // Placebo-proof: no synth call, and no derive was ever needed (the voice
+    // really was healthy) — the throw comes from the misattribution guard,
+    // not from an availability failure.
+    expect(provider.calls).toHaveLength(0);
+    expect(deriveEngineArtifact).not.toHaveBeenCalled();
+  });
+
   /* fs-38 Wave 3c, Task 23 — the narrator stub must resolve its REAL cast
      row when one exists. Every entry point (generation.ts, chapter-splice
      .ts, chapter-qa-repair.ts) hardcoded `narratorCharacterId: 'narrator'`,
@@ -450,7 +520,67 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     expect(deriveEngineArtifact).not.toHaveBeenCalled();
   });
 
-  it('Task 23: a char-narrator book renders the narrator on its real cloned voice, not a stock catalogue pick', async () => {
+  it('Task 23 / #2023 Piece 2: a char-narrator book\'s cloned voice resolves its REAL row via the orphaned-characterId net, and now correctly refuses to speak the substituted line', async () => {
+    /* Pre-#2023 this asserted the OPPOSITE: a healthy cloned char-narrator
+       rendered the orphaned 'ghost' line on its own cloned voice. That WAS
+       the guarantee gap #2023 found — every affected narrator in the five
+       wrong-voice-audio books was a healthy voice, so "the render used the
+       cloned voice's own storage key" was the bug, not proof the resolver
+       worked. The resolver's OWN job (validating narratorCharacterId
+       resolves the real 'char-narrator' row, not a synthetic stub) is now
+       proven by `readEntry` still firing with the real uuid — it's the
+       OUTCOME once that row resolves healthy that flipped, from "renders"
+       to "refuses". */
+    const provider = makeProvider();
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'char-narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Narrator (unused)',
+            libraryUuid: 'lib-char-narrator-clone',
+            provenance: 'cloned',
+          },
+        },
+      },
+    ];
+    const entry = baseEntry({ voiceUuid: 'lib-char-narrator-clone' });
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-char-narrator-clone' ? entry : null,
+    );
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'ghost')],
+        cast: narratorCast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+      }),
+    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+
+    // The resolver validated the REAL row (not a no-op against a stub it
+    // could never match) — a still-hardcoded narratorCharacterId would make
+    // `readEntry` never fire at all (the gate never sees 'char-narrator').
+    // Zero synth calls: the substitution is refused, never rendered on any
+    // voice.
+    expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("#2023 replacement coverage: a char-narrator book's cloned narrator renders its OWN (non-orphaned) line on its own clone storage key", async () => {
+    /* The Task 23 case above lost `expect(provider.calls[0].voiceName).toBe(
+       'qwen-lib-char-narrator-clone')` because that scenario's line is an
+       orphaned-characterId substitution, which #2023 now correctly refuses
+       — there is no rendered call left to assert a voiceName against there.
+       This is the replacement: same char-narrator cloned-voice setup, but
+       the sentence carries the NARRATOR'S OWN characterId (not an orphaned
+       one), so the #2023 misattribution guard never fires and the chapter
+       renders normally — still pinning "a cloned narrator renders on its
+       own clone storage key, not a stock catalogue pick" (the narrator-
+       row-resolution half of Task 23) somewhere in this suite. */
     const provider = makeProvider();
     const narratorCast: CastCharacter[] = [
       {
@@ -471,7 +601,7 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     );
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'ghost')],
+      sentences: [sentence(1, 'char-narrator')],
       cast: narratorCast,
       provider,
       modelKey: 'qwen3-tts-0.6b',
@@ -479,13 +609,6 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
       cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
     });
 
-    // The resolver validated the real row (not a no-op against a stub it
-    // could never match), and the render used the cloned voice's own
-    // storage key — never a catalogue narrator-bucket pick synthesised from
-    // the stub's absent gender/tone hints. A still-hardcoded
-    // narratorCharacterId makes `readEntry` never fire (the gate never sees
-    // 'char-narrator') and `voiceName` come back as a plain qwen catalogue
-    // pick instead of `qwen-lib-char-narrator-clone`.
     expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
     expect(provider.calls.length).toBeGreaterThan(0);
     expect(provider.calls[0].voiceName).toBe('qwen-lib-char-narrator-clone');

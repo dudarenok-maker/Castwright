@@ -46,6 +46,15 @@ import { expandForSpeech } from './normalize/index.js';
 
 const ALL_CAPS_RUN = /([A-Z])([A-Z']{2,})/g;
 const DASH_RUN = /\s*[–—]\s*/g;
+/* A dash at the very start of the string (after optional leading whitespace)
+   — the standard dialogue-opener convention in Russian, French, and Spanish
+   prose (`— Кто бы это ни был...`). Matched and replaced SEPARATELY from
+   `DASH_RUN` below — see `softenDashes`'s doc comment for why a leading dash
+   can't just fall through to the same ", " substitution every other dash
+   gets. Language-agnostic on purpose: the character is identical across
+   every language that uses this convention, so this is not a Russian-only
+   fix (#2026 defect 2). */
+const LEADING_DASH = /^\s*[–—]\s*/;
 /* `[empathic]` / `[shouting]` / etc — only the analyzer-vocabulary tags.
    Matching the closed set keeps proper-noun-in-brackets ("[Citation Needed]")
    from being silently swallowed. Case-insensitive because the analyzer
@@ -91,9 +100,26 @@ export function denormaliseAllCaps(text: string): string {
 /** Replace em-dash (U+2014) and en-dash (U+2013) with a comma so the TTS
     decoder treats the parenthetical break like any other clause boundary.
     Surrounding whitespace is collapsed so `right—missing` and `right — missing`
-    both become `right, missing`. */
+    both become `right, missing`.
+
+    A dash at the very START of the string is handled FIRST and differently
+    (#2026 defect 2): on-box measurement (issue #2026) found a leading dash —
+    the standard Russian/French/Spanish dialogue-opener convention
+    (`— Кто бы это ни был...`) — produces no audible pause (+0.14 s vs the
+    same line with no dash at all), while a mid-sentence dash IS honoured
+    normally (+1.53 s). The difference isn't the punctuation mark, it's the
+    POSITION: every interior dash this function converts to ", " lands after
+    a real preceding word, which is what actually gives the comma something
+    to pause after — a comma at position zero has nothing before it to pause
+    after, no matter which mark it replaced. An ellipsis at the very start
+    doesn't have that problem — leading "..." is the ordinary way written
+    prose marks a beat before speech resumes, in every one of the languages
+    that use a leading dash for dialogue — so a leading dash becomes "... "
+    instead of ", ". Order matters: this runs BEFORE the general `DASH_RUN`
+    pass below, and the ellipsis it inserts contains no dash character, so
+    the two passes can't double-process the same dash. */
 export function softenDashes(text: string): string {
-  return text.replace(DASH_RUN, ', ');
+  return text.replace(LEADING_DASH, '... ').replace(DASH_RUN, ', ');
 }
 
 /** Strip every codepoint that can poison the XTTS tokenizer with no defensible

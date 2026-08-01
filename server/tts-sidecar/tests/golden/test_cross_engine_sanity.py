@@ -64,6 +64,26 @@ MAX_DURATION_SEC = 30.0
 # render is expected; still tight enough to catch a truncated or runaway one.
 MAX_DURATION_SEC_LONG = 60.0
 
+# #2026 acceptance criterion 4 — Russian coverage for the golden tier. Every
+# check in this file (and `test_xtts_clone_sanity` below) was English-only
+# before this, which is exactly why fs-38 Wave 3 on-box acceptance found
+# defects 1-3 (neuter-adjective mispronunciation, leading-dash pause,
+# rare language-collapse) nowhere reachable by CI. The exact acceptance-
+# chapter line from the issue: a leading em-dash, the standard Russian
+# dialogue-opener convention. 34 chars, comfortably under XTTS's `ru`
+# char_limits threshold of 182 (docs/testing/fs38-wave3-onbox-acceptance.md
+# E-04). Node's own `normaliseForTts` softens a leading dash to "... " before
+# text ever reaches the wire in production (server/src/tts/text-normalize.ts)
+# — this check sends the RAW manuscript text straight to the engine instead,
+# mirroring how the on-box probes that found the bug were run, so it
+# exercises the tokenizer's own dash handling directly. Like every other
+# check in this file it is LOOSE and format-only: it proves the render
+# doesn't crash / go silent / come back in the wrong format, NOT that the
+# leading-dash pause is now audible or that the neuter-adjective/language-
+# collapse defects are fixed — those still need a real by-ear listen, tracked
+# on the on-box acceptance run sheet.
+RUSSIAN_SANITY_TEXT = "— Кто бы это ни был, пусть стучит."
+
 
 def _assert_sane(res, requested_voice: str, *, max_duration: float = MAX_DURATION_SEC) -> None:
     assert res.sample_rate == 24000, f"sample_rate {res.sample_rate} != 24000"
@@ -83,6 +103,22 @@ def test_coqui_sanity():
     engine = main.CoquiEngine()
     try:
         res = engine.synthesize("xtts_v2", engine.FALLBACK_SPEAKER, SANITY_TEXT)
+    except Exception as e:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Coqui engine unavailable: {e}")
+    _assert_sane(res, engine.FALLBACK_SPEAKER)
+
+
+def test_coqui_sanity_ru():
+    """Russian coverage for the golden tier (#2026 acceptance criterion 4) —
+    see `RUSSIAN_SANITY_TEXT`'s module-level comment for why this specific
+    line and what this loose, format-only check does and does not prove."""
+    if os.environ.get("GOLDEN_COQUI") not in ("1", "true", "TRUE"):
+        pytest.skip("Set GOLDEN_COQUI=1 to run the Coqui XTTS sanity check (lazy-loads weights).")
+    engine = main.CoquiEngine()
+    try:
+        res = engine.synthesize(
+            "xtts_v2", engine.FALLBACK_SPEAKER, RUSSIAN_SANITY_TEXT, language="ru"
+        )
     except Exception as e:  # pragma: no cover - environment-dependent
         pytest.skip(f"Coqui engine unavailable: {e}")
     _assert_sane(res, engine.FALLBACK_SPEAKER)

@@ -120,6 +120,17 @@ describe('config registry', () => {
     expect(k?.apply).toBe('restart-sidecar');
   });
 
+  it('tts.coqui.degenGuard (#2026) registers a default-on boolean guard toggle mapped to COQUI_DEGEN_GUARD', () => {
+    const k = getKnob('tts.coqui.degenGuard');
+    expect(k).toBeDefined();
+    expect(k?.env).toBe('COQUI_DEGEN_GUARD');
+    expect(k?.type).toBe('boolean');
+    expect(k?.default).toBe(true);
+    expect(k?.group).toBe('tts-engine');
+    expect(k?.apply).toBe('restart-sidecar');
+    expect(k?.risk).toBe('medium');
+  });
+
   it('tts.preload.kokoro defaults to false (fs-60 — non-English books are no longer forced onto a single engine, so an always-hot English-only engine is a less universally good default)', () => {
     const k = getKnob('tts.preload.kokoro');
     expect(k).toBeDefined();

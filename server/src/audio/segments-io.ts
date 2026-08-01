@@ -70,6 +70,12 @@ export interface SegmentsFile {
     characterId?: string;
     sentenceIds?: number[];
     renderedFallbackEngine?: string | null;
+    /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this segment
+        when `characterId` above is an orphaned id (no cast entry at all) and
+        the render's orphaned-characterId safety net substituted the narrator
+        for it. See `ChapterSegment.renderedFallbackCharacterId`'s doc comment
+        in tts/synthesise-chapter.ts. */
+    renderedFallbackCharacterId?: string | null;
     textHash?: string;
     /* fs-58 (#1041) — djb2-base36 hash of the group's RAW explicit `instruct`,
        stamped ONLY on the per-group qwen-1.7b liveInstruct path (the instruct
@@ -77,7 +83,26 @@ export interface SegmentsFile {
        instruct to flag a chapter whose instruct was edited after it rendered.
        Absent on every other engine/path and on pre-fs-58 renders. */
     instructHash?: string;
+    /** #1972 — the voice name ACTUALLY sent to the provider for this segment
+        (post-fallback, post-emotion-variant). `baseVoiceName` is the same,
+        minus any `__<emotion>` variant suffix — read by
+        `collectOrphanedCharacterFallbacks` below (#2023 Piece 1) to report
+        the voice actually used for an orphaned-id substitution. */
+    voiceName?: string;
+    baseVoiceName?: string;
   }>;
+}
+
+/** #2023 Piece 1 — the render-time record of an orphaned-characterId
+    substitution: which cast character actually spoke the line, and (when
+    known) which voice they spoke it in. */
+export interface OrphanedCharacterFallback {
+  /** The cast character id that rendered the line instead (usually the book's
+      narrator — see `resolveNarratorChar` in tts/synthesise-chapter.ts). */
+  characterId: string;
+  /** The voice name actually sent to the provider, when the render recorded
+      one. Absent on a pre-#2023 render whose segments predate this stamp. */
+  voiceName?: string;
 }
 
 /* #1105 — djb2 base-36 hash of a sentence's RAW text. Byte-identical to
@@ -247,6 +272,42 @@ export async function collectRenderedFallbackEngines(
   for (const seg of segs) {
     for (const [characterId, snap] of Object.entries(seg.characterSnapshots ?? {})) {
       if (snap.renderedFallbackEngine) out[characterId] = snap.renderedFallbackEngine;
+    }
+  }
+  return out;
+}
+
+/* #2023 Piece 1 — per-orphaned-id render-time substitution, aggregated across
+   a book's rendered chapters. Today's `characterId` values live only in an
+   error log line (once per orphan id per render); nothing on the wire ever
+   named the substitution, so `renderedFallbackByCharacter` stayed `{}` even
+   for a render that substituted dozens of segments. Keyed by the ORPHANED id
+   itself (never a real cast id, so it can't collide with
+   `collectRenderedFallbackEngines`'s cast-id keyspace above) — mirrors that
+   sibling aggregator's shape and "any rendered chapter" semantics, but reads
+   `renderedFallbackCharacterId` off the per-SEGMENT record (stamped in
+   `synthesise-chapter.ts`'s `resolveGroup`) rather than a per-character
+   snapshot, since an orphaned id is never itself a cast member and so never
+   gets a `characterSnapshots` entry. */
+export async function collectOrphanedCharacterFallbacks(
+  bookDir: string,
+  chapters: Array<{ id: number; slug: string }>,
+): Promise<Record<string, OrphanedCharacterFallback>> {
+  const out: Record<string, OrphanedCharacterFallback> = {};
+  const segs = await loadSegmentsFiles(bookDir, chapters);
+  for (const seg of segs) {
+    for (const s of seg.segments ?? []) {
+      if (!s.characterId || !s.renderedFallbackCharacterId) continue;
+      out[s.characterId] = {
+        characterId: s.renderedFallbackCharacterId,
+        /* GATE 1 review — `resolveGroup` (synthesise-chapter.ts) stamps
+           `baseVoiceName` unconditionally on every segment, so a `?? s.voiceName`
+           fallback here was dead in production (and untested — both existing
+           test cases set the two fields to the same string). Only a pre-#1972
+           segments.json predates the field at all, which `?? undefined` still
+           covers. */
+        voiceName: s.baseVoiceName ?? undefined,
+      };
     }
   }
   return out;

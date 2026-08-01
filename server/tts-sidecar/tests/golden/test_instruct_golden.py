@@ -50,7 +50,12 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
-from tests.golden.compare import bless_guard_thresholds  # noqa: E402
+from tests.golden.compare import (  # noqa: E402
+    IDENTITY_COSINE_EPSILON,
+    LOUDNESS_DBFS_EPSILON,
+    bless_guard_thresholds,
+    describe_measurement_move,
+)
 
 pytestmark = pytest.mark.golden
 
@@ -173,22 +178,65 @@ def _measure(engine) -> dict:
 
 
 def _bless(measured: dict) -> None:
-    """Record measurements AND (guarded) the derived tolerances. #1995: the
-    `tolerances` block is a THRESHOLD, not a measurement -- a bless run
-    performed for an unrelated reason (e.g. re-blessing kokoro-baseline.json's
-    transcripts in the same `--sidecar-only --bless` invocation) must not
-    silently move it to whatever THIS run measured. `bless_guard_thresholds`
-    refuses (raises, no write at all -- same all-or-nothing shape as
-    `test_golden_regression._bless`'s G1/G2) unless the computed tolerances
-    match what's already committed, or `GOLDEN_REBLESS_THRESHOLDS=1` is set.
+    """Record measurements AND (guarded) the derived tolerances, identity
+    cosines, and per-emotion loudness. #1995 guarded `tolerances` (a
+    THRESHOLD, not a measurement); #2035 widened the same guard to
+    `identity` and `loudness_dbfs` -- both are *assertion references* too:
+    `test_live_instruct_golden`'s per-emotion drift check diffs a fresh
+    measurement against `baseline["loudness_dbfs"][e]`, so that recorded
+    figure is the CENTRE of a ±`loudness_dbfs_abs` drift window, not free
+    data; the recorded `identity` cosines feed `computed_tolerances`'
+    `identity_cosine_max` the same way. A bless run performed for an
+    unrelated reason (e.g. re-blessing kokoro-baseline.json's transcripts in
+    the same `--sidecar-only --bless` invocation) must not silently
+    re-centre any of the three.
 
-    `previously_blessed=bool(baseline.get("identity"))` disambiguates a
-    genuine first bless (no `identity` recorded yet) from a previously
-    blessed baseline that lost its `tolerances` key (e.g. a hand-resolved
-    merge conflict) -- `existing is None` alone cannot tell those apart, and
-    conflating them was the exact #2003 shape reproduced inside this guard.
-    `baseline.get("identity")` is the same signal `test_live_instruct_golden`
-    already uses below for its own unblessed-SKIP."""
+    **#2045 F1: `identity`/`loudness_dbfs` are noise-tolerant, `tolerances`
+    is not.** `tolerances` is quantised (`max(0.15, id_max+0.10)`, a flat
+    `4.0`, `max(1.0, rtf*1.5)`), so exact equality is the right bar and
+    `epsilon` stays at `bless_guard_thresholds`' default `0.0`. `identity`/
+    `loudness_dbfs` are raw stochastic measurements — `instruct-baseline.
+    json`'s own `metadata.notes` records ~0.0014 identity run-to-run spread
+    -- so an exact-equality guard on THOSE refuses on every honest re-bless,
+    which independent review found makes #1995 worse: the operator reaches
+    for `GOLDEN_REBLESS_THRESHOLDS=1` on a ROUTINE bless, and that same flag
+    covers `tolerances`, silently re-authorising exactly the kind of change
+    #1995 exists to catch. `IDENTITY_COSINE_EPSILON` (0.015) /
+    `LOUDNESS_DBFS_EPSILON` (0.4) let a within-epsilon move through --
+    `describe_measurement_move` then reports what moved and by how much, and
+    this function PRINTS it, so the move is loud rather than silent (#2035's
+    Acceptance: "surfaced loudly enough that it cannot pass unnoticed") even
+    though the write proceeds. A beyond-epsilon move still refuses exactly
+    like `tolerances` does. All three guards run before any field is
+    written, so a refusal on one leaves the file completely untouched -- the
+    same all-or-nothing shape as `test_golden_regression._bless`'s G1/G2.
+
+    `previously_blessed` disambiguates a genuine first bless (nothing
+    recorded yet) from a previously blessed baseline that lost one of the
+    GUARDED keys (e.g. a hand-resolved merge conflict) -- `existing is None`
+    alone cannot tell those apart, and conflating them was the exact #2003
+    shape reproduced inside this guard.
+
+    **#2045 F5**: the probe is `any(k in baseline for k in ("rtf",
+    "identity", "loudness_dbfs", "tolerances"))` -- ANY of the four,
+    not one. An earlier revision of this fix used `bool(baseline.
+    get("identity"))`, which independent review found circular for
+    `label="identity"` specifically (that field IS one of the three being
+    guarded, so losing exactly `identity` made the probe read "never
+    blessed" and the identity guard never fired). The very next revision
+    narrowed the probe to `bool(baseline.get("rtf"))` alone on the theory
+    that `rtf` is never itself a guarded field -- true, but STILL a single
+    key: a merge conflict is exactly as likely to drop `rtf` as `identity`,
+    and dropping `rtf` alone would have made ALL THREE guards read "never
+    blessed" simultaneously, a WIDER blast radius than the bug it fixed
+    (merely a less likely trigger). `any(...)` across all four closes that:
+    as long as ONE of them survives a corruption, every guard's probe still
+    correctly reads "previously blessed". `test_live_instruct_golden`'s own
+    unblessed-SKIP below still reads `baseline.get("identity")` directly --
+    that answers a DIFFERENT question ("is there recorded data to assert
+    against", not "is a re-bless of a specific field safe") with no
+    corresponding circularity or blind spot, so it is deliberately left as
+    is rather than aligned to the same probe."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
@@ -197,19 +245,37 @@ def _bless(measured: dict) -> None:
         "loudness_dbfs_abs": 4.0,
         "rtf_max": round(max(1.0, measured["rtf"] * 1.5), 2),
     }
+    computed_identity = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
+    computed_loudness = measured["loudness_dbfs"]
+
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
-    guard_reason = bless_guard_thresholds(
-        baseline.get("tolerances"),
-        computed_tolerances,
-        previously_blessed=bool(baseline.get("identity")),
-        allow_rebless_thresholds=allow_rebless_thresholds,
+    previously_blessed = any(k in baseline for k in ("rtf", "identity", "loudness_dbfs", "tolerances"))
+    # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
+    # equality is correct there, see this function's own docstring above.
+    guard_specs = (
+        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0),
+        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON),
+        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON),
     )
-    if guard_reason is not None:
-        raise AssertionError(guard_reason)
+    for label, existing_val, computed_val, epsilon in guard_specs:
+        guard_reason = bless_guard_thresholds(
+            existing_val,
+            computed_val,
+            previously_blessed=previously_blessed,
+            allow_rebless_thresholds=allow_rebless_thresholds,
+            label=label,
+            epsilon=epsilon,
+        )
+        if guard_reason is not None:
+            raise AssertionError(guard_reason)
+        if epsilon > 0:
+            echo = describe_measurement_move(existing_val, computed_val, epsilon=epsilon)
+            if echo is not None:
+                print(f"[golden-bless] {label} moved {echo}")
 
     baseline["tolerances"] = computed_tolerances
-    baseline["identity"] = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
-    baseline["loudness_dbfs"] = measured["loudness_dbfs"]
+    baseline["identity"] = computed_identity
+    baseline["loudness_dbfs"] = computed_loudness
     baseline["rtf"] = {"batched": measured["rtf"]}
     # blessed_at left for the committer to stamp — the harness has no clock.
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
@@ -236,6 +302,18 @@ def test_live_instruct_golden():
         pytest.skip("GOLDEN_BLESS set — recorded instruct-baseline.json (not asserting this run).")
 
     baseline = _load_json(BASELINE_PATH)
+    # #2045 F5: this reads `identity` specifically, NOT `_bless()`'s
+    # `any(...)` probe above -- deliberately, not an oversight. `_bless()`'s
+    # probe answers "has this baseline EVER been blessed" (any one of the
+    # four guarded/written keys survives a corruption), which is the right
+    # question for deciding whether an omission is a first bless or #2003
+    # corruption. This SKIP answers a narrower, different question: "do I
+    # have `identity` data to assert against" -- the loop right below reads
+    # `tol["identity_cosine_max"]` via `measured["identity"]` and
+    # `base_L = baseline["loudness_dbfs"]`, so `identity` specifically
+    # (not `rtf`, not `tolerances` alone) is what this test needs present.
+    # No circularity here to fix: unlike `_bless()`'s guard, this is a
+    # read-only skip check, not itself deciding whether to write `identity`.
     if not baseline.get("identity"):
         pytest.skip(
             "instruct-baseline.json is unblessed. Bless on a GPU box: "

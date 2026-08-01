@@ -428,6 +428,76 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
   });
 });
 
+/* Pairs with #2023 (docs/testing/fs38-wave3-onbox-acceptance.md §5 Section C,
+   C-05) — the orphaned-characterId fallback banner's whole hydrate seam had
+   ZERO coverage: deleting `dispatch(castActions.setOrphanedCharacterFallbacks(…))`
+   from layout.tsx's getBookState handler left all 4492 frontend tests AND the
+   new e2e spec green, because the e2e spec dispatches the reducer directly
+   (bypassing layout — see its own corrected comment) and no unit test ever
+   drove layout's own hydrate path for this field. This is that missing case. */
+describe('Layout — per-book hydration: orphaned-characterId fallback banner (#2023)', () => {
+  it('dispatches castActions.setOrphanedCharacterFallbacks from a getBookState response', async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: {
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'Third-person observer', color: 'narrator' },
+        ],
+      },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+      orphanedCharacterFallbacks: {
+        mayrin: { characterId: 'narrator', voiceName: 'qwen-lib-narrator-clone' },
+      },
+    });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('b1');
+    });
+
+    /* The field this whole feature exists to surface — asserted against the
+       real reducer's state shape, not a spy on the dispatch call, so this
+       fails exactly the way the deleted-line mutation should: red when the
+       dispatch is missing, green when it's there. */
+    await waitFor(() => {
+      expect(store.getState().cast.orphanedCharacterFallbacks).toEqual({
+        mayrin: { characterId: 'narrator', voiceName: 'qwen-lib-narrator-clone' },
+      });
+    });
+  });
+});
+
 /* Pairs with docs/features/archive/91-cast-drift-consolidation.md — the multi-book
    drift modal's BOOK header must resolve titles through a saved → library
    → bookId chain so cross-book groups (book never opened this session, so
