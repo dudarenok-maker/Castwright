@@ -8,6 +8,10 @@ on:
     # to preserve for an unrelated PR.
     paths:
       - 'docs/testing/onbox-acceptance-register.md'
+      # The live view is checked against the register by the same script, so a
+      # change to either side has to fire it — a live-view-only edit is exactly
+      # the shape that drifts the published page away from the markdown.
+      - 'docs/testing/onbox-acceptance-register-live-view.html'
       # Also fire on the checker itself (and its own workflow file) so
       # editing the checker exercises it against the real register, rather
       # than only ever running against a register that hasn't changed.

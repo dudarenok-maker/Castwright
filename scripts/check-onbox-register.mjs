@@ -324,6 +324,288 @@ export function checkRegister(text) {
   return errors;
 }
 
+// ---------------------------------------------------------------------------
+// The live view (docs/testing/onbox-acceptance-register-live-view.html)
+// ---------------------------------------------------------------------------
+// The register has a hand-authored HTML twin published to a fixed artifact URL.
+// It is not generated from the markdown, so the two drift: on 2026-07-28 the
+// published page was simultaneously missing a row added in one PR and carrying
+// a row that only existed on another PR's branch, and the two errors cancelled
+// in the total — a plausible-looking summary strip over two wrong group counts.
+// Nothing could see it, because the checks above validate the markdown against
+// itself.
+//
+// These checks close that gap by comparing the two files. What they CANNOT see
+// is the published page itself: publishing the wrong file, or forgetting to
+// publish at all, leaves no trace in the repo. That half is a documented
+// procedure, not a mechanical gate — see the register's "Live view" section.
+
+// Blanks HTML comments before anything else parses the live view. Both
+// directions matter and both were wrong without it (PR #2080 review round 2):
+// a commented-out row was counted as a real one, and commenting out a whole
+// group section — which removes it from the published page — was invisible.
+// Blanking rather than deleting keeps the comment's own `<section>`/`<span>`
+// text from being read while leaving the surrounding structure intact.
+function stripHtmlComments(html) {
+  return html.replace(/<!--[\s\S]*?-->/g, '');
+}
+
+// Strips tags and collapses whitespace, so a cell's text can be compared
+// regardless of the markup inside it (the C group's setup cell wraps a
+// `<span lang="ru">`, and every glance-table letter is wrapped in an `<a>`).
+function htmlCellText(html) {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Parses the live view's glance table into letter → count, mirroring the
+// markdown's parseGlanceTable: a row only counts as a *group* row when its
+// first cell is a single uppercase letter, so the `—`-prefixed Blocked and
+// Unconfirmed rows and the header row are skipped without special-casing.
+function parseLiveViewGlance(html) {
+  const tableMatch = html.match(/<table class="glance">([\s\S]*?)<\/table>/);
+  if (!tableMatch) return { groups: null, malformedLetters: [], duplicateLetters: new Set() };
+  const groups = new Map();
+  const malformedLetters = [];
+  const duplicateLetters = new Set();
+  // `<tr\b[^>]*>`, not a bare `<tr>`: a row carrying any attribute was
+  // previously invisible, so an ADDED group row went unreported (round 2, #7).
+  for (const rowMatch of tableMatch[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)) {
+    const cells = [...rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) =>
+      htmlCellText(c[1]),
+    );
+    if (cells.length === 0) continue;
+    if (!/^[A-Z]$/.test(cells[0])) continue;
+    const letter = cells[0];
+    const lastCell = cells[cells.length - 1];
+    if (cells.length !== 3 || !/^\d+$/.test(lastCell)) {
+      malformedLetters.push(letter);
+      continue;
+    }
+    // Map.set is last-writer-wins, so a repeated letter would silently keep
+    // only one of two contradicting rows — and which one it kept would depend
+    // on their order. The markdown parser guards exactly this
+    // (duplicateTableLetters); mirroring it here keeps the two symmetrical.
+    if (groups.has(letter)) duplicateLetters.add(letter);
+    groups.set(letter, Number(lastCell));
+  }
+  return { groups, malformedLetters, duplicateLetters };
+}
+
+// Parses the live view's group sections into letter → { headerCount, rowIds }.
+// Rows are collected per SECTION rather than by their own ID letter, so a row
+// filed under the wrong group is caught rather than silently landing in the
+// right bucket. Sections whose `gtag` is not a single uppercase letter (the
+// `BLK` and `?` sections) are skipped — the markdown's own glance table marks
+// their rows with `—` and excludes them from the owed total too.
+//
+// The split marker matches a whole `<section>` tag whose class list CONTAINS
+// `group`, wherever the class attribute sits among the others. Two rounds of
+// review narrowed it to this:
+//   - `<section class="group"` (round 1) missed the real file's modifier-class
+//     sections (`class="group is-blocked"`, `class="group is-soft"`), folding
+//     their content — and the trailing `<footer>` — into the PRECEDING group's
+//     block. The `gtag` filter never saw them, a lettered row added to either
+//     was attributed to the wrong group, and a cosmetic modifier class on any
+//     other section made its whole row list read as "extra rows" (F2).
+//   - `<section class="group[^"]*"` (round 2) fixed that but matched sibling
+//     names like `class="grouping"` / `class="group-nav"`, and was still
+//     positional: `<section id="blocked" class="group is-blocked">` re-opened
+//     the fold SILENTLY, which is the one attribute variation that degraded
+//     quietly rather than failing loudly (#4, #5).
+// `(?:\s[^"]*)?` requires whitespace after `group`, so `grouping` no longer
+// matches; the leading `[^>]*` makes attribute order irrelevant.
+function parseLiveViewSections(html) {
+  const sections = new Map();
+  const duplicateLetters = new Set();
+  const invalidRowIds = [];
+  const blocks = html.split(/<section\b[^>]*\bclass="group(?:\s[^"]*)?"[^>]*>/).slice(1);
+  for (const block of blocks) {
+    const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
+    if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
+    const letter = tagMatch[1].trim();
+    const countMatch = block.match(/<span class="gcount">(\d+) rows?<\/span>/);
+    const allIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)].map((m) =>
+      m[1].trim(),
+    );
+    const rowIds = allIds.filter((id) => /^[A-Z]\d+$/.test(id));
+    // A `num` that is neither a row ID nor the `—` used by the Blocked and
+    // Unconfirmed sections is REPORTED, not dropped. Silently filtering it was
+    // the inverse of the markdown side, which rejects the same convention
+    // violation loudly (`### A19b` → invalidRowHeadings): a live-view row
+    // numbered `A31b`, `a32` or `A&nbsp;32` used to vanish from the comparison
+    // entirely, so the page carried a row the register did not and the check
+    // stayed green (round 2, #1).
+    for (const id of allIds) {
+      if (!/^[A-Z]\d+$/.test(id) && id !== '—') invalidRowIds.push({ letter, id });
+    }
+    // Same last-writer-wins hazard as the glance table above: two sections
+    // carrying the same `gtag` would leave only one visible, and the page
+    // would render the group twice with nothing reporting it.
+    if (sections.has(letter)) duplicateLetters.add(letter);
+    sections.set(letter, {
+      headerCount: countMatch ? Number(countMatch[1]) : null,
+      rowIds,
+    });
+  }
+  return { sections, duplicateLetters, invalidRowIds };
+}
+
+// Compares the live view against the markdown. Returns human-readable error
+// strings; empty when the two agree.
+//
+// Every extraction failure below is an error rather than a skip. A regex that
+// stops matching after a markup change would otherwise turn this whole check
+// into a vacuous pass — which is the exact shape of bug it exists to catch.
+export function checkLiveView(markdownText, rawLiveViewHtml) {
+  const errors = [];
+  const liveViewHtml = stripHtmlComments(rawLiveViewHtml);
+  const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
+  // Same bail-out as checkRegister, for the same reason: an unterminated fence
+  // blanks the rest of the markdown, so every comparison below would read the
+  // live view against a truncated register and demand the deletion of sections
+  // that are perfectly fine. checkRegister already reports the fence itself.
+  if (unterminatedFenceLine !== null) {
+    return [
+      `Cannot check the live view: the register has an unterminated fenced code block opened at line ${unterminatedFenceLine}, so everything after it was ignored.`,
+    ];
+  }
+  const sections = splitSections(fenceStrippedText);
+  const glanceSection = sections.find((s) => s.title === 'At a glance');
+  if (!glanceSection) {
+    return ['No "## At a glance" section in the markdown — cannot check the live view against it.'];
+  }
+  const { groups: mdGroups, total: mdTotal } = parseGlanceTable(glanceSection.body);
+  const { groups: mdBodyGroups } = parseBodyGroups(sections);
+
+  // The owed total, as the summary strip states it.
+  const owedMatch = liveViewHtml.match(/<div class="n owed">(\d+)<\/div>/);
+  if (!owedMatch) {
+    errors.push(
+      'Live view: no `<div class="n owed">NN</div>` found — the summary strip\'s owed total could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+  } else if (mdTotal !== null && Number(owedMatch[1]) !== mdTotal) {
+    errors.push(
+      `Live view says ${owedMatch[1]} owed but the register says ${mdTotal}. Update the live view's summary strip.`,
+    );
+  }
+
+  // The glance table, letter by letter.
+  const {
+    groups: lvGroups,
+    malformedLetters,
+    duplicateLetters: duplicateGlanceLetters,
+  } = parseLiveViewGlance(liveViewHtml);
+  if (lvGroups === null) {
+    errors.push(
+      'Live view: no `<table class="glance">` found — the per-group counts could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+  } else {
+    for (const letter of duplicateGlanceLetters) {
+      errors.push(
+        `Live view: Group ${letter} appears more than once in the glance table. Remove the duplicate row — only one of them is being checked, and which one depends on their order.`,
+      );
+    }
+    for (const letter of malformedLetters) {
+      errors.push(
+        `Live view: the glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
+      );
+    }
+    for (const [letter, mdCount] of mdGroups) {
+      if (!lvGroups.has(letter)) {
+        if (!malformedLetters.includes(letter)) {
+          errors.push(`Live view: Group ${letter} is missing from the glance table.`);
+        }
+        continue;
+      }
+      if (lvGroups.get(letter) !== mdCount) {
+        errors.push(
+          `Live view: glance table says Group ${letter} has ${lvGroups.get(letter)} rows, the register says ${mdCount}.`,
+        );
+      }
+    }
+    for (const letter of lvGroups.keys()) {
+      if (!mdGroups.has(letter)) {
+        errors.push(
+          `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
+        );
+      }
+    }
+  }
+
+  // The group sections and their rows.
+  const {
+    sections: lvSections,
+    duplicateLetters: duplicateSectionLetters,
+    invalidRowIds,
+  } = parseLiveViewSections(liveViewHtml);
+  for (const { letter, id } of invalidRowIds) {
+    errors.push(
+      `Live view: Group ${letter} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
+    );
+  }
+  if (lvSections.size === 0) {
+    errors.push(
+      'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+    return errors;
+  }
+  for (const letter of duplicateSectionLetters) {
+    errors.push(
+      `Live view: more than one group section carries the gtag ${letter}. The page renders that group twice — remove the duplicate section.`,
+    );
+  }
+  for (const [letter, mdNumbers] of mdBodyGroups) {
+    const section = lvSections.get(letter);
+    if (!section) {
+      errors.push(`Live view: no group section for Group ${letter}.`);
+      continue;
+    }
+    if (section.headerCount === null) {
+      errors.push(
+        `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
+      );
+    } else if (section.headerCount !== mdNumbers.length) {
+      errors.push(
+        `Live view: Group ${letter}'s header says ${section.headerCount} rows, the register's body has ${mdNumbers.length}.`,
+      );
+    }
+    const expected = new Set(mdNumbers.map((n) => `${letter}${n}`));
+    const found = new Set(section.rowIds);
+    const missing = [...expected].filter((id) => !found.has(id));
+    const extra = [...found].filter((id) => !expected.has(id));
+    // Both messages name the SECTION the comparison was made in. Without it a
+    // row filed under the wrong group reads as two contradicting errors — "X is
+    // missing" and "X is extra" — with nothing saying where it actually sits.
+    if (missing.length > 0) {
+      errors.push(
+        `Live view's Group ${letter} section is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from that section.`,
+      );
+    }
+    if (extra.length > 0) {
+      errors.push(
+        `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
+      );
+    }
+    if (section.rowIds.length !== found.size) {
+      const seen = new Set();
+      const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
+      errors.push(`Live view: Group ${letter} lists ${dupes.join(', ')} more than once.`);
+    }
+  }
+  for (const letter of lvSections.keys()) {
+    if (!mdBodyGroups.has(letter)) {
+      errors.push(
+        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+      );
+    }
+  }
+
+  return errors;
+}
+
 // CLI mode: `node scripts/check-onbox-register.mjs`
 const invokedAsCli =
   typeof process !== 'undefined' &&
@@ -331,24 +613,45 @@ const invokedAsCli =
   process.argv[1].replace(/\\/g, '/').endsWith('scripts/check-onbox-register.mjs');
 
 if (invokedAsCli) {
-  const registerPath = new URL('../docs/testing/onbox-acceptance-register.md', import.meta.url);
-  let text;
-  try {
-    text = readFileSync(registerPath, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.error(
-        'Register not found at docs/testing/onbox-acceptance-register.md — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml',
-      );
-      process.exit(1);
+  const REGISTER = 'docs/testing/onbox-acceptance-register.md';
+  const LIVE_VIEW = 'docs/testing/onbox-acceptance-register-live-view.html';
+
+  // A missing file is a hard failure for both, not a skip: the live view is
+  // tracked precisely so it is always present, and treating its absence as
+  // "nothing to check" would restore the silent-drift hole this closes.
+  const read = (relPath) => {
+    try {
+      return readFileSync(new URL(`../${relPath}`, import.meta.url), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        console.error(
+          `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml`,
+        );
+        process.exit(1);
+      }
+      throw err;
     }
-    throw err;
-  }
-  const errors = checkRegister(text);
-  if (errors.length > 0) {
-    console.error('docs/testing/onbox-acceptance-register.md is not internally consistent:\n');
+  };
+
+  const text = read(REGISTER);
+  const liveViewHtml = read(LIVE_VIEW);
+
+  const report = (label, errors) => {
+    if (errors.length === 0) return false;
+    console.error(`${label}:\n`);
     for (const error of errors) console.error(`- ${error}`);
-    process.exit(1);
-  }
-  process.exit(0);
+    console.error('');
+    return true;
+  };
+
+  // Both checks always run — the live-view comparison is reported even when
+  // the markdown is internally inconsistent, so one PR sees both problems
+  // rather than discovering the second only after fixing the first.
+  const registerFailed = report(`${REGISTER} is not internally consistent`, checkRegister(text));
+  const liveViewFailed = report(
+    `${LIVE_VIEW} does not agree with ${REGISTER}`,
+    checkLiveView(text, liveViewHtml),
+  );
+
+  process.exit(registerFailed || liveViewFailed ? 1 : 0);
 }
