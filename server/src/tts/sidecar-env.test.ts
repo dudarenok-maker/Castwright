@@ -118,6 +118,19 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
     expect(env.QWEN_DEGEN_GUARD).toBe('0');
   });
 
+  it('tts.coqui.degenGuard (#2026) left at its default-on value is NOT injected (sidecar Python default True applies)', () => {
+    const env = buildSidecarEnv({ modelKey: 'coqui-xtts-v2', repoRoot: process.cwd() });
+    expect(env.COQUI_DEGEN_GUARD).toBeUndefined();
+  });
+
+  it('turning tts.coqui.degenGuard off injects COQUI_DEGEN_GUARD=0', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'tts.coqui.degenGuard': false,
+    });
+    const env = buildSidecarEnv({ modelKey: 'coqui-xtts-v2', repoRoot: process.cwd() });
+    expect(env.COQUI_DEGEN_GUARD).toBe('0');
+  });
+
   it('boolean overrides are emitted as 1/0 (not true/false) so == "1" sidecar reads work', () => {
     (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
       'tts.preload.coqui': true,

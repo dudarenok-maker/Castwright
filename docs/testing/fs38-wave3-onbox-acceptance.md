@@ -2653,6 +2653,20 @@ Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and 
 
 ---
 
+#### #2026 — additional acceptance criteria: Russian XTTS quality (leading-dash pause, Coqui degeneracy guard)
+
+Not an E-10 (same reason as #1967 above — the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the three defects filed as [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), found while running this same run sheet's §5 Section E, E-04. **This PR deliberately does NOT add a register row for these items** — `docs/testing/onbox-acceptance-register.md` is being actively edited by a concurrent PR (#2039, annotating the E-04 row itself), so recording this debt there is left for a follow-up reconciliation rather than risking a collision on the same file. The criteria below are the complete record in the meantime; do not let them go missing when the register row is eventually added — the reconciliation (adding the row once #2039 merges, and republishing the register's live HTML twin at its existing artifact URL) is tracked on [#2057](https://github.com/dudarenok-maker/Castwright/issues/2057).
+
+**Preconditions:** a stock catalogue Coqui voice (no clone needed — every defect reproduces on `Damien Black` per the issue), `language: ru`, the acceptance chapter used for E-04 (or any Russian manuscript with dialogue lines opening on `—`).
+
+1. **Defect 2 — leading em-dash pause, by ear.** Generate (or `POST /synthesize` directly) a dialogue line that opens with `—` (e.g. `— Кто бы это ни был, пусть стучит.`). Listen for an audible beat before the speech starts — the fix (`server/src/tts/text-normalize.ts`'s `softenDashes`) converts the leading dash to `... ` server-side, on the theory that a leading ellipsis produces a pause where a leading comma didn't; **this has NOT been confirmed by ear on real audio**, only pinned as a wire-text transform (`server/src/tts/text-normalize.test.ts`). Compare against the SAME line with no leading punctuation at all, and against an interior-dash sentence, as the two reference points the original issue measured (2.41 s / 4.22 s for a 24-/regression-length line).
+2. **Defect 3 — Coqui degeneracy guard, live.** The guard (`tts.coqui.degenGuard`, `server/tts-sidecar/main.py`'s `_coqui_synth_is_degenerate`) is pinned by a scripted-fake pytest (`server/tts-sidecar/tests/test_coqui_degeneracy_guard.py`) but has never run against the REAL XTTS model. Owed: (a) confirm it does NOT false-positive on ordinary short Russian lines (2-3 words) at normal speaking pace — the 20 ms/speakable-char floor is reused verbatim from the Qwen guard's own calibration, not independently measured for Coqui's actual healthy short-utterance duration; (b) if a live repro of the original degenerate collapse (`Хорошее олово.` → Finnish, `Тёплое море.` → English) can be captured, confirm the guard's retry actually recovers it — the guard's own docstring is explicit that it can only catch an implausibly SHORT render, not a plausible-duration wrong-language collapse, so a live repro may show the guard does NOT catch these specific historical cases even when working as designed.
+3. **Defect 1 — neuter `-ее` mispronunciation.** No local fix was attempted (see the finding posted to issue #2026) — this item is a standing invariant check, not new acceptance: confirm the defect still reproduces on `main` (so a future coqui-tts upgrade can be checked against it) rather than something to sign off as fixed.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
 ## 6. Known limitations — verify as EXPECTED, do not file as defects
 
 Everything in this table is a **documented, accepted** limitation of the shipped

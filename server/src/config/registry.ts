@@ -631,6 +631,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'medium',
   },
   {
+    key: 'tts.coqui.degenGuard',
+    env: 'COQUI_DEGEN_GUARD',
+    group: 'tts-engine',
+    label: 'Coqui degeneracy guard',
+    help: 'Master on/off for the Coqui XTTS output-degeneracy guard (#2026). Same detection idea as the Qwen guard above (a substantial line must render a plausible amount of audio, ≈20 ms per speakable character); an implausibly short render retries once with a fresh stochastic draw — no model reload/recycle, since XTTS has no fixed seed and a degenerate render here is a per-call sampling fluke, not a corrupted resident model. Turn off only to disable that protection (e.g. to isolate a suspected false-positive on unusual text) — the detection thresholds themselves are fixed, not tunable here. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: true, // ← COQUI_DEGEN_GUARD default in tts-sidecar/main.py (_COQUI_DEGEN_GUARD_ENABLED, _parse_bool default=True)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
     key: 'tts.preload.coqui',
     env: 'PRELOAD_COQUI',
     group: 'tts-engine',
