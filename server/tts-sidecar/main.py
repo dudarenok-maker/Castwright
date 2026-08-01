@@ -4657,14 +4657,16 @@ class QwenEngine(Engine):
         # Claimed at entry / released in a finally; `maybe_free_idle_design`
         # bails while `.busy`. Thread-safe (#1917) — see `InFlightCounter`: a
         # plain int here can silently lose a decrement and disable this
-        # engine's eviction for the rest of the process lifetime. The
-        # airtight backstop is still the re-ensure under `_synth_lock` guarding
-        # design_voice's DESIGN forward (the `_ensure_design_loaded()` +
-        # `_ensure_base_loaded()` pair inside that `with self._synth_lock:`
-        # block) — this guard just stops the wasteful, racy free there. The
-        # AUDITION forward's re-ensure moved OUTSIDE `_synth_lock` (#1975, plan
-        # 273 T7/T8): a concurrent /unload winning that narrow gap now raises
-        # loudly instead of being silently absorbed by an in-lock re-ensure.
+        # engine's eviction for the rest of the process lifetime. This guard
+        # just stops the wasteful, racy free during an in-flight design; it is
+        # NOT a backstop against a concurrent explicit /unload landing mid-
+        # design — both the DESIGN forward (#2021) and the AUDITION forward
+        # (#1975, plan 273 T7/T8) now capture `_design`/`_base` UNDER
+        # `_synth_lock` and raise a typed `RuntimeError` if that race is lost,
+        # rather than silently re-pulling the model (the DESIGN forward's
+        # `_ensure_design_loaded()` alone is the heaviest weights pull in this
+        # engine, ~4-5 GB — re-pulling it while already holding `_synth_lock`
+        # was the residual defect #2021 closed).
         self._design_in_flight = InFlightCounter()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
@@ -5622,20 +5624,35 @@ class QwenEngine(Engine):
                     # Serialise the GPU forwards against any concurrent synth/design — see
                     # `_synth_lock` in __init__ (the Base model isn't thread-safe).
                     with self._synth_lock:
-                        # Re-ensure the models UNDER the lock. Every in-place nuller of
-                        # `_design`/`_base` (the idle watchdog, a concurrent
-                        # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                        # so a model ensured before we took the lock may have been freed
-                        # in the gap. Re-ensuring here is the airtight backstop against
-                        # "'NoneType' object has no attribute 'generate_voice_design'".
-                        # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                        # `_synth_lock`, so this can't deadlock.
-                        self._ensure_design_loaded()
-                        self._ensure_base_loaded()
+                        # Capture UNDER the lock instead of silently re-ensuring
+                        # (#2021 — extends #1975's AUDITION-forward pattern to
+                        # this, the heaviest forward in the process:
+                        # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                        # model, the longest possible Stop-blocking pull in
+                        # QwenEngine. Every in-place nuller of `_design`/`_base`
+                        # (the idle watchdog, a concurrent /synthesize's
+                        # unload_design, a full /unload) holds `_synth_lock`, so
+                        # a model ensured before we took the lock may have been
+                        # freed in the gap — raise loud instead of silently
+                        # absorbing that race with an in-lock re-pull that would
+                        # itself hold `_synth_lock` for the whole cold load.
+                        design = self._design
+                        if design is None:
+                            raise RuntimeError(
+                                "Qwen VoiceDesign model was unloaded before "
+                                "this design could render — reload it and "
+                                "retry."
+                            )
+                        base = self._base
+                        if base is None:
+                            raise RuntimeError(
+                                "Qwen Base model was unloaded before this "
+                                "design could render — reload it and retry."
+                            )
                         # 1. design a reference clip from the persona instruction.
                         _phase("designing")
                         _t = time.perf_counter()
-                        ref_wavs, ref_sr = self._design.generate_voice_design(
+                        ref_wavs, ref_sr = design.generate_voice_design(
                             text=ref_text, language=lang, instruct=instruct
                         )
                         design_fwd_ms = (time.perf_counter() - _t) * 1000.0
@@ -5644,7 +5661,7 @@ class QwenEngine(Engine):
                         # 2. distil into a reusable clone prompt on the Base model.
                         _phase("distilling")
                         _t = time.perf_counter()
-                        prompt = self._base.create_voice_clone_prompt(
+                        prompt = base.create_voice_clone_prompt(
                             ref_audio=(ref_audio, ref_sr), ref_text=ref_text
                         )
                         distil_ms = (time.perf_counter() - _t) * 1000.0
@@ -5766,6 +5783,17 @@ class QwenEngine(Engine):
         lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
         audition = (audition_text or ref_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
+        # Re-ensure BEFORE the lock (#2021, mirrors design_voice/mint_variant):
+        # `_ensure_base_loaded` can run a full cold load (unbounded — a real
+        # weights pull), and `/unload` also takes `_synth_lock`, so doing that
+        # pull INSIDE the lock would hold a Stop off for its whole duration.
+        # Unlike synthesize()/synthesize_batch, clone_voice is a user-initiated
+        # ONE-SHOT action with no `withTtsRetry` net on the Node side, so a
+        # raise here surfaces straight to the user for an extremely narrow
+        # race window. Keep the old "reload and proceed" shape instead — the
+        # in-lock re-ensure below is a cheap no-op on the (overwhelming)
+        # common path and only pays the cold-reload cost in the rare gap.
+        self._ensure_base_loaded(device=device)
         with self._synth_lock:
             self._ensure_base_loaded(device=device)
             # 1. distil the caller's clip into a reusable clone prompt.
@@ -5894,7 +5922,18 @@ class QwenEngine(Engine):
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
-                self._ensure_base17_for_mint(device=device)
+                # Capture UNDER the lock instead of silently re-ensuring (#2021,
+                # #2022 — matches design_voice's audition-forward / #1975
+                # pattern): a concurrent `/unload {model:'1.7b'}` winning the
+                # narrow gap between the pre-ensure above and this acquire must
+                # raise the typed error below, not a bare AttributeError from
+                # dereferencing `self._base17` directly (#2022).
+                base17 = self._base17
+                if base17 is None:
+                    raise RuntimeError(
+                        "Qwen 1.7B-Base model was unloaded before this mint's "
+                        "anchoring forward started — reload it and retry."
+                    )
                 rc = base_item.ref_code
                 # Move onto the card the resident 1.7B is ACTUALLY on, read off
                 # the wrapper itself (published atomically with the model at load
@@ -5902,13 +5941,13 @@ class QwenEngine(Engine):
                 # shared engine-wide `self._device`, which a concurrent
                 # design/mint admitted to another card can clobber in the
                 # unlocked gap between load and this forward (#1730 gap 1).
-                rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
+                rc = rc.to(base17.device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
                 _phase("anchoring")
-                ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+                ref_wavs, ref_sr = base17.model.speech_tokenizer.decode(
                     [{"audio_codes": rc}]
                 )
-                icl = self._base17.create_voice_clone_prompt(
+                icl = base17.create_voice_clone_prompt(
                     ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text
                 )
                 icl = icl if isinstance(icl, list) else [icl]
@@ -5921,6 +5960,12 @@ class QwenEngine(Engine):
         # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
         _phase("distilling")
         _t = time.perf_counter()
+        # Re-ensure BEFORE the lock (#2021 — same rationale as clone_voice):
+        # mint_variant is a user-initiated one-shot with no `withTtsRetry` net,
+        # so this stays "reload and proceed" (silent in-lock re-ensure) rather
+        # than raise-on-race, while still moving the common-case cold load out
+        # from under `_synth_lock`.
+        self._ensure_base_loaded()
         with self._synth_lock:
             self._ensure_base_loaded()
             prompt = self._base.create_voice_clone_prompt(
@@ -5963,6 +6008,9 @@ class QwenEngine(Engine):
         # shipped audio; re-run by re-auditioning).
         _phase("rendering")
         _t = time.perf_counter()
+        # Re-ensure BEFORE the lock (#2021 — same rationale as the distil
+        # phase above): reload-and-proceed, not raise-on-race.
+        self._ensure_base_loaded()
         with self._synth_lock:
             self._ensure_base_loaded()
             wavs, sr = self._base.generate_voice_clone(
