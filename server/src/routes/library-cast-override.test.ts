@@ -16,6 +16,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { readJson } from '../workspace/state-io.js';
+import type { CharacterOutput } from '../handoff/schemas.js';
+
+/* `readJson` has no workspace-path dependency at all, so it's safe as an
+   ordinary top-level import. `castJsonPath` is a pure function of its
+   bookDir argument too, but merely IMPORTING '../workspace/paths.js'
+   executes that module's top-level WORKSPACE_ROOT/BOOKS_ROOT binding
+   against whatever WORKSPACE_DIR happens to be at that instant — so it
+   still needs the same lazy-import treatment as `makeBookId` below (see
+   this file's header comment); imported once, inside the same-book
+   describe's beforeAll. */
+interface CastFile {
+  characters: CharacterOutput[];
+}
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -332,5 +346,80 @@ describe('library-cast override router', () => {
     expect(res.body.source.ageRange).toBe('adult');
     /* Attributes unioned (source had none) so both sides get target's. */
     expect(res.body.source.attributes).toEqual(['warm', 'principled']);
+  });
+});
+
+/* #1981 (Task 8) — the same-book data-loss bug. library-cast-override's
+   guard rejects same-book AND same-character only, so same-book with two
+   DIFFERENT characters is reachable — and broken with NO concurrency at
+   all: two independent reads of one file, two arrays derived from
+   separate snapshots, two writes to the same path. Its own book pair so
+   this can't interact with the shared Oduvan fixtures above. */
+describe('library-cast override router — same-book merge (#1981 Task 8)', () => {
+  const SAME_BOOK_TITLE = 'Same-Book Override Book';
+  const aliceName = 'Alice Merrow';
+  const bobName = 'Bob Wexler';
+  let bookId: string;
+  let bookDir: string;
+  let castJsonPath: (bookDir: string) => string;
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    castJsonPath = paths.castJsonPath;
+    const { makeBookId } = paths;
+    bookId = makeBookId(AUTHOR, SERIES, SAME_BOOK_TITLE);
+    bookDir = writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, SAME_BOOK_TITLE, bookId, [
+      {
+        id: 'alice',
+        name: aliceName,
+        role: 'protagonist',
+        color: 'eliza',
+        voiceId: 'v_alice',
+        gender: 'female',
+        ageRange: 'adult',
+        description: 'A sharp-tongued cartographer with a soft spot for lost causes.',
+        attributes: ['sharp-tongued', 'loyal'],
+        aliases: ['Al'],
+        lines: 40,
+        scenes: 3,
+      },
+      {
+        id: 'bob',
+        name: bobName,
+        role: 'sidekick',
+        color: 'damien',
+        voiceId: 'v_bob',
+        gender: 'male',
+        ageRange: 'adult',
+        description: 'A nervous quartermaster who counts everything twice.',
+        attributes: ['nervous', 'meticulous'],
+        lines: 25,
+        scenes: 2,
+      },
+    ]);
+  });
+
+  it('does not lose the source merge when source and target are the same book', async () => {
+    /* Its guard rejects same-book AND same-character only, so same-book with two
+       different characters is reachable — and broken with no concurrency at
+       all: two independent reads of one file, two arrays derived from separate
+       snapshots, two writes to the same path. nextTargetCharacters is derived
+       from the PRE-merge targetCast read, so the second write puts alice back
+       unmodified and her merge is gone.
+
+       Assert on `aliases`. This route never touches overrideTtsVoices — it merges
+       description, role, gender, ageRange, tone, attributes and aliases — so an
+       overrideTtsVoices assertion would pass before and after and prove nothing. */
+    await request(app).post('/api/library-cast/override')
+      .send({ sourceBookId: bookId, sourceCharacterId: 'alice',
+              targetBookId: bookId, targetCharacterId: 'bob' })
+      .expect(200);
+
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    const byId = Object.fromEntries((cast?.characters ?? []).map((c) => [c.id, c]));
+    /* alice's merge takes bob's name into her alias pool. Red today: alice is
+       written back from the pre-merge snapshot. */
+    expect(byId.alice.aliases).toContain(bobName);
+    expect(byId.bob.aliases).toContain(aliceName);
   });
 });

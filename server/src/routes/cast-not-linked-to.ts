@@ -20,6 +20,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLocks } from '../workspace/cast-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const castNotLinkedToRouter = Router();
@@ -79,46 +80,58 @@ castNotLinkedToRouter.post(
       });
     }
 
-    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-    const otherCast = await readJson<CastFile>(castJsonPath(otherLocated.bookDir));
-    if (!sourceCast?.characters?.length)
-      return res.status(409).json({ error: 'Source book has no cast on disk yet.' });
-    if (!otherCast?.characters?.length)
-      return res.status(409).json({ error: 'Other book has no cast on disk yet.' });
+    /* #1981 (Task 8) — this route touches TWO books' cast.json (the
+       symmetric notLinkedTo pair-write on each side). withCastLocks holds
+       both for the whole read-through-write span, sorted so a concurrent
+       call with the books in the opposite role can't AB/BA against it. The
+       read and the decisions derived from it (sourceChanged, otherChanged)
+       live inside the lock, per rule 2. */
+    return withCastLocks([sourceLocated.bookDir, otherLocated.bookDir], async () => {
+      const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+      const otherCast = await readJson<CastFile>(castJsonPath(otherLocated.bookDir));
+      if (!sourceCast?.characters?.length)
+        return res.status(409).json({ error: 'Source book has no cast on disk yet.' });
+      if (!otherCast?.characters?.length)
+        return res.status(409).json({ error: 'Other book has no cast on disk yet.' });
 
-    const sourceCharacter = sourceCast.characters.find((c) => c.id === sourceCharacterId);
-    if (!sourceCharacter)
-      return res
-        .status(404)
-        .json({ error: `Source character "${sourceCharacterId}" not found.` });
-    const otherCharacter = otherCast.characters.find((c) => c.id === otherCharacterId);
-    if (!otherCharacter)
-      return res.status(404).json({ error: `Other character "${otherCharacterId}" not found.` });
+      const sourceCharacter = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+      if (!sourceCharacter)
+        return res
+          .status(404)
+          .json({ error: `Source character "${sourceCharacterId}" not found.` });
+      const otherCharacter = otherCast.characters.find((c) => c.id === otherCharacterId);
+      if (!otherCharacter)
+        return res.status(404).json({ error: `Other character "${otherCharacterId}" not found.` });
 
-    /* Pair-write: add (otherBookId, otherCharacterId) to source.notLinkedTo,
-       and (sourceBookId, sourceCharacterId) to other.notLinkedTo. Each side
-       deduped — if the entry already exists on a given side, that side is
-       a no-op. Symmetric write avoids stale half-state on retry. */
-    const sourceChanged = appendNotLinked(sourceCharacter, otherBookId, otherCharacterId);
-    const otherChanged = appendNotLinked(otherCharacter, sourceBookId, sourceCharacterId);
+      /* Pair-write: add (otherBookId, otherCharacterId) to source.notLinkedTo,
+         and (sourceBookId, sourceCharacterId) to other.notLinkedTo. Each side
+         deduped — if the entry already exists on a given side, that side is
+         a no-op. Symmetric write avoids stale half-state on retry. */
+      const sourceChanged = appendNotLinked(sourceCharacter, otherBookId, otherCharacterId);
+      const otherChanged = appendNotLinked(otherCharacter, sourceBookId, sourceCharacterId);
 
-    if (sourceChanged) {
-      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), { characters: sourceCast.characters });
-    }
-    if (otherChanged) {
-      await writeJsonAtomic(castJsonPath(otherLocated.bookDir), { characters: otherCast.characters });
-    }
+      if (sourceChanged) {
+        await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+          characters: sourceCast.characters,
+        });
+      }
+      if (otherChanged) {
+        await writeJsonAtomic(castJsonPath(otherLocated.bookDir), {
+          characters: otherCast.characters,
+        });
+      }
 
-    console.log(
-      `[cast-not-linked-to] ${sourceBookId}/${sourceCharacterId} ↮ ${otherBookId}/${otherCharacterId}` +
-        (sourceChanged || otherChanged ? '' : ' (no-op: already recorded on both sides)'),
-    );
+      console.log(
+        `[cast-not-linked-to] ${sourceBookId}/${sourceCharacterId} ↮ ${otherBookId}/${otherCharacterId}` +
+          (sourceChanged || otherChanged ? '' : ' (no-op: already recorded on both sides)'),
+      );
 
-    return res.json({
-      pair: {
-        a: { bookId: sourceBookId, characterId: sourceCharacterId },
-        b: { bookId: otherBookId, characterId: otherCharacterId },
-      },
+      return res.json({
+        pair: {
+          a: { bookId: sourceBookId, characterId: sourceCharacterId },
+          b: { bookId: otherBookId, characterId: otherCharacterId },
+        },
+      });
     });
   },
 );
@@ -175,50 +188,54 @@ castNotLinkedToRouter.delete(
       });
     }
 
-    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-    const otherCast = await readJson<CastFile>(castJsonPath(otherLocated.bookDir));
-    if (!sourceCast?.characters?.length)
-      return res.status(409).json({ error: 'Source book has no cast on disk yet.' });
-    if (!otherCast?.characters?.length)
-      return res.status(409).json({ error: 'Other book has no cast on disk yet.' });
+    /* #1981 (Task 8) — same two-book span as the POST above; see its
+       comment. */
+    return withCastLocks([sourceLocated.bookDir, otherLocated.bookDir], async () => {
+      const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+      const otherCast = await readJson<CastFile>(castJsonPath(otherLocated.bookDir));
+      if (!sourceCast?.characters?.length)
+        return res.status(409).json({ error: 'Source book has no cast on disk yet.' });
+      if (!otherCast?.characters?.length)
+        return res.status(409).json({ error: 'Other book has no cast on disk yet.' });
 
-    const sourceCharacter = sourceCast.characters.find((c) => c.id === sourceCharacterId);
-    if (!sourceCharacter)
-      return res
-        .status(404)
-        .json({ error: `Source character "${sourceCharacterId}" not found.` });
-    const otherCharacter = otherCast.characters.find((c) => c.id === otherCharacterId);
-    if (!otherCharacter)
-      return res.status(404).json({ error: `Other character "${otherCharacterId}" not found.` });
+      const sourceCharacter = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+      if (!sourceCharacter)
+        return res
+          .status(404)
+          .json({ error: `Source character "${sourceCharacterId}" not found.` });
+      const otherCharacter = otherCast.characters.find((c) => c.id === otherCharacterId);
+      if (!otherCharacter)
+        return res.status(404).json({ error: `Other character "${otherCharacterId}" not found.` });
 
-    /* Pair-remove: drop (otherBookId, otherCharacterId) from source.notLinkedTo
-       and (sourceBookId, sourceCharacterId) from other.notLinkedTo. Each side
-       a no-op when the entry is already absent — symmetric so retry settles
-       both ends. */
-    const sourceChanged = removeNotLinked(sourceCharacter, otherBookId, otherCharacterId);
-    const otherChanged = removeNotLinked(otherCharacter, sourceBookId, sourceCharacterId);
+      /* Pair-remove: drop (otherBookId, otherCharacterId) from source.notLinkedTo
+         and (sourceBookId, sourceCharacterId) from other.notLinkedTo. Each side
+         a no-op when the entry is already absent — symmetric so retry settles
+         both ends. */
+      const sourceChanged = removeNotLinked(sourceCharacter, otherBookId, otherCharacterId);
+      const otherChanged = removeNotLinked(otherCharacter, sourceBookId, sourceCharacterId);
 
-    if (sourceChanged) {
-      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
-        characters: sourceCast.characters,
+      if (sourceChanged) {
+        await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+          characters: sourceCast.characters,
+        });
+      }
+      if (otherChanged) {
+        await writeJsonAtomic(castJsonPath(otherLocated.bookDir), {
+          characters: otherCast.characters,
+        });
+      }
+
+      console.log(
+        `[cast-not-linked-to] (delete) ${sourceBookId}/${sourceCharacterId} ↮ ${otherBookId}/${otherCharacterId}` +
+          (sourceChanged || otherChanged ? '' : ' (no-op: pair absent on both sides)'),
+      );
+
+      return res.json({
+        pair: {
+          a: { bookId: sourceBookId, characterId: sourceCharacterId },
+          b: { bookId: otherBookId, characterId: otherCharacterId },
+        },
       });
-    }
-    if (otherChanged) {
-      await writeJsonAtomic(castJsonPath(otherLocated.bookDir), {
-        characters: otherCast.characters,
-      });
-    }
-
-    console.log(
-      `[cast-not-linked-to] (delete) ${sourceBookId}/${sourceCharacterId} ↮ ${otherBookId}/${otherCharacterId}` +
-        (sourceChanged || otherChanged ? '' : ' (no-op: pair absent on both sides)'),
-    );
-
-    return res.json({
-      pair: {
-        a: { bookId: sourceBookId, characterId: sourceCharacterId },
-        b: { bookId: otherBookId, characterId: otherCharacterId },
-      },
     });
   },
 );

@@ -44,6 +44,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLocks } from '../workspace/cast-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const libraryCastOverrideRouter = Router();
@@ -85,25 +86,108 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
   if (!targetLocated)
     return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });
 
-  const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-  const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
-  if (!sourceCast?.characters?.length) {
-    return res.status(409).json({ error: 'Source book has no cast on disk.' });
-  }
-  if (!targetCast?.characters?.length) {
-    return res.status(409).json({ error: 'Target book has no cast on disk.' });
-  }
+  /* #1981 (Task 8) — this route writes up to two books' cast.json.
+     withCastLocks dedupes+sorts, so the same-book case below (its guard
+     rejects same-book AND same-character only, so same-book with two
+     DIFFERENT characters is reachable) collapses to a single lock — which
+     stops it deadlocking, but does NOT by itself fix the data loss: two
+     independent reads of one file, two arrays derived from separate
+     snapshots, two writes to the same path, second write wins and
+     silently discards the first merge. The same-book branch below reads
+     ONCE, applies both merges to that single array, and writes ONCE. */
+  return withCastLocks([sourceLocated.bookDir, targetLocated.bookDir], async () => {
+    const sameBook = sourceLocated.bookDir === targetLocated.bookDir;
 
-  const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
-  const target = targetCast.characters.find((c) => c.id === targetCharacterId);
-  if (!source)
-    return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
-  if (!target)
-    return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
+    if (sameBook) {
+      const cast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({ error: 'Source book has no cast on disk.' });
+      }
+      const source = cast.characters.find((c) => c.id === sourceCharacterId);
+      const target = cast.characters.find((c) => c.id === targetCharacterId);
+      if (!source)
+        return res
+          .status(404)
+          .json({ error: `Source character "${sourceCharacterId}" not found.` });
+      if (!target)
+        return res
+          .status(404)
+          .json({ error: `Target character "${targetCharacterId}" not found.` });
 
-  /* Identity-level fields are merged ONCE — both books end up with these
-     identical values. Per-book audio + metric fields are then applied
-     when each side's record is composed. */
+      const { mergedSource, mergedTarget } = mergeCharacters(source, target);
+      const nextCharacters = cast.characters.map((c) => {
+        if (c.id === sourceCharacterId) return mergedSource;
+        if (c.id === targetCharacterId) return mergedTarget;
+        return c;
+      });
+      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), { characters: nextCharacters });
+
+      console.log(
+        `[library-cast-override] ${sourceBookId}/${sourceCharacterId} ⇄ ${targetBookId}/${targetCharacterId} (same book)`,
+      );
+
+      return res.json({ source: mergedSource, target: mergedTarget });
+    }
+
+    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+    const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
+    if (!sourceCast?.characters?.length) {
+      return res.status(409).json({ error: 'Source book has no cast on disk.' });
+    }
+    if (!targetCast?.characters?.length) {
+      return res.status(409).json({ error: 'Target book has no cast on disk.' });
+    }
+
+    const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+    const target = targetCast.characters.find((c) => c.id === targetCharacterId);
+    if (!source)
+      return res
+        .status(404)
+        .json({ error: `Source character "${sourceCharacterId}" not found.` });
+    if (!target)
+      return res
+        .status(404)
+        .json({ error: `Target character "${targetCharacterId}" not found.` });
+
+    const { mergedSource, mergedTarget } = mergeCharacters(source, target);
+
+    const nextSourceCharacters = sourceCast.characters.map((c) =>
+      c.id === sourceCharacterId ? mergedSource : c,
+    );
+    const nextTargetCharacters = targetCast.characters.map((c) =>
+      c.id === targetCharacterId ? mergedTarget : c,
+    );
+
+    /* Write both sides. Atomic-rename each — if the target write fails
+       after the source write succeeded, re-running the call is safe: the
+       merge is deterministic and re-merging already-merged records yields
+       the same fixed point. */
+    await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+      characters: nextSourceCharacters,
+    });
+    await writeJsonAtomic(castJsonPath(targetLocated.bookDir), {
+      characters: nextTargetCharacters,
+    });
+
+    console.log(
+      `[library-cast-override] ${sourceBookId}/${sourceCharacterId} ⇄ ${targetBookId}/${targetCharacterId}`,
+    );
+
+    return res.json({ source: mergedSource, target: mergedTarget });
+  });
+});
+
+/* Shared merge derivation for both the same-book and cross-book branches
+   above — identity-level fields (description/role/gender/ageRange/tone/
+   attributes) are merged ONCE into shared values; each side's own
+   id/voiceId/color/name/voiceState/lines/scenes/evidence survive
+   untouched; aliases are the full name-form pool with each side's OWN
+   name dropped. See the module doc comment at the top of this file for
+   the per-field rules. */
+function mergeCharacters(
+  source: CharacterOutput,
+  target: CharacterOutput,
+): { mergedSource: CharacterOutput; mergedTarget: CharacterOutput } {
   const sharedDescription = longest(source.description, target.description);
   const sharedRole = preferSource(source.role, target.role);
   const sharedGender = preferSource(source.gender, target.gender);
@@ -111,11 +195,6 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
   const sharedTone = mergeTone(source.tone, target.tone);
   const sharedAttributes = unionStrings(source.attributes, target.attributes);
 
-  /* Aliases — union of the full pool of name forms across both sides
-     (each side's aliases plus the other side's name). Each side then
-     drops its OWN name from the list so no record self-aliases. Same
-     shape as the manual-merge alias contract; the matcher uses these on
-     future books. */
   const aliasPool = collectAliasPool(source, target);
   const mergedSource: CharacterOutput = {
     ...source,
@@ -137,27 +216,8 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
     attributes: sharedAttributes,
     aliases: aliasesExcludingSelf(aliasPool, target.name),
   };
-
-  const nextSourceCharacters = sourceCast.characters.map((c) =>
-    c.id === sourceCharacterId ? mergedSource : c,
-  );
-  const nextTargetCharacters = targetCast.characters.map((c) =>
-    c.id === targetCharacterId ? mergedTarget : c,
-  );
-
-  /* Write both sides. Atomic-rename each — if the target write fails
-     after the source write succeeded, re-running the call is safe: the
-     merge is deterministic and re-merging already-merged records yields
-     the same fixed point. */
-  await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), { characters: nextSourceCharacters });
-  await writeJsonAtomic(castJsonPath(targetLocated.bookDir), { characters: nextTargetCharacters });
-
-  console.log(
-    `[library-cast-override] ${sourceBookId}/${sourceCharacterId} ⇄ ${targetBookId}/${targetCharacterId}`,
-  );
-
-  return res.json({ source: mergedSource, target: mergedTarget });
-});
+  return { mergedSource, mergedTarget };
+}
 
 /* Longest non-empty string wins. Same rule cast-merge.ts uses inside one
    book — applied symmetrically here so neither side loses a richer
