@@ -402,6 +402,19 @@ export interface ChapterSegment {
       Kokoro. Undefined = rendered in the configured engine. Drives the
       "Fallback (Kokoro)" status in the UI. */
   renderedFallbackEngine?: TtsEngine;
+  /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this line when
+      `characterId` above is an ORPHANED id (no entry in this book's cast at
+      all) and the render's orphaned-characterId safety net substituted the
+      narrator for it (see the "which is not in this book's cast" warning in
+      `resolveGroup`). `characterId` is deliberately left as the ORIGINAL
+      (orphaned) id — every existing consumer (revisions drift detector, the
+      srv-36 audition anchors) keys off the manuscript's own attribution —
+      so this field is the ONLY place the substitution itself is recorded.
+      Undefined on every normally-resolved segment. Aggregated across a
+      book's rendered chapters by `collectOrphanedCharacterFallbacks`
+      (segments-io.ts) into the book-state response, mirroring how
+      `renderedFallbackEngine` is aggregated by `collectRenderedFallbackEngines`. */
+  renderedFallbackCharacterId?: string;
   /** The voice this segment REQUESTED, set only when the sidecar substituted a
       safe fallback because the requested voice wasn't in its speaker manifest
       (its `X-Voice-Substituted-From` header). Absent on a clean render. Surfaces
@@ -1346,6 +1359,15 @@ export async function synthesiseChapter(
     route: Route,
     voiceName: string,
     detail?: string,
+    /** #2023 Piece 2 — set to the sentence group's ORIGINAL characterId when
+        this call is resolving an orphaned-characterId line (the group's own
+        id has no cast entry and `c` is the substituted narrator instead).
+        Gates the cloned-voice guard below: a cloned narrator must never
+        speak another character's attributed line, even when that cloned
+        voice is perfectly healthy — this is a misattribution risk, not an
+        availability problem, so it's checked independently of `voiceName`/
+        `routeEngineUnavailable`. */
+    orphanedFromId?: string,
   ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
     /* C1 — a cloned voice is exempt from fallback/reroute on ANY clone-capable
        engine, not just Qwen (fs-38 Wave 3c, Task 21 — this guard used to be
@@ -1397,6 +1419,28 @@ export async function synthesiseChapter(
     const routeEngine = route.engine;
     const clonedOnRoute = isCloneEngine(routeEngine) && hasClonedProvenance(c, routeEngine);
     const routeEngineUnavailable = isCloneEngine(routeEngine) && engineUnavailableFor(routeEngine);
+    /* #2023 Piece 2 — `!!orphanedFromId` joins the existing disjuncts so a
+       HEALTHY cloned narrator still raises for an orphaned-characterId line,
+       not just an unavailable one. Never substitute a real person's voice
+       for another character's attributed dialogue — the same guarantee this
+       branch already enforces for an unresolvable clone, extended to cover
+       the misattribution case.
+
+       #2023 fix round 2 — the orphaned case gets its OWN reason
+       (`misattributed-substitution`, via `fromList`), checked first and
+       exclusively of `!voiceName`/`routeEngineUnavailable`. The bare
+       `UnresolvableClonedVoiceError` constructor below hardcodes "the Qwen
+       engine is not available this run… Re-enable Qwen" — every clause of
+       that sentence is false for an orphaned id on a healthy Qwen (or a
+       healthy Coqui clone, which it would also blame on Qwen): the engine is
+       fine, the voice is fine, and there is no cast row to reassign. Routing
+       through `fromList` gives an accurate, reason-aware message instead —
+       see clone-voice-resolver.ts's `BrokenClonedVoice.orphanedCharacterId`. */
+    if (clonedOnRoute && orphanedFromId) {
+      throw UnresolvableClonedVoiceError.fromList([
+        { name: c.name ?? c.id, reason: 'misattributed-substitution', orphanedCharacterId: orphanedFromId },
+      ]);
+    }
     if (clonedOnRoute && (!voiceName || routeEngineUnavailable)) {
       throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
     }
@@ -2199,6 +2243,11 @@ export async function synthesiseChapter(
     renderedFallbackEngine?: TtsEngine;
     configuredEngine: TtsEngine;
     cloned: boolean;
+    /** #2023 Piece 1 — set to the cast character id that ACTUALLY spoke this
+        line when the group's own `characterId` is an orphaned id (no cast
+        entry at all) and the narrator was substituted for it. See
+        `ChapterSegment.renderedFallbackCharacterId`'s doc comment. */
+    renderedFallbackCharacterId?: string;
   };
   const resolvedByIndex = new Map<number, GroupRoute>();
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
@@ -2260,6 +2309,7 @@ export async function synthesiseChapter(
             `was substituted with the narrator — that substitution is what's failing here, not a ` +
             `narrator dialogue line.)`
         : undefined,
+      orphanedFromId,
     );
     const r = {
       ...fallback,
@@ -2279,6 +2329,10 @@ export async function synthesiseChapter(
          carries no emotion suffix — its OWN voiceName IS the base — so only
          the non-rerouted path needs the pre-variant `baseVoice`. */
       baseVoiceName: fallback.renderedFallbackEngine ? fallback.voiceName : baseVoice,
+      /* #2023 Piece 1 — `character` has already been reassigned to the
+         resolved narrator above when `orphanedFromId` is set, so `character.id`
+         is exactly who spoke this line. Undefined on every normal group. */
+      renderedFallbackCharacterId: orphanedFromId ? character.id : undefined,
     };
     resolvedByIndex.set(group.index, r);
     return r;
@@ -3136,6 +3190,7 @@ export async function synthesiseChapter(
       startSec,
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
+      renderedFallbackCharacterId: resolveGroup(group).renderedFallbackCharacterId,
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       voiceName: resolveGroup(group).voiceName,
       baseVoiceName: resolveGroup(group).baseVoiceName,

@@ -4183,6 +4183,8 @@ export interface components {
                 suspect?: boolean;
                 /** @description Human-readable QA reasons for a suspect segment. Segment-QA reasons always; ASR reasons only when the ASR verdict was drift. */
                 reasons?: string[];
+                /** @description #2023 — the cast character id that ACTUALLY spoke this segment when `characterId` above is an orphaned id (no cast entry at all) substituted with the narrator. Absent on every normally-resolved segment. */
+                renderedFallbackCharacterId?: string;
             }[];
             /**
              * @description EBU R128 loudness measurement persisted next to the chapter
@@ -5104,6 +5106,24 @@ export interface components {
              */
             renderedFallbackByCharacter?: {
                 [key: string]: string;
+            };
+            /**
+             * @description #2023 — orphaned characterId → who actually rendered it. Keyed by
+             *     a manuscript `characterId` that has NO entry in this book's cast at
+             *     all (e.g. a cast/analysis id-romanisation drift) and so was
+             *     substituted with the narrator, aggregated across any rendered
+             *     chapter. Distinct from `renderedFallbackByCharacter` above (which
+             *     is keyed by a REAL cast id whose configured ENGINE changed) — this
+             *     is a wrong-CHARACTER substitution, not an engine one. Empty/absent
+             *     when nothing has substituted.
+             */
+            orphanedCharacterFallbacks?: {
+                [key: string]: {
+                    /** @description The cast character id that actually spoke the line (usually the narrator). */
+                    characterId: string;
+                    /** @description The voice name actually sent to the provider, when recorded. */
+                    voiceName?: string;
+                };
             };
             /** @description Editorial activity trail; null when no change-log.json exists yet. */
             changeLog: components["schemas"]["ChangeLogEvent"][] | null;

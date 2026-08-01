@@ -1495,6 +1495,44 @@ Copy-Item "$BOOK\.audiobook\cast.json" "$BOOK\.audiobook\cast.json.bak"
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
+**Run-3 finding (2026-07-31) — fires, and was NOT surfaced.** This exact path
+fired naturally on *Заказ Коалфолла* ch.2: `cast.json` has `mairin`/
+`coalfall-dragon`, the analysis cache and rendered `segments.json` have
+`mayrin`/`coalfall` — 21 of 72 segments (60.3 s) rendered in the **narrator's**
+voice, logged once per orphan id per render and surfaced **nowhere else**
+(`renderedFallbackByCharacter` stayed `{}`). Filed
+[#2023](https://github.com/dudarenok-maker/Castwright/issues/2023) — fixed by
+the PR carrying this edit. Two sub-cases now extend this test, both merged into
+this PR and covered by automated tests (fake resolver deps, no live GPU
+needed for the LOGIC gate) — **the on-box run below still proves the FULL
+integration** (a real cloned voice, a real sidecar, a real cast/analysis id
+drift) and remains owed:
+
+- **C-05a (Piece 2 — the actual guarantee gap).** Repeat the steps above with
+  the narrator's cloned voice **HEALTHY** (not revoked) instead. Before #2023
+  this rendered the orphaned line silently on the cloned narrator's voice —
+  the guarantee was safe only by luck (every affected narrator in the 5
+  wrong-voice-audio books happened to be a *designed*, not cloned, voice).
+  **Expected (post-fix):** the chapter now fails with `cloned-voice-broken`
+  naming the narrator, exactly like the revoked case — a healthy cloned voice
+  must never be substituted for another character's line either. See
+  `synthesise-chapter-cloned-resolver.test.ts`'s "#2023 Piece 2" case for the
+  automated pin of this exact scenario.
+- **C-05b (Piece 1 — record + surface, non-cloned narrator).** Repeat with a
+  **designed** (non-cloned) narrator voice — the render still falls back
+  (falling back may be correct behaviour; only the *silence* was the bug).
+  **Expected (post-fix):** the chapter completes normally, AND (a) the
+  rendered `<slug>.segments.json`'s orphaned-id segment carries a
+  `renderedFallbackCharacterId` naming the narrator, (b) `GET
+  /api/books/:id/state`'s `orphanedCharacterFallbacks` map names the orphaned
+  id + the voice actually used, and (c) the Cast view shows the amber
+  "N character id(s) not found in this book's cast" advisory banner naming
+  the orphaned id(s).
+
+**Result (C-05a):** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+**Result (C-05b):** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
 ---
 
 #### C-06 — A **Repairable** voice transparently re-derives and the chapter completes

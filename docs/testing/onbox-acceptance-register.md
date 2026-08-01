@@ -269,6 +269,12 @@ asserts which voice reached the provider.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.
+- **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
+  a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+  / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
+  orphaned-characterId line) and C-05b (a designed narrator's substitution is
+  recorded + surfaced) — see the run sheet's `Result (C-05a)`/`Result (C-05b)`
+  lines. Sharpens what C-05 needs to test; the Section C headcount is unchanged.
 
 **Two findings that are NOT defects, recorded so they are not re-filed.** (1)
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
