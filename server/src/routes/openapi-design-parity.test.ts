@@ -7,9 +7,18 @@
    every file involved at RUNTIME (openapi.yaml, the two route files, and the
    internal loopback relay that also broadcasts onto the single-design SSE)
    and cross-checks the SSE `type` values + the mounted paths against what
-   openapi.yaml actually describes — a THIRD hardcoded literal on either side
-   would defeat the point, so both sides are derived from the real source,
-   not copied by hand.
+   openapi.yaml actually describes. Both the `type`-value checks
+   (`extractEventTypes` against the route sources, `typeEnum` against
+   openapi.yaml) and the path check's cross-comparison
+   (`describedDesignPaths(yaml)` against `mountedPaths(...)`) derive each
+   side from the real file at runtime — no hand-copied duplicate stands in
+   for either. The path check adds one deliberate exception on top of that
+   (see `:123` below): it also pins today's known six paths as a literal
+   array, so a route that's newly regex-extracted from source AND newly
+   described in openapi.yaml still fails the suite until a human updates
+   that array — a trip-wire against the two derived sides silently agreeing
+   with each other on a route nobody reviewed, not a violation of the
+   "derived, not copied" rule above.
 
    Unlike openapi-setup-parity.test.ts, there is no exported TypeScript union
    of "every event type this route emits" to import type-only and pin via
@@ -87,18 +96,45 @@ function typeEnum(src: string, schemaName: string): string[] {
 /** Every `type: '<literal>'` occurring anywhere in a route source file —
     verified (by inspection, see file header) to match ONLY genuine SSE event
     payloads in cast-design.ts / single-design.ts / design-progress-relay.ts,
-    never an unrelated `type` property. */
+    never an unrelated `type` property.
+
+    Independent review (PR #2048, finding F3) — the class was `[a-z_]`,
+    invisible to a hyphenated literal (`'preview-ready'`) or a digit
+    (`'phase2'`). Widened to `[a-z0-9_-]` (adds hyphen + digit, keeps
+    underscore for today's `character_failed`-style literals) —
+    deliberately not adding uppercase/camelCase on top: hyphenated-lowercase
+    is the ESTABLISHED style on this exact surface (the documented `phase`
+    enum is `freeing-vram` / `loading-model` / `distilling`), so it's the
+    likely next shape here, unlike camelCase which nothing on this surface
+    uses. Verified safe against over-matching: every `type:` occurrence in
+    the three route files (`git grep -n 'type:' cast-design.ts
+    single-design.ts design-progress-relay.ts`) is already one of these SSE
+    event literals — none is an unrelated `type` property this widening
+    could newly sweep in. */
 function extractEventTypes(src: string): string[] {
-  return [...new Set([...src.matchAll(/type:\s*'([a-z_]+)'/g)].map((m) => m[1]))].sort();
+  return [...new Set([...src.matchAll(/type:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]))].sort();
 }
 
 /** Every `<router>.(get|post)('<path>', ...)` registration in a route source
     — tolerates the method name and the path string landing on different
     lines (single-design.ts wraps its longest route). Converts Express's
     `:param` segments to OpenAPI's `{param}` and prefixes with the app.ts
-    mount point (`/api/books` for both routers here). */
+    mount point (`/api/books` for both routers here).
+
+    Independent review (PR #2048, finding F1) — the prior class was `['"]`
+    only, so a backtick-quoted route (a plain, non-interpolated template
+    literal, e.g. `` router.post(`/:bookId/cast/design/resume`, h) ``) was
+    INVISIBLE to this extraction: `fromSource` would silently stay at the old
+    path count, `describedDesignPaths(yaml)` would independently match it
+    (openapi.yaml was never updated for the undocumented route), and both
+    `expect`s below would pass on a route nobody described. Widened to the
+    same three-quote-style class the #2013 layering guard
+    (`gpu/engine-device-state.test.ts`) uses for the identical reason. Only
+    a non-interpolated template literal is covered — one containing
+    `${...}` still isn't a static path and stays out of scope here, same as
+    it would for `['"]`. */
 function mountedPaths(src: string, routerName: string): string[] {
-  const re = new RegExp(`${routerName}\\.(get|post)\\(\\s*['"]([^'"]+)['"]`, 'g');
+  const re = new RegExp(`${routerName}\\.(get|post)\\(\\s*[\`'"]([^\`'"]+)[\`'"]`, 'g');
   return [...src.matchAll(re)]
     .map((m) => `/api/books${m[2].replace(/:([A-Za-z0-9_]+)/g, '{$1}')}`)
     .sort();
@@ -156,9 +192,14 @@ describe('openapi.yaml describes the cast/single design SSE surface accurately (
     /* Scoped to `type: 'error', code: '...'` pairs on the SAME literal — NOT
        every `code: '...'` in the file, which also matches the unrelated
        plain-JSON 409 `{ error, code: 'clone_protected' }` response (asserted
-       separately below). */
+       separately below). Class widened `[a-z_]` → `[a-z0-9_-]` for the same
+       finding-F3 reason as `extractEventTypes` above — see that function's
+       header for the full rationale (hyphenated is this surface's
+       established style, and every `code:` literal here is already a
+       genuine error code, so the widening can't newly sweep in something
+       unrelated). */
     const codes = [
-      ...new Set([...singleDesignSrc.matchAll(/type:\s*'error',\s*code:\s*'([a-z_]+)'/g)].map((m) => m[1])),
+      ...new Set([...singleDesignSrc.matchAll(/type:\s*'error',\s*code:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1])),
     ].sort();
     expect(codes).toEqual(['design_failed', 'not_found', 'unsupported_language']);
     const block = schemaBlock(yaml, 'SingleDesignEvent');
