@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import type { Reporter, TestCase } from 'vitest/node';
 
 /* Server-side test harness. Node environment (no jsdom) — most suites are
    pure helpers + supertest against Express routers. Tests that shell out
@@ -60,6 +61,50 @@ const SLOW_FILES_TO_EXCLUDE = [
 const lowConcurrency =
   process.env.LOW_CONCURRENCY === '1' || process.env.LOW_CONCURRENCY === 'true';
 const maxWorkers = lowConcurrency ? 1 : 2;
+
+/* ops-46 (#2028) — retry:1 below can turn a genuine red-phase test green: for
+   a test asserting on module-level mutable state keyed by a fixed string
+   (a Map/Set/counter at module scope, or fixture state on disk keyed by a
+   fixed path), attempt 1 fails and leaks its mutation; attempt 2 reads state
+   attempt 1 already touched and passes for the wrong reason. See
+   CONTRIBUTING.md's "Testing discipline" section for the full writeup and
+   the `--retry=0` verification convention this reporter exists to surface.
+
+   Deliberately NOT flipped to retry:0 or scoped per-file here. Both were
+   considered and rejected for THIS change:
+   - Global removal is unsafe blind, and not hypothetical: surveyed
+     2026-08-01 via `npx vitest run --retry=0` against this exact suite on
+     unmodified `main` — it reddens `src/routes/voices.test.ts` ("writes
+     ONLY to the anchor book's series..."), deterministically, on the FIRST
+     attempt, every time. That test is currently green in every gating run
+     purely because retry:1 papers over it. Dropping retry here would
+     redden every lane's CI on a file this change does not own.
+   - Per-file retry:0 (e.g. on the file-lock.ts spec that surfaced #2028)
+     requires editing files under server/src/**, which this change does
+     not own either.
+   So retry:1 stays, and the gap is closed by observability instead: any
+   test that fails on attempt 1 and only passes after a retry prints a
+   `[retry-hazard]` line below, naming the file and test, so it can no
+   longer pass silently. A human then re-runs it with `--retry=0` to judge
+   whether it's a genuine transient (route through quarantinedIt,
+   docs/testing/flaky-register.md) or a red-phase test the retry hid (this
+   issue's failure mode) — exactly the survey the "drop retry globally"
+   option needed, now running on every CI invocation instead of once by
+   hand. */
+export const retryHazardReporter: Reporter = {
+  onTestCaseResult(testCase: TestCase) {
+    const diagnostic = testCase.diagnostic();
+    if (diagnostic && diagnostic.retryCount > 0 && testCase.result().state === 'passed') {
+      console.warn(
+        `[retry-hazard] ${testCase.module.moduleId} :: "${testCase.fullName}" failed on its ` +
+          `first attempt and only passed after ${diagnostic.retryCount} retry(ies). If this test ` +
+          'asserts on module-level mutable state, retry:1 may be hiding a genuine red-phase ' +
+          'failure (#2028) — re-run with --retry=0 to check. See CONTRIBUTING.md "Testing ' +
+          'discipline".',
+      );
+    }
+  },
+};
 
 export default defineConfig({
   test: {
@@ -126,5 +171,8 @@ export default defineConfig({
        stays — this subprocess-heavy suite still needs fork isolation. */
     maxWorkers,
     retry: 1,
+    // ops-46 (#2028) — see retryHazardReporter above for why retry:1 stays
+    // and what this adds on top of it.
+    reporters: ['default', retryHazardReporter],
   },
 });
