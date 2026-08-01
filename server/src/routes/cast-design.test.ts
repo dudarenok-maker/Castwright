@@ -1254,3 +1254,39 @@ describe('cast-design persona pre-pass', () => {
     writeBookOnDisk(characters);
   });
 });
+
+/* #1981 — cast-design.ts can't use the self-vs-self race shape every other
+   module in this sweep uses: `inFlightByBook` means a second concurrent POST
+   for the same book attaches to the running job's SSE stream instead of
+   starting a second one (see cast-design.ts's `inFlightByBook.get` gate) —
+   there is only ever one design writer per book. So this races the design
+   job's `writeVoiceStylePersona` write helper (the locked fresh-read-through-
+   write span both design call sites share) DIRECTLY against a different
+   module's writer (cast-aliases' add-alias) on the same book, per the #1981
+   plan's note for this file. Driving the helper directly (not the route)
+   sidesteps having to time a real SSE job's internal write against another
+   request — the job runs detached from the request that started it, so a
+   route-level race here can't be made deterministic. */
+describe('#1981 — cross-writer race: cast-design write helper vs cast-aliases add-alias', () => {
+  it('keeps both writes when a design persona write and an add-alias call for one book overlap', async () => {
+    const { writeVoiceStylePersona } = await import('./cast-design.js');
+    const { castAliasesRouter } = await import('./cast-aliases.js');
+    const aliasApp = express();
+    aliasApp.use(express.json());
+    aliasApp.use('/api/books', castAliasesRouter);
+
+    const [, resAlias] = await Promise.all([
+      writeVoiceStylePersona(bookDir, 'hart', 'a race persona for hart'),
+      request(aliasApp)
+        .post(`/api/books/${bookId}/cast/add-alias`)
+        .send({ characterId: 'brann', aliasName: 'Race Alias' }),
+    ]);
+    expect(resAlias.status).toBe(200);
+
+    const cast = readCast();
+    expect(cast.characters.find((c) => c.id === 'hart')?.voiceStyle).toBe(
+      'a race persona for hart',
+    );
+    expect(cast.characters.find((c) => c.id === 'brann')?.aliases).toContain('Race Alias');
+  });
+});

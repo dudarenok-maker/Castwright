@@ -36,6 +36,7 @@ import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
@@ -148,6 +149,31 @@ function isGpuBusyClass(e: unknown): boolean {
 
 interface CastFile {
   characters: CastCharacter[];
+}
+
+/* #1981 — the fresh-read/write pair shared by runPersonaPrePass and
+   runDesignJob for persisting a generated persona onto a single character.
+   Both call sites already re-read `fresh` immediately before writing
+   (freshness-skip against a concurrent edit) — this just locks that
+   existing read-through-write span rather than the (multi-second) LLM
+   call above it, which stays outside the lock on purpose (see this file's
+   per-site design note in the #1981 plan). Exported so the cross-writer
+   race test can drive it directly — a full route call can't be timed
+   against the job's internal write step deterministically, since the job
+   runs detached from the request that started it. */
+export async function writeVoiceStylePersona(
+  bookDir: string,
+  characterId: string,
+  persona: string,
+): Promise<void> {
+  return withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (fresh && idx !== -1) {
+      fresh.characters[idx] = { ...fresh.characters[idx], voiceStyle: persona };
+      await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    }
+  });
 }
 
 interface DesignSubscriber {
@@ -286,12 +312,7 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
       }
 
       // Minimal-patch write so a concurrent edit to another character survives.
-      const fresh = await readJson<CastFile>(castJsonPath(job.bookDir));
-      const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-      if (fresh && idx !== -1) {
-        fresh.characters[idx] = { ...fresh.characters[idx], voiceStyle: persona };
-        await writeJsonAtomic(castJsonPath(job.bookDir), fresh);
-      }
+      await writeVoiceStylePersona(job.bookDir, characterId, persona);
     }
   } finally {
     clearInterval(beat);
@@ -445,12 +466,7 @@ async function runDesignJob(
           continue;
         }
         persona = await generateVoiceStylePersona(character);
-        const fresh = await readJson<CastFile>(castJsonPath(job.bookDir));
-        const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-        if (fresh && idx !== -1) {
-          fresh.characters[idx] = { ...fresh.characters[idx], voiceStyle: persona };
-          await writeJsonAtomic(castJsonPath(job.bookDir), fresh);
-        }
+        await writeVoiceStylePersona(job.bookDir, characterId, persona);
       }
 
       /* bug #1411 code-review follow-up: must match sample-scope.ts's

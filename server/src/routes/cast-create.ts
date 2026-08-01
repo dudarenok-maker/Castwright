@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const castCreateRouter = Router();
@@ -62,36 +63,41 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
   const located = await findBookByBookId(bookId);
   if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
 
-  const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
-  if (!cast?.characters) {
-    return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
-  }
+  /* #1981 — the read is inside the lock; the minted id and the whole
+     `nextCharacters` build are decisions derived from it. */
+  return withCastLock(located.bookDir, async () => {
+    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+    if (!cast?.characters) {
+      return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
+    }
 
-  const existingIds = new Set(cast.characters.map((c) => c.id));
-  let newId = slugify(name);
-  if (existingIds.has(newId)) {
-    newId = `${newId}_${randomBytes(3).toString('hex')}`;
-  }
+    const existingIds = new Set(cast.characters.map((c) => c.id));
+    let newId = slugify(name);
+    if (existingIds.has(newId)) {
+      newId = `${newId}_${randomBytes(3).toString('hex')}`;
+    }
 
-  const newCharacter: PersistedCharacter = {
-    id: newId,
-    name,
-    role: typeof body.role === 'string' && body.role.trim() ? body.role.trim() : 'character',
-    color: 'unset',
-    gender:
-      body.gender === 'male' || body.gender === 'female' || body.gender === 'neutral'
-        ? body.gender
+    const newCharacter: PersistedCharacter = {
+      id: newId,
+      name,
+      role: typeof body.role === 'string' && body.role.trim() ? body.role.trim() : 'character',
+      color: 'unset',
+      gender:
+        body.gender === 'male' || body.gender === 'female' || body.gender === 'neutral'
+          ? body.gender
+          : undefined,
+      ageRange: ['child', 'teen', 'adult', 'elderly'].includes(body.ageRange as string)
+        ? (body.ageRange as PersistedCharacter['ageRange'])
         : undefined,
-    ageRange: ['child', 'teen', 'adult', 'elderly'].includes(body.ageRange as string)
-      ? (body.ageRange as PersistedCharacter['ageRange'])
-      : undefined,
-    voiceState: 'generated',
-  };
+      voiceState: 'generated',
+    };
 
-  await writeJsonAtomic(castJsonPath(located.bookDir), {
-    characters: [...cast.characters, newCharacter],
+    await writeJsonAtomic(castJsonPath(located.bookDir), {
+      ...cast,
+      characters: [...cast.characters, newCharacter],
+    });
+
+    console.log(`[cast-create] ${bookId} + "${newId}"`);
+    return res.json({ character: newCharacter });
   });
-
-  console.log(`[cast-create] ${bookId} + "${newId}"`);
-  return res.json({ character: newCharacter });
 });

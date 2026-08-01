@@ -587,3 +587,87 @@ describe('cast-merge downgrade to bucket — Russian book (Wave D, plan 221)', (
     expect(bucket.gender).toBe('male');
   });
 });
+
+/* #1981 — a dedicated book with two INDEPENDENT merge pairs (a1→a2, b1→b2),
+   so two concurrent POST /cast/merge calls for the same book race that
+   book's cast.json without any manuscript-edits/analysis-cache/journal
+   files present — performCastMerge tolerates all three being absent
+   (loadAnalysisCache/readJson return empty defaults; saveCastMerges is
+   wrapped in a non-fatal try/catch), so this is the minimal fixture that
+   still exercises the real cast.json read-modify-write. Own book/beforeAll
+   (spawned into the shared workspaceRoot — a fresh mkdtemp would be
+   invisible to the route's frozen BOOKS_ROOT) so it can't collide with the
+   other describes' shared character ids. */
+describe('#1981 — two /cast/merge calls for one book overlap', () => {
+  const RACE_BOOK = 'Race Merge Book';
+  const RACE_MANUSCRIPT_ID = 'm_race_merge_test';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_BOOK);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_BOOK);
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: RACE_MANUSCRIPT_ID,
+        title: RACE_BOOK,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'a1', name: 'A One', role: 'character', color: 'unset' },
+          { id: 'a2', name: 'A Two', role: 'character', color: 'unset' },
+          { id: 'b1', name: 'B One', role: 'character', color: 'unset' },
+          { id: 'b2', name: 'B Two', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+  });
+
+  it('keeps both merges when two /cast/merge calls for one book overlap', async () => {
+    const [resA, resB] = await Promise.all([
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId: 'a1', targetId: 'a2' }),
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId: 'b1', targetId: 'b2' }),
+    ]);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[] }> };
+    const ids = cast.characters.map((c) => c.id);
+    /* Both sources folded away, both targets survive — a lost merge shows up
+       as a source id surviving OR a target id (and its alias) missing. */
+    expect(ids).not.toContain('a1');
+    expect(ids).not.toContain('b1');
+    expect(ids).toContain('a2');
+    expect(ids).toContain('b2');
+    const a2 = cast.characters.find((c) => c.id === 'a2')!;
+    const b2 = cast.characters.find((c) => c.id === 'b2')!;
+    expect(a2.aliases).toContain('A One');
+    expect(b2.aliases).toContain('B One');
+  });
+});

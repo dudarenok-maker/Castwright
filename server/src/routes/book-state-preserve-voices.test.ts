@@ -13,13 +13,25 @@
    Kept in its own fast-tier file (NOT book-state.test.ts, pinned slow) so the
    fixture setup doesn't compound the slow-run hook-timeout pressure. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #1981 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the race test at
+   the bottom of this file can deterministically intercept book-state.ts's
+   OWN `readJson` call (bound at book-state.ts's own module-load time,
+   before any runtime spy could attach to it). Defaults to a plain
+   passthrough — every other test in this file behaves exactly as if this
+   mock weren't here — so only the one race test below overrides
+   `mockImplementation` for the duration of its own `it`, then restores it. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
 
 const AUTHOR = 'Preserve Author';
 const SERIES = 'Preserve Series';
@@ -309,5 +321,156 @@ describe('book-state PUT cast — a cloned slot survives a wholesale write (C-B1
     const wren = cloneCast().characters.find((c) => c.id === 'wren')!;
     expect(wren.overrideTtsVoices).toEqual({ coqui: clonedSlot });
     expect(wren.description).toBe('edited'); // ordinary cast edits still flow
+  });
+});
+
+/* #1981 — book-state.ts's cast slice writes `body.patch` wholesale and is
+   last-writer-wins BY CONTRACT, so "two PUTs, different characters, both
+   survive" is the wrong shape to test here (it stays red even after the
+   lock — Task 11 reasons the same thing for its own site). What the lock
+   actually protects is the clone-consent guards inside `preserveDesignedVoices`
+   (this file's whole point, see the header comment above): a cast PUT whose
+   patch omits a character's `overrideTtsVoices`, raced against
+   POST /voice-library/:voiceUuid/assign planting one on the SAME character.
+   Unlocked, the PUT's `preserveDesignedVoices` read can land BEFORE assign's
+   write, so `preserveDesignedVoicesOnCastWrite`'s existingChars snapshot has
+   nothing to restore — the PUT's later write (still using that stale
+   snapshot) overwrites cast.json with no override, silently erasing the one
+   assign just planted. Locked, the PUT's read is inside the same cast lock
+   assign takes, so it either fully precedes or fully follows assign's own
+   write — never straddles it. */
+describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assign', () => {
+  const RACE_TITLE = 'Race Assign Book';
+  const RACE_VOICE_UUID = 'race-voice-1';
+  let raceBookId: string;
+  let raceBookDir: string;
+  let vl: typeof import('../workspace/voice-library.js');
+
+  function raceCast(): { characters: Array<Record<string, unknown> & { id: string }> } {
+    return JSON.parse(readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'));
+  }
+
+  beforeAll(async () => {
+    const [{ makeBookId }, { voiceLibraryRouter }, voiceLibMod] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('./voice-library.js'),
+      import('../workspace/voice-library.js'),
+    ]);
+    vl = voiceLibMod;
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+    /* Same shared `app` the rest of this file uses — voice-library only
+       answers under /api/voice-library, so this can't shadow the book-state
+       routes the other describes exercise. */
+    app.use('/api/voice-library', voiceLibraryRouter);
+  });
+
+  beforeEach(async () => {
+    writeBook(raceBookDir, raceBookId, [
+      { id: 'nova', name: 'Nova', role: 'minor', color: '#abc', voiceState: 'generated' },
+    ]);
+    await vl.writeEntry({
+      voiceUuid: RACE_VOICE_UUID,
+      name: 'Race Voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+  });
+
+  /* This pairing (a bespoke book-state PUT vs. the much heavier /assign route
+     — readEntry + consent checks + findBookByBookId before it ever touches
+     cast.json) has asymmetric preambles, so a bare `Promise.all` of two
+     supertest calls doesn't reliably straddle the two writes the way the
+     self-vs-self races elsewhere in this sweep do (those keep both sides'
+     preambles symmetric — see cast-series-patch's and cast-aliases' race
+     tests — which isn't an option for two different ROUTES). Instead,
+     deterministically SCRIPT the interleaving: intercept the first `readJson`
+     call against this book's cast.json (PUT's own, inside
+     `preserveDesignedVoices`) and hold its resolution open behind a
+     manually-released gate — real bytes are read now (so PUT's read
+     genuinely happens-before /assign's write, matching the bug's
+     precondition), only the JS-visible resolution is delayed. /assign then
+     gets a generous, one-directional head start to either complete fully
+     (unlocked — the bug window) or queue behind PUT's held lock (locked —
+     the fix): either way the outcome doesn't depend on tuning a tight timing
+     window, only on "long enough", which a generous setTimeout satisfies
+     without flaking.
+
+     supertest requests are LAZY — `request(app).post(...)` does not actually
+     dispatch until the Test object is awaited/`.then()`'d (see the repo's own
+     `r_supertest_request` note). Merely constructing `assignPromise` and
+     holding it in a variable does NOT start it; a `.catch(() => {})` right
+     after construction forces real dispatch now, decoupled from when the
+     result is actually awaited below — without it, /assign's request doesn't
+     even reach the network until the final `Promise.all`, by which point the
+     gate has long since released and there is nothing left to race. */
+  it('#1981 — a stale cast PUT does not erase a concurrently /assign-planted voice', async () => {
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(raceBookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === raceCastPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real read, now — happens-before /assign's write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let resPut: request.Response;
+    let resAssign: request.Response;
+    try {
+      const putPromise = request(app)
+        .put(`/api/books/${raceBookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({
+          slice: 'cast',
+          patch: {
+            characters: [
+              { id: 'nova', name: 'Nova', role: 'minor', color: '#abc', voiceState: 'generated' },
+            ],
+          },
+        });
+      putPromise.catch(() => {}); // force dispatch now (see header comment)
+      // Let PUT reach (and get stuck behind) the intercepted read.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(intercepted).toBe(true);
+
+      const assignPromise = request(app)
+        .post(`/api/voice-library/${RACE_VOICE_UUID}/assign`)
+        .send({ bookId: raceBookId, characterId: 'nova' });
+      assignPromise.catch(() => {}); // force dispatch now (see header comment)
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind PUT's held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [resPut, resAssign] = await Promise.all([putPromise, assignPromise]);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
+    expect(resPut.status).toBe(204);
+    expect(resAssign.status).toBe(200);
+
+    const nova = raceCast().characters.find((c) => c.id === 'nova')!;
+    expect((nova.overrideTtsVoices as Record<string, { name: string }> | undefined)?.qwen?.name).toBe(
+      `qwen-${RACE_VOICE_UUID}`,
+    );
   });
 });

@@ -37,6 +37,7 @@ import {
   qwenVoiceWavPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
@@ -879,23 +880,32 @@ qwenVoiceRouter.delete(
 
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
-    const character = cast?.characters?.find((c) => c.id === characterId);
-    if (!character || !cast) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
 
-    /* Drop the slot from cast.json (preserving base + sibling variants). */
-    const qwenSlot = character.overrideTtsVoices?.qwen;
-    if (qwenSlot?.variants && emotion in qwenSlot.variants) {
-      delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
-      if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
-      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
-    }
+    /* #1981 — the read is inside the lock; the 404 and the variant-map
+       mutation are both decisions derived from it. The teardown call below
+       (embedding + sidecar file deletion, sidecar cache evict) touches no
+       cast.json state, but stays inside the lock's closure anyway — it's the
+       simplest shape and it doesn't itself take another lock on this book,
+       so there's no ordering hazard (rule 1). */
+    return withCastLock(located.bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+      const character = cast?.characters?.find((c) => c.id === characterId);
+      if (!character || !cast) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
 
-    /* Delete the designed embedding + persona sidecar and evict it (best-effort). */
-    await tearDownEmotionVariant(`${qwenStorageKey(character, characterId)}__${emotion}`);
+      /* Drop the slot from cast.json (preserving base + sibling variants). */
+      const qwenSlot = character.overrideTtsVoices?.qwen;
+      if (qwenSlot?.variants && emotion in qwenSlot.variants) {
+        delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
+        if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
+        await writeJsonAtomic(castJsonPath(located.bookDir), cast);
+      }
 
-    return res.status(200).json({ ok: true, removed: emotion });
+      /* Delete the designed embedding + persona sidecar and evict it (best-effort). */
+      await tearDownEmotionVariant(`${qwenStorageKey(character, characterId)}__${emotion}`);
+
+      return res.status(200).json({ ok: true, removed: emotion });
+    });
   },
 );

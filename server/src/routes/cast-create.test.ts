@@ -141,4 +141,24 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no cast/i);
   });
+
+  /* #1981 — two concurrent /create calls for the SAME book race cast.json.
+     Unlocked, both requests' readJson resolve before either writeJsonAtomic
+     lands, so the later write replays a `characters` snapshot taken before
+     the earlier write happened and silently drops it. */
+  it('#1981 — keeps both new characters when two /create calls for one book overlap', async () => {
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
+    const [resA, resB] = await Promise.all([
+      callCreate(bookId, { name: 'Alpha' }),
+      callCreate(bookId, { name: 'Beta' }),
+    ]);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    const cast = readCastJson(bookDir);
+    const ids = cast.characters.map((c) => c['id']);
+    expect(ids).toContain(resA.body.character.id);
+    expect(ids).toContain(resB.body.character.id);
+    expect(cast.characters).toHaveLength(initialCast.length + 2);
+  });
 });

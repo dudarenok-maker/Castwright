@@ -34,6 +34,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -200,25 +201,29 @@ async function applyPatchToCastFile(
   characterId: string,
   patch: SeriesPatch,
 ): Promise<void> {
-  const cast = await readJson<CastFile>(castJsonPath(bookDir));
-  if (!cast?.characters?.length) {
-    throw new Error('Cast on disk is empty');
-  }
-  const idx = cast.characters.findIndex((c) => c.id === characterId);
-  if (idx < 0) {
-    throw new Error(`Character "${characterId}" not present in this book's cast`);
-  }
-  const current = cast.characters[idx];
-  const merged: PersistedCharacter = { ...current };
-  if (patch.gender !== undefined) merged.gender = patch.gender;
-  if (patch.ageRange !== undefined) merged.ageRange = patch.ageRange;
-  if (patch.tone !== undefined) {
-    /* Field-level merge — patch carries only the fields the user edited;
-       unspecified tone axes preserve the existing value. */
-    merged.tone = { ...(current.tone ?? {}), ...patch.tone };
-  }
-  const nextCharacters = cast.characters.map((c, i) => (i === idx ? merged : c));
-  await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
+  /* #1981 — the read is inside the lock; the 404-equivalent throws and the
+     merged fields are all decisions derived from it. */
+  return withCastLock(bookDir, async () => {
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    if (!cast?.characters?.length) {
+      throw new Error('Cast on disk is empty');
+    }
+    const idx = cast.characters.findIndex((c) => c.id === characterId);
+    if (idx < 0) {
+      throw new Error(`Character "${characterId}" not present in this book's cast`);
+    }
+    const current = cast.characters[idx];
+    const merged: PersistedCharacter = { ...current };
+    if (patch.gender !== undefined) merged.gender = patch.gender;
+    if (patch.ageRange !== undefined) merged.ageRange = patch.ageRange;
+    if (patch.tone !== undefined) {
+      /* Field-level merge — patch carries only the fields the user edited;
+         unspecified tone axes preserve the existing value. */
+      merged.tone = { ...(current.tone ?? {}), ...patch.tone };
+    }
+    const nextCharacters = cast.characters.map((c, i) => (i === idx ? merged : c));
+    await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
+  });
 }
 
 /* Cross-book match rule shared with plan-94's series-prior dedup

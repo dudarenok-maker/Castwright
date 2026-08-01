@@ -1638,6 +1638,58 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
     expect(unassignRes.body.cleared).toEqual(assignRes.body.written);
     expect(slotsOf(bookDir)).toEqual({});
   });
+
+  /* #1981 — two concurrent DELETE /assign calls for DIFFERENT characters in
+     the SAME book race that book's cast.json. Unlocked, both requests'
+     readJson resolve before either writeJsonAtomic lands, so the later
+     write replays a `characters` snapshot taken before the earlier write
+     happened and silently un-clears the earlier one's slot. */
+  it('#1981 — keeps both unassigns when two DELETE /assign calls for one book overlap', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-race',
+      [
+        {
+          id: 'char-alice',
+          name: 'Alice',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-race-a', libraryUuid: 'race-a', provenance: 'cloned' },
+          },
+        },
+        {
+          id: 'char-bob',
+          name: 'Bob',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-race-b', libraryUuid: 'race-b', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const [resAlice, resBob] = await Promise.all([
+      request(app)
+        .delete('/api/voice-library/race-a/assign')
+        .query({ bookId: 'book-unassign-race', characterId: 'char-alice' }),
+      request(app)
+        .delete('/api/voice-library/race-b/assign')
+        .query({ bookId: 'book-unassign-race', characterId: 'char-bob' }),
+    ]);
+    expect(resAlice.status).toBe(200);
+    expect(resAlice.body).toEqual({ cleared: ['coqui'] });
+    expect(resBob.status).toBe(200);
+    expect(resBob.body).toEqual({ cleared: ['coqui'] });
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ id: string; overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    const alice = cast.characters.find((c) => c.id === 'char-alice')!;
+    const bob = cast.characters.find((c) => c.id === 'char-bob')!;
+    expect(alice.overrideTtsVoices?.coqui).toBeUndefined();
+    expect(bob.overrideTtsVoices?.coqui).toBeUndefined();
+  });
 });
 
 describe('POST /:uuid/assign — cloned readiness gate (#1933, formerly the fs-38 Wave 3b1 Qwen-only gate)', () => {

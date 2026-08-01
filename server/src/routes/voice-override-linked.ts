@@ -33,6 +33,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -226,6 +227,19 @@ voiceOverrideLinkedRouter.post(
    the exact consent breach this guard exists to close, just one shift-key
    away. */
 export async function applyToBook(
+  bookDir: string,
+  ids: string[],
+  canonicalVoiceId: string,
+  canonicalVoiceUuid: string | undefined,
+  override: { engine: Engine; name: string } | null,
+): Promise<string[]> {
+  /* #1981 — the read is inside the lock; every guard/throw below (cloned-slot
+     refusal, the reserved-prefix consent check) and the write are all
+     decisions derived from it. */
+  return withCastLock(bookDir, () => applyToBookLocked(bookDir, ids, canonicalVoiceId, canonicalVoiceUuid, override));
+}
+
+async function applyToBookLocked(
   bookDir: string,
   ids: string[],
   canonicalVoiceId: string,

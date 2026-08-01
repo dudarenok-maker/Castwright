@@ -1000,6 +1000,56 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
+
+  /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
+     characters in the SAME book race that book's cast.json. Unlocked, both
+     requests' readJson resolve before either writeJsonAtomic lands, so the
+     later write replays a `characters` snapshot taken before the earlier
+     write happened and silently drops it — one character's variant map
+     reverts to its pre-delete state. `nopersona` gets its own qwen override
+     here (it has none by default) purely so it has a second, independent
+     variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
+     `{ force: true }` / try-catch best-effort, so this doesn't need matching
+     .pt/.json fixtures on disk. */
+  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap', async () => {
+    seedVariants();
+    const withSecond = readCast().characters.map((c) =>
+      c.id === 'nopersona'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-nopersona',
+                variants: { sad: { name: 'qwen-nopersona__sad' } },
+              },
+            },
+          }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withSecond }),
+    );
+
+    const [resMaerin, resNopersona] = await Promise.all([
+      request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`),
+      request(app).delete(`/api/books/${bookId}/cast/nopersona/emotion-variant/sad`),
+    ]);
+    expect(resMaerin.status).toBe(200);
+    expect(resNopersona.status).toBe(200);
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    const nopersonaQwen = nopersona.overrideTtsVoices as {
+      qwen: { variants?: Record<string, unknown> };
+    };
+    /* maerin: angry removed, sad survives. */
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+    /* nopersona: its only variant (sad) removed → whole map cleaned up. */
+    expect(nopersonaQwen.qwen.variants).toBeUndefined();
+  });
 });
 
 describe('persistEmotionVariant', () => {

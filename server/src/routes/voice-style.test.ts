@@ -158,6 +158,24 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-style/generate', () =>
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/GEMINI_API_KEY/);
   });
+
+  /* #1981 — two concurrent /generate calls for DIFFERENT characters in the
+     SAME book race that book's cast.json. Unlocked, both requests' readJson
+     resolve before either writeJsonAtomic lands, so the later write replays
+     a `characters` snapshot taken before the earlier write happened and
+     silently drops it. */
+  it('#1981 — keeps both personas when two /generate calls for one book overlap', async () => {
+    const [resWren, resMarlow] = await Promise.all([
+      request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`),
+      request(app).post(`/api/books/${bookId}/cast/marlow/voice-style/generate`),
+    ]);
+    expect(resWren.status).toBe(200);
+    expect(resMarlow.status).toBe(200);
+
+    const cast = readCast();
+    expect(cast.characters.find((c) => c.id === 'wren')?.voiceStyle).toBe('persona-for-wren');
+    expect(cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe('persona-for-marlow');
+  });
 });
 
 describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {

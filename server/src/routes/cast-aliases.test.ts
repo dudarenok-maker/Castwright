@@ -432,3 +432,71 @@ describe('cast-aliases router — repoint-alias', () => {
     expect(res.status).toBe(404);
   });
 });
+
+/* #1981 — a dedicated book (this file's shared book has no beforeEach reset,
+   so its aliases are already consumed by the tests above by the time this
+   runs) with two characters that carry no aliases yet, so two concurrent
+   add-alias calls race that book's cast.json without any of the other
+   describes' order-dependent state. Spawned into the same workspaceRoot —
+   a fresh mkdtemp would be invisible to the route's frozen BOOKS_ROOT. */
+describe('#1981 — two add-alias calls for one book overlap', () => {
+  const RACE_TITLE = 'Cast Aliases Race Book';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: 'm_aliases_race_test',
+        title: RACE_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'race-x', name: 'Race X', role: 'character', color: 'unset', aliases: [] },
+          { id: 'race-y', name: 'Race Y', role: 'character', color: 'unset', aliases: [] },
+        ],
+      }),
+    );
+  });
+
+  it('keeps both aliases when two add-alias calls for one book overlap', async () => {
+    const [resX, resY] = await Promise.all([
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/add-alias`)
+        .send({ characterId: 'race-x', aliasName: 'Xander' }),
+      request(app)
+        .post(`/api/books/${raceBookId}/cast/add-alias`)
+        .send({ characterId: 'race-y', aliasName: 'Yara' }),
+    ]);
+    expect(resX.status).toBe(200);
+    expect(resY.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; aliases?: string[] }> };
+    const x = cast.characters.find((c) => c.id === 'race-x')!;
+    const y = cast.characters.find((c) => c.id === 'race-y')!;
+    expect(x.aliases).toEqual(['Xander']);
+    expect(y.aliases).toEqual(['Yara']);
+  });
+});

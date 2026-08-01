@@ -1726,35 +1726,42 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
       return res.status(404).json({ error: `No book "${bookId}".` });
     }
 
-    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
-    const characters = cast?.characters ?? [];
-    const charIndex = characters.findIndex((c) => c.id === characterId);
-    if (charIndex === -1) {
-      return res
-        .status(404)
-        .json({ error: `No character "${characterId}" in book "${bookId}".` });
-    }
-
-    const character = characters[charIndex];
-    const nextSlots = { ...character.overrideTtsVoices };
-    const cleared: CloneEngine[] = [];
-    for (const engine of CLONE_ENGINE_LIST) {
-      if (nextSlots[engine]?.libraryUuid === voiceUuid) {
-        delete nextSlots[engine];
-        cleared.push(engine);
+    /* #1981 — the read is inside the lock; `charIndex`/`cleared` and the
+       write are all decisions derived from it. No `withLibraryVoiceLock`
+       here — this route's own header comment already explains why: no
+       consent/readiness/provenance gate, no `readEntry` at all, so there is
+       no library-voice-scoped state to guard, only the cast.json RMW. */
+    await withCastLock(located.bookDir, async () => {
+      const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+      const characters = cast?.characters ?? [];
+      const charIndex = characters.findIndex((c) => c.id === characterId);
+      if (charIndex === -1) {
+        return res
+          .status(404)
+          .json({ error: `No character "${characterId}" in book "${bookId}".` });
       }
-    }
 
-    if (cleared.length > 0) {
-      const nextCharacters = [...characters];
-      nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
-      await writeJsonAtomic(castJsonPath(located.bookDir), {
-        ...cast,
-        characters: nextCharacters,
-      });
-    }
+      const character = characters[charIndex];
+      const nextSlots = { ...character.overrideTtsVoices };
+      const cleared: CloneEngine[] = [];
+      for (const engine of CLONE_ENGINE_LIST) {
+        if (nextSlots[engine]?.libraryUuid === voiceUuid) {
+          delete nextSlots[engine];
+          cleared.push(engine);
+        }
+      }
 
-    res.status(200).json({ cleared });
+      if (cleared.length > 0) {
+        const nextCharacters = [...characters];
+        nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
+        await writeJsonAtomic(castJsonPath(located.bookDir), {
+          ...cast,
+          characters: nextCharacters,
+        });
+      }
+
+      return res.status(200).json({ cleared });
+    });
   } catch (e) {
     console.error('[voice-library] unassign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library unassign failed.' });
