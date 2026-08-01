@@ -24,7 +24,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkReleaseNotes, checkMojibake, formatHonouredEcho } from './release-notes-gate.mjs';
+import {
+  checkReleaseNotes,
+  checkMojibake,
+  checkConflictMarkers,
+  formatHonouredEcho,
+} from './release-notes-gate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -458,7 +463,16 @@ async function main() {
   // an `[allow]` line. Don't add one back without first changing that
   // refusal-first invariant.
   if (existsSync(notesPath)) {
-    const mojibakeCheck = checkMojibake(readFileSync(notesPath, 'utf8'), 'RELEASE_NOTES.md');
+    const notesText = readFileSync(notesPath, 'utf8');
+
+    // Pre-flight 5b (#2018): unresolved git conflict markers must never ship.
+    // Unlike every other pre-flight in this file, this one dies UNCONDITIONALLY
+    // — no --force, no --dry-run downgrade — because there is no legitimate
+    // reason for a marker to be here (see checkConflictMarkers' doc comment).
+    const conflictCheck = checkConflictMarkers(notesText, 'RELEASE_NOTES.md');
+    if (!conflictCheck.ok) die(conflictCheck.reason);
+
+    const mojibakeCheck = checkMojibake(notesText, 'RELEASE_NOTES.md');
     if (!mojibakeCheck.ok) {
       if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
       else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
@@ -481,6 +495,11 @@ async function main() {
             `cutting ${newVersion}. Refresh it for this release (or pass --force).`,
         );
     }
+
+    // Pre-flight 6a (#2018): same unconditional conflict-marker refusal as
+    // pre-flight 5b above, for the technical notes file.
+    const conflictCheck = checkConflictMarkers(notesFileText, args.notesFile);
+    if (!conflictCheck.ok) die(conflictCheck.reason);
 
     // Pre-flight 6b (#1956): the technical notes are fed verbatim into the
     // tag annotation / GitHub release body — a mojibake mangle here ships

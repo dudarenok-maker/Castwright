@@ -399,6 +399,86 @@ test('bump-version never echoes a RELEASE_NOTES.md marker — it is refused inst
   }
 });
 
+// #2018 — unresolved git conflict markers must never ship. Unlike the
+// mojibake gate above, this one has NO --force / --dry-run downgrade path:
+// checkConflictMarkers' doc comment explains why (there is no legitimate
+// reason for a marker to be here), and these three tests pin that bump-version
+// actually enforces it unconditionally rather than routing it through the
+// same force/dry-run branches as every other pre-flight in this file.
+const CONFLICT_FIXTURE =
+  '# v1.0.1\n\nFixes:\n<<<<<<< HEAD\n- Ours.\n=======\n- Theirs.\n>>>>>>> origin/main\n';
+
+test('bump-version refuses on a conflict marker in RELEASE_NOTES.md, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), CONFLICT_FIXTURE);
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /RELEASE_NOTES\.md contains 2 unresolved git conflict marker/);
+    assert.match(out.stderr, /line\(s\) 4, 8/);
+    assert.match(out.stderr, /no allowlist/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a conflict marker in RELEASE_NOTES.md even with --dry-run', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), CONFLICT_FIXTURE);
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--dry-run', '--allow-placeholder']);
+    assert.notEqual(out.status, 0);
+    assert.doesNotMatch(out.stdout, /DRY-RUN.*conflict/i);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a conflict marker in --notes-file, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-conflict-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, CONFLICT_FIXTURE);
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version does not false-positive on a RELEASE_NOTES.md with no conflict markers', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--dry-run', '--allow-placeholder']);
+    assert.equal(out.status, 0, out.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* Plan 127 — cross-OS gate. The throwaway repo has no `gh` and no remote, so
    the gate-on path can't run here; --skip-cross-os reverts to the local-only
    flow and is what every post-state test above passes. This pins that the

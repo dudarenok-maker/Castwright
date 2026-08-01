@@ -220,6 +220,59 @@ function reencodeOrForceAdvice(label) {
   );
 }
 
+/* #2018 — unresolved git conflict markers must never reach a published
+   release. Not hypothetical: a `git merge origin/main` on the branch for PR
+   #2010 left three markers inside RELEASE_NOTES.md's own v1.15.0 section, and
+   every gate that existed at the time — including this one — was green; it
+   was caught only because a reviewer read the merge commit's diff by hand.
+
+   Anchored on the `<<<<<<< ` / `>>>>>>> ` PAIR (each with its mandatory
+   trailing space) rather than also trying to match a bare `=======`: a lone
+   `=======` line is a legitimate markdown setext heading underline, but git
+   always appends a ref label after the space on its two outer markers, so
+   `<<<<<<< ` and `>>>>>>> ` are never legitimate release-note prose. Matching
+   only the pair that can never false-positive is enough to catch every real
+   conflict — git never emits one marker without the other. */
+const CONFLICT_START_RE = /^<{7} /;
+const CONFLICT_END_RE = /^>{7} /;
+
+/** Find every unresolved git conflict marker line in `text`. Returns one
+    `{ line, text }` per hit, `line` 1-indexed to match an editor's line
+    numbers. */
+export function findConflictMarkers(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const hits = [];
+  lines.forEach((line, i) => {
+    if (CONFLICT_START_RE.test(line) || CONFLICT_END_RE.test(line)) {
+      hits.push({ line: i + 1, text: line });
+    }
+  });
+  return hits;
+}
+
+/**
+ * Check that `label`'s text contains no unresolved git conflict markers.
+ *
+ * Deliberately no allowlist and no downgrade path (#2018): unlike
+ * checkMojibake, there is no legitimate reason for one of these two lines to
+ * appear in a shipped release-notes file, so every call site treats a
+ * failure here as unconditional — see this file's CLI and
+ * bump-version.mjs's pre-flights 5c/6b, all of which refuse regardless of
+ * --force or --dry-run.
+ */
+export function checkConflictMarkers(text, label) {
+  const hits = findConflictMarkers(text);
+  if (hits.length === 0) return { ok: true, reason: '' };
+  const lines = hits.map((h) => h.line).join(', ');
+  return {
+    ok: false,
+    reason:
+      `${label} contains ${hits.length} unresolved git conflict marker(s) at line(s) ${lines}. ` +
+      `Resolve the conflict and remove the markers before this can ship — there is no allowlist ` +
+      `or --force override for this check (#2018).`,
+  };
+}
+
 /** Render the "an armed marker is never silent" echo line (#1990) for a file
     that honoured at least one marker literal, or `null` when it honoured none
     — the caller should print the line only when it is non-null. Shared by
@@ -511,16 +564,27 @@ if (invokedHref && import.meta.url === invokedHref) {
     process.exit(1);
   }
 
-  // Mojibake guard (#1956): covers RELEASE_NOTES.md (this run's notesPath)
-  // AND docs/release-notes-next.md — the technical notes bump-version.mjs
-  // feeds verbatim into the tag annotation / GitHub release body.
-  const mojibakeTargets = new Map([
+  // Mojibake guard (#1956) + conflict-marker guard (#2018): both cover
+  // RELEASE_NOTES.md (this run's notesPath) AND docs/release-notes-next.md —
+  // the technical notes bump-version.mjs feeds verbatim into the tag
+  // annotation / GitHub release body.
+  const gatedTargets = new Map([
     [notesPath, notesPath === resolve(repoRootFromHere(), 'RELEASE_NOTES.md') ? 'RELEASE_NOTES.md' : notesPath],
     [resolve(repoRootFromHere(), 'docs/release-notes-next.md'), 'docs/release-notes-next.md'],
   ]);
-  for (const [targetPath, label] of mojibakeTargets) {
+  for (const [targetPath, label] of gatedTargets) {
     if (!existsSync(targetPath)) continue;
-    const mojibakeRes = checkMojibake(readFileSync(targetPath, 'utf8'), label);
+    const text = readFileSync(targetPath, 'utf8');
+
+    // #2018 — checked first and unconditionally: no allowlist, no --force,
+    // markers are never legitimate content.
+    const conflictRes = checkConflictMarkers(text, label);
+    if (!conflictRes.ok) {
+      process.stderr.write(`[release-notes-gate] ${conflictRes.reason}\n`);
+      process.exit(1);
+    }
+
+    const mojibakeRes = checkMojibake(text, label);
     // #1990 — echo every honoured marker on every run that reaches this
     // target, pass or fail, so an accidental arming (e.g. one hiding in what
     // looked like a fenced block) is never silent. "Reaches" matters (PR
