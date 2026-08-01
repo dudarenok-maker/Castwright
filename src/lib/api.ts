@@ -64,6 +64,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { initialCharacters } from '../data/characters';
 import { initialSentences } from '../data/sentences';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
@@ -9912,7 +9913,7 @@ export async function mockRetryCloneEngine(
   const idx = mockVoiceLibraryEntries.findIndex((e) => e.voiceUuid === voiceUuid);
   if (idx === -1) throw new Error(`No voice-library entry "${voiceUuid}".`);
   const entry = mockVoiceLibraryEntries[idx];
-  const slotKey = engine === 'coqui' ? 'xtts' : 'qwen';
+  const slotKey = manifestSlotFor(engine);
   if (entry.engines?.[slotKey]?.status !== 'failed') {
     return entry;
   }
