@@ -38,6 +38,20 @@ import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
+/* #1981 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the promote-voice-
+   vs-assign race test far below can deterministically intercept
+   qwen-voice.ts's OWN `readJson` call (bound at qwen-voice.ts's own
+   module-load time, before any runtime spy could attach to it) — same
+   rationale as book-state-preserve-voices.test.ts's own #1981 race test.
+   Defaults to a plain passthrough, so every other test in this file behaves
+   exactly as if this mock weren't here; only the one race test below
+   overrides `mockImplementation` for the duration of its own `it`, then
+   restores it. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';
@@ -918,26 +932,61 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    just one. Locked, promote-voice re-reads fresh cast.json inside
    `withCastLock`, so both mutations survive regardless of interleaving.
 
-   The sidecar `fetch` in promote-voice's own prologue (the eviction call) is
-   already `fetchMock` — a synchronous-resolving stub wired for the whole
-   file (see the root `beforeEach` above) — so, per Task 1's finding, both
-   requests' reads still land together and a bare `Promise.all` interleaves
-   deterministically; no extra delay/gate harness is needed here. `nopersona`
-   is given no override to start (the default fixture), so a survived assign
-   is unambiguous: any `overrideTtsVoices.qwen` on it after the race can only
-   have come from the concurrent assign. */
+   #1981 race-hardening round (Aug 2026) — a bare `Promise.all` of the two
+   requests (the original shape of this test) does NOT interleave reliably:
+   measured at ~50% per-trial detection (15 red / 30 external runs,
+   `withCastLock` mutated to a pass-through, `--retry=0`) — the prior header
+   comment's "interleaves deterministically" claim did not hold up under
+   measurement. Every OTHER race test hardened in this same round measured
+   20/20 deterministic on this box (see the hardening report's table), so
+   this one is a genuine outlier: promote-voice's handler does several real
+   file renames plus a sidecar-evict `fetch` between its OWN two `readJson`
+   calls, which is enough async distance for the interleaving to go either
+   way depending on OS/fs scheduling.
+
+   A naive fix — loop the bare-`Promise.all` trial N times and require every
+   trial to pass — does NOT work here either, and was tried first: repeating
+   the trial WITHIN one vitest process is not independent sampling. Diagnostic
+   instrumentation across 25 in-process repeats showed only the FIRST trial
+   ever caught the miss; trials 2–25 consistently "passed" once the process's
+   JIT/fs-thread-pool state settled — a process-level correlation invisible to
+   a per-trial probability model. 25 external re-runs of that loop-based
+   version still went green 9/20 times, i.e. no better than the original
+   single-trial test.
+
+   The fix that actually reproduces the bug on demand: SCRIPT the
+   interleaving deterministically, the same technique
+   book-state-preserve-voices.test.ts's own #1981 race test uses for its
+   asymmetric-preamble PUT-vs-assign race. Intercept the SECOND call to
+   `readJson` for this book's cast.json — promote-voice's own "fresh read"
+   inside its (real) `withCastLock` span, the one whose snapshot the
+   teardown write is based on — read the real bytes immediately (so the read
+   genuinely happens-before assign's write, matching the bug's precondition)
+   but hold the JS-visible resolution open behind a manually-released gate.
+   /assign then gets a generous one-directional head start: it completes
+   fully when unlocked (the bug window) or queues behind promote-voice's
+   still-held lock when locked (the fix) — either way nothing depends on
+   tuning a tight timing window. This lands a single trial, deterministically,
+   in the same 200-of-200-class category the cast-lock.ts docstring cites for
+   the base primitive — no in-process repetition needed, and none of the
+   process-correlation risk that repetition carries. Confirmed empirically:
+   20/20 external re-runs of THIS version go red against the same mutation
+   (see the hardening report). */
 describe('#1981 — promote-voice races /assign for a different character', () => {
   let raceVoiceLibraryRouter: typeof import('./voice-library.js').voiceLibraryRouter;
   let vl: typeof import('../workspace/voice-library.js');
+  let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
   let mounted = false;
 
   beforeAll(async () => {
-    const [{ voiceLibraryRouter }, voiceLibMod] = await Promise.all([
+    const [{ voiceLibraryRouter }, voiceLibMod, { castJsonPath: cjp }] = await Promise.all([
       import('./voice-library.js'),
       import('../workspace/voice-library.js'),
+      import('../workspace/paths.js'),
     ]);
     raceVoiceLibraryRouter = voiceLibraryRouter;
     vl = voiceLibMod;
+    castJsonPath = cjp;
     /* Mount once — this describe's beforeAll only runs once, but guard
        anyway since `app` is the file-shared instance every other describe
        also exercises. */
@@ -971,8 +1020,9 @@ describe('#1981 — promote-voice races /assign for a different character', () =
           }
         : c,
     );
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
     writeFileSync(
-      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      join(bookDir, '.audiobook', 'cast.json'),
       JSON.stringify({ characters: withVariants }),
     );
 
@@ -988,14 +1038,64 @@ describe('#1981 — promote-voice races /assign for a different character', () =
       updatedAt: '2026-01-01T00:00:00.000Z',
     });
 
-    const [resPromote, resAssign] = await Promise.all([
-      request(app)
+    /* Script the interleaving: hold promote-voice's SECOND `readJson` call
+       for this book's cast.json (its fresh, in-lock read) open until assign
+       has had a generous chance to write. See this describe's header
+       comment for the full rationale. */
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const raceCastPath = castJsonPath(bookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let interceptedSecondRead = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is the top-of-handler character lookup, made before any of
+         promote-voice's file-rename dance — let it through untouched. Call
+         #2 is the fresh, in-lock read the teardown write is based on. */
+      if (callsForCastPath === 2) {
+        interceptedSecondRead = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before assign's write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let resPromote: request.Response;
+    let resAssign: request.Response;
+    try {
+      const promotePromise = request(app)
         .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-        .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY }),
-      request(app)
+        .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      promotePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      // Let promote-voice run its file-rename dance and reach (and get stuck
+      // behind) its second, intercepted read.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(interceptedSecondRead).toBe(true);
+
+      const assignPromise = request(app)
         .post(`/api/voice-library/${raceVoiceUuid}/assign`)
-        .send({ bookId, characterId: 'nopersona' }),
-    ]);
+        .send({ bookId, characterId: 'nopersona' });
+      assignPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind promote-voice's held lock when locked. Not a tight window.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [resPromote, resAssign] = await Promise.all([promotePromise, assignPromise]);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory), not a `vi.spyOn` spy — restore its default
+      // passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
 
     expect(resPromote.status).toBe(200);
     expect(resAssign.status).toBe(200);
