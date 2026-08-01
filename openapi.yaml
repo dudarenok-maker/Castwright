@@ -1967,12 +1967,51 @@ paths:
                 tags: { type: array, items: { type: string } }
                 pinned: { type: boolean }
                 persona: { type: string }
+                transcript:
+                  type: string
+                  maxLength: 2000
+                  description: |
+                    Plan 276 Decision 6 — corrects a cloned voice's reference
+                    transcript after the fact (the "Add transcript" cast-time-gate
+                    CTA). Accepted only when the entry's `provenance` is `cloned`
+                    AND it carries a `master` clip; 400 otherwise. Sets
+                    `master.transcript` (`transcriptSource: 'user'`) and the
+                    entry's own `sampleTranscript` — a second persisted copy of
+                    the same text — and CLEARS `master.languageCode` and the
+                    entry's own `languageCode`: both are Whisper stamps describing
+                    the ORIGINAL clip, and a user-edited transcript may be in a
+                    different language, so a stale stamp would contradict it. A
+                    non-empty transcript also clears a `failed` `qwen` engine
+                    slot (an empty string clears the text but supplies no fix, so
+                    it leaves the slot's `failed` status alone). The qwen `.pt`
+                    distilled against the old text is left untouched — this is a
+                    lexical correction, not a re-derive.
       responses:
         '200':
-          description: Updated entry
+          description: |
+            Updated entry. Like every other route that hands an entry back to
+            the client, this response is passed through the same
+            computed-staleness transform `GET /api/voice-library` uses: a
+            version-stale `qwen`/`xtts` engine slot reports `status: 'stale'`
+            here even when the persisted manifest still says `ready` (a
+            `failed` slot is left untouched by that transform). A caller that
+            assumes it is reading the persisted `engines[*].status` verbatim
+            will disagree with what a chapter render actually decides.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '400':
+          description: |
+            `transcript` was rejected — either the entry isn't a cloned voice
+            with a `master` clip, the value isn't a string, or it exceeds 2000
+            characters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
         '404':
           description: No library entry with that voiceUuid
     delete:
@@ -2033,6 +2072,53 @@ paths:
                         bookTitle: { type: string }
                         characterId: { type: string }
                         characterName: { type: string }
+
+  /api/voice-library/{voiceUuid}/engines/{engine}/retry:
+    post:
+      summary: Clear a failed clone-engine derive so it can be retried
+      operationId: retryVoiceLibraryEngine
+      description: |
+        Plan 276 Decision 7 — the "Retry derive" cast-time-gate CTA. Deletes
+        the named engine's manifest slot key from `engines` (`coqui` maps to
+        the `xtts` slot) rather than rewriting its `status`, so the voice can
+        be re-derived from scratch on the next render/sample. `master`, the
+        retained reference clip, and any existing `.pt` artifact are left
+        untouched.
+
+        No-op — 200, entry unchanged — when the slot is `ready`, and equally
+        when the slot is absent entirely; only a slot whose persisted status
+        is `failed` is actually cleared.
+      parameters:
+        - { in: path, name: voiceUuid, required: true, schema: { type: string } }
+        - in: path
+          name: engine
+          required: true
+          schema: { type: string, enum: [qwen, coqui] }
+          description: A clone-capable engine name. Anything else 400s.
+      responses:
+        '200':
+          description: |
+            Updated (or, on a no-op, unchanged) entry. Like the PATCH above,
+            this response is passed through the same computed-staleness
+            transform `GET /api/voice-library` uses — the returned
+            `engines[*].status` is the COMPUTED status (e.g. a version-stale
+            but persisted-`ready` slot reports `'stale'`), which can differ
+            from what is actually persisted on disk. A client that assumes it
+            is reading persisted state will be wrong.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoiceLibraryEntry' }
+        '400':
+          description: '`engine` is not a clone-capable engine name (qwen or coqui)'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        '404':
+          description: No library entry with that voiceUuid
 
   /api/voice-library/design:
     post:

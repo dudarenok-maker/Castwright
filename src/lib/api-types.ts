@@ -1444,6 +1444,35 @@ export interface paths {
         patch: operations["updateVoiceLibraryEntry"];
         trace?: never;
     };
+    "/api/voice-library/{voiceUuid}/engines/{engine}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear a failed clone-engine derive so it can be retried
+         * @description Plan 276 Decision 7 — the "Retry derive" cast-time-gate CTA. Deletes
+         *     the named engine's manifest slot key from `engines` (`coqui` maps to
+         *     the `xtts` slot) rather than rewriting its `status`, so the voice can
+         *     be re-derived from scratch on the next render/sample. `master`, the
+         *     retained reference clip, and any existing `.pt` artifact are left
+         *     untouched.
+         *
+         *     No-op — 200, entry unchanged — when the slot is `ready`, and equally
+         *     when the slot is absent entirely; only a slot whose persisted status
+         *     is `failed` is actually cleared.
+         */
+        post: operations["retryVoiceLibraryEngine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voice-library/design": {
         parameters: {
             query?: never;
@@ -7772,17 +7801,109 @@ export interface operations {
                     tags?: string[];
                     pinned?: boolean;
                     persona?: string;
+                    /**
+                     * @description Plan 276 Decision 6 — corrects a cloned voice's reference
+                     *     transcript after the fact (the "Add transcript" cast-time-gate
+                     *     CTA). Accepted only when the entry's `provenance` is `cloned`
+                     *     AND it carries a `master` clip; 400 otherwise. Sets
+                     *     `master.transcript` (`transcriptSource: 'user'`) and the
+                     *     entry's own `sampleTranscript` — a second persisted copy of
+                     *     the same text — and CLEARS `master.languageCode` and the
+                     *     entry's own `languageCode`: both are Whisper stamps describing
+                     *     the ORIGINAL clip, and a user-edited transcript may be in a
+                     *     different language, so a stale stamp would contradict it. A
+                     *     non-empty transcript also clears a `failed` `qwen` engine
+                     *     slot (an empty string clears the text but supplies no fix, so
+                     *     it leaves the slot's `failed` status alone). The qwen `.pt`
+                     *     distilled against the old text is left untouched — this is a
+                     *     lexical correction, not a re-derive.
+                     */
+                    transcript?: string;
                 };
             };
         };
         responses: {
-            /** @description Updated entry */
+            /**
+             * @description Updated entry. Like every other route that hands an entry back to
+             *     the client, this response is passed through the same
+             *     computed-staleness transform `GET /api/voice-library` uses: a
+             *     version-stale `qwen`/`xtts` engine slot reports `status: 'stale'`
+             *     here even when the persisted manifest still says `ready` (a
+             *     `failed` slot is left untouched by that transform). A caller that
+             *     assumes it is reading the persisted `engines[*].status` verbatim
+             *     will disagree with what a chapter render actually decides.
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /**
+             * @description `transcript` was rejected — either the entry isn't a cloned voice
+             *     with a `master` clip, the value isn't a string, or it exceeds 2000
+             *     characters.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+            /** @description No library entry with that voiceUuid */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    retryVoiceLibraryEngine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voiceUuid: string;
+                /** @description A clone-capable engine name. Anything else 400s. */
+                engine: "qwen" | "coqui";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description Updated (or, on a no-op, unchanged) entry. Like the PATCH above,
+             *     this response is passed through the same computed-staleness
+             *     transform `GET /api/voice-library` uses — the returned
+             *     `engines[*].status` is the COMPUTED status (e.g. a version-stale
+             *     but persisted-`ready` slot reports `'stale'`), which can differ
+             *     from what is actually persisted on disk. A client that assumes it
+             *     is reading persisted state will be wrong.
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceLibraryEntry"];
+                };
+            };
+            /** @description `engine` is not a clone-capable engine name (qwen or coqui) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
                 };
             };
             /** @description No library entry with that voiceUuid */
