@@ -324,6 +324,200 @@ export function checkRegister(text) {
   return errors;
 }
 
+// ---------------------------------------------------------------------------
+// The live view (docs/testing/onbox-acceptance-register-live-view.html)
+// ---------------------------------------------------------------------------
+// The register has a hand-authored HTML twin published to a fixed artifact URL.
+// It is not generated from the markdown, so the two drift: on 2026-07-28 the
+// published page was simultaneously missing a row added in one PR and carrying
+// a row that only existed on another PR's branch, and the two errors cancelled
+// in the total — a plausible-looking summary strip over two wrong group counts.
+// Nothing could see it, because the checks above validate the markdown against
+// itself.
+//
+// These checks close that gap by comparing the two files. What they CANNOT see
+// is the published page itself: publishing the wrong file, or forgetting to
+// publish at all, leaves no trace in the repo. That half is a documented
+// procedure, not a mechanical gate — see the register's "Live view" section.
+
+// Strips tags and collapses whitespace, so a cell's text can be compared
+// regardless of the markup inside it (the C group's setup cell wraps a
+// `<span lang="ru">`, and every glance-table letter is wrapped in an `<a>`).
+function htmlCellText(html) {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Parses the live view's glance table into letter → count, mirroring the
+// markdown's parseGlanceTable: a row only counts as a *group* row when its
+// first cell is a single uppercase letter, so the `—`-prefixed Blocked and
+// Unconfirmed rows and the header row are skipped without special-casing.
+function parseLiveViewGlance(html) {
+  const tableMatch = html.match(/<table class="glance">([\s\S]*?)<\/table>/);
+  if (!tableMatch) return { groups: null, malformedLetters: [] };
+  const groups = new Map();
+  const malformedLetters = [];
+  for (const rowMatch of tableMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+    const cells = [...rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map((c) =>
+      htmlCellText(c[1]),
+    );
+    if (cells.length === 0) continue;
+    if (!/^[A-Z]$/.test(cells[0])) continue;
+    const letter = cells[0];
+    const lastCell = cells[cells.length - 1];
+    if (cells.length !== 3 || !/^\d+$/.test(lastCell)) {
+      malformedLetters.push(letter);
+      continue;
+    }
+    groups.set(letter, Number(lastCell));
+  }
+  return { groups, malformedLetters };
+}
+
+// Parses the live view's group sections into letter → { headerCount, rowIds }.
+// Rows are collected per SECTION rather than by their own ID letter, so a row
+// filed under the wrong group is caught rather than silently landing in the
+// right bucket. Sections whose `gtag` is not a single uppercase letter (the
+// `BLK` and `?` sections) are skipped — the markdown's own glance table marks
+// their rows with `—` and excludes them from the owed total too.
+function parseLiveViewSections(html) {
+  const sections = new Map();
+  const blocks = html.split(/<section class="group"/).slice(1);
+  for (const block of blocks) {
+    const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
+    if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
+    const letter = tagMatch[1].trim();
+    const countMatch = block.match(/<span class="gcount">(\d+) rows?<\/span>/);
+    const rowIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)]
+      .map((m) => m[1].trim())
+      .filter((id) => /^[A-Z]\d+$/.test(id));
+    sections.set(letter, {
+      headerCount: countMatch ? Number(countMatch[1]) : null,
+      rowIds,
+    });
+  }
+  return sections;
+}
+
+// Compares the live view against the markdown. Returns human-readable error
+// strings; empty when the two agree.
+//
+// Every extraction failure below is an error rather than a skip. A regex that
+// stops matching after a markup change would otherwise turn this whole check
+// into a vacuous pass — which is the exact shape of bug it exists to catch.
+export function checkLiveView(markdownText, liveViewHtml) {
+  const errors = [];
+  const { text: fenceStrippedText } = stripFences(markdownText);
+  const sections = splitSections(fenceStrippedText);
+  const glanceSection = sections.find((s) => s.title === 'At a glance');
+  if (!glanceSection) {
+    return ['No "## At a glance" section in the markdown — cannot check the live view against it.'];
+  }
+  const { groups: mdGroups, total: mdTotal } = parseGlanceTable(glanceSection.body);
+  const { groups: mdBodyGroups } = parseBodyGroups(sections);
+
+  // The owed total, as the summary strip states it.
+  const owedMatch = liveViewHtml.match(/<div class="n owed">(\d+)<\/div>/);
+  if (!owedMatch) {
+    errors.push(
+      'Live view: no `<div class="n owed">NN</div>` found — the summary strip\'s owed total could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+  } else if (mdTotal !== null && Number(owedMatch[1]) !== mdTotal) {
+    errors.push(
+      `Live view says ${owedMatch[1]} owed but the register says ${mdTotal}. Update the live view's summary strip.`,
+    );
+  }
+
+  // The glance table, letter by letter.
+  const { groups: lvGroups, malformedLetters } = parseLiveViewGlance(liveViewHtml);
+  if (lvGroups === null) {
+    errors.push(
+      'Live view: no `<table class="glance">` found — the per-group counts could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+  } else {
+    for (const letter of malformedLetters) {
+      errors.push(
+        `Live view: the glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
+      );
+    }
+    for (const [letter, mdCount] of mdGroups) {
+      if (!lvGroups.has(letter)) {
+        if (!malformedLetters.includes(letter)) {
+          errors.push(`Live view: Group ${letter} is missing from the glance table.`);
+        }
+        continue;
+      }
+      if (lvGroups.get(letter) !== mdCount) {
+        errors.push(
+          `Live view: glance table says Group ${letter} has ${lvGroups.get(letter)} rows, the register says ${mdCount}.`,
+        );
+      }
+    }
+    for (const letter of lvGroups.keys()) {
+      if (!mdGroups.has(letter)) {
+        errors.push(
+          `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
+        );
+      }
+    }
+  }
+
+  // The group sections and their rows.
+  const lvSections = parseLiveViewSections(liveViewHtml);
+  if (lvSections.size === 0) {
+    errors.push(
+      'Live view: no `<section class="group">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
+    );
+    return errors;
+  }
+  for (const [letter, mdNumbers] of mdBodyGroups) {
+    const section = lvSections.get(letter);
+    if (!section) {
+      errors.push(`Live view: no group section for Group ${letter}.`);
+      continue;
+    }
+    if (section.headerCount === null) {
+      errors.push(
+        `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
+      );
+    } else if (section.headerCount !== mdNumbers.length) {
+      errors.push(
+        `Live view: Group ${letter}'s header says ${section.headerCount} rows, the register's body has ${mdNumbers.length}.`,
+      );
+    }
+    const expected = new Set(mdNumbers.map((n) => `${letter}${n}`));
+    const found = new Set(section.rowIds);
+    const missing = [...expected].filter((id) => !found.has(id));
+    const extra = [...found].filter((id) => !expected.has(id));
+    if (missing.length > 0) {
+      errors.push(
+        `Live view is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from the live view.`,
+      );
+    }
+    if (extra.length > 0) {
+      errors.push(
+        `Live view has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register does not. A row published from an unmerged branch is the usual cause.`,
+      );
+    }
+    if (section.rowIds.length !== found.size) {
+      const seen = new Set();
+      const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
+      errors.push(`Live view: Group ${letter} lists ${dupes.join(', ')} more than once.`);
+    }
+  }
+  for (const letter of lvSections.keys()) {
+    if (!mdBodyGroups.has(letter)) {
+      errors.push(
+        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+      );
+    }
+  }
+
+  return errors;
+}
+
 // CLI mode: `node scripts/check-onbox-register.mjs`
 const invokedAsCli =
   typeof process !== 'undefined' &&
@@ -331,24 +525,45 @@ const invokedAsCli =
   process.argv[1].replace(/\\/g, '/').endsWith('scripts/check-onbox-register.mjs');
 
 if (invokedAsCli) {
-  const registerPath = new URL('../docs/testing/onbox-acceptance-register.md', import.meta.url);
-  let text;
-  try {
-    text = readFileSync(registerPath, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.error(
-        'Register not found at docs/testing/onbox-acceptance-register.md — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml',
-      );
-      process.exit(1);
+  const REGISTER = 'docs/testing/onbox-acceptance-register.md';
+  const LIVE_VIEW = 'docs/testing/onbox-acceptance-register-live-view.html';
+
+  // A missing file is a hard failure for both, not a skip: the live view is
+  // tracked precisely so it is always present, and treating its absence as
+  // "nothing to check" would restore the silent-drift hole this closes.
+  const read = (relPath) => {
+    try {
+      return readFileSync(new URL(`../${relPath}`, import.meta.url), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        console.error(
+          `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml`,
+        );
+        process.exit(1);
+      }
+      throw err;
     }
-    throw err;
-  }
-  const errors = checkRegister(text);
-  if (errors.length > 0) {
-    console.error('docs/testing/onbox-acceptance-register.md is not internally consistent:\n');
+  };
+
+  const text = read(REGISTER);
+  const liveViewHtml = read(LIVE_VIEW);
+
+  const report = (label, errors) => {
+    if (errors.length === 0) return false;
+    console.error(`${label}:\n`);
     for (const error of errors) console.error(`- ${error}`);
-    process.exit(1);
-  }
-  process.exit(0);
+    console.error('');
+    return true;
+  };
+
+  // Both checks always run — the live-view comparison is reported even when
+  // the markdown is internally inconsistent, so one PR sees both problems
+  // rather than discovering the second only after fixing the first.
+  const registerFailed = report(`${REGISTER} is not internally consistent`, checkRegister(text));
+  const liveViewFailed = report(
+    `${LIVE_VIEW} does not agree with ${REGISTER}`,
+    checkLiveView(text, liveViewHtml),
+  );
+
+  process.exit(registerFailed || liveViewFailed ? 1 : 0);
 }

@@ -11,3 +11,9 @@ audiobook-workspace/
 package-lock.json
 server/package-lock.json
 src/lib/api-types.ts
+
+# Hand-authored publish source for the on-box register's live view. Reformatting
+# it would reflow markup that scripts/check-onbox-register.mjs matches line-wise
+# (e.g. `<span class="num">A1</span>`), and the file is authored to be published
+# verbatim, not to match repo JS/CSS style.
+docs/testing/onbox-acceptance-register-live-view.html
