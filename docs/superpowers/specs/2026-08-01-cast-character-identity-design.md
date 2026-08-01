@@ -8,12 +8,23 @@ leaving this root cause alone — see that issue's "Piece 3 — FILE ONLY" note)
 re-record path), plan 122 (the 2026-05-27 one-off id repair whose residue is
 §1.4), the cast.json write-lock design (§10)
 
-**Review:** one adversarial pass (Premium tier). It broke three load-bearing
-claims of the first draft — the rewrite-emission mechanism was inert, the RC3
-diagnosis was a no-op, and the read-site conversion opened a clone-validation
-hole. All three are corrected below and the corpus figures were re-measured.
-Two of its findings were themselves wrong and are recorded in §12 so they are
-not re-litigated.
+**Review:** two adversarial passes (Premium tier).
+
+*Round 1* broke three load-bearing claims of the first draft — the
+rewrite-emission mechanism was inert, the RC3 diagnosis was a no-op, and the
+read-site conversion opened a clone-validation hole.
+
+*Round 2* found the round-1 fix had reproduced the same defect one level down:
+the design wrote aliases into a field that `mergeAnalysisResultWithExistingCast`
+erases on every re-analysis. It also found the collision path drops the very
+case §4.4 claimed to fix, an eighth join site whose omission would have made
+wave 2 a regression, and that an alias can be silently shadowed by a re-minted
+live id.
+
+All are corrected below. Corpus figures were independently re-measured and
+reproduced exactly in both rounds. One round-1 finding was wrong and is
+recorded in §12; a rebuttal this spec made to a second one was itself wrong,
+and §12 now says so.
 
 ## 1. What is actually wrong
 
@@ -280,9 +291,11 @@ leaves underscore ids in place and `cast-create.ts`'s collision suffix is
 `_<hex>`, so `foo_ab12ef` and `foo-ab12ef` are reachable. A tie falls through
 to the orphan path.
 
-**Seven sites convert, not six.** The criterion is *provenance of the id*: an
-id that came from manuscript attribution or a frozen render resolves through
-aliases; an id supplied by an API caller does not.
+**Eight sites convert.** The criterion is *provenance of the id*: an id that
+came from manuscript attribution or a frozen render resolves through aliases;
+an id supplied by an API caller does not. The first draft said six and the
+second said seven; both undercounts came from enumerating by file rather than
+by join.
 
 | Site | Today | Note |
 |---|---|---|
@@ -293,6 +306,7 @@ aliases; an id supplied by an API caller does not.
 | `revisions.ts:155` drift detector | `continue` on miss | resolver, then `continue` |
 | `audio/render-integrity/aggregate.ts:510` audition centroid | `undefined` hint | **writes** — see below |
 | `routes/chapter-qa-repair.ts:408` | falls back to `{}` | **writes** — see below |
+| `audio/build-synth-replacement.ts:200` `findDivergentSentences` | raw `current.characterId !== seg.characterId` | **blocks repair — see below** |
 
 `:1519` is the one the first draft missed, and missing it would have shipped a
 regression. The cloned-voice pre-pass validates exactly
@@ -314,6 +328,24 @@ now be re-recorded in the resolved character's voice and the segments file
 rewritten. Both are the correct outcome — the whole point is that these lines
 belong to a real cast member — but they are behaviour changes on write paths
 and belong in §7, not in a table of "read sites".
+
+**`findDivergentSentences` is the eighth site, and without it wave 2 is a
+regression.** It compares the current sentence store against the frozen segment
+by raw string (`build-synth-replacement.ts:200`) — the exact cross-provenance
+join this section exists for. Its hits are dropped into `stillSuspect` by
+`chapter-qa-repair.ts:442-447`, and `chapter-splice.ts:355` **refuses the whole
+splice** on any hit.
+
+Today the corpus is safe here because the cache and the frozen segments
+*agree* — measured: _Playing with Fire_ holds `the-torment` ×67 in both, and
+1/1 and 6/6 for the other two ids. Only `cast.json` differs. But §4.4's remap
+rewrites `reconciled.sentences` into `manuscript-edits.json` at
+`analysis.ts:4729`, moving the sentence store into prior-id space while the
+frozen segments stay in analyzer space. `findDivergentSentences` would then
+read every one of those segments as "the user reassigned this line", QA repair
+would skip them, and splice would refuse outright — locking the 188 segments
+out of the two repair paths wave 1 exists to enable, and directly contradicting
+§7's claim that QA repair re-records them. It must join through the resolver.
 
 The request-driven CRUD routes (`cast-aliases`, `cast-design`, `cast-merge`,
 `cast-series-patch`, `qwen-voice`, `single-design`, `voice-library`,
@@ -366,13 +398,42 @@ This is the riskiest single change in the design (§9).
 **The invariant that generalises all of this:**
 
 > Any code path that changes a character's persisted id records the old id in
-> that character's `idAliases`.
+> that character's `idAliases` — and no code path on the analysis write path
+> may drop the field.
 
-Concretely that means `applyRewriteToPriorCast` (`merge-analysis-cast.ts:235`),
-which today swaps a live row's id and discards the old one, appends it instead.
-That single change fixes RC3's live path — the dedup collapse that would
-otherwise re-orphan rendered audio on every re-analysis — at the exact point
-where the old id is still in hand.
+It takes **three** changes, not one. An earlier draft named only the first and
+was inert, which is the same defect the round-1 review killed one level up.
+
+1. **`applyRewriteToPriorCast` (`merge-analysis-cast.ts:224-275`) appends the
+   old id.** Today it swaps a live row's id (`:235`) and discards the original.
+2. **Its collision path must union the loser, not drop it.** When two prior
+   rows rewrite onto one canonical id, `winners`/`voiceStateRank` keeps one and
+   pushes the other to `droppedVoices` — a log array — then discards it
+   (`:274`). The dedup collapse **is** this path, so it is precisely the case
+   the invariant must cover. The rule is
+   `winner.idAliases ∪= {winner.originalId, loser.originalId} ∪ loser.idAliases`.
+3. **`mergeAnalysisResultWithExistingCast` must union `idAliases`.** This is
+   the load-bearing one. It builds every output row as `{ ...f }` from the
+   *fresh* roster and overlays only `PRESERVED_VOICE_FIELDS` (`:35-45`), a
+   union of `aliases`, and the narrator carry-forward. `idAliases` is in none
+   of them — so without this, every re-analysis erases the accumulated alias
+   set for every matched character, and changes 1 and 2 are discarded eight
+   lines after they are made (`analysis.ts:4767` → `:4775`). Union it on
+   **both** the id-matched branch and the name-fallback branch, exactly as
+   `aliases` is handled at `:180-181`.
+
+**An alias must never shadow a live id, and must yield when its id is
+re-minted.** Resolution is exact-id-first (§4.3), so a returning real
+`unknown-male` row correctly wins over Timkin's alias — but then Timkin's 21
+frozen segments silently reroute to the generic background bucket with no tie,
+no warning and no orphan stamp. This is not hypothetical: `foldMinorCast` mints
+that bucket routinely (`fold-minor-cast.ts:294-303`) and Exile's cache
+`chapterCast` still carries `unknown-male` for chapters 7/11/24/33/34, which
+`rebuildRoster` folds back into every roster build. **55 of the 188 segments
+are exposed.** The rule: when a fresh roster introduces a live row whose id
+collides with an existing `idAliases` entry, that entry is **removed** from the
+other character and the affected segments are reported as *needs your decision*
+(§4.6) rather than silently rerouted.
 
 ### 4.5 RC2 — `cast-create.ts` uses `safeId`
 
@@ -382,20 +443,37 @@ Tier B and by the repair pass; no forced migration.
 
 ### 4.6 Surfacing what could not be resolved
 
-#2023's banner (`src/views/cast.tsx:939-968`) currently lists every orphaned id
-in one undifferentiated block. It splits in two:
+**The existing banner shows nothing today, and that must be fixed first.**
+`collectOrphanedCharacterFallbacks` (`server/src/audio/segments-io.ts:299-301`)
+skips any segment lacking `renderedFallbackCharacterId`, the stamp #2023
+introduced. Measured across all 20 books: **188 orphaned segments, 0 carrying
+the stamp** — every affected render predates #2023. So #2023's banner
+(`src/views/cast.tsx:939-968`) is empty on all five affected books, and any
+design that hangs new UI off that collector inherits an empty list.
+
+Worse for the split below: an id that *resolves* through an alias never takes
+`resolveGroup`'s orphan branch, so it never gets the stamp either — the
+"auto-reconciled" list would be empty **by construction**. The collector's
+`!s.renderedFallbackCharacterId` gate must therefore be widened to report any
+segment whose `characterId` is not an exact live cast id, tagged with how it
+resolved, rather than only those carrying the stamp.
+
+With that fixed, the banner splits in two:
 
 - **Auto-reconciled** — resolved through an alias or normalised key.
   Informational, collapsed by default.
-- **Needs your decision** — a genuine miss. Actionable, showing the closest
-  candidate by name so the user can confirm or reject rather than reading raw
-  ids. **This is also the un-record path**: rejecting a reconciliation removes
-  the `idAliases` entry, so a wrong auto-match made by §4.4's widened fallback
-  is reversible rather than a one-way door.
+- **Needs your decision** — a genuine miss, or an alias displaced by a
+  re-minted live id (§4.4). Actionable, showing the closest candidate by name
+  so the user can confirm or reject rather than reading raw ids.
 
-`collectOrphanedCharacterFallbacks` (`server/src/audio/segments-io.ts:292-314`)
-already carries the per-segment data; it gains the resolution outcome so the
-frontend can split the list without a second pass.
+**The un-record path must be durable.** Rejecting a reconciliation removes the
+`idAliases` entry — but §4.4's fallback matches on the *name*, which the
+rejection does not change, so the next re-analysis would simply re-record it.
+The repo already has the right primitive: `notLinkedTo`, honoured by
+`dedupePriorCastByName` (`merge-analysis-cast.ts:391`, `groupHasNotLinkedEdge`)
+and by `seedReuseGuardsFromPriorCast`. A rejection writes a `notLinkedTo` edge
+between the two characters, and §4.4's matcher honours it. Without this the
+un-record is a one-way door in the opposite direction from the one §9 fears.
 
 ### 4.7 The repair pass
 
@@ -411,10 +489,37 @@ tested):
 - **The two orphan populations need different treatment, and the first draft
   conflated them.** A cache orphan carries a display *name*, so Tier A applies.
   A frozen `segments.json` carries only a `characterId` — no name — so Tier A
-  cannot apply and only Tier B can match. For segment-only orphans with no Tier
-  B match (Exile's `unknown-male`, KOTLC's `alden`), the repair reconstructs a
-  candidate name from `cast.json` backups where present (§1.4 shows this works:
-  `cast.json.bak.r2` names them) and otherwise reports them for a human.
+  cannot apply and only Tier B can match.
+- **A frozen segment is not nameless, though.** `characterSnapshots` in the
+  segments file carries `tone`, `gender`, `ageRange`, `voiceEngine` and
+  `attributes` for the orphaned id (verified on Exile's
+  `07-chapter-five-five.segments.json`). No name, but a far stronger matching
+  signal than "id only", and the repair should use it to rank candidates.
+  Where a `cast.json.bak.*` names the id outright (§1.4:
+  `cast.json.bak.r2` gives `unknown-male` = "Timkin"), that is stronger still.
+
+**The whole rendered-orphan population, enumerated** — the spec previously gave
+only a total, which hid a gap:
+
+| book | id | segments | attributed to |
+|---|---|---|---|
+| Playing with Fire | `the-torment` | 67 | RC2 (Tier B recovers) |
+| Playing with Fire | `pool-player-2` | 6 | RC2 variant — `-2` suffix defeats Tier B |
+| Playing with Fire | `lightning-dave` | 1 | RC2 (Tier B recovers) |
+| Заказ Коалфолла | `coalfall` | 13 | RC1 + §1.3 restore |
+| Заказ Коалфолла | `mayrin` | 8 | RC1 + §1.3 restore |
+| Exile | `unknown-male` | 21 | §1.4 |
+| Exile | `unknown-female` | 14 | §1.4 |
+| Unlocked | `unknown-male` | 34 | §1.4 |
+| Exile | `silveny` | 17 | **unattributed** |
+| Everblaze | `lady-alina` | 6 | **unattributed** |
+| Exile | `sir-harding` | 1 | **unattributed** |
+
+**24 of the 188 segments have no attributed mechanism.** They are consistent
+with RC1 or with another incomplete repair, but that has not been traced. The
+repair pass handles them the same way as any other unresolved orphan — reported
+for a human — so this gap does not block wave 3, but it does mean §1.2 is not
+yet a complete account and should not be read as one.
 - Writes `cast.json.bak.id-drift-<date>` before any change.
 - Emits the **re-render list**: book, chapter, orphaned id, segment count,
   approximate affected duration. Whether to spend GPU time on those re-renders
@@ -443,7 +548,12 @@ did nothing — the placebo shape this repo has been bitten by before. So:
 | unit | `buildCastResolver`: each of the four tiers hits; a true miss returns `undefined`; **a tie returns `undefined`** |
 | server | an **unvoiced** drifted character keeps its prior id (locks RC1) |
 | server | the ambiguity guard still refuses to match when two candidates share a name key |
-| server | `applyRewriteToPriorCast` appends the old id to `idAliases` (locks RC3's live path) |
+| server | `applyRewriteToPriorCast` appends the old id to `idAliases` |
+| server | its **collision** path unions the loser's id *and* the loser's existing `idAliases` into the winner (locks RC3's live path — the unit test above passes without this) |
+| server | **end-to-end**: run a full analysis over a book whose cast already has `idAliases`, and assert the written `cast.json` still has them. This is the test that fails if `mergeAnalysisResultWithExistingCast` drops the field — the two rows above are green either way |
+| server | `findDivergentSentences` does not report divergence when the sentence store and the frozen segment differ only by an alias (locks the eighth site; without it wave 2 blocks QA repair) |
+| server | a fresh roster re-minting a live `unknown-male` row removes that entry from the other character's `idAliases` and reports the affected segments rather than rerouting them |
+| server | a rejected reconciliation writes a `notLinkedTo` edge, and a subsequent re-analysis does not re-record the alias |
 | server | `pruneSuggestionsToRoster` still returns a non-empty list after a remap (locks §4.4 step 4) |
 | server | a client cast `PUT` omitting `idAliases` does not erase it (locks §4.1) |
 | server | `:1519` — a resolvable orphan still puts the resolved character into the clone pre-pass |
@@ -459,7 +569,7 @@ The golden-audio tier is not involved — no audio-assembly behaviour changes.
 | Wave | Ships | Standalone effect |
 |---|---|---|
 | 1 | `normaliseIdKey`, `buildCastResolver` (incl. tie handling), all seven sites, `idAliases` on the schema + preserved-on-write | Recovers **68 of 188** orphaned segments (36%) via Tier B alone, with no alias recorded — and closes the `:1519` gate it would otherwise open |
-| 2 | §4.4's early remap pass, the `applyRewriteToPriorCast` invariant, RC2 | Stops new drift being generated, on both the model path and the dedup path |
+| 2 | §4.4's early remap pass, all three parts of the id invariant, the eighth site, RC2 | Stops new **cast.json** drift on both the model and dedup paths, and keeps the alias set alive across re-analysis |
 | 3 | repair pass, banner split + un-record path, re-render list | Cleans up the existing books |
 
 Measured, not estimated: Tier B resolves 2 of the 11 distinct orphaned ids, but
@@ -467,6 +577,19 @@ those two account for 68 of the 188 orphaned segments. By id count wave 1 looks
 marginal; by wrong-voice audio it is the largest single recovery. _Заказ
 Коалфолла_ gets nothing from wave 1 — its drift is letter-level and needs
 wave 2 or 3.
+
+**Wave 2 does not stop analysis-cache drift, and the wave table should not be
+read as claiming it does.** Every `saveAnalysisCache` on the main path is at or
+before `analysis.ts:4360`, and on the subset path at or before `:5648` — both
+ahead of §4.4's insertion points. The cache therefore keeps its pre-remap ids,
+and `rebuildCacheFromEdits` (`analysis-cache-rebuild.ts:53`) heals only
+`chapters`, spreading `...prior`, so `chapterCast` stays in the drifted space
+indefinitely and re-seeds the analyzer prompt's "reuse their `id` verbatim"
+roster from stale ids on the next run. Cache drift is the larger population —
+**89 distinct cache-orphan ids across 18 books**, against 11 segment ids across
+5 — and this design *masks* it with aliases rather than stopping it. Moving the
+cache write after the remap is possible but was not designed here; it is
+recorded as §11 Q3.
 
 ## 7. Behaviour changes the user will notice
 
@@ -510,6 +633,14 @@ hazards:
 
 **Tier B could mask a real collision.** Mitigated by the tie rule (§4.3).
 
+**Wave 1 may poison persisted audition centroids.** `aggregate.ts:510` feeds
+`writeCentroids`. Post-wave-1 the 67 `the-torment` segments — which were
+*rendered in the narrator's voice* — start bucketing under `the_torment`, so
+known-bad audio enters a persisted QA reference. Whether the aggregation
+actually degrades the centroid was not traced, so this is unconfirmed; the
+plan should either verify it or exclude alias-resolved segments from centroid
+aggregation until a re-render replaces them.
+
 **The repair pass writes real user data.** Dry-run default, per-book backups,
 server-reachability refusal, and unresolved cases left for a human.
 
@@ -534,30 +665,50 @@ mutex covers whether or not the lock has landed — hence its refusal to
 
 1. **Two normalisers.** `normaliseForMatch` (`text-match.ts:18`) and
    `normaliseNameKey` (`safe-id.ts`) are both used on this path for the same
-   purpose, and `dedupePriorCastByName` uses the latter while §4.2's matcher
-   uses the former. A pair that one normaliser separates and the other collapses
-   behaves inconsistently. Decide which is canonical here before implementing
-   §4.4.
-2. **Subset-path ordering.** Whether §4.4's remap runs before or after the
-   reuse-link block at `analysis.ts:5776-5796`. Running it before would let
-   `seedReuseGuardsFromPriorCast`'s by-id lookup line up naturally; running it
-   after preserves that block's current behaviour exactly.
-3. **Stacking with the existing rewrite table.** After §4.4's remap, the
-   roster's ids already equal the prior cast's for every matched character
-   *before* `composeRewrites`/`applyRewriteToPriorCast` run. Those calls still
-   serve their original within-run purpose, but whether the new remap must also
-   update `dd`/`folded`'s rewrite keys to keep `cumulative` meaningful is
-   unresolved.
+   purpose — `dedupePriorCastByName` uses the latter, `merge-analysis-cast`'s
+   fallback and `seedReuseGuardsFromPriorCast` use the former. They differ
+   materially: `normaliseNameKey` strips all non-alphanumerics ("Mr. Forkle" →
+   `mrforkle`), `normaliseForMatch` keeps them (`mr. forkle`). A pair one
+   separates and the other collapses behaves inconsistently. **This divergence
+   is inherited, not introduced by this design** — but §4.4's widened fallback
+   makes it matter more, so pick a canonical one before implementing.
+2. **Ordering of §4.4's remap against `composeRewrites`.** More determinate
+   than "unresolved", and the plan must specify it: `composeRewrites(dd.rewrites,
+   folded.rewrites)` is keyed in **fresh**-id space. Once the roster is remapped
+   into prior-id space, applying that table to the prior cast can rename a prior
+   row back *out* of the space the remap just put it in — e.g. prior `mairin` →
+   `mayrin` when this run's dedup collapsed `mairin`→`mayrin`. The remap must
+   either compose into that table or run strictly after it is applied.
+3. **Whether to move the analysis-cache write after the remap.** Today it
+   precedes both insertion points (§6), so cache drift is masked rather than
+   stopped, and `chapterCast` re-seeds the analyzer prompt from stale ids
+   forever. Moving `saveAnalysisCache` after the remap would fix it but was not
+   designed here; the per-chapter cache writes inside the `runChapter` loop are
+   what make it non-trivial.
+
+*(The subset-path ordering question from the previous draft is resolved: the
+main path already runs `seedReuseGuardsFromPriorCast` and
+`linkSeriesReuseAtAnalysis` at `analysis.ts:3702`/`:3710`, well before the
+`:4636` insertion point, so putting the subset remap after the `:5776-5796`
+block keeps the two paths symmetric. `seedReuseGuardsFromPriorCast` also
+carries its own ambiguity-guarded name fallback at
+`merge-analysis-cast.ts:289-318`, so the benefit of running it earlier was
+already covered.)*
 
 ## 12. Review findings that were themselves wrong
 
 Recorded so they are not re-litigated. Both come from the adversarial pass.
 
-- **"67 segments is an analysis-cache reference count; segments-only is 125."**
-  False. The cache reference count for `the-torment` is **0**; the current
-  segments files hold **67**, and 67 + 6 + 1 = 74, matching #2040's own table
-  for _Playing with Fire_. The 125 figure double-counts the superseded
-  `.previous.segments.json` render.
+- **"segments-only is 125."** False, and only this half. The current segments
+  files hold **67** `the-torment` entries; `.previous.segments.json` holds a
+  further 58, and 67 + 58 = 125 — so the 125 figure double-counts a superseded
+  render. 67 + 6 + 1 = 74 matches #2040's own table for _Playing with Fire_.
+  The same review's other half — that 67 is *also* the analysis-cache
+  reference count — is **correct**, and a first attempt to rebut it here was
+  based on a faulty measurement. The cache holds exactly 67 `the-torment`
+  references (74 across the three ids, under `cache.chapters`). Cache and
+  segments **agree**; only `cast.json` differs. That agreement is load-bearing
+  for §4.3's eighth site — see it.
 - **"On the subset re-analysis path the fresh roster is only the re-run
   chapters' roster."** False. `rebuildRoster` (`analysis.ts:3138`, `:5301`)
   iterates **all** `chapterHints` from the accumulated `chapterCast`, so the
