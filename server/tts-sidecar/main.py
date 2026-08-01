@@ -6099,7 +6099,9 @@ class QwenEngine(Engine):
         subsequent calls are cache hits.
 
         Requires `_base17` to already be loaded before calling (the caller is
-        responsible via `_ensure_base17_loaded()`).
+        responsible via `_ensure_base17_loaded()`); raises a typed
+        `RuntimeError` (#2022) rather than an `AttributeError` if a concurrent
+        `/unload` won the gap between that ensure and this call.
 
         Language is inherited from the base voice's manifest — the same language
         used for the 0.6B path."""
@@ -6147,17 +6149,35 @@ class QwenEngine(Engine):
         base_items = base_items if isinstance(base_items, list) else [base_items]
         base_item = base_items[0]
 
+        # Capture `_base17` into a local and guard it (#2022): the docstring's
+        # "requires _base17 already loaded" contract is enforced by the
+        # CALLER's `_ensure_base17_loaded()`, but this method runs OUTSIDE
+        # `_synth_lock` (synthesize()'s 1.7B path, synthesize_batch()'s 1.7B
+        # loop), so a concurrent `/unload {model:'1.7b'}` can land in the
+        # unguarded window between that ensure and this call and null
+        # `_base17` first. Without this guard the derefs below raised a bare
+        # "'NoneType' object has no attribute 'device'" instead of the same
+        # typed, actionable `RuntimeError` #1975 established elsewhere.
+        base17 = self._base17
+        if base17 is None:
+            # Generic "render", not "batch render": this method is shared by
+            # synthesize()'s single-utterance 1.7B path AND
+            # synthesize_batch()'s 1.7B loop.
+            raise RuntimeError(
+                "Qwen 1.7B-Base model was unloaded before this render "
+                "could derive the voice prompt — reload it and retry."
+            )
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
         # Move onto the resident 1.7B's OWN card (read off the wrapper, immune to
         # a concurrent clobber of the shared `self._device` — #1730 gap 1; see
         # mint_variant's matching forward for the full rationale).
         rc = base_item.ref_code
-        rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
-        ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+        rc = rc.to(base17.device) if hasattr(rc, "to") else rc
+        ref_wavs, ref_sr = base17.model.speech_tokenizer.decode(
             [{"audio_codes": rc}]
         )
-        prompt = self._base17.create_voice_clone_prompt(
+        prompt = base17.create_voice_clone_prompt(
             ref_audio=(ref_wavs[0], ref_sr), ref_text=base_item.ref_text
         )
 
@@ -6233,8 +6253,13 @@ class QwenEngine(Engine):
                     # can still win the narrow gap between the re-ensure
                     # above and this acquire — the only window left once the
                     # cold load itself is out of the lock. Loud and typed.
+                    # #2022: friendly name, not the raw attribute — every
+                    # OTHER typed message in this engine says "Qwen Base" /
+                    # "Qwen 1.7B-Base"; this one used to leak `_base` verbatim
+                    # ("Qwen _base model…"), the one outlier.
+                    friendly = {"_base": "Base", "_base17": "1.7B-Base"}.get(base_attr, base_attr)
                     raise RuntimeError(
-                        f"Qwen {base_attr} model was unloaded before this "
+                        f"Qwen {friendly} model was unloaded before this "
                         "render started — reload it and retry."
                     )
                 wavs, sr = model.generate_voice_clone(

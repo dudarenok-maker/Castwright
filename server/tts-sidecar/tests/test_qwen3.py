@@ -885,6 +885,58 @@ def test_mint_variant_1_7b_forward_raises_when_base17_unloaded_in_gap(
     assert calls["n"] == 1, f"expected exactly 1 _ensure_base17_for_mint call, got {calls['n']}"
 
 
+# ── #2022: unguarded self._base17 derefs bypass #1975's typed error ──────
+
+
+def test_load_voice_prompt_17b_raises_when_base17_unloaded_in_gap(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2022 — `_load_voice_prompt_17b` runs OUTSIDE `_synth_lock` (both
+    synthesize()'s 1.7B path and synthesize_batch()'s 1.7B loop call it
+    there), in the unguarded window between the caller's
+    `_ensure_base17_loaded()` and the eventual `_synth_lock` forward. A
+    concurrent `/unload {model:'1.7b'}` landing in that window used to
+    surface as a bare "'NoneType' object has no attribute 'device'" instead
+    of the typed, actionable RuntimeError every other unload-race site in
+    this engine raises.
+
+    Forces a cache MISS (so the derivation path — the one with the unguarded
+    derefs — actually runs) and nulls `_base17` right before calling
+    `_load_voice_prompt_17b` directly, standing in for the race. Monkeypatches
+    `_load_voice_prompt` to return a `ref_code` with a real `.to()` — same
+    reason `test_mint_variant_anchors_to_base_and_marks_json` does (:1479-1483):
+    the fixture's fake `torch.save`/`torch.load` round-trips through a
+    temp-name write (`_atomic_torch_save`) that the fake never registers under
+    the FINAL path, so a genuine disk re-read after `design_voice` returns the
+    dict fallback `{"_prompt": True}` instead of a real prompt item — which
+    would make this test fail on an unrelated `AttributeError: 'dict' object
+    has no attribute 'ref_code'` before ever reaching the guarded line, a
+    false-positive RED that wouldn't actually be testing the #2022 guard.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base17 is None: raise RuntimeError(...)` guard this issue added.
+    Without it, `rc.to(base17.device)` raises an AttributeError on `None`
+    instead of the typed message asserted here.
+    """
+    engine = fake_qwen_runtime["engine"]
+
+    class _FakeRefCode:
+        def to(self, device: Any) -> "_FakeRefCode":
+            return self
+
+    monkeypatch.setattr(
+        engine, "_load_voice_prompt",
+        lambda v: ([types.SimpleNamespace(ref_code=_FakeRefCode(), ref_text="calib")], "English", False),
+    )
+    engine._base17 = None  # the race: unloaded before this call
+
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen 1.7B-Base model was unloaded before this render could derive the voice prompt",
+    ):
+        engine._load_voice_prompt_17b("v1")
+
+
 def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> None:
     """`maybe_free_idle_design` must refuse to free the VoiceDesign model while a
     design is in flight (`_design_in_flight.busy`), even past the idle TTL — the
