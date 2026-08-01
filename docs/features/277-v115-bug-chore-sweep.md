@@ -6,7 +6,8 @@ owner: null
 
 # 277 — v1.15 bug & chore sweep: triage and round plan
 
-> Status: active — Round 1 dispatched 2026-08-01
+> Status: active — **Round 1 SHIPPED 2026-08-01** (all four lanes merged);
+> Rounds 2 and 3 outstanding. See "Round 1 outcome" below.
 > Key files: this document is a coordination record, not a feature plan. The
 > per-item detail lives in each linked GitHub issue, which stays canonical.
 > URL surface: none
@@ -188,9 +189,16 @@ Files: `server/tts-sidecar/main.py`, `server/tts-sidecar/tests/test_qwen3.py`.
 **All three must share one lane — they are all in `main.py`.**
 
 - **#2021** — five more in-lock cold Qwen loads survive #1975, three with no
-  pre-ensure at all, on `synthesize_batch` (the main render path).
-  *Benefit (user):* removes the remaining render stalls — #1975 measured RTF
-  5.83 sequential vs 1.36 batched.
+  pre-ensure at all: `clone_voice`, `mint_variant`'s distil / audition / 1.7B
+  forward, and `design_voice`'s DESIGN forward.
+  *Benefit (user):* a Stop press is no longer held hostage by a cold weights
+  pull taken inside the synth lock.
+  **Correction (2026-08-01):** an earlier revision of this line said these
+  sites were "on `synthesize_batch` (the main render path)" and cited #1975's
+  RTF 5.83 → 1.36 measurement as the benefit. Both belong to **#1975**, not
+  #2021 — these five are cast-review paths, and the delivering PR (#2064)
+  correctly disclaims re-measuring that figure. Caught by the independent
+  review of #2064.
 - **#2022** — unguarded `self._base17` derefs bypass #1975's typed error with a
   bare `AttributeError`.
   *Benefit (user):* an out-of-memory condition reports as one, not as a stack
@@ -199,6 +207,79 @@ Files: `server/tts-sidecar/main.py`, `server/tts-sidecar/tests/test_qwen3.py`.
   directory instead of `tmp_path`; two concurrent pytest runs race on it.
   *Benefit (technical):* removes a flake class that fires precisely when two
   lanes run sidecar tests at once — i.e. during this round.
+
+## Round 1 outcome (2026-08-01)
+
+All four lanes shipped. **13 issues closed across 5 PRs**, and **15 filed** —
+so the queue moved roughly sideways on count. That is the headline finding of
+the round, not a footnote: see "What Round 1 changed about the plan" below.
+
+| PR | Closes | Lane |
+|---|---|---|
+| [#2045](https://github.com/dudarenok-maker/Castwright/pull/2045) | #2035, #2005, #2004 | 1 · golden gate |
+| [#2049](https://github.com/dudarenok-maker/Castwright/pull/2049) | #2028, #2018, #2025 | 2 · release gate + retry |
+| [#2048](https://github.com/dudarenok-maker/Castwright/pull/2048) | #2034, #2013, #1934 | 3 · server contract + cycle |
+| [#2064](https://github.com/dudarenok-maker/Castwright/pull/2064) | #2021, #2022, #2030 | 4 · Qwen residuals |
+| [#2066](https://github.com/dudarenok-maker/Castwright/pull/2066) | #2065 | fix-forward on #2045 |
+
+### What the independent reviews caught
+
+Every lane's first attempt had a defect a review found and I did not. Three
+were in the *premise* rather than the code:
+
+- **#2045** shipped a guard that refused **every honest re-bless**, because
+  exact equality was applied to stochastic 4dp/2dp measurements. Since the
+  escape flag is shared with `tolerances`, routine use of it silently
+  re-authorises the `rtf_max` ceiling — reproducing #1995 one flag deep. Then
+  its own fix round mislabelled a 0.13 forced move as "noise", needing #2066.
+- **#2049** hand-rolled a retry-hazard reporter that **suppressed vitest's
+  built-in `github-actions` reporter** — deleting inline PR annotations and the
+  Flaky-Tests summary panel that already did the job better. Its release note
+  then shipped claiming the fix had *not* been applied.
+- **#2064** made `design_voice` raise on a lost race without disclosing that
+  the race window **contains a full 0.6B cold load** and that `unload_design()`
+  never consults `_design_in_flight` — filed as #2070.
+
+### What Round 1 changed about the plan
+
+**The filing rate is the problem.** 15 issues filed against 13 closed. Of those
+15: one is this sweep's own tracking issue, one was self-inflicted and already
+fixed (#2065), three were always-owed work that existed only as prose inside
+the issues being closed (#2047, #2051, #2053), four are genuine pre-existing
+defects that were simply invisible until someone looked (#2044, #2046, #2052,
+#2063), and **three are design residue from one new mechanism** (#2060, #2061,
+#2062 — all against the epsilon bless guard).
+
+Two conclusions for Rounds 2 and 3:
+
+1. **Decide the bless-guard design rather than carrying tickets against it.**
+   The #2066 reviewer's diagnosis is better than the options originally weighed:
+   the root cause is not the epsilon, it is the **shared flag**. One
+   `GOLDEN_REBLESS_THRESHOLDS` arms `tolerances`, `identity` and
+   `loudness_dbfs` together, which is what turned an over-tight guard into a
+   re-opening of #1995. Splitting it (`GOLDEN_REBLESS_MEASUREMENTS` vs
+   `GOLDEN_REBLESS_THRESHOLDS`) removes the blast radius entirely. #2035's own
+   rationale for one flag — "the same kind of judgement call" — is the premise
+   to reject.
+2. **#2046 should go early in Round 2, not sit in the queue.** It is a
+   deterministically red test on `main` that `retry: 1` hides. It cost time
+   twice this round by looking like a regression it wasn't, and it blocks any
+   future tightening of the retry — including #2063's frontend equivalent.
+
+### Process notes worth keeping
+
+- **The push is where lanes die.** All four stalled at the same place: a
+  pre-commit or pre-push hook running the full server or sidecar suite, which
+  exceeds a subagent's 600s foreground cap. Brief agents to commit and *report*;
+  the coordinating thread should own the push, where a long run can be
+  backgrounded.
+- **`docs/release-notes-next.md` conflicts on every single merge**, because
+  every PR appends to it. Five merges cost four hand-resolutions. Merging one
+  at a time and re-resolving immediately before each is the only reliable
+  order.
+- **Never run git commands in a worktree an agent still holds.** Done twice
+  this round; once a half-applied verification mutation was misread as damage,
+  and once a mid-cleanup probe file was nearly deleted out from under its owner.
 
 ## Round 2 — four lanes, 8 issues (after Round 1 merges)
 
