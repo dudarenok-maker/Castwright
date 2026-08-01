@@ -65,15 +65,31 @@ def test_make_whisper_pins_compute_type_with_nothing_ambient(monkeypatch) -> Non
     assert engine._compute_type() == golden.ASR_COMPUTE_TYPE_NAME
 
 
-def test_asr_compute_type_name_matches_the_cpu_default() -> None:
-    """`ASR_COMPUTE_TYPE_NAME` must actually BE the value `_compute_type()`
-    resolves to for `ASR_DEVICE_NAME` ("cpu") with nothing overridden --
-    otherwise the pin would just be asserting a made-up constant, not the
-    value the recorded baseline was actually measured under."""
-    family, _ = main._parse_device(golden.ASR_DEVICE_NAME)
+def test_asr_compute_type_name_matches_the_default_compute_type_for_cpu(monkeypatch) -> None:
+    """`ASR_COMPUTE_TYPE_NAME` must actually BE the value `main.WhisperEngine
+    ._compute_type()` resolves to for `ASR_DEVICE_NAME` ("cpu") with nothing
+    overridden -- otherwise the pin in `_make_whisper()` would just be
+    asserting a made-up constant, not the value the recorded baseline was
+    actually measured under.
+
+    #2045 F3 (independent review): the earlier version of this test compared
+    `golden.ASR_COMPUTE_TYPE_NAME == "int8"` -- a module constant against its
+    OWN literal, never touching `main.py`'s actual default table at all.
+    Mutating that table (`_compute_type`'s `"int8_float16" if family ==
+    "cuda" else "float32"`, i.e. swapping the cpu branch's default from
+    `"int8"` to `"float32"`) left the entire file green. Fixed by
+    constructing `main.WhisperEngine()` DIRECTLY here -- not via
+    `_make_whisper()`, which sets `ASR_COMPUTE_TYPE` outright and would mask
+    exactly the default this test needs to see -- and reading back its
+    real, computed `_compute_type()`."""
+    monkeypatch.setenv("ASR_DEVICE", golden.ASR_DEVICE_NAME)
+    monkeypatch.delenv("ASR_COMPUTE_TYPE", raising=False)
+
+    engine = main.WhisperEngine()
+    family, _ = main._parse_device(engine._device)
     assert family == "cpu"
-    # Mirrors WhisperEngine._compute_type's own default table (main.py).
-    assert golden.ASR_COMPUTE_TYPE_NAME == "int8"
+
+    assert engine._compute_type() == golden.ASR_COMPUTE_TYPE_NAME
 
 
 # ── ASR-stack version stamp in `_bless()`'s metadata (#2004) ───────────────
