@@ -1424,8 +1424,24 @@ export async function synthesiseChapter(
        not just an unavailable one. Never substitute a real person's voice
        for another character's attributed dialogue — the same guarantee this
        branch already enforces for an unresolvable clone, extended to cover
-       the misattribution case. */
-    if (clonedOnRoute && (!!orphanedFromId || !voiceName || routeEngineUnavailable)) {
+       the misattribution case.
+
+       #2023 fix round 2 — the orphaned case gets its OWN reason
+       (`misattributed-substitution`, via `fromList`), checked first and
+       exclusively of `!voiceName`/`routeEngineUnavailable`. The bare
+       `UnresolvableClonedVoiceError` constructor below hardcodes "the Qwen
+       engine is not available this run… Re-enable Qwen" — every clause of
+       that sentence is false for an orphaned id on a healthy Qwen (or a
+       healthy Coqui clone, which it would also blame on Qwen): the engine is
+       fine, the voice is fine, and there is no cast row to reassign. Routing
+       through `fromList` gives an accurate, reason-aware message instead —
+       see clone-voice-resolver.ts's `BrokenClonedVoice.orphanedCharacterId`. */
+    if (clonedOnRoute && orphanedFromId) {
+      throw UnresolvableClonedVoiceError.fromList([
+        { name: c.name ?? c.id, reason: 'misattributed-substitution', orphanedCharacterId: orphanedFromId },
+      ]);
+    }
+    if (clonedOnRoute && (!voiceName || routeEngineUnavailable)) {
       throw new UnresolvableClonedVoiceError(c.name ?? c.id, detail);
     }
     const needsFallback =

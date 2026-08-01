@@ -20,9 +20,14 @@
  * `cast/setOrphanedCharacterFallbacks` reducer (src/store/cast-slice.ts) —
  * the exact action the book-state GET's hydration path fires
  * (src/components/layout.tsx) — and checking the advisory banner
- * (src/views/cast.tsx) actually renders, crossing the same redux/layout seam
- * CLAUDE.md's testing discipline calls out for UI-visible behaviour, rather
- * than only unit-pinning the reducer + component in isolation. */
+ * (src/views/cast.tsx) actually renders. This crosses the redux/component
+ * seam (store.dispatch through to rendered DOM) at real browser layout/focus
+ * timing, going beyond a jsdom unit test — but NOT the layout.tsx hydration
+ * seam itself: the spec dispatches the reducer directly rather than driving
+ * it through Layout's own getBookState hydrate effect, so it cannot catch a
+ * regression in THAT wiring (see `src/components/layout.test.tsx`'s
+ * "orphaned-characterId fallback banner (#2023)" describe block for the test
+ * that pins layout.tsx's dispatch itself). */
 
 import { test, expect, type Page } from '@playwright/test';
 import { goToConfirm, waitForRouteReady } from './helpers';

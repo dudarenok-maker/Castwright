@@ -84,6 +84,28 @@ describe('UnresolvableClonedVoiceError', () => {
     expect(e.message).toContain('switch the book to Qwen');
   });
 
+  /* #2023 fix round 2 — `misattributed-substitution` gets its own header AND
+     its own remedy: the voice is healthy (so no "unavailable"/"re-enable"
+     wording) and the orphaned id has no cast row (so no "reassign the
+     character(s)" tail). */
+  it('#2023: fromList gives misattributed-substitution an accurate, reason-specific message', () => {
+    const e = UnresolvableClonedVoiceError.fromList([
+      { name: 'Narrator', reason: 'misattributed-substitution', orphanedCharacterId: 'mayrin' },
+    ]);
+    expect(e.message).toContain('Narrator');
+    expect(e.message).toContain('misattributed-substitution');
+    expect(e.message).toContain('orphaned characterId "mayrin"');
+    expect(e.message).toContain(
+      'Re-attribute the affected sentence(s) to the correct character in the Manuscript view',
+    );
+    // The two misdiagnoses this reason exists to avoid: it must never read
+    // as an availability problem, and it must never tell the user to
+    // reassign a character that has no cast row at all.
+    expect(e.message).not.toContain('unavailable');
+    expect(e.message).not.toContain('Re-enable');
+    expect(e.message).not.toContain('reassign the character(s)');
+  });
+
   it('the legacy single-name constructor still works (3b1 backstop)', () => {
     const e = new UnresolvableClonedVoiceError('Marlow');
     expect(e.broken).toEqual([{ name: 'Marlow', reason: 'engine-unavailable' }]);

@@ -400,8 +400,9 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     );
     const deriveEngineArtifact = vi.fn();
 
-    await expect(
-      synthesiseChapter({
+    let thrown: UnresolvableClonedVoiceError | undefined;
+    try {
+      await synthesiseChapter({
         sentences: [sentence(1, 'ghost')],
         cast: narratorCast,
         provider,
@@ -415,8 +416,28 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
           ptExists: async () => true,
           deriveEngineArtifact: deriveEngineArtifact as unknown as ResolveChapterDeps['deriveEngineArtifact'],
         },
-      }),
-    ).rejects.toBeInstanceOf(UnresolvableClonedVoiceError);
+      });
+    } catch (e) {
+      thrown = e as UnresolvableClonedVoiceError;
+    }
+
+    expect(thrown).toBeInstanceOf(UnresolvableClonedVoiceError);
+    // #2023 fix round 2 — the review's exact finding: this call site used to
+    // throw the BARE constructor unconditionally, which hardcodes "the Qwen
+    // engine is not available this run… Re-enable Qwen or reassign the
+    // character" — every clause false here (Qwen IS available, the voice IS
+    // healthy, and 'ghost' has no cast row to reassign). Pin the accurate
+    // reason and message instead.
+    expect(thrown?.broken).toEqual([
+      { name: 'Narrator', reason: 'misattributed-substitution', orphanedCharacterId: 'ghost' },
+    ]);
+    expect(thrown?.message).toContain('orphaned characterId "ghost"');
+    expect(thrown?.message).toContain(
+      'Re-attribute the affected sentence(s) to the correct character in the Manuscript view',
+    );
+    expect(thrown?.message).not.toContain('Re-enable Qwen');
+    expect(thrown?.message).not.toContain('unavailable this');
+    expect(thrown?.message).not.toContain('reassign the character(s)');
 
     // Placebo-proof: no synth call, and no derive was ever needed (the voice
     // really was healthy) — the throw comes from the misattribution guard,
@@ -547,6 +568,51 @@ describe('synthesiseChapter — cloned-voice resolver pre-pass (fs-38 Wave 3b2)'
     // voice.
     expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
     expect(provider.calls).toHaveLength(0);
+  });
+
+  it("#2023 replacement coverage: a char-narrator book's cloned narrator renders its OWN (non-orphaned) line on its own clone storage key", async () => {
+    /* The Task 23 case above lost `expect(provider.calls[0].voiceName).toBe(
+       'qwen-lib-char-narrator-clone')` because that scenario's line is an
+       orphaned-characterId substitution, which #2023 now correctly refuses
+       — there is no rendered call left to assert a voiceName against there.
+       This is the replacement: same char-narrator cloned-voice setup, but
+       the sentence carries the NARRATOR'S OWN characterId (not an orphaned
+       one), so the #2023 misattribution guard never fires and the chapter
+       renders normally — still pinning "a cloned narrator renders on its
+       own clone storage key, not a stock catalogue pick" (the narrator-
+       row-resolution half of Task 23) somewhere in this suite. */
+    const provider = makeProvider();
+    const narratorCast: CastCharacter[] = [
+      {
+        id: 'char-narrator',
+        name: 'Narrator',
+        overrideTtsVoices: {
+          qwen: {
+            name: 'Narrator (unused)',
+            libraryUuid: 'lib-char-narrator-clone',
+            provenance: 'cloned',
+          },
+        },
+      },
+    ];
+    const entry = baseEntry({ voiceUuid: 'lib-char-narrator-clone' });
+    const readEntry = vi.fn(async (uuid: string) =>
+      uuid === 'lib-char-narrator-clone' ? entry : null,
+    );
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'char-narrator')],
+      cast: narratorCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      cloneResolverDepsOverride: { readEntry, ptExists: async () => true },
+    });
+
+    expect(readEntry).toHaveBeenCalledWith('lib-char-narrator-clone');
+    expect(provider.calls.length).toBeGreaterThan(0);
+    expect(provider.calls[0].voiceName).toBe('qwen-lib-char-narrator-clone');
+    expect(result.segments.length).toBeGreaterThan(0);
   });
 
   it('[#1891] fail-fast: a legacy libraryUuid-with-no-provenance slot still gets revocation-checked', async () => {

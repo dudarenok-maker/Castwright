@@ -300,7 +300,13 @@ export async function collectOrphanedCharacterFallbacks(
       if (!s.characterId || !s.renderedFallbackCharacterId) continue;
       out[s.characterId] = {
         characterId: s.renderedFallbackCharacterId,
-        voiceName: s.baseVoiceName ?? s.voiceName ?? undefined,
+        /* GATE 1 review — `resolveGroup` (synthesise-chapter.ts) stamps
+           `baseVoiceName` unconditionally on every segment, so a `?? s.voiceName`
+           fallback here was dead in production (and untested — both existing
+           test cases set the two fields to the same string). Only a pre-#1972
+           segments.json predates the field at all, which `?? undefined` still
+           covers. */
+        voiceName: s.baseVoiceName ?? undefined,
       };
     }
   }
