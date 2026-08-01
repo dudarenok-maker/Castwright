@@ -62,6 +62,7 @@ export interface SegmentReplacement {
     | 'qaRetries'
     | 'asrRetries'
     | 'voiceName'
+    | 'baseVoiceName'
     | 'voiceSubstitutedFrom'
   >;
 }

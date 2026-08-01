@@ -67,8 +67,16 @@ export interface SynthOutput {
       caller hasn't wired this through." `buildSynthReplacements` must
       therefore always set this key on `freshVerdict` (never omit it), or a
       clean re-record would leave a stale substitution flag from the
-      segment's prior render in place. */
-  voiceSubstitutedFrom?: ChapterSegment['voiceSubstitutedFrom'];
+      segment's prior render in place.
+
+      #2034 — REQUIRED (not `?:`), unlike every other field on this
+      interface: an optional key lets a caller's returned object literal
+      omit it with no compile error, and `buildSynthReplacements` would then
+      read `undefined` off a genuinely-absent property indistinguishably
+      from a genuine "no substitution" — silently wiping a real prior
+      substitution flag. Requiring the key (its value still permits
+      `undefined`) forces every caller to make that choice explicitly. */
+  voiceSubstitutedFrom: ChapterSegment['voiceSubstitutedFrom'];
 }
 
 export interface BuildSynthReplacementsOpts {

@@ -937,6 +937,157 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/design": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start (or re-subscribe to) the "Design full cast" bulk voice-design job
+         * @description Dual-purpose, server-owned, SSE-streamed background job (`server/src/
+         *     routes/cast-design.ts`). One in-memory job per book. A body carrying
+         *     `characterIds` and/or `scope: 'variants'|'both'` with `variantTasks`
+         *     STARTS a new job; a bare body (no work) RE-SUBSCRIBES to whatever job
+         *     is already running for this book. The job keeps running when its last
+         *     SSE subscriber disconnects — a browser reload re-attaches via the bare
+         *     POST and resumes the pill, so a server-side crash is the only thing
+         *     that loses progress (each designed voice is persisted to cast.json
+         *     the instant it completes, so even that only loses the live pill).
+         *     Streams `CastDesignEvent` frames; see that schema for the full event
+         *     catalogue.
+         */
+        post: operations["streamCastDesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/design/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cold-boot probe — is a bulk cast-design job live for this book?
+         * @description Plain JSON (not SSE) so the frontend can poll cheaply on mount before
+         *     deciding whether to open the `POST .../cast/design` re-subscribe
+         *     stream. Mirrors the fields the terminal `idle` CastDesignEvent
+         *     carries.
+         */
+        get: operations["getCastDesignStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/design/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel the book's live bulk cast-design job
+         * @description Aborts the in-flight job's controller (checked at the next task
+         *     boundary — not mid-synthesis). `cancelled` is false when no job was
+         *     running, so this is safe to call speculatively.
+         */
+        post: operations["pauseCastDesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/{characterId}/design-voice/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a single-character Qwen voice design (first design or A/B redesign)
+         * @description Server-owned, SSE-streamed background job (`server/src/routes/single-
+         *     design.ts`), one per book — mutually exclusive with the bulk job via
+         *     the shared `designBusy` registry (both 409 while the other runs).
+         *     `preview: false` (first design) persists the result exactly as the
+         *     bulk job does, the instant it completes; `preview: true` (redesign)
+         *     stages a `-preview` sibling and emits `preview_ready` WITHOUT
+         *     persisting — the cast drawer's A/B compare promotes or discards it.
+         *     Streams `SingleDesignEvent` frames, including `phase` events relayed
+         *     from the sidecar via the internal loopback `POST /api/internal/
+         *     design-progress` (not itself part of this contract — loopback-only).
+         *     Like the bulk job, it keeps running after its SSE subscriber
+         *     disconnects; `POST .../design-single/subscribe` re-attaches after a
+         *     reload.
+         */
+        post: operations["streamSingleDesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/design-single/subscribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-subscribe to a live single-character voice-design job after a reload
+         * @description Bare-body SSE re-attach, mirroring the bulk job's re-subscribe path on
+         *     `POST .../cast/design`. Sends `idle` immediately (and ends the
+         *     stream) when no job is running for this book, otherwise `resume_from`
+         *     followed by whatever the live job broadcasts next (`heartbeat`,
+         *     `phase`, `preview_ready`, `designed`, or `error`).
+         */
+        post: operations["subscribeSingleDesign"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/design-single/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cold-boot probe — is a single-character voice design live for this book?
+         * @description Plain JSON (not SSE), the single-design counterpart of `GET .../cast/design/status`.
+         */
+        get: operations["getSingleDesignStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queue": {
         parameters: {
             query?: never;
@@ -2650,6 +2801,177 @@ export interface components {
         };
         CastMergeSuggestionsResponse: {
             suggestions: components["schemas"]["MergeSuggestion"][];
+        };
+        CastDesignClonedSkip: {
+            characterId: string;
+            name: string;
+        };
+        CastDesignFailure: {
+            characterId: string;
+            name: string;
+            error: string;
+        };
+        /**
+         * @description One `data: <json>` SSE frame from `POST /api/books/{bookId}/cast/
+         *     design` ("Design full cast").
+         */
+        CastDesignEvent: {
+            /**
+             * @description `resume_from` is sent once, immediately, when re-subscribing to a
+             *     LIVE job — carries `total`/`done`/`currentName` so the reload
+             *     doesn't replay. `idle` is the terminal event on completion or
+             *     cancellation (`total`/`done`/`skipped`/`clonedSkips`/`failures`
+             *     all populated) — the SAME type is also sent, with every counter
+             *     at 0/empty and `clonedSkips` OMITTED, when re-subscribing to a
+             *     book with no live job at all (a cold-boot "nothing running"
+             *     probe uses the bare-body POST for this, not a separate route).
+             *     `progress` fires once per character/variant the loop is about to
+             *     attempt, before the design call. `heartbeat` fires on a ~6s
+             *     interval during both the persona pre-pass and each per-character
+             *     design call, so the pill's 30s stall heuristic never trips on a
+             *     healthy long design. `character_skipped` fires for a character
+             *     passed over without attempting: deleted/merged mid-run or
+             *     already-designed since the list was captured (`name`/`reason`
+             *     both absent), or — fs-38 Wave 3c GATE 2 — already carries a
+             *     CLONED voice on another engine, which a bulk design would
+             *     otherwise silently retarget off its clone (`reason:
+             *     'already_cloned'`, `name` present; also appended to the terminal
+             *     `idle` event's `clonedSkips`). `character_designed` /
+             *     `variant_designed` fire on a successful base/variant design;
+             *     `variant_designed` additionally carries `viaFallback`/
+             *     `fallbackReason` when the sidecar fell back off the instruct
+             *     design path. `character_failed` records a per-character
+             *     synthesis (or persona-generation) failure and CONTINUES the run
+             *     — not fatal to the sweep. `error` is a whole-run abort:
+             *     `sidecar_unavailable` (the sidecar recycled and didn't come back
+             *     within the ride-out budget) / `gpu_contention` (same, for
+             *     GPU-busy contention) / `unsupported_language` (the book's
+             *     language has no sidecar mapping — checked before the stream
+             *     produces any progress) / `unknown` (defensive catch-all for an
+             *     unexpected throw escaping the design loop).
+             * @enum {string}
+             */
+            type: "resume_from" | "idle" | "progress" | "heartbeat" | "character_skipped" | "character_designed" | "variant_designed" | "character_failed" | "error";
+            total?: number;
+            done?: number;
+            /** @description Count of character_skipped occurrences so far, ALL reasons combined (clonedSkips is a subset, not an addition). */
+            skipped?: number;
+            /** @description fs-38 Wave 3c — characters skipped specifically for already carrying a cloned voice. Present on the terminal `idle` event of a job that actually ran; OMITTED on the "no live job" idle sent to a bare re-subscribe probe. */
+            clonedSkips?: components["schemas"]["CastDesignClonedSkip"][];
+            failures?: components["schemas"]["CastDesignFailure"][];
+            /** @description resume_from only — the character currently being designed, for the reload banner. */
+            currentName?: string | null;
+            /** @description Present on progress / heartbeat / character_skipped / character_designed / variant_designed / character_failed. */
+            characterId?: string;
+            /** @description Present on progress, character_skipped (clone-protected variant only), and character_failed. Absent on character_designed itself (only its preceding progress event carries a name). */
+            name?: string;
+            /** @description variant_designed only — the emotion just designed. */
+            emotion?: string;
+            /** @description character_designed / variant_designed only — the resulting qwen-<uuid> voice id. */
+            voiceId?: string;
+            /** @description variant_designed only — true when the sidecar fell back off the instruct design path. */
+            viaFallback?: boolean;
+            /** @description variant_designed only */
+            fallbackReason?: string;
+            /**
+             * @description character_skipped only — present exactly when the skip is the clone-protection guard; absent for every other skip cause.
+             * @enum {string}
+             */
+            reason?: "already_cloned";
+            /** @description character_failed only — the per-character failure message. */
+            errorReason?: string;
+            /**
+             * @description error only — machine-readable whole-run abort reason.
+             * @enum {string}
+             */
+            code?: "sidecar_unavailable" | "gpu_contention" | "unsupported_language" | "unknown";
+            /** @description error only — human-readable abort message. */
+            message?: string;
+        };
+        /** @description GET /api/books/{bookId}/cast/design/status response. */
+        CastDesignStatusResponse: {
+            active: boolean;
+            total?: number;
+            done?: number;
+            skipped?: number;
+            clonedSkips?: components["schemas"]["CastDesignClonedSkip"][];
+            currentName?: string | null;
+            /** @enum {string} */
+            state?: "running";
+            failures?: components["schemas"]["CastDesignFailure"][];
+        };
+        /**
+         * @description One `data: <json>` SSE frame shared by `POST /api/books/{bookId}/
+         *     cast/{characterId}/design-voice/stream` (the job's origin) and
+         *     `POST /api/books/{bookId}/cast/design-single/subscribe` (a
+         *     re-attached subscriber to the same job) — both routes broadcast onto
+         *     the identical `SingleJob.subscribers` set, so a re-subscriber sees
+         *     exactly the same event stream the originating request would have.
+         */
+        SingleDesignEvent: {
+            /**
+             * @description `resume_from` and `idle` are re-subscribe-only (never sent to the
+             *     request that started the job): `resume_from` when a live job
+             *     exists (carries `characterId`/`name`/`mode`/`phase`), `idle`
+             *     (bare, no other fields) when none does. `heartbeat` fires on a
+             *     ~6s interval while the design call is in flight. `phase` is
+             *     relayed from the sidecar via the internal loopback `POST /api/
+             *     internal/design-progress` (not part of this contract) as the
+             *     design progresses through freeing-vram → loading-model →
+             *     designing → anchoring → performing → distilling → rendering.
+             *     `preview_ready` is the terminal event for a `preview: true`
+             *     (redesign) run — the result is staged, NOT persisted; the cast
+             *     drawer's A/B compare promotes or discards it separately.
+             *     `designed` is the terminal event for a `preview: false` (first
+             *     design) run — the result is already persisted by the time this
+             *     fires. `error` is the terminal event for a failed run: `code`
+             *     `not_found` (character deleted mid-run), `design_failed` (the
+             *     design call itself threw), or `unsupported_language`.
+             * @enum {string}
+             */
+            type: "resume_from" | "idle" | "heartbeat" | "phase" | "preview_ready" | "designed" | "error";
+            characterId?: string;
+            /** @description resume_from / preview_ready / designed only. */
+            name?: string;
+            /**
+             * @description resume_from only.
+             * @enum {string}
+             */
+            mode?: "first" | "redesign";
+            /**
+             * @description Present on resume_from (current phase, for the reload banner) and on every `phase` event.
+             * @enum {string}
+             */
+            phase?: "freeing-vram" | "loading-model" | "designing" | "anchoring" | "performing" | "distilling" | "rendering";
+            /** @description preview_ready only. */
+            previewVoiceId?: string;
+            /** @description preview_ready only. */
+            previewUrl?: string;
+            /** @description preview_ready only — the persona text the preview was designed from. */
+            persona?: string;
+            /** @description preview_ready / designed only. */
+            voiceUuid?: string;
+            /** @description designed only. */
+            voiceId?: string;
+            /** @description designed only. */
+            url?: string;
+            /**
+             * @description error only.
+             * @enum {string}
+             */
+            code?: "not_found" | "design_failed" | "unsupported_language";
+            /** @description error only. */
+            message?: string;
+        };
+        /** @description GET /api/books/{bookId}/cast/design-single/status response. */
+        SingleDesignStatusResponse: {
+            active: boolean;
+            characterId?: string;
+            name?: string;
+            /** @enum {string} */
+            mode?: "first" | "redesign";
+            /** @enum {string} */
+            phase?: "freeing-vram" | "loading-model" | "designing" | "anchoring" | "performing" | "distilling" | "rendering";
         };
         /**
          * @description One chapter's persisted, checkpointed script-review findings.
@@ -7035,6 +7357,246 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    streamCastDesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Start path — base-voice character ids to design (scope 'bases' or 'both'). Omit (with a bare body) to re-subscribe instead of starting. */
+                    characterIds?: string[];
+                    /**
+                     * @description Required on the start path.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    /**
+                     * @default bases
+                     * @enum {string}
+                     */
+                    scope?: "bases" | "variants" | "both";
+                    /** @description scope variants/both only — one entry per character whose emotion variants to design. */
+                    variantTasks?: {
+                        characterId: string;
+                        emotions: ("angry" | "sad" | "excited" | "whisper" | "fearful")[];
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description CastDesignEvent stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["CastDesignEvent"];
+                };
+            };
+            /** @description modelKey missing/invalid on the start path */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Start path only: analysis is running for this book (re-analysis
+             *     rewrites the cast), OR a single-character design already owns the
+             *     book's shared `designBusy` registry (mirrors `POST .../design-
+             *     voice/stream`'s own 409 for the reverse case — the two design
+             *     surfaces are mutually exclusive).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                    };
+                };
+            };
+        };
+    };
+    getCastDesignStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job liveness + progress snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CastDesignStatusResponse"];
+                };
+            };
+        };
+    };
+    pauseCastDesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancellation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        /** @description True only if a live job was actually found and aborted. */
+                        cancelled: boolean;
+                    };
+                };
+            };
+        };
+    };
+    streamSingleDesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Voice-style persona text to design from. */
+                    persona: string;
+                    sampleVoiceId: string;
+                    /** @enum {string} */
+                    modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    /**
+                     * @description True = A/B redesign (stage a preview, don't persist). False = first design (auto-persists).
+                     * @default false
+                     */
+                    preview?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description SingleDesignEvent stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SingleDesignEvent"];
+                };
+            };
+            /** @description persona, sampleVoiceId, or modelKey missing/invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description A design (bulk or single) is already in progress for this book
+             *     (`code` absent), OR — fs-38 Wave 3c — this character already
+             *     carries a cloned voice on another engine and a non-preview design
+             *     would silently retarget it off that clone (`code:
+             *     'clone_protected'`). The clone-protected refusal happens before
+             *     the SSE stream starts, so it is an honest 409 rather than a
+             *     hollow terminal event for a design that never persisted.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code?: "clone_protected";
+                    };
+                };
+            };
+        };
+    };
+    subscribeSingleDesign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SingleDesignEvent stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SingleDesignEvent"];
+                };
+            };
+        };
+    };
+    getSingleDesignStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job liveness snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SingleDesignStatusResponse"];
+                };
             };
         };
     };

@@ -21,8 +21,12 @@ import { setLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
-import { setLastKnownEngineDevices } from '../gpu/engine-device-state.js';
-import { TRACKED_ENGINES, type TrackedEngine } from '../gpu/tracked-engines.js';
+import {
+  setLastKnownEngineDevices,
+  type SidecarDeviceFamily,
+  type SidecarDeviceMap,
+} from '../gpu/engine-device-state.js';
+import { TRACKED_ENGINES } from '../gpu/tracked-engines.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
@@ -186,9 +190,14 @@ interface SidecarHealthBody {
    families ('cuda' | 'rocm' | 'directml' | 'mps' | 'cpu') or null while
    unknowable; devices_state tracks the startup probe ('pending' until torch is
    imported in the background, 'ready', or 'error' when torch is missing/broken).
-   rocm/directml are the AMD families (phase 2). Absent on an older sidecar → null. */
-export type SidecarDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu';
-export type SidecarDeviceMap = Record<TrackedEngine, SidecarDeviceFamily | null>;
+   rocm/directml are the AMD families (phase 2). Absent on an older sidecar → null.
+
+   #2013 — `SidecarDeviceFamily`/`SidecarDeviceMap` now live in
+   `gpu/engine-device-state.ts` (imported above) rather than here, so that
+   module — under `server/src/gpu/` — never has to import this route module
+   back to use them; re-exported under the same names so existing consumers
+   (e.g. `routes/info.ts`) needed no change. */
+export type { SidecarDeviceFamily, SidecarDeviceMap };
 export type SidecarDevicesState = 'pending' | 'ready' | 'error';
 
 const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = [
