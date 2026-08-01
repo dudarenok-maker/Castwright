@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { withKeyLock } from './file-lock.js';
 
-describe('withKeyLock', () => {
+/* ops-46 (#2028), Narrow option: withKeyLock's `chains` Map (file-lock.ts:5)
+   is module-level mutable state keyed by a fixed string — exactly the shape
+   that turned a genuine red-phase test green while landing #2001's fix
+   (attempt 1 fails and leaks its key into `chains`; the suite's global
+   retry:1 re-runs attempt 2 against that already-mutated map, so it can pass
+   for the wrong reason). retry:0 here means a red-phase test against this
+   file's state is never silently rescued by the suite-wide retry — see
+   CONTRIBUTING.md's "When you ship a change" section (the "#2028" note) and
+   server/vitest.config.ts's retryHazardReporter for the survey that ruled
+   out flipping retry:1 suite-wide instead. */
+describe('withKeyLock', { retry: 0 }, () => {
   it('serializes critical sections sharing a key', async () => {
     const order: string[] = [];
     const slow = withKeyLock('book-1', async () => {
