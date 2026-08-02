@@ -27,16 +27,43 @@ prose.
 
 **https://claude.ai/code/artifact/adf22b7b-12dd-49fe-874c-4a340585b26a**
 
-This file has a browsable HTML twin at the URL above. Artifact URLs are
-server-assigned UUIDs — they cannot be renamed, aliased, or re-slugged — so
-**that exact URL is the artifact's identity**. Update it by passing it as the
-`url` argument; publishing the register without it mints a *second*, competing
-register and orphans this one. That is the single most likely way this register
-goes wrong.
+The page at that URL is rendered from **one specific file in this repo**:
 
-The twin carries derived figures — owed count, per-group counts, oldest debt —
-that must be **recomputed** on every edit. Rows can be right while the summary
-strip lies.
+> ### [`onbox-acceptance-register-live-view.html`](onbox-acceptance-register-live-view.html)
+>
+> Publish **that** file, with the URL above passed as `url`.
+
+Artifact URLs are server-assigned UUIDs — they cannot be renamed, aliased, or
+re-slugged — so **that exact URL is the artifact's identity**. Publishing
+without it mints a *second*, competing register and orphans this one.
+
+**The live view is a hand-authored HTML page, not a rendering of this file —
+never publish this `.md` to that URL.** Passing the right `url` is *not*
+sufficient. Publishing this markdown keeps the URL and destroys the page,
+replacing the styled register with default markdown rendering: no summary strip,
+a self-referential "Live view" section, and dead relative links. **Nothing errors
+when this happens.** It happened four times between 2026-07-31 and 2026-08-01, to
+four different PR-shipping agents that each read a paragraph like the one above
+and concluded they had complied. The live view is tracked in this repo — rather
+than living in whichever session scratchpad last built it — precisely so the
+right file is always to hand.
+
+The live view carries derived figures — owed count, per-group counts, oldest
+debt — that must be **recomputed** on every edit. Rows can be right while the
+summary strip lies. `npm run check:onbox-register` verifies the owed total, the
+per-group counts and the row IDs across both files, so **adding or removing a
+row here and missing the live view fails CI**. Know its edges, because two of
+them are wide:
+
+- **A wording-only edit does not fail.** Rewording a row, recording a run
+  result, changing a hardware note or a criteria link — the most common edit
+  this register gets — changes nothing the check compares. The live view mirrors
+  that prose in its own row bodies and will silently fall behind.
+- **The rest of the summary strip is unchecked** — oldest debt, and the
+  group/blocked/unconfirmed tallies. Recompute those by hand.
+- **The published page is invisible to it.** It only ever reads the source file,
+  so "was it published at all, and was it the right file?" is procedure, not a
+  gate.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:

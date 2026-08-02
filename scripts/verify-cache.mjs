@@ -67,7 +67,13 @@ export const STEPS = [
          throwaway repo, see `setupRepo`), not via a module-graph edge, so a
          bump-version.mjs-only diff would otherwise leave this step
          stale-green locally (CI is unaffected: verify.yml's `^scripts/`
-         match already covers it). */
+         match already covers it).
+         check-onbox-register.mjs and the two on-box register files are the
+         same trap once more: check-onbox-register.test.mjs imports the first
+         and reads the other two as TEXT at RUNTIME, asserting the live view
+         still agrees with the markdown. Without them here, a register-only
+         diff — precisely the edit that drifts the two apart — prints
+         [cached] and the cross-check sits stale-green. */
       extraFiles: [
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
@@ -75,6 +81,9 @@ export const STEPS = [
         'docs/release-notes-next.md',
         'scripts/release-notes-gate.mjs',
         'scripts/bump-version.mjs',
+        'scripts/check-onbox-register.mjs',
+        'docs/testing/onbox-acceptance-register.md',
+        'docs/testing/onbox-acceptance-register-live-view.html',
       ],
       includeLockfiles: ['root'],
     },
