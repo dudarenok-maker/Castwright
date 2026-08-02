@@ -330,6 +330,7 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
     });
 
     let result: unknown;
+    let responses: [{ status: number }, { status: number }] | undefined;
     try {
       result = await Promise.race([
         Promise.all([
@@ -341,7 +342,10 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
             otherBookId: keeperBookId,
             otherCharacterId: 'wren',
           }),
-        ]).then(() => 'settled'),
+        ]).then((r) => {
+          responses = r as [{ status: number }, { status: number }];
+          return 'settled';
+        }),
         new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
       ]);
     } finally {
@@ -351,6 +355,26 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
       spy.mockImplementation(actual.findBookByBookId);
     }
     expect(result).toBe('settled');
+
+    /* #1981 fix-round Finding 3 — 'settled' alone doesn't rule out both
+       requests 500ing after their second book lookup (the barrier only
+       guarantees both reached that lookup, not that either succeeded).
+       Assert the HTTP status AND that both sides of the symmetric pair
+       actually landed on disk. Both calls write the SAME symmetric pair
+       (just with source/other swapped), so the outcome is deterministic
+       regardless of which request's critical section the lock let run
+       first — appendNotLinked is idempotent, so the second call's write is
+       a no-op once the first has already recorded the pair. */
+    expect(responses?.[0].status).toBe(200);
+    expect(responses?.[1].status).toBe(200);
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
+    );
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+      (c) => c.id === 'wren',
+    );
+    expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+    expect(wrenExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'wren' }]);
   });
 });
 

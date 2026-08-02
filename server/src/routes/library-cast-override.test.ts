@@ -10,7 +10,7 @@
    cast-merge.test.ts / voice-match.test.ts so WORKSPACE_DIR is set before
    paths.js binds BOOKS_ROOT. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,19 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import { readJson } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+
+/* #1981 fix-round Finding 2 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so
+   the AB/BA deadlock test at the bottom of this file can deterministically
+   intercept this route's OWN `findBookByBookId` calls (bound at scan.js's
+   own module-load time). Defaults to a plain passthrough — every other test
+   in this file behaves exactly as if this mock weren't here. Same shape as
+   cast-not-linked-to.test.ts's own `#1981` deadlock test — see that test's
+   header comment for why a bare `Promise.all` of two live requests can't
+   reliably exercise this path. */
+vi.mock('../workspace/scan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/scan.js')>();
+  return { ...actual, findBookByBookId: vi.fn(actual.findBookByBookId) };
+});
 
 /* `readJson` has no workspace-path dependency at all, so it's safe as an
    ordinary top-level import. `castJsonPath` is a pure function of its
@@ -421,5 +434,156 @@ describe('library-cast override router — same-book merge (#1981 Task 8)', () =
        written back from the pre-merge snapshot. */
     expect(byId.alice.aliases).toContain(bobName);
     expect(byId.bob.aliases).toContain(aliceName);
+  });
+});
+
+/* #1981 fix-round Finding 2 — this route now holds withCastLocks([source,
+   target]) across its read-through-write span, same as cast-link-prior and
+   cast-not-linked-to. Only cast-not-linked-to had a route-level AB/BA
+   regression test; this closes the gap for library-cast-override. Its own
+   book pair (bookX/bookY, each with two characters) so this can't interact
+   with the shared Oduvan fixtures or the same-book fixtures above. */
+describe('library-cast override router — AB/BA deadlock (#1981 fix-round Finding 2)', () => {
+  const BOOK_X_TITLE = 'AB-BA Book X';
+  const BOOK_Y_TITLE = 'AB-BA Book Y';
+  let bookXId: string;
+  let bookYId: string;
+
+  const x1 = {
+    id: 'x1',
+    name: 'X1',
+    role: 'character',
+    color: 'unset',
+    voiceId: 'v_x1',
+    description: 'X1 desc.',
+    attributes: ['a1'],
+  };
+  const x2 = {
+    id: 'x2',
+    name: 'X2',
+    role: 'character',
+    color: 'unset',
+    voiceId: 'v_x2',
+    description: 'X2 description that is definitely longer than Y2s short one.',
+    attributes: ['d1'],
+  };
+  const y1 = {
+    id: 'y1',
+    name: 'Y1',
+    role: 'character',
+    color: 'unset',
+    voiceId: 'v_y1',
+    description: 'Y1 description longer than X1s short one.',
+    attributes: ['b1'],
+  };
+  const y2 = {
+    id: 'y2',
+    name: 'Y2',
+    role: 'character',
+    color: 'unset',
+    voiceId: 'v_y2',
+    description: 'Y2 desc.',
+    attributes: ['c1'],
+  };
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    bookXId = makeBookId(AUTHOR, SERIES, BOOK_X_TITLE);
+    bookYId = makeBookId(AUTHOR, SERIES, BOOK_Y_TITLE);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_X_TITLE, bookXId, [x1, x2]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_Y_TITLE, bookYId, [y1, y2]);
+  });
+
+  /* Two concurrent calls with sourceBookId/targetBookId in opposite roles:
+     call 1 overrides bookX/x1 <-> bookY/y1 (raw lock order [bookXDir,
+     bookYDir]); call 2 overrides bookY/y2 <-> bookX/x2 (raw lock order
+     [bookYDir, bookXDir]) — the reverse. Without withCastLocks's `.sort()`
+     this is a classic AB/BA. The two calls touch four DISJOINT character
+     records (call 1: x1 + y1; call 2: x2 + y2), so the outcome is assertable
+     regardless of which call's critical section the lock lets run first —
+     each book's cast.json ends up with BOTH of its characters merged,
+     because whichever call runs second reads the already-merged state left
+     by the first and only overwrites its own targeted id.
+
+     Same deterministic-barrier shape as cast-not-linked-to.test.ts's and
+     cast-link-prior.test.ts's `#1981` tests: intercept BOTH requests' SECOND
+     `findBookByBookId` call (each request's target-book lookup, immediately
+     preceding withCastLocks) and hold each open until both have arrived.
+     Because the fixture books are the same two ids in swapped roles, the
+     second-ever lookup of bookXId is deterministically call 2's target
+     lookup, and the second-ever lookup of bookYId is deterministically call
+     1's target lookup — true regardless of which physical request reaches
+     that point first. */
+  it('#1981 — two concurrent calls with the books in opposite argument order do not deadlock', async () => {
+    const scan = await import('../workspace/scan.js');
+    const actual = await vi.importActual<typeof import('../workspace/scan.js')>(
+      '../workspace/scan.js',
+    );
+    const seen: Record<string, number> = {};
+    let arrived = 0;
+    let releaseBoth!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const spy = vi.mocked(scan.findBookByBookId).mockImplementation(async (id: string) => {
+      seen[id] = (seen[id] ?? 0) + 1;
+      const isSecondLookup = seen[id] === 2 && (id === bookXId || id === bookYId);
+      const result = await actual.findBookByBookId(id); // real read, now
+      if (isSecondLookup) {
+        arrived += 1;
+        if (arrived === 2) releaseBoth();
+        await gate; // hold the RESOLUTION open until both requests arrive
+      }
+      return result;
+    });
+
+    let results: [{ status: number }, { status: number }];
+    try {
+      results = (await Promise.race([
+        Promise.all([
+          callOverride({
+            sourceBookId: bookXId,
+            sourceCharacterId: 'x1',
+            targetBookId: bookYId,
+            targetCharacterId: 'y1',
+          }),
+          callOverride({
+            sourceBookId: bookYId,
+            sourceCharacterId: 'y2',
+            targetBookId: bookXId,
+            targetCharacterId: 'x2',
+          }),
+        ]),
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error('DEADLOCK')), 2000),
+        ),
+      ])) as [{ status: number }, { status: number }];
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.findBookByBookId);
+    }
+
+    expect(results[0].status).toBe(200);
+    expect(results[1].status).toBe(200);
+
+    /* Both merges survived on disk, in BOTH books. Call 1's merge (x1<->y1)
+       and call 2's merge (x2<->y2) are disjoint characters, so neither call
+       could have clobbered the other's write. */
+    const bookXChars = readCast(BOOK_X_TITLE).characters;
+    const bookYChars = readCast(BOOK_Y_TITLE).characters;
+    const byIdX = Object.fromEntries(bookXChars.map((c) => [c.id, c]));
+    const byIdY = Object.fromEntries(bookYChars.map((c) => [c.id, c]));
+
+    expect(byIdX.x1.description).toBe(y1.description); // longer of the pair
+    expect(byIdY.y1.description).toBe(y1.description);
+    expect(byIdX.x1.aliases).toContain('Y1');
+    expect(byIdY.y1.aliases).toContain('X1');
+
+    expect(byIdY.y2.description).toBe(x2.description); // longer of the pair
+    expect(byIdX.x2.description).toBe(x2.description);
+    expect(byIdY.y2.aliases).toContain('X2');
+    expect(byIdX.x2.aliases).toContain('Y2');
   });
 });

@@ -188,6 +188,9 @@ function mergeCharacters(
   source: CharacterOutput,
   target: CharacterOutput,
 ): { mergedSource: CharacterOutput; mergedTarget: CharacterOutput } {
+  /* Identity-level fields are merged ONCE — both books end up with these
+     identical values. Per-book audio + metric fields are then applied
+     when each side's record is composed. */
   const sharedDescription = longest(source.description, target.description);
   const sharedRole = preferSource(source.role, target.role);
   const sharedGender = preferSource(source.gender, target.gender);
@@ -195,6 +198,11 @@ function mergeCharacters(
   const sharedTone = mergeTone(source.tone, target.tone);
   const sharedAttributes = unionStrings(source.attributes, target.attributes);
 
+  /* Aliases — union of the full pool of name forms across both sides
+     (each side's aliases plus the other side's name). Each side then
+     drops its OWN name from the list so no record self-aliases. Same
+     shape as the manual-merge alias contract; the matcher uses these on
+     future books. */
   const aliasPool = collectAliasPool(source, target);
   const mergedSource: CharacterOutput = {
     ...source,

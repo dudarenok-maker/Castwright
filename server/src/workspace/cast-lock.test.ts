@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { withCastLock, withCastLocks } from './cast-lock.js';
 /* Namespace import so vi.spyOn can intercept the call cast-lock.ts makes
    internally — Vite's SSR transform rewrites it to a property access resolved
@@ -18,9 +18,23 @@ describe('withCastLocks', () => {
      which is true with or without .sort(), with or without any lock at all.
      That is the placebo shape this whole PR exists to prevent. */
 
+  /* #1981 fix-round Finding 1 — restoration MUST NOT depend on the test
+     body reaching its last statement. A `spy.mockRestore()` at the end of
+     a test with no afterEach never runs if an earlier assertion throws,
+     which leaves `fileLock.withKeyLock` mocked to a no-op passthrough for
+     every later test in this file — silently disarming their own
+     mutation-detection power exactly when a regression would need it.
+     Reproduced: with `.sort()` removed from withCastLocks, a full-file run
+     reported the AB/BA deadlock test below as PASSING while the same test
+     in isolation failed 3/3 — because the preceding sorted-order test threw
+     first and left the spy live. */
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('acquires keys in sorted order within a single call', async () => {
     const acquired: string[] = [];
-    const spy = vi.spyOn(fileLock, 'withKeyLock').mockImplementation(
+    vi.spyOn(fileLock, 'withKeyLock').mockImplementation(
       async (key: string, fn: () => Promise<unknown>) => {
         acquired.push(key);
         return fn();
@@ -32,7 +46,6 @@ describe('withCastLocks', () => {
     acquired.length = 0;
     await withCastLocks(['/w/a', '/w/b'], async () => undefined);
     expect(acquired).toEqual([castJsonPath('/w/a'), castJsonPath('/w/b')]);
-    spy.mockRestore();
   });
 
   it('does not deadlock when two callers pass the books in opposite orders', async () => {
