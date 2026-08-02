@@ -16,6 +16,7 @@ import {
   promoteRedesign,
   discardRedesign,
   patchEntry,
+  retryEngine,
   deleteEntry,
   assignVoice,
   promoteCharacterVoice,
@@ -28,6 +29,7 @@ vi.mock('../lib/api', () => ({
   api: {
     listVoiceLibrary: vi.fn(),
     patchVoiceLibrary: vi.fn(),
+    retryCloneEngine: vi.fn(),
     deleteVoiceLibrary: vi.fn(),
     designLibraryVoice: vi.fn(),
     redesignLibraryVoice: vi.fn(),
@@ -141,6 +143,26 @@ describe('voiceLibrarySlice reducers', () => {
     expect(state.entries[0]).toEqual(serverEntry);
   });
 
+  /* Plan 276 Decision 7 — mirrors the `patchEntry.fulfilled` case directly
+     above: `retryEngine.fulfilled` REPLACES the matching entry with the
+     server's response wholesale (not a partial merge), same reconciliation
+     as every other non-optimistic mutation in this slice. */
+  it('retryEngine.fulfilled reconciles the entry with the server response', () => {
+    const initial = {
+      entries: [makeEntry({ voiceUuid: 'v1', engines: { qwen: { status: 'failed' } } })],
+      status: 'ready' as const,
+      designPending: false,
+      clonePending: false,
+      lastFetchedAt: 1000,
+    };
+    const serverEntry = makeEntry({ voiceUuid: 'v1', engines: {} });
+    const state = voiceLibrarySlice.reducer(
+      initial,
+      retryEngine.fulfilled(serverEntry, 'reqId', { voiceUuid: 'v1', engine: 'qwen' }),
+    );
+    expect(state.entries[0]).toEqual(serverEntry);
+  });
+
   it('designVoice toggles designPending true on pending, false on fulfilled', () => {
     const pendingState = voiceLibrarySlice.reducer(
       undefined,
@@ -208,6 +230,21 @@ describe('voiceLibrarySlice thunks against api mocks', () => {
     });
     await store.dispatch(patchEntry({ voiceUuid: 'v1', patch: { pinned: true } }));
     expect(api.patchVoiceLibrary).toHaveBeenCalledWith('v1', { pinned: true });
+    expect(store.getState().voiceLibrary.entries[0]).toEqual(updated);
+  });
+
+  it('retryEngine calls api.retryCloneEngine with the voiceUuid + engine and reconciles the entry', async () => {
+    const updated = makeEntry({ voiceUuid: 'v1', engines: {} });
+    vi.mocked(api.retryCloneEngine).mockResolvedValue(updated);
+    const store = makeStore({
+      entries: [makeEntry({ voiceUuid: 'v1', engines: { qwen: { status: 'failed' } } })],
+      status: 'ready',
+      designPending: false,
+      clonePending: false,
+      lastFetchedAt: 1000,
+    });
+    await store.dispatch(retryEngine({ voiceUuid: 'v1', engine: 'qwen' }));
+    expect(api.retryCloneEngine).toHaveBeenCalledWith('v1', 'qwen');
     expect(store.getState().voiceLibrary.entries[0]).toEqual(updated);
   });
 

@@ -76,6 +76,20 @@ function readCastFromDisk(workspace: string, author: string, series: string, tit
   return JSON.parse(readFileSync(path, 'utf8')) as { characters: Array<Record<string, unknown>> };
 }
 
+/* A workspace-wide override write (no `scope` passed) reaches every book
+   sharing the voiceId, including a cross-series one — so a per-describe
+   cleanup that only enumerates the same-series books leaks state into
+   whichever describe runs next. Cleanups that touch a cross-series book
+   share this body; keep it in one place. */
+function clearOverridesOnDisk(workspace: string, author: string, series: string, title: string) {
+  const path = join(workspace, 'books', author, series, title, '.audiobook', 'cast.json');
+  const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+    characters: Array<Record<string, unknown>>;
+  };
+  delete cast.characters[0].overrideTtsVoices;
+  writeFileSync(path, JSON.stringify(cast));
+}
+
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -1305,6 +1319,8 @@ describe('PUT /api/voices/:voiceId/override — refuses to clear a cloned slot (
       delete cast.characters[0].overrideTtsVoices;
       writeFileSync(path, JSON.stringify(cast));
     }
+    // This suite's workspace-wide writes also reach the cross-series book.
+    clearOverridesOnDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
   });
 
   it('409s a workspace-wide clear when a linked character carries a cloned slot, and writes nothing', async () => {
@@ -1434,6 +1450,8 @@ describe('PUT /api/voices/:voiceId/override — clears a stale libraryUuid/prove
       delete cast.characters[0].overrideTtsVoices;
       writeFileSync(path, JSON.stringify(cast));
     }
+    // This suite's workspace-wide writes also reach the cross-series book.
+    clearOverridesOnDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
   });
 
   it('[DELTA-I5] an explicit catalogue pick after a designed library assign clears the stale libraryUuid/provenance', async () => {
@@ -1539,6 +1557,8 @@ describe('applyOverrideToCastFiles — direct-call coverage for the qwen half of
       delete cast.characters[0].overrideTtsVoices;
       writeFileSync(path, JSON.stringify(cast));
     }
+    // This suite's workspace-wide writes also reach the cross-series book.
+    clearOverridesOnDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
   });
 
   it('[I-2] a direct applyOverrideToCastFiles(qwen) call preserves libraryUuid/provenance on a CLONED qwen slot', async () => {
@@ -1563,25 +1583,18 @@ describe('applyOverrideToCastFiles — direct-call coverage for the qwen half of
 });
 
 describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => {
-  afterEach(async () => {
+  async function resetAllCasts() {
     /* Clear all three casts between cases so the cross-series assertions
-       start clean. */
+       start clean. Run before AND after each case: an earlier describe in
+       this file could otherwise leak a dirty cross-series fixture into the
+       first test here (afterEach alone only cleans up after this suite's
+       own writes). */
     await request(app).put('/api/voices/v_brann/override').send({ override: null });
-    const otherPath = join(
-      workspaceRoot,
-      'books',
-      AUTHOR,
-      OTHER_SERIES,
-      OTHER_BOOK,
-      '.audiobook',
-      'cast.json',
-    );
-    const cast = JSON.parse(readFileSync(otherPath, 'utf8')) as {
-      characters: Array<Record<string, unknown>>;
-    };
-    delete cast.characters[0].overrideTtsVoices;
-    writeFileSync(otherPath, JSON.stringify(cast));
-  });
+    clearOverridesOnDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
+  }
+
+  beforeEach(resetAllCasts);
+  afterEach(resetAllCasts);
 
   it("writes ONLY to the anchor book's series, leaving other series untouched", async () => {
     const res = await request(app)

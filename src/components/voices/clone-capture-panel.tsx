@@ -3,6 +3,7 @@ import { useAppDispatch } from '../../store';
 import { cloneSample } from '../../store/voice-library-slice';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from '../../lib/clone-transcript-limit';
 import { VoiceRecorder } from './voice-recorder';
+import { TranscriptField } from './transcript-field';
 
 type Relationship = 'self' | 'family-with-permission' | 'guardian-of-minor';
 export interface ConsentDraft { personName: string; relationship: Relationship; permittedUse: 'personal'; attestedBy?: string; }
@@ -75,17 +76,7 @@ export function CloneCapturePanel({ onReady }: { onReady: (r: { candidateId: str
       {busy && <p>Processing sample…</p>}
       {error && <p className="text-magenta">{error}</p>}
       {warnings.map((w) => <p key={w} className="text-amber-600 text-xs">{w}</p>)}
-      {candidateId && (
-        <label>Transcript
-          <textarea aria-label="transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} />
-          {transcriptTooLong && (
-            <p className="text-magenta text-xs">
-              That transcript is too long — {transcript.length.toLocaleString()} characters, and the
-              limit is {MAX_CLONE_TRANSCRIPT_CHARS.toLocaleString()}. Trim it to continue.
-            </p>
-          )}
-        </label>
-      )}
+      {candidateId && <TranscriptField value={transcript} onChange={setTranscript} />}
 
       <fieldset className="flex flex-col gap-2">
         <legend>Consent</legend>

@@ -27,16 +27,43 @@ prose.
 
 **https://claude.ai/code/artifact/adf22b7b-12dd-49fe-874c-4a340585b26a**
 
-This file has a browsable HTML twin at the URL above. Artifact URLs are
-server-assigned UUIDs — they cannot be renamed, aliased, or re-slugged — so
-**that exact URL is the artifact's identity**. Update it by passing it as the
-`url` argument; publishing the register without it mints a *second*, competing
-register and orphans this one. That is the single most likely way this register
-goes wrong.
+The page at that URL is rendered from **one specific file in this repo**:
 
-The twin carries derived figures — owed count, per-group counts, oldest debt —
-that must be **recomputed** on every edit. Rows can be right while the summary
-strip lies.
+> ### [`onbox-acceptance-register-live-view.html`](onbox-acceptance-register-live-view.html)
+>
+> Publish **that** file, with the URL above passed as `url`.
+
+Artifact URLs are server-assigned UUIDs — they cannot be renamed, aliased, or
+re-slugged — so **that exact URL is the artifact's identity**. Publishing
+without it mints a *second*, competing register and orphans this one.
+
+**The live view is a hand-authored HTML page, not a rendering of this file —
+never publish this `.md` to that URL.** Passing the right `url` is *not*
+sufficient. Publishing this markdown keeps the URL and destroys the page,
+replacing the styled register with default markdown rendering: no summary strip,
+a self-referential "Live view" section, and dead relative links. **Nothing errors
+when this happens.** It happened four times between 2026-07-31 and 2026-08-01, to
+four different PR-shipping agents that each read a paragraph like the one above
+and concluded they had complied. The live view is tracked in this repo — rather
+than living in whichever session scratchpad last built it — precisely so the
+right file is always to hand.
+
+The live view carries derived figures — owed count, per-group counts, oldest
+debt — that must be **recomputed** on every edit. Rows can be right while the
+summary strip lies. `npm run check:onbox-register` verifies the owed total, the
+per-group counts and the row IDs across both files, so **adding or removing a
+row here and missing the live view fails CI**. Know its edges, because two of
+them are wide:
+
+- **A wording-only edit does not fail.** Rewording a row, recording a run
+  result, changing a hardware note or a criteria link — the most common edit
+  this register gets — changes nothing the check compares. The live view mirrors
+  that prose in its own row bodies and will silently fall behind.
+- **The rest of the summary strip is unchecked** — oldest debt, and the
+  group/blocked/unconfirmed tallies. Recompute those by hand.
+- **The published page is invisible to it.** It only ever reads the source file,
+  so "was it published at all, and was it the right file?" is procedure, not a
+  gate.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -73,7 +100,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 28 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -83,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**45 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**48 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -218,7 +245,10 @@ asserts which voice reached the provider.
   behind it — the clone **derive** failed without shared FFmpeg libraries
   (#1967) — and that is now fixed and merged (PR #1978, 2026-07-31), so
   E-03…E-07 are runnable on a stock static-FFmpeg box without any hot patch.
-  Their first run doubles as A26 item 1. History of the
+  **E-04 specifically is no longer blocked on a fix** — the code-level fix for
+  its `ImportError` shape (#2017) landed in PR #2039 — so what remains of its
+  debt is a re-run of the reproduction (46-char control, 245-char Russian
+  line) on real Coqui weights, not an outstanding bug. Their first run doubles as A26 item 1. History of the
   first blocker follows, kept because it is what the run-2 result confirms:
   Coqui/XTTS could not load in a
   sidecar that had already served ECAPA `/embed`, and cloning always calls
@@ -266,6 +296,12 @@ asserts which voice reached the provider.
 - **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
   (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
   derive) are untouched and remain the highest-risk unproven behaviour here.
+- **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
+  a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+  / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
+  orphaned-characterId line) and C-05b (a designed narrator's substitution is
+  recorded + surfaced) — see the run sheet's `Result (C-05a)`/`Result (C-05b)`
+  lines. Sharpens what C-05 needs to test; the Section C headcount is unchanged.
 
 **Two findings that are NOT defects, recorded so they are not re-filed.** (1)
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
@@ -615,6 +651,37 @@ judgement is wrong is a sidecar OOM, which is worse than the abort it replaced.
 > hazard is reachable on this card **without** any evict failure at all, which is worth
 > knowing before running the forced case. Note the box also had two agent pytest suites
 > holding ~2 GB of cuda:0 at the time, so this is a contended-card datapoint, not a clean one.
+
+> **Correction 2026-08-01 — that datapoint was contention, not a card-size limit.** The
+> caveat above understated it. Re-run on a **quiet** box the same mixed Qwen+Coqui chapter
+> **completed 71/71** with `audioEngines {qwen: 3, coqui: 1}`. Measured footprints via
+> `POST /load` + `/health`:
+>
+> | state | cuda:0 | cuda:1 |
+> |---|---|---|
+> | Qwen 0.6B alone | 0 MB | 1,845 MB |
+> | Qwen **+** Coqui, both resident | 0 MB | **3,758 MB** |
+> | sidecar fresh, **nothing loaded** | **5,743 MB** | 393 MB |
+>
+> Both engines together are **3.7 GB** — they fit an 8 GB card with room to spare. That
+> last row is the tell: a brand-new sidecar with zero models resident, and cuda:0 already
+> two-thirds full. The holder was another worktree's real-GPU Qwen pytest suite
+> (`wt-1975-batch-inlock-load`, ~5.4 GB across **both** cards). The refusal itself was
+> correct and self-describing — `NoCapacityError … deviceKey: 'cuda:0', blockers: []`, where
+> `blockers: []` means "something I cannot see holds this card", since the placement
+> controller only knows its own engines.
+>
+> **So A19's question is still entirely open** — the unforced case does *not* reliably spill
+> on an 8 GB card, and the earlier reading that it did was measuring a foreign process.
+> Caveat in the other direction: our own peak across a 1,588-sample trace was **6,727 MB**
+> (Qwen + Coqui + Whisper ASR together), which on an 8 GB card leaves little headroom — so
+> co-residency is genuinely tight, just not the 6.7 GB-at-idle that was observed.
+>
+> **Box policy since 2026-08-01 (owner's call):** renders are pinned to the 16 GB 5070 Ti
+> via `COQUI_DEVICE=cuda:1` / `QWEN_DEVICE=cuda:1` / `ASR_DEVICE=cuda:1` in the git-ignored
+> `server/.env`, leaving cuda:0 free for other worktrees' PR suites. **A19's forced-evict run
+> must temporarily undo those pins**, or it will not exercise the single-8 GB-card scenario
+> this row is about.
 
 - Render a chapter that genuinely mixes Qwen and Coqui — a non-English book (the
   Russian Coalfall chapter) with one designed-Qwen character and one undesigned
@@ -1062,6 +1129,202 @@ is unproven.
 (ASR or a design) once it finishes. *Criteria:* PR #1993's description +
 the C1/M3 review findings quoted above. *Cost:* short — rides along with A19
 and A20, which already stage a mixed-engine render on this same card.
+
+---
+
+### A29 · `qa.asr.model` reaches the sidecar AND every server-side reader (PR #2008, closes [#1988](https://github.com/dudarenok-maker/Castwright/issues/1988), [#1989](https://github.com/dudarenok-maker/Castwright/issues/1989)) · **no GPU needed, sidecar venv only**
+
+Registering `ASR_MODEL` as the `qa.asr.model` registry knob made a UI-set
+override reach the sidecar via the generic restart-sidecar env-injection loop,
+but the PR's own independent review found it did **not** reach the server's
+own Node-side Whisper-model readers — `whisperRepoDir()` / `whisperModelPresent()`
+/ `detectWhisperInstallStateOnDisk()` (`model-paths.ts`, `whisper-install-detect.ts`)
+cached `process.env.ASR_MODEL` in a module-load-time constant, so Model
+Manager's sizing, install-state, and **Remove** all still targeted `base`
+regardless of what was actually configured and loaded. This was verified as a
+real defect (not just a review claim) by reverting the fix and watching the
+paired tests go red — see the PR's mutation-verification comment — but the
+full failure mode needs the real sidecar + a real Hugging Face download to
+observe end to end, which no unit test can substitute for.
+
+- **Prerequisite:** comment out `ASR_MODEL` in `server/.env` first, if it's
+  set. `server/.env.example`'s generated block ships `ASR_MODEL=base`
+  uncommented; on a box seeded from that file, the value is present as a real
+  env var, and `resolver.ts` gives env unconditional precedence with
+  `locked: true` — Advanced Configuration would show the knob disabled with
+  an env pill, making step 1 below unperformable.
+- Set **Content-QA (Whisper) model** to a non-default value (e.g. `small`) in
+  Advanced Configuration and let the sidecar restart. Confirm from the sidecar
+  log / `/health` that `faster-whisper` actually loaded `small`, not `base`.
+- Open Model Manager: the Whisper row must report `small`'s on-disk size and
+  path, not `base`'s.
+- Click **Remove**. It must delete the `small` snapshot directory and leave
+  any pre-existing `base` snapshot untouched — the inverse of the pre-fix
+  behaviour, which deleted `base` and left the model actually in use on disk.
+- Run the in-app installer (Account → Models → Whisper → Install) with
+  `small` configured and confirm `install-whisper.mjs` fetches `small` (its
+  `[install-whisper]` step lines / the resulting HF cache snapshot name), not
+  `base` — pinning that the installer spawn now receives an explicit
+  `--model` flag carrying the live value rather than falling back to its own
+  `process.env.ASR_MODEL || 'base'` default. Confirm the install card's own
+  copy also names `small`, not a hard-coded `base` (m1 fix).
+- **Separately**, confirm the documented CLI path
+  (`node server/tts-sidecar/scripts/install-whisper.mjs`, no flags) fetches
+  `base` in this scenario, not `small` — it has no access to
+  `user-settings.json`, so it cannot see the UI override; only the in-app
+  installer (which always passes `--model`) reflects the configured model.
+  This is expected, not a defect — it's why the script's usage comment now
+  says to pass `--model` explicitly for a UI-configured, non-default model.
+
+*Needs:* the sidecar venv with `faster-whisper` installable, network access
+for the HF download of a second model size, and write access to the HF hub
+cache to seed/inspect both `base` and the configured model's snapshots. No GPU
+required. *Criteria:* this row plus PR #2008's description of the failure
+scenario. *Cost:* short — one restart-sidecar cycle, one install run, one
+Remove click.
+
+---
+
+### A30 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+
+PR #2032 (hardened further by the independent pre-merge review that produced
+this row) closes three "a gate that silently stopped asserting" defects in
+`server/tts-sidecar/tests/golden/compare.py`'s bless guards and in
+`test_golden_regression.py`'s `_make_kokoro`. All three files' pure-function
+gating tests (`test_golden_compare.py`, `test_instruct_bless_gating.py`,
+`test_make_kokoro_gating.py`) are mutation-verified and run in the fast
+`test:sidecar` tier — but two behaviours only a real bless run against real
+weights can prove, and neither was exercised on real hardware for this PR:
+
+- **A guard that never blocks honest work.** Every guard added/hardened here
+  (`bless_guard`'s G1/G2, `bless_guard_thresholds`'s tolerances check and its
+  new `previously_blessed` disambiguation) is proven only against synthetic
+  fixtures. The thing that would make it a *rubber stamp in the other
+  direction* — refusing a bless that changed nothing real, or demanding
+  `GOLDEN_REBLESS_THRESHOLDS=1`/`GOLDEN_REBLESS_CONTENT=1` on a routine,
+  uncontended re-bless — has never been observed end to end.
+- **`_make_kokoro` against a real `KokoroEngine`.** `test_make_kokoro_gating.py`
+  pins the classifier wiring (`synthesise_or_skip` / `prereq.py`) with a
+  stubbed engine; #1987's actual claim — a genuine CUDA/model-corruption
+  failure during Kokoro warm-up now FAILS the test instead of reading as a
+  green SKIP — has not been forced against the real engine.
+
+- **Prerequisite:** Kokoro weights installed
+  (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx` +
+  `voices-v1.0.bin`), sidecar venv bootstrapped. A single 8 GB card is
+  sufficient (Kokoro is the ~1 GB fallback engine); CUDA is not required —
+  `ASR_DEVICE=cpu`/CPU Kokoro also exercises this.
+- Run `npm run test:golden-audio -- --bless --sidecar-only` on a clean,
+  **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
+  contention warning should print nothing). Confirm it completes and writes
+  `kokoro-baseline.json` / `instruct-baseline.json` **without**
+  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set on a
+  routine, uncontended re-bless. **Amended by #2045 F1/F2** (`instruct-
+  baseline.json`'s `identity`/`loudness_dbfs` guard, added by #2035 after
+  this row was written, is noise-tolerant, not silent-or-refuse like
+  `tolerances`): `kokoro-baseline.json`'s `transcript`/`text_edits` and
+  `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
+  (or the guard is broken); `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
+  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=**0.005** /
+  `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
+  printed a `[golden-bless] identity moved ... within epsilon ... (noise)`
+  / `[golden-bless] loudness_dbfs moved ...` line for each one that did —
+  the echo is the part a `git diff` alone can't confirm, and it's the
+  accept-path half of the guard real hardware is uniquely placed to
+  exercise (both the ROUTINE-bless-doesn't-need-the-flag half AND the
+  noise-gets-echoed half need a REAL measurement pair with real noise
+  between them — a synthetic fixture can only assert the arithmetic, never
+  that actual noise clears epsilon on a real box). `blessed_at`-adjacent
+  housekeeping fields may also move as before.
+- **This run is also the only thing that retires the identity epsilon's
+  open question** (#2066). `IDENTITY_COSINE_EPSILON` moved 0.015 → 0.005
+  because 0.015 was derived from an unrelated ceiling (`identity_cosine_max`
+  = 0.15) rather than from measured noise. 0.005 is ≈3.6× the **single**
+  run-to-run delta recorded anywhere in the repo (`metadata.notes`' ~0.0014)
+  — one observed figure, on one leaf, while the guard refuses on the `max`
+  across five. Nothing in-repo measures the per-leaf distribution. So record
+  the **actual per-leaf deltas** you observe here, not just pass/fail: if any
+  single leaf routinely clears 0.005, the constant is too tight and this
+  gate refuses honest work. That measurement is the deliverable.
+- Then force one refusal for real: hand-edit a committed baseline to null out
+  its `transcript` (or delete its `tolerances` key) exactly as a bad
+  merge-resolution would, re-run the same `--bless` command, and confirm it
+  refuses with the expected `GOLDEN_REBLESS_*` message and leaves the file
+  byte-identical to before the attempt — then revert the hand-edit.
+  This is the "#2003/#1995 shape, on a real file, via the real CLI entry
+  point" check the unit tests can only approximate with `tmp_path` fixtures.
+- **Amended by #2045 F1/F2:** also force one WINDOW-sized refusal on
+  `instruct-baseline.json`'s `identity` block (hand-edit one committed
+  `identity.cosine.<emotion>` figure by clearly more than
+  `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
+  command, and confirm it refuses (not just accepts-and-echoes) with the
+  expected `GOLDEN_REBLESS_THRESHOLDS` message and leaves the file
+  byte-identical — then revert the hand-edit. This is the boundary the
+  noise-tolerant epsilon exists to draw; the routine-bless bullet above
+  only exercises the accept side.
+- Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
+  (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
+  normally (expect pass), then deliberately break the engine (e.g. rename
+  the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM) and
+  confirm the run now **FAILS** rather than SKIPping — the #1987 defect this
+  PR closed. Restore the weights afterward.
+
+*Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
+stable, reproducible value (no concurrent GPU work), and permission to
+hand-edit a baseline JSON for the refusal drill (revert before committing).
+*Criteria:* this row; PR #2032's own mutation-verification table is the
+synthetic-fixture half of the evidence, this row is the real-file half.
+*Cost:* short — one clean bless, one deliberately-broken bless, one
+deliberately-broken Kokoro run; well under an hour total.
+
+---
+
+### A31 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
+
+The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
+test binding it to the render's own oracle, an e2e walkthrough. What no suite
+proves is that pressing the buttons **repairs the render**. Every automated
+layer stops at the API response; none of them derives an artifact or synthesises
+a line.
+
+Two specific gaps, one of them structural:
+
+- **`derive-failed` / "Retry derive" is unreachable in mock mode.**
+  `mockCloneVoice` unconditionally stamps `engines.qwen.status: 'ready'`, and no
+  exported mock mutator can move a slot to `'failed'`. So the e2e spec
+  (`e2e/clone-readiness-gate.spec.ts`) covers `no-transcript` and the two silent
+  controls and **cannot** cover this CTA at all. It is untested outside unit
+  level by construction, not by omission.
+- **"Add transcript" is only proven to persist.** The server test asserts the
+  write; nothing asserts that a Qwen derive then *succeeds* against the
+  corrected text — which is the entire premise of the CTA.
+
+Run:
+
+- Ingest a clip **without** a transcript, assign it while the session engine is
+  Coqui (expect 200 + #1933's advisory), then switch the session engine to Qwen
+  and press "Approve cast & start generating". The gate must name the character,
+  Qwen, and the missing transcript, and offer **Add transcript**.
+- Use the CTA. Then **render a chapter** and confirm the cloned voice actually
+  speaks on Qwen — the derive succeeded against the user-supplied text. Capture
+  the resolved voice key from `characterSnapshots`, not just the absence of an
+  error.
+- Force a genuine `failed` slot (a real derive failure — e.g. attempt a Qwen
+  derive against an empty transcript on-box), confirm the gate reports
+  **derive-failed**, press **Retry derive**, and confirm the predicate
+  re-evaluates to the *underlying* cause (`no-transcript`) rather than reporting
+  healthy. Plan 276 Decision 7 argues this is why the CTA cannot loop; nothing
+  automated exercises it against a real stamp.
+- **Control:** with the session engine switched back to Coqui, the same cast
+  must produce **no** gate. Steps above pass equally well against a check that
+  always warns.
+
+*Needs:* the 8 GB card, a real sidecar, and a real cloned voice with a real
+master clip. *Criteria:* the run sheet
+[`clone-readiness-gate-onbox-acceptance.md`](clone-readiness-gate-onbox-acceptance.md);
+walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
+cloning session, which already stages a real clone on this card.
 
 ---
 

@@ -845,6 +845,78 @@ def _qwen_synth_is_degenerate(text: str, audio_ms: float) -> bool:
     return audio_ms < n * _QWEN_DEGEN_MS_PER_CHAR
 
 
+# --- Coqui XTTS output-degeneracy guard (#2026 defect 3, mirrors the Qwen guard
+# above) ---
+# fs-38 Wave 3 on-box acceptance (issue #2026) found XTTS v2 rarely collapses a
+# short Russian utterance entirely: `Хорошее олово.` -> Whisper auto-detected
+# FINNISH ("Karosia olleet tämän tämän"), `Тёплое море.` -> ENGLISH ("Job
+# player, Moria"). Short isolated lines separately draw hallucinated trailing
+# artifacts (`испортишь отливку.` -> "испортишь отливку, ПАА!"). `tts.qwen
+# .degenGuard` already exists for Qwen's OWN failure mode (a persistent
+# VRAM-churn meta-tensor corruption that makes the resident Base model emit
+# near-empty audio); there was no Coqui equivalent.
+#
+# Same registry-knob shape (`tts.coqui.degenGuard` / `COQUI_DEGEN_GUARD`,
+# default on) and the same "duration implausible for the given speakable text"
+# detection idea as `_qwen_synth_is_degenerate` above — reusing the identical
+# `_QWEN_DEGEN_MIN_TEXT_LEN`-shaped min-length gate and the identical
+# conservative 20 ms/speakable-char floor (Coqui's own healthy Russian
+# baseline measured on this same issue is ~100 ms/char — a stock voice's
+# `Кто бы это ни был, пусть стучит.` rendered in 2.41 s for 24 speakable
+# letters — so 20 ms/char stays comfortably conservative for Coqui too, not
+# just Qwen). Adapted where the two engines' failure modes actually differ:
+# XTTS's decoder is stochastic (no fixed seed, unlike a corrupted resident
+# Qwen Base), so a degenerate draw is a per-call sampling fluke, not a broken
+# model — recovery here is a plain RE-SYNTH (a fresh stochastic draw), never
+# a model reload/recycle, because nothing about the resident model needs
+# fixing.
+#
+# Known, DEFINITIONAL gap, not an oversight to guess at later: this floor
+# only catches a render that comes back IMPLAUSIBLY SHORT, and the language-
+# collapse cases above (Finnish/English) DO render at a roughly plausible
+# duration — measured, not hedged. A healthy two-word Russian line probed on
+# this same box ran ~200 ms/speakable char (2.411 s for
+# `C:\fixtures\fs38\_EARCHECK\garble-cause\5-STOCK-two-words-only.mp3`),
+# roughly 10x this floor's 20 ms/char, and the reported collapses were
+# themselves fluent, multi-word utterances — nothing that intelligible
+# renders in under a quarter-second, so neither would ever have tripped a
+# duration check even working exactly as designed. These cases are outside
+# THIS guard's detection envelope by construction. Setting a duration
+# CEILING to catch the related hallucinated-tail symptom (also uncaught
+# here, since it makes a render LONGER, not shorter) would need a real
+# healthy-duration baseline for short (2-3 word) Coqui utterances this guard
+# doesn't have, so it is not attempted here to avoid a false-positive
+# footgun. Catching plausible-duration language-collapse needs content
+# verification (e.g. the existing ASR-based segment QA gate,
+# `server/src/tts/segment-asr-qa.ts`) — a separate, heavier mechanism than
+# "mirror the Qwen knob shape" — tracked as #2055, not attempted here.
+_COQUI_DEGEN_MIN_TEXT_LEN = _QWEN_DEGEN_MIN_TEXT_LEN
+_COQUI_DEGEN_MS_PER_CHAR = _QWEN_DEGEN_MS_PER_CHAR
+# Total attempts before shipping (or, if still degenerate, raising) — mirrors
+# `_QWEN_DEGEN_SYNTH_ATTEMPTS`'s "one retry" shape. No self-recycle escalation
+# here (see docstring above): a stochastic-decode fluke needs a fresh SAMPLE,
+# not a fresh PROCESS, so there is nothing a code-44 recycle would fix.
+_COQUI_DEGEN_SYNTH_ATTEMPTS = 2
+
+
+def _coqui_speakable_len(text: str) -> int:
+    """Count of speech-bearing characters — letters (any script incl. Cyrillic)
+    and digits. Same definition and rationale as `_qwen_speakable_len` (kept as
+    its own function rather than a shared import so the Coqui guard has no
+    compile-time dependency on Qwen's internals)."""
+    return sum(1 for c in text if c.isalnum())
+
+
+def _coqui_synth_is_degenerate(text: str, audio_ms: float) -> bool:
+    """True when a Coqui XTTS synth returned implausibly little audio for its
+    input. Same shape as `_qwen_synth_is_degenerate` — see the constants above
+    for what differs (and what deliberately doesn't) between the two engines."""
+    n = _coqui_speakable_len(text)
+    if n < _COQUI_DEGEN_MIN_TEXT_LEN:
+        return False
+    return audio_ms < n * _COQUI_DEGEN_MS_PER_CHAR
+
+
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
 # socket buffers flush within a couple of ms, but we give a generous
@@ -954,6 +1026,16 @@ def _parse_bool(value: Optional[str], default: bool) -> bool:
 # only when overridden off, so this Python default still governs the untouched
 # case.
 _QWEN_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("QWEN_DEGEN_GUARD"), True)
+
+# Master switch for the Coqui output-degeneracy guard (#2026 defect 3 — see the
+# constants + helpers near `_COQUI_DEGEN_MS_PER_CHAR`). Same rationale as the
+# Qwen switch above: default ON in production, but `tests/conftest.py` sets
+# `COQUI_DEGEN_GUARD=0` suite-wide so the unit suite's minimal fakes (which
+# emit non-realistic short audio) don't read as degenerate; the dedicated
+# degeneracy regression test re-enables it explicitly. Surfaced as the
+# `tts.coqui.degenGuard` Advanced-Settings knob (registry key, env
+# `COQUI_DEGEN_GUARD`, default true).
+_COQUI_DEGEN_GUARD_ENABLED = _parse_bool(os.environ.get("COQUI_DEGEN_GUARD"), True)
 
 
 # --- Process-memory instrumentation + reclaim (host-RAM leak guard) ---
@@ -2077,9 +2159,55 @@ class CoquiEngine(Engine):
                 # both forwards below re-read `self._tts` under the lock and
                 # fail LOUD rather than asserting if they lost that race.
                 self._ensure_loaded(model)
-                return self._synthesize_claimed(model, voice, text, language)
+                return self._synthesize_degen_guarded(model, voice, text, language)
             finally:
                 self._last_used = time.monotonic()
+
+    def _synthesize_degen_guarded(
+        self, model: str, voice: str, text: str, language: Optional[str] = None
+    ) -> SynthResult:
+        """Wraps `_synthesize_claimed` with the Coqui output-degeneracy guard
+        (#2026 defect 3 — see `_coqui_synth_is_degenerate`'s module-level
+        docstring for the detection rationale and how it differs from the
+        Qwen guard's own escalation).
+
+        Called from inside `synthesize`'s `_in_flight.claim()` block, so a
+        retry here needs no re-`_ensure_loaded()` of its own: the model can't
+        be evicted out from under an in-flight claim, and XTTS's forward
+        itself is already guarded by `_synth_lock` inside `_synthesize_claimed`
+        (both branches). Each attempt is a fresh call — for the cloned-voice
+        branch that re-reads the cached latents (cheap, no re-derive) and
+        re-runs the GPU forward with a fresh stochastic draw; for the
+        catalogue branch, just a fresh forward.
+        """
+        for attempt in range(1, _COQUI_DEGEN_SYNTH_ATTEMPTS + 1):
+            result = self._synthesize_claimed(model, voice, text, language)
+            audio_ms = _audio_duration_ms(np.frombuffer(result.pcm, dtype="<i2"), result.sample_rate)
+            if not _COQUI_DEGEN_GUARD_ENABLED or not _coqui_synth_is_degenerate(text, audio_ms):
+                return result
+            if attempt < _COQUI_DEGEN_SYNTH_ATTEMPTS:
+                log.warning(
+                    "coqui synth degenerate (attempt %d/%d): voice=%s text_len=%d "
+                    "audio_ms=%.0f — implausibly short audio for the input; "
+                    "retrying with a fresh stochastic draw (no reload needed).",
+                    attempt, _COQUI_DEGEN_SYNTH_ATTEMPTS, voice, len(text), audio_ms,
+                )
+                continue
+            log.warning(
+                "coqui synth STILL degenerate after %d attempts: voice=%s text_len=%d "
+                "audio_ms=%.0f — no model reload/recycle to try (XTTS's failure "
+                "here is a per-call sampling fluke, not a corrupted resident "
+                "model); failing this request loud rather than shipping it.",
+                _COQUI_DEGEN_SYNTH_ATTEMPTS, voice, len(text), audio_ms,
+            )
+            raise RuntimeError(
+                f"Coqui synth degenerate (implausibly short audio: {audio_ms:.0f}ms "
+                f"for {len(text)} chars) persisted across {_COQUI_DEGEN_SYNTH_ATTEMPTS} "
+                "attempts."
+            )
+        # Unreachable (the final attempt always returns or raises above); present so
+        # a static analyzer sees a definite return on every path.
+        raise AssertionError("unreachable: degeneracy loop exited without returning")
 
     def _synthesize_claimed(
         self, model: str, voice: str, text: str, language: Optional[str] = None
@@ -2394,6 +2522,14 @@ class CoquiEngine(Engine):
         identically instead of one path hitting XTTS's low-fidelity
         low-level-API defaults.
 
+        `enable_text_splitting=True` needs spacy (`requirements/base.txt`
+        declares plain `spacy`, #2017) — `get_spacy_lang` raises `ImportError`
+        without it. Belt-and-braces: an `ImportError` from the inference call
+        is caught and retried with `enable_text_splitting=False`, logged
+        loudly rather than silently, so a stale/broken venv degrades instead
+        of 500ing outright. Do NOT flip the primary `True` above to `False`
+        — this catch is a fallback, not the fix.
+
         Returns (audio, sample_rate).
         """
         # A loud guard, not `assert self._tts is not None` (GATE 1 MIN-2):
@@ -2419,14 +2555,58 @@ class CoquiEngine(Engine):
                 ("top_p", 0.85),
             )
         }
-        result = tts_model.inference(
-            text=text,
-            language=language,
-            gpt_cond_latent=gpt_cond_latent,
-            speaker_embedding=speaker_embedding,
-            enable_text_splitting=True,
-            **inference_settings,
-        )
+        try:
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=True,
+                **inference_settings,
+            )
+        except ImportError as e:
+            # Belt-and-braces (#2017): `enable_text_splitting=True` reaches
+            # upstream's `get_spacy_lang`, which raises ImportError if spacy
+            # isn't installed. `requirements/base.txt` now declares `spacy`,
+            # so this should never fire in a properly-provisioned venv — but
+            # if it does (a stale/broken install), degrade LOUDLY rather than
+            # 500ing outright. `enable_text_splitting=False` skips sentence
+            # splitting entirely, which risks the `assert text_tokens.shape[-1]
+            # < gpt_max_text_tokens` in `xtts.py:516` on very long input — a
+            # real but rarer failure than every cloned-voice render 500ing.
+            #
+            # `ja` is a known-and-tracked exception to "reinstall fixes it"
+            # (#2038): plain `spacy` deliberately excludes the `[ja]` extra
+            # (SudachiPy + sudachidict-core, 68.9 MB of the 92.5 MB total),
+            # so a Japanese line hitting this path has spacy installed and
+            # working — the "missing or broken" / "reinstall" message is
+            # simply wrong for this one language, and would send an operator
+            # in a circle. Name the real cause instead.
+            if language == "ja":
+                log.error(
+                    "Coqui text-splitting import failed for a Japanese line "
+                    "(%s) — spacy is installed, but SudachiPy/sudachidict-core "
+                    "(the `spacy[ja]` extra) is deliberately not, per #2038; "
+                    "retrying WITHOUT sentence splitting "
+                    "(enable_text_splitting=False).",
+                    e,
+                )
+            else:
+                log.error(
+                    "Coqui text-splitting import failed (%s) — spacy missing or "
+                    "broken in the sidecar venv; retrying WITHOUT sentence "
+                    "splitting (enable_text_splitting=False). Reinstall the "
+                    "sidecar requirements to restore text-splitting.",
+                    e,
+                )
+            result = tts_model.inference(
+                text=text,
+                language=language,
+                gpt_cond_latent=gpt_cond_latent,
+                speaker_embedding=speaker_embedding,
+                enable_text_splitting=False,
+                **inference_settings,
+            )
         sample_rate = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
         return result["wav"], sample_rate
 
@@ -4605,14 +4785,16 @@ class QwenEngine(Engine):
         # Claimed at entry / released in a finally; `maybe_free_idle_design`
         # bails while `.busy`. Thread-safe (#1917) — see `InFlightCounter`: a
         # plain int here can silently lose a decrement and disable this
-        # engine's eviction for the rest of the process lifetime. The
-        # airtight backstop is still the re-ensure under `_synth_lock` guarding
-        # design_voice's DESIGN forward (the `_ensure_design_loaded()` +
-        # `_ensure_base_loaded()` pair inside that `with self._synth_lock:`
-        # block) — this guard just stops the wasteful, racy free there. The
-        # AUDITION forward's re-ensure moved OUTSIDE `_synth_lock` (#1975, plan
-        # 273 T7/T8): a concurrent /unload winning that narrow gap now raises
-        # loudly instead of being silently absorbed by an in-lock re-ensure.
+        # engine's eviction for the rest of the process lifetime. This guard
+        # just stops the wasteful, racy free during an in-flight design; it is
+        # NOT a backstop against a concurrent explicit /unload landing mid-
+        # design — both the DESIGN forward (#2021) and the AUDITION forward
+        # (#1975, plan 273 T7/T8) now capture `_design`/`_base` UNDER
+        # `_synth_lock` and raise a typed `RuntimeError` if that race is lost,
+        # rather than silently re-pulling the model (the DESIGN forward's
+        # `_ensure_design_loaded()` alone is the heaviest weights pull in this
+        # engine, ~4-5 GB — re-pulling it while already holding `_synth_lock`
+        # was the residual defect #2021 closed).
         self._design_in_flight = InFlightCounter()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
@@ -5570,20 +5752,43 @@ class QwenEngine(Engine):
                     # Serialise the GPU forwards against any concurrent synth/design — see
                     # `_synth_lock` in __init__ (the Base model isn't thread-safe).
                     with self._synth_lock:
-                        # Re-ensure the models UNDER the lock. Every in-place nuller of
-                        # `_design`/`_base` (the idle watchdog, a concurrent
-                        # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                        # so a model ensured before we took the lock may have been freed
-                        # in the gap. Re-ensuring here is the airtight backstop against
-                        # "'NoneType' object has no attribute 'generate_voice_design'".
-                        # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                        # `_synth_lock`, so this can't deadlock.
-                        self._ensure_design_loaded()
-                        self._ensure_base_loaded()
+                        # Capture UNDER the lock instead of silently re-ensuring
+                        # (#2021 — extends #1975's AUDITION-forward pattern to
+                        # this, the heaviest forward in the process:
+                        # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                        # model, the longest possible Stop-blocking pull in
+                        # QwenEngine. Every in-place nuller of `_design`/`_base`
+                        # (the idle watchdog, a concurrent /synthesize's
+                        # unload_design, a full /unload) holds `_synth_lock`, so
+                        # a model ensured before we took the lock may have been
+                        # freed in the gap — raise loud instead of silently
+                        # absorbing that race with an in-lock re-pull that would
+                        # itself hold `_synth_lock` for the whole cold load.
+                        design = self._design
+                        if design is None:
+                            # see #2070 — `unload_design()` is called
+                            # unconditionally from synthesize()/
+                            # synthesize_batch() (not gated on
+                            # `_design_in_flight`), so an ordinary render of
+                            # another voice can land here mid-design, and the
+                            # gap this raise closes spans a full 0.6B cold
+                            # load (seconds to tens of seconds), not a narrow
+                            # Stop-only race.
+                            raise RuntimeError(
+                                "Qwen VoiceDesign model was unloaded before "
+                                "this design could render — reload it and "
+                                "retry."
+                            )
+                        base = self._base
+                        if base is None:
+                            raise RuntimeError(
+                                "Qwen Base model was unloaded before this "
+                                "design could render — reload it and retry."
+                            )
                         # 1. design a reference clip from the persona instruction.
                         _phase("designing")
                         _t = time.perf_counter()
-                        ref_wavs, ref_sr = self._design.generate_voice_design(
+                        ref_wavs, ref_sr = design.generate_voice_design(
                             text=ref_text, language=lang, instruct=instruct
                         )
                         design_fwd_ms = (time.perf_counter() - _t) * 1000.0
@@ -5592,7 +5797,7 @@ class QwenEngine(Engine):
                         # 2. distil into a reusable clone prompt on the Base model.
                         _phase("distilling")
                         _t = time.perf_counter()
-                        prompt = self._base.create_voice_clone_prompt(
+                        prompt = base.create_voice_clone_prompt(
                             ref_audio=(ref_audio, ref_sr), ref_text=ref_text
                         )
                         distil_ms = (time.perf_counter() - _t) * 1000.0
@@ -5714,6 +5919,24 @@ class QwenEngine(Engine):
         lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
         audition = (audition_text or ref_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
+        # Re-ensure BEFORE the lock (#2021, mirrors design_voice/mint_variant):
+        # `_ensure_base_loaded` can run a full cold load (unbounded — a real
+        # weights pull), and `/unload` also takes `_synth_lock`, so doing that
+        # pull INSIDE the lock would hold a Stop off for its whole duration.
+        # The raise-vs-silent-reload split across these #2021/#2022 sites does
+        # NOT track "has a `withTtsRetry` net" — that net only exists on the
+        # Node side for synthesize()/synthesize_batch()
+        # (server/src/tts/synthesise-chapter.ts), yet design_voice's design-
+        # and audition-forward and mint_variant's 1.7B anchoring forward all
+        # raise despite having none either. The real discriminator is whether
+        # the site already had a pre-ensure BEFORE #2021: sites that did
+        # (design_voice's two forwards, mint_variant's 1.7B forward) keep
+        # raising on a losing race; sites that never had one — clone_voice
+        # here, and mint_variant's distil/audition phases below — keep the
+        # old "reload and proceed" shape. Keep it here too: the in-lock
+        # re-ensure below is a cheap no-op on the (overwhelming) common path
+        # and only pays the cold-reload cost in the rare gap.
+        self._ensure_base_loaded(device=device)
         with self._synth_lock:
             self._ensure_base_loaded(device=device)
             # 1. distil the caller's clip into a reusable clone prompt.
@@ -5842,7 +6065,18 @@ class QwenEngine(Engine):
             # Phase boundary: Kokoro-evict + (cold) 1.7B-Base load above.
             load_ms = (time.perf_counter() - t0) * 1000.0
             with self._synth_lock:
-                self._ensure_base17_for_mint(device=device)
+                # Capture UNDER the lock instead of silently re-ensuring (#2021,
+                # #2022 — matches design_voice's audition-forward / #1975
+                # pattern): a concurrent `/unload {model:'1.7b'}` winning the
+                # narrow gap between the pre-ensure above and this acquire must
+                # raise the typed error below, not a bare AttributeError from
+                # dereferencing `self._base17` directly (#2022).
+                base17 = self._base17
+                if base17 is None:
+                    raise RuntimeError(
+                        "Qwen 1.7B-Base model was unloaded before this mint's "
+                        "anchoring forward started — reload it and retry."
+                    )
                 rc = base_item.ref_code
                 # Move onto the card the resident 1.7B is ACTUALLY on, read off
                 # the wrapper itself (published atomically with the model at load
@@ -5850,13 +6084,13 @@ class QwenEngine(Engine):
                 # shared engine-wide `self._device`, which a concurrent
                 # design/mint admitted to another card can clobber in the
                 # unlocked gap between load and this forward (#1730 gap 1).
-                rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
+                rc = rc.to(base17.device) if hasattr(rc, "to") else rc
                 _t = time.perf_counter()
                 _phase("anchoring")
-                ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+                ref_wavs, ref_sr = base17.model.speech_tokenizer.decode(
                     [{"audio_codes": rc}]
                 )
-                icl = self._base17.create_voice_clone_prompt(
+                icl = base17.create_voice_clone_prompt(
                     ref_audio=(ref_wavs[0], ref_sr), ref_text=ref_text
                 )
                 icl = icl if isinstance(icl, list) else [icl]
@@ -5869,6 +6103,20 @@ class QwenEngine(Engine):
         # --- 0.6B phase: distil the emotion clip into a variant clone prompt ---
         _phase("distilling")
         _t = time.perf_counter()
+        # Re-ensure BEFORE the lock (#2021 — same rationale as clone_voice):
+        # the split here isn't "has a `withTtsRetry` net" (mint_variant has
+        # none on the Node side, same as clone_voice) — it's whether THIS
+        # site already had a pre-ensure before #2021. This distil phase (and
+        # the audition phase ~40 lines below) never did, so both keep "reload
+        # and proceed" (silent in-lock re-ensure) rather than raise-on-race,
+        # while still moving the common-case cold load out from under
+        # `_synth_lock`. Note the consequence within this one call: the 1.7B
+        # anchoring forward above (around line 5931) already had a pre-ensure
+        # and so RAISES on a losing race, while this distil phase and the
+        # audition phase below silently reload on the same shape of race —
+        # one `mint_variant` call runs two different policies back to back;
+        # don't be surprised by it.
+        self._ensure_base_loaded()
         with self._synth_lock:
             self._ensure_base_loaded()
             prompt = self._base.create_voice_clone_prompt(
@@ -5911,6 +6159,9 @@ class QwenEngine(Engine):
         # shipped audio; re-run by re-auditioning).
         _phase("rendering")
         _t = time.perf_counter()
+        # Re-ensure BEFORE the lock (#2021 — same rationale as the distil
+        # phase above): reload-and-proceed, not raise-on-race.
+        self._ensure_base_loaded()
         with self._synth_lock:
             self._ensure_base_loaded()
             wavs, sr = self._base.generate_voice_clone(
@@ -5999,7 +6250,9 @@ class QwenEngine(Engine):
         subsequent calls are cache hits.
 
         Requires `_base17` to already be loaded before calling (the caller is
-        responsible via `_ensure_base17_loaded()`).
+        responsible via `_ensure_base17_loaded()`); raises a typed
+        `RuntimeError` (#2022) rather than an `AttributeError` if a concurrent
+        `/unload` won the gap between that ensure and this call.
 
         Language is inherited from the base voice's manifest — the same language
         used for the 0.6B path."""
@@ -6047,17 +6300,35 @@ class QwenEngine(Engine):
         base_items = base_items if isinstance(base_items, list) else [base_items]
         base_item = base_items[0]
 
+        # Capture `_base17` into a local and guard it (#2022): the docstring's
+        # "requires _base17 already loaded" contract is enforced by the
+        # CALLER's `_ensure_base17_loaded()`, but this method runs OUTSIDE
+        # `_synth_lock` (synthesize()'s 1.7B path, synthesize_batch()'s 1.7B
+        # loop), so a concurrent `/unload {model:'1.7b'}` can land in the
+        # unguarded window between that ensure and this call and null
+        # `_base17` first. Without this guard the derefs below raised a bare
+        # "'NoneType' object has no attribute 'device'" instead of the same
+        # typed, actionable `RuntimeError` #1975 established elsewhere.
+        base17 = self._base17
+        if base17 is None:
+            # Generic "render", not "batch render": this method is shared by
+            # synthesize()'s single-utterance 1.7B path AND
+            # synthesize_batch()'s 1.7B loop.
+            raise RuntimeError(
+                "Qwen 1.7B-Base model was unloaded before this render "
+                "could derive the voice prompt — reload it and retry."
+            )
         # Decode ref_code through the 1.7B speech_tokenizer to get a waveform,
         # then re-derive a 1.7B-native clone prompt (mirrors mint_variant ~1831-1836).
         # Move onto the resident 1.7B's OWN card (read off the wrapper, immune to
         # a concurrent clobber of the shared `self._device` — #1730 gap 1; see
         # mint_variant's matching forward for the full rationale).
         rc = base_item.ref_code
-        rc = rc.to(self._base17.device) if hasattr(rc, "to") else rc
-        ref_wavs, ref_sr = self._base17.model.speech_tokenizer.decode(
+        rc = rc.to(base17.device) if hasattr(rc, "to") else rc
+        ref_wavs, ref_sr = base17.model.speech_tokenizer.decode(
             [{"audio_codes": rc}]
         )
-        prompt = self._base17.create_voice_clone_prompt(
+        prompt = base17.create_voice_clone_prompt(
             ref_audio=(ref_wavs[0], ref_sr), ref_text=base_item.ref_text
         )
 
@@ -6133,8 +6404,13 @@ class QwenEngine(Engine):
                     # can still win the narrow gap between the re-ensure
                     # above and this acquire — the only window left once the
                     # cold load itself is out of the lock. Loud and typed.
+                    # #2022: friendly name, not the raw attribute — every
+                    # OTHER typed message in this engine says "Qwen Base" /
+                    # "Qwen 1.7B-Base"; this one used to leak `_base` verbatim
+                    # ("Qwen _base model…"), the one outlier.
+                    friendly = {"_base": "Base", "_base17": "1.7B-Base"}.get(base_attr, base_attr)
                     raise RuntimeError(
-                        f"Qwen {base_attr} model was unloaded before this "
+                        f"Qwen {friendly} model was unloaded before this "
                         "render started — reload it and retry."
                     )
                 wavs, sr = model.generate_voice_clone(
@@ -7366,7 +7642,10 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
             return (None, None, None)
         allocated = torch.cuda.memory_allocated() / 1_000_000.0
         reserved = torch.cuda.memory_reserved() / 1_000_000.0
-        total = torch.cuda.get_device_properties(0).total_memory / 1_000_000.0
+        # #1997 — `allocated`/`reserved` above already read the CURRENT device
+        # (torch's no-arg default); `total` must match, or the ratio this feeds
+        # to the recycle watchdog mixes two different cards on a multi-GPU box.
+        total = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0
         return (allocated, reserved, total)
     except Exception:
         return (None, None, None)
@@ -8884,7 +9163,12 @@ def debug_memory() -> dict[str, Any]:
                 "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
                 # total card size — `reserved_mb` crossing this is the spill line
                 # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
-                "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
+                # #1997 review (M1) — `allocated_mb`/`reserved_mb` above already
+                # read the CURRENT device (no-arg calls); `total_mb` must match,
+                # or an operator sees two different totals disagree between this
+                # endpoint and /health once _cuda_vram_mb() was fixed to be
+                # current-device-consistent but this sibling reading wasn't.
+                "total_mb": torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1_000_000.0,
             }
             # side-11 leak attribution: CUDA PINNED host memory (cudaHostAlloc
             # staging buffers for H2D/D2H copies). torch's caching host

@@ -11,3 +11,10 @@ audiobook-workspace/
 package-lock.json
 server/package-lock.json
 src/lib/api-types.ts
+
+# Hand-authored publish source for the on-box register's live view. The file is
+# authored to be published verbatim, not to match repo JS/CSS style — and
+# reformatting would break scripts/check-onbox-register.mjs, whose element-level
+# patterns (`<div class="n owed">NN</div>`, `<span class="num">A1</span>`) do not
+# survive Prettier splitting an element's text across lines.
+docs/testing/onbox-acceptance-register-live-view.html

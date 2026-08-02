@@ -13,6 +13,8 @@ import {
   checkMojibake,
   parseMojibakeAllowlist,
   formatHonouredEcho,
+  findConflictMarkers,
+  checkConflictMarkers,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -746,6 +748,156 @@ test('the CLI echoes an honoured marker in docs/release-notes-next.md on stdout'
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
     assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2018 — the gate must catch unresolved git conflict markers: not
+// hypothetical, three of them landed inside RELEASE_NOTES.md's own v1.15.0
+// section on PR #2010 with every other gate green.
+const CONFLICT_FIXTURE =
+  '- **Line before.**\n' +
+  '<<<<<<< HEAD\n' +
+  '- **Ours.**\n' +
+  '=======\n' +
+  '- **Theirs.**\n' +
+  '>>>>>>> origin/main\n' +
+  '- **Line after.**\n';
+
+test('findConflictMarkers finds the outer <<<<<<< / >>>>>>> pair with 1-indexed line numbers', () => {
+  const hits = findConflictMarkers(CONFLICT_FIXTURE);
+  assert.equal(hits.length, 2);
+  assert.equal(hits[0].line, 2);
+  assert.equal(hits[0].text, '<<<<<<< HEAD');
+  assert.equal(hits[1].line, 6);
+  assert.equal(hits[1].text, '>>>>>>> origin/main');
+});
+
+test('findConflictMarkers does not flag a bare "=======" markdown setext rule', () => {
+  // A setext heading underline, with no <<<<<<< / >>>>>>> anywhere nearby —
+  // the property #2018 explicitly calls out as a false-positive risk to avoid.
+  const text = 'Title\n=======\n\nSome prose.\n';
+  assert.deepEqual(findConflictMarkers(text), []);
+});
+
+test('findConflictMarkers finds nothing in ordinary release-note prose', () => {
+  assert.deepEqual(findConflictMarkers('- **Ships a fix.** Details here.\n'), []);
+});
+
+test('checkConflictMarkers fails and names the file and line numbers', () => {
+  const res = checkConflictMarkers(CONFLICT_FIXTURE, 'RELEASE_NOTES.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /RELEASE_NOTES\.md/);
+  assert.match(res.reason, /2 unresolved git conflict marker/);
+  assert.match(res.reason, /line\(s\) 2, 6/);
+  assert.match(res.reason, /no allowlist/);
+});
+
+test('checkConflictMarkers passes on clean text', () => {
+  assert.equal(checkConflictMarkers('Clean release notes.\n', 'RELEASE_NOTES.md').ok, true);
+});
+
+// The CLI wiring itself: a marker in EITHER gated file fails the run and
+// names the file + line, and — the property #2018 exists for — this fires
+// even though the file's version heading and mojibake are both otherwise
+// clean, i.e. no other check happens to catch it first.
+test('the CLI fails on an unresolved conflict marker in RELEASE_NOTES.md, naming the file and line', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(
+      resolve(dir, 'RELEASE_NOTES.md'),
+      `# v1.15.0\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runGate(dir, ['v1.15.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /RELEASE_NOTES\.md contains 2 unresolved git conflict marker/);
+    assert.match(out.stderr, /line\(s\) 4, 8/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI fails on an unresolved conflict marker in docs/release-notes-next.md', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md contains 2 unresolved git conflict marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2025 — the echo's ORDERING relative to its failure branch was untested,
+// and ordering is the whole property: PR #2007 replaced fence-awareness with
+// "an armed marker is never silent," which only holds if the [allow] line
+// prints even when the run goes on to fail. Both prior CLI spawn tests
+// (above) only ever exercised a PASSING run, so a `process.exit(1)` moved to
+// sit BEFORE the echo write was invisible to the whole suite — verified
+// during the PR #2007 re-review: moving both echo blocks after their failure
+// branches left the suite at 81 pass / 0 fail while genuinely silencing the
+// echo on every failing run. This fixture — an armed CAFÉ™ marker plus a
+// SEPARATE, unallowlistable standalone mangle — forces exactly that
+// combination: the gate still fails (the standalone span), but the marker it
+// honoured along the way must still be echoed.
+test('the CLI echoes an honoured marker even on a run that still fails overall', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.0\n\n` +
+        `- Ships with a ${CAFE} badge.\n` +
+        `- A ${MOJIBAKE_EM_DASH} standing alone.\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
+    assert.match(out.stderr, /1 double-UTF-8-encoded mojibake span/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI passes on a clean RELEASE_NOTES.md with no conflict markers', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// PR #2049 review, F5 — the conflict check (#2018) was a NEW early exit added
+// in this same PR, and it originally ran BEFORE the mojibake echo: a target
+// carrying both a conflict marker and an armed `allow` marker died naming
+// only the conflict, with the armed marker never echoed that run — silently
+// regressing #1990's "an armed marker is never silent" property for exactly
+// the files it's meant to cover. The fix computes the mojibake check (and
+// prints its echo) before EITHER failure branch, so the echo survives
+// regardless of which check is what ultimately fails the run.
+test('an armed marker is still echoed even when a conflict marker is what fails the run', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.0\n\n` +
+        `- Ships with a ${CAFE} badge.\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md contains 2 unresolved git conflict marker/);
+    assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

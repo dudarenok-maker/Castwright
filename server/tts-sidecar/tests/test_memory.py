@@ -972,6 +972,70 @@ def test_cuda_vram_mb_per_device_reads_per_index_reserved_and_properties(monkeyp
     }
 
 
+def test_cuda_vram_mb_reads_current_device_total_not_device_zero(monkeypatch):
+    """#1997 — `_cuda_vram_mb()`'s `allocated`/`reserved` reads are deliberately
+    current-device-only (no-arg `memory_allocated()`/`memory_reserved()` calls —
+    see this function's own docstring and `_cuda_vram_mb_per_device`'s, which
+    calls that scoping out as intentional). But `total` used to come from
+    `get_device_properties(0)` — device 0, HARDCODED, not the current device —
+    so on a box where `torch.cuda.current_device()` isn't 0 the function mixed
+    one card's allocated/reserved with a DIFFERENT card's total. Patches real
+    `torch.cuda` attributes (same technique as the per-device test above,
+    never a fake module) with `current_device()` returning 1: `total` must
+    come from device 1's properties, not device 0's."""
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda: 5_000_000_000)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda: 7_500_000_000)
+    total_by_index = {0: 8_188_000_000, 1: 16_302_000_000}
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda i: types.SimpleNamespace(total_memory=total_by_index[i]),
+    )
+
+    allocated, reserved, total = main._cuda_vram_mb()
+
+    assert allocated == pytest.approx(5000.0)
+    assert reserved == pytest.approx(7500.0)
+    assert total == pytest.approx(16302.0)  # device 1's total, NOT device 0's 8188
+
+
+def test_debug_memory_cuda_total_mb_reads_current_device(monkeypatch):
+    """#1997 review (M1) — `/debug/memory`'s inline `cuda` block had the exact
+    same defect shape as `_cuda_vram_mb()` above: `allocated_mb`/`reserved_mb`
+    already read torch's CURRENT device (no-arg calls), but `total_mb` came
+    from `get_device_properties(0)` — hardcoded, not the current device. Left
+    unfixed, `_cuda_vram_mb()`'s fix would make `/health.vram_total_mb`
+    current-device-consistent while this sibling reading still reported device
+    0's total, so an operator diagnosing a multi-GPU box would see the two
+    endpoints disagree. Same patch-real-`torch.cuda`-attributes technique as
+    the test above, driven through the real endpoint via `TestClient`."""
+    import torch
+
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda: 5_000_000_000)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda: 7_500_000_000)
+    total_by_index = {0: 8_188_000_000, 1: 16_302_000_000}
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda i: types.SimpleNamespace(total_memory=total_by_index[i]),
+    )
+
+    with TestClient(main.app) as client:
+        r = client.get("/debug/memory")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cuda"]["total_mb"] == pytest.approx(16302.0)  # device 1's, NOT device 0's 8188
+
+
 def test_qwen_unload_waits_for_synth_lock(monkeypatch):
     """unload() must acquire `_synth_lock` before nulling `_base`, so it can't
     drop the model out from under an in-flight forward. Without the lock the

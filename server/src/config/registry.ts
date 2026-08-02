@@ -375,6 +375,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'medium',
   },
   {
+    key: 'qa.asr.model',
+    env: 'ASR_MODEL',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) model',
+    help: 'faster-whisper model size/name (default "base"). Cap at "base" on an 8 GB card — a larger model competes with synth for VRAM on ASR_DEVICE=cuda. Changing the model restarts the sidecar.',
+    type: 'string',
+    default: 'base',
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
     key: 'qa.speaker.autoRepair',
     env: 'SEG_SPK_AUTO_REPAIR',
     group: 'qa-gates',
@@ -618,6 +628,16 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Master on/off for the Qwen output-degeneracy guard (#1594). When on (default), each Qwen Base synth checks that a substantial line rendered a plausible amount of audio (≈20 ms per speakable character); an implausibly short render triggers one in-process Base-model reload + retry, then a supervised sidecar recycle, rather than silently shipping near-empty audio. Turn off only to disable that protection (e.g. to isolate a suspected false-positive on unusual text) — the detection thresholds themselves are fixed, not tunable here. Changing this requires a sidecar restart.',
     type: 'boolean',
     default: true, // ← QWEN_DEGEN_GUARD default in tts-sidecar/main.py (_QWEN_DEGEN_GUARD_ENABLED, _parse_bool default=True)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
+    key: 'tts.coqui.degenGuard',
+    env: 'COQUI_DEGEN_GUARD',
+    group: 'tts-engine',
+    label: 'Coqui degeneracy guard',
+    help: 'Master on/off for the Coqui XTTS output-degeneracy guard (#2026). Same detection idea as the Qwen guard above (a substantial line must render a plausible amount of audio, ≈20 ms per speakable character); an implausibly short render retries once with a fresh stochastic draw — no model reload/recycle, since XTTS has no fixed seed and a degenerate render here is a per-call sampling fluke, not a corrupted resident model. Turn off only to disable that protection (e.g. to isolate a suspected false-positive on unusual text) — the detection thresholds themselves are fixed, not tunable here. Changing this requires a sidecar restart.',
+    type: 'boolean',
+    default: true, // ← COQUI_DEGEN_GUARD default in tts-sidecar/main.py (_COQUI_DEGEN_GUARD_ENABLED, _parse_bool default=True)
     apply: 'restart-sidecar', risk: 'medium',
   },
   {

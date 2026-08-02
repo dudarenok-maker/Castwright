@@ -123,6 +123,18 @@ export interface UiState {
       with no designed voice; the voice-readiness gate modal renders instead
       of (before) the tier prompt. Transient. */
   voiceReadinessGate: { bookId: string } | null;
+  /** Plan 276 (fs-cast-readiness) — set when `startGenerationFlow` finds a
+      cloned voice that will not resolve on its routed engine (revoked,
+      wrong engine, a terminal derive failure, or a missing master/transcript
+      it needs to derive). Fires independently of the voice-readiness gate
+      above and of the Qwen tier prompt — see `start-generation-flow.ts`'s
+      ordering comment. Transient. */
+  cloneReadinessGate: { bookId: string } | null;
+  /** Plan 276 — true while `startGenerationFlow` is awaiting its
+      `fetchVoiceLibrary` round-trip. The "Approve cast & start generating" /
+      "Resume generation" CTAs disable on this so a slow fetch can't be
+      double-clicked into two starts. */
+  startGenerationPending: boolean;
 }
 
 const initialState: UiState = {
@@ -151,6 +163,8 @@ const initialState: UiState = {
   rebaselineBookId: null,
   startGenPrompt: null,
   voiceReadinessGate: null,
+  cloneReadinessGate: null,
+  startGenerationPending: false,
 };
 
 export const uiSlice = createSlice({
@@ -279,6 +293,20 @@ export const uiSlice = createSlice({
     },
     closeVoiceReadinessGate: (s) => {
       s.voiceReadinessGate = null;
+    },
+    /* Plan 276 — opened by `startGenerationFlow` instead of the tier prompt
+       when a cloned voice would not resolve on its routed engine. Mirrors
+       `openVoiceReadinessGate` above. */
+    openCloneReadinessGate: (s, a: PayloadAction<{ bookId: string }>) => {
+      s.cloneReadinessGate = a.payload;
+    },
+    closeCloneReadinessGate: (s) => {
+      s.cloneReadinessGate = null;
+    },
+    /* Plan 276 — toggled around `startGenerationFlow`'s `fetchVoiceLibrary`
+       await so the CTA can disable while in flight. */
+    setStartGenerationPending: (s, a: PayloadAction<boolean>) => {
+      s.startGenerationPending = a.payload;
     },
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;

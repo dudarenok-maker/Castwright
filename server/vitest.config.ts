@@ -1,4 +1,6 @@
 import { defineConfig } from 'vitest/config';
+import type { Reporter, TestCase } from 'vitest/node';
+import { isAgent } from 'std-env';
 
 /* Server-side test harness. Node environment (no jsdom) — most suites are
    pure helpers + supertest against Express routers. Tests that shell out
@@ -61,6 +63,63 @@ const lowConcurrency =
   process.env.LOW_CONCURRENCY === '1' || process.env.LOW_CONCURRENCY === 'true';
 const maxWorkers = lowConcurrency ? 1 : 2;
 
+/* ops-46 (#2028) — retry:1 below can turn a genuine red-phase test green: for
+   a test asserting on module-level mutable state keyed by a fixed string
+   (a Map/Set/counter at module scope, or fixture state on disk keyed by a
+   fixed path), attempt 1 fails and leaks its mutation; attempt 2 reads state
+   attempt 1 already touched and passes for the wrong reason. See
+   CONTRIBUTING.md's "When you ship a change" section (the "#2028" note) for
+   the full writeup and the `--retry=0` verification convention this
+   reporter exists to surface.
+
+   #2028's Acceptance offered two deliberate options, Narrow or Global — this
+   PR ships **Narrow**, not neither:
+   - Narrow: server/src/workspace/file-lock.test.ts's `describe('withKeyLock',
+     { retry: 0 }, ...)` — withKeyLock's module-level `chains` Map is exactly
+     the shape #2028 describes, and that file is where the hazard was found
+     landing #2001. A red-phase test against that state is never silently
+     rescued by the suite-wide retry.
+   - Global was surveyed rather than assumed, and rejected on the evidence
+     AS OF 2026-08-01: surveyed via `npx vitest run --retry=0` against this
+     exact suite on unmodified `main` — it reddened `src/routes/voices.test.ts`
+     ("writes ONLY to the anchor book's series..."), deterministically, on
+     the FIRST attempt, every time. That test was green in every gating run
+     purely because retry:1 papered over it, so dropping retry suite-wide
+     would have reddened every lane's CI on that file.
+     **That specific blocker is now discharged**: #2046 root-caused it as
+     test-fixture pollution (three describes cleaned two of the three books
+     their workspace-wide writes touched — NOT a production scope leak) and
+     fixed it, so that file is green under `--retry=0`. This does not by
+     itself make Global safe: the 2026-08-01 survey named one red file, and
+     nothing has re-surveyed the suite since. Re-run the survey before
+     re-opening the Narrow-vs-Global call — do not read the discharged
+     blocker as a green light.
+   retryHazardReporter below is additive on top of Narrow, not a replacement
+   for it: Narrow covers file-lock.test.ts specifically; every OTHER file
+   still runs under the suite-wide retry:1, and for those, any test that
+   fails on attempt 1 and only passes after a retry prints a `[retry-hazard]`
+   line below, naming the file and test, so it can no longer pass silently
+   there either. A human then re-runs it with `--retry=0` to judge whether
+   it's a genuine transient (route through quarantinedIt,
+   docs/testing/flaky-register.md) or a red-phase test the retry hid (this
+   issue's failure mode) — exactly the survey the "drop retry globally"
+   option needed, now running on every CI invocation instead of once by
+   hand. */
+export const retryHazardReporter: Reporter = {
+  onTestCaseResult(testCase: TestCase) {
+    const diagnostic = testCase.diagnostic();
+    if (diagnostic && diagnostic.retryCount > 0 && testCase.result().state === 'passed') {
+      console.warn(
+        `[retry-hazard] ${testCase.module.moduleId} :: "${testCase.fullName}" failed on its ` +
+          `first attempt and only passed after ${diagnostic.retryCount} retry(ies). If this test ` +
+          'asserts on module-level mutable state, retry:1 may be hiding a genuine red-phase ' +
+          'failure (#2028) — re-run with --retry=0 to check. See CONTRIBUTING.md "When you ' +
+          'ship a change" (the "#2028" note).',
+      );
+    }
+  },
+};
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -77,6 +136,15 @@ export default defineConfig({
       'dist/**',
       'src/test-setup.ts',
       'src/**/*.golden.test.ts',
+      /* PR #2049 review, Finding 6 — vitest-retry-hazard-reporter.test.ts's
+         runVitestOnFixture() writes throwaway wire-test fixtures under this
+         directory and deletes them in a `finally` block; a kill between
+         write and cleanup could leave one behind. Excluding it here means a
+         surviving `__wire-fixtures__/*.test.ts` is structurally invisible to
+         THIS suite regardless — `vitest.config.wire-fixtures.ts` is the only
+         config that ever includes it, and only that config is what
+         runVitestOnFixture() spawns against. */
+      'src/__wire-fixtures__/**',
       ...SLOW_FILES_TO_EXCLUDE,
     ],
     testTimeout: 15_000,
@@ -126,5 +194,35 @@ export default defineConfig({
        stays — this subprocess-heavy suite still needs fork isolation. */
     maxWorkers,
     retry: 1,
+    // ops-46 (#2028) — see retryHazardReporter above for why retry:1 stays
+    // and what this adds on top of it. Vitest only auto-selects its OWN
+    // built-in reporters when the resolved `reporters` array is EMPTY —
+    // setting one explicitly, unconditionally, silently overrode TWO
+    // separate auto-selections (PR #2049 review, Findings 1 and 4):
+    //   1. The base reporter: vitest's own resolver pushes
+    //      `[isAgent ? 'agent' : 'default', {}]` — 'agent' under an AI
+    //      coding agent (std-env's isAgent, true here under CLAUDECODE —
+    //      also Cursor, Replit, Codex, etc.), 'default' otherwise.
+    //      Hardcoding 'default' in both ternary arms below silently
+    //      downgraded every agent-driven local run.
+    //   2. 'github-actions' (inline PR annotations + the "Flaky Tests"
+    //      $GITHUB_STEP_SUMMARY panel), appended only when GITHUB_ACTIONS
+    //      is 'true'; verify.yml runs `vitest run` directly in server/, so
+    //      suppressing it silenced that panel on every CI run of this
+    //      suite. Reproduced against installed vitest 4.1.9: with an empty
+    //      `reporters` config and GITHUB_ACTIONS=true, both an inline
+    //      `::error file=…,line=…::…` annotation and a rendered "Flaky
+    //      Tests" summary appear; with the old unconditional
+    //      `['default', retryHazardReporter]`, neither did.
+    // Mirroring both selections below keeps this config's behaviour
+    // identical to what an EMPTY `reporters` array would already do, plus
+    // retryHazardReporter layered on top — never a downgrade from it. No
+    // sibling config has this bug: vitest.config.slow.ts,
+    // vitest.config.golden.ts and the root frontend config all leave
+    // `reporters` unset.
+    reporters:
+      process.env.GITHUB_ACTIONS === 'true'
+        ? [isAgent ? 'agent' : 'default', 'github-actions', retryHazardReporter]
+        : [isAgent ? 'agent' : 'default', retryHazardReporter],
   },
 });

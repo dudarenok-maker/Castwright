@@ -356,38 +356,49 @@ def test_design_voice_writes_null_voice_uuid_when_absent(fake_qwen_runtime) -> N
 
 # ── design-model race / idle-watchdog (2026-06-02 regression) ────────────
 
-def test_design_voice_survives_design_model_freed_in_the_gap(
+def test_design_voice_design_forward_raises_when_design_freed_in_the_gap(
     fake_qwen_runtime, monkeypatch
 ) -> None:
     """The idle watchdog (or a concurrent /synthesize's unload_design) can null
     `_design` in the unguarded window between `_ensure_design_loaded()` and the
-    `_synth_lock` forward. design_voice used to crash there with
-    "'NoneType' object has no attribute 'generate_voice_design'". The fix
-    re-ensures the model UNDER the lock, so the design completes regardless of a
-    free landing in the gap.
+    `_synth_lock` forward. design_voice used to crash there with a bare
+    "'NoneType' object has no attribute 'generate_voice_design'" AttributeError.
+
+    #2021 SUPERSEDES this test's original behaviour: the DESIGN forward used to
+    silently RE-ENSURE the model under the lock (recovering transparently) —
+    but that re-ensure could itself pull the ~4-5 GB VoiceDesign model while
+    ALREADY holding `_synth_lock`, the worst-possible-case Stop-blocking pull
+    in this engine. It now captures `_design` under the lock and raises the
+    typed "Qwen VoiceDesign model was unloaded" RuntimeError instead, matching
+    #1975's AUDITION-forward pattern (see the sibling test below).
 
     We simulate the free deterministically (no threads): wrap `_ensure_base_loaded`
-    — which runs in that gap — to null `_design` on its FIRST call only (the
-    pre-lock ensure), leaving the re-ensure inside the lock to reload it."""
+    — which runs in that gap, right after `_ensure_design_loaded()` — to null
+    `_design` on its FIRST call only (the pre-lock ensure).
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if design is None: raise RuntimeError(...)` guard in the DESIGN-forward
+    block. Without it this instead crashes with an AttributeError on
+    `None.generate_voice_design`."""
     engine = fake_qwen_runtime["engine"]
     orig_ensure_base = engine._ensure_base_loaded
     fired = {"n": 0}
 
     def racing_ensure_base(device=None) -> None:
         orig_ensure_base(device=device)
-        if fired["n"] == 0:  # only the pre-lock ensure, not the in-lock re-ensure
+        if fired["n"] == 0:  # only the pre-lock ensure
             fired["n"] += 1
             engine._design = None  # a watchdog free lands in the gap
 
     monkeypatch.setattr(engine, "_ensure_base_loaded", racing_ensure_base)
 
-    # Must NOT raise AttributeError: 'NoneType' … generate_voice_design.
-    result = engine.design_voice("hart", "a witty teenage boy", "English", None)
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen VoiceDesign model was unloaded before this design could render",
+    ):
+        engine.design_voice("hart", "a witty teenage boy", "English", None)
 
-    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
-    assert result.sample_rate == 24000
-    assert fired["n"] == 1  # the model really was nulled in the gap …
-    assert engine._design is not None  # … and re-ensured under the lock
+    assert fired["n"] == 1  # the model really was nulled in the gap
 
 
 def test_unload_is_not_blocked_by_a_cold_base_load_during_design_audition(
@@ -467,12 +478,18 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_design_audition(
 
     stop = threading.Thread(target=engine.unload, daemon=True)
     stop.start()
-    stop.join(0.5)
-    assert not stop.is_alive(), (
-        "unload() was blocked behind the parked audition-forward Base load"
-    )
-
-    release.set()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked audition-forward Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — otherwise it stays wedged in `release.wait(5)` and a
+        # later test can trip over its leaked side effects (a false red that
+        # misdirects a bisect of the real failure). See finding 5, PR #2064
+        # review.
+        release.set()
     t.join(5)
     assert not t.is_alive(), "design_voice thread did not finish within 5s"
     assert design_errors == [], f"design_voice raised: {design_errors!r}"
@@ -494,19 +511,22 @@ def test_design_voice_audition_raises_runtime_error_when_base_unloaded_in_gap(
     `None`.
 
     Simulates the gap deterministically by counting `_ensure_base_loaded`
-    calls: a single `design_voice` run makes exactly THREE (the pre-`_synth_lock`
-    design-forward ensure at :5564, the in-lock design-forward re-ensure at
-    :5582, and the pre-audition-lock ensure this issue hoisted at :5674). The
-    first two run for real (via the original bound method) so the design +
-    distil phase completes normally and populates a real `_base`; the third —
-    the audition's hoisted ensure — nulls `_base` right after it returns,
-    standing in for a concurrent `/unload` winning that exact gap.
+    calls: a single `design_voice` run makes exactly TWO post-#2021 (the
+    pre-`_synth_lock` design-forward ensure at :5564, and the pre-audition-lock
+    ensure #1975 hoisted at :5674 — #2021 REMOVED the in-lock design-forward
+    re-ensure this test originally counted as a third call; see
+    `test_design_voice_design_forward_raises_when_design_freed_in_the_gap`
+    above for that site's own coverage). The first call runs for real (via the
+    original bound method) so the design + distil phase completes normally and
+    populates a real `_base`; the second — the audition's hoisted ensure —
+    nulls `_base` right after it returns, standing in for a concurrent
+    `/unload` winning that exact gap.
 
     Mutation that must fail it — breaks the PRODUCER: delete the
-    `if base is None: raise RuntimeError(...)` guard at :5677-5681. Without
-    it this test would instead fail with an `AttributeError` from calling
-    `.generate_voice_clone` on `None` — proving the guard, not just some
-    other exception, is what's under test.
+    `if base is None: raise RuntimeError(...)` guard at the AUDITION-forward
+    site. Without it this test would instead fail with an `AttributeError`
+    from calling `.generate_voice_clone` on `None` — proving the guard, not
+    just some other exception, is what's under test.
     """
     engine = fake_qwen_runtime["engine"]
     orig_ensure_base = engine._ensure_base_loaded
@@ -515,7 +535,7 @@ def test_design_voice_audition_raises_runtime_error_when_base_unloaded_in_gap(
     def racing_ensure_base(device=None) -> None:
         calls["n"] += 1
         orig_ensure_base(device=device)
-        if calls["n"] == 3:
+        if calls["n"] == 2:
             engine._base = None  # a concurrent /unload wins the gap right here
 
     monkeypatch.setattr(engine, "_ensure_base_loaded", racing_ensure_base)
@@ -526,7 +546,410 @@ def test_design_voice_audition_raises_runtime_error_when_base_unloaded_in_gap(
     ):
         engine.design_voice("hart", "a witty teenage boy", "English", None)
 
-    assert calls["n"] == 3, f"expected exactly 3 _ensure_base_loaded calls, got {calls['n']}"
+    assert calls["n"] == 2, f"expected exactly 2 _ensure_base_loaded calls, got {calls['n']}"
+
+
+# ── #2021: five more in-lock cold Qwen loads survive #1975 ───────────────
+
+
+def test_design_voice_design_forward_raises_when_base_unloaded_in_gap(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2021 — same DESIGN-forward block as above, `_base` variant: a
+    concurrent `/unload` winning the gap around the pre-lock
+    `_ensure_base_loaded()` must raise "Qwen Base model was unloaded" rather
+    than silently re-pulling under the lock or crashing with an
+    AttributeError on `None.create_voice_clone_prompt`.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base is None: raise RuntimeError(...)` guard in the DESIGN-forward
+    block (not the AUDITION-forward's pre-existing #1975 guard, a different
+    site later in the same method).
+    """
+    engine = fake_qwen_runtime["engine"]
+    orig_ensure_base = engine._ensure_base_loaded
+    calls = {"n": 0}
+
+    def racing_ensure_base(device=None) -> None:
+        calls["n"] += 1
+        orig_ensure_base(device=device)
+        if calls["n"] == 1:  # the DESIGN-forward's pre-lock ensure only
+            engine._base = None  # a concurrent /unload wins the gap right here
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", racing_ensure_base)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen Base model was unloaded before this design could render",
+    ):
+        engine.design_voice("hart", "a witty teenage boy", "English", None)
+
+    assert calls["n"] == 1, f"expected exactly 1 _ensure_base_loaded call, got {calls['n']}"
+
+
+def test_unload_is_not_blocked_by_a_cold_base_load_during_clone_voice(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2021 (plan 273 T7/T8 shape) — clone_voice's `_ensure_base_loaded()`
+    must run BEFORE `_synth_lock` is taken. Pre-fix, clone_voice's ENTIRE
+    body (distil + persist + audition) ran inside `with self._synth_lock:`,
+    including the cold load itself — a `/unload` (Stop) landing during a
+    cold clone_voice call queued behind that load's whole duration, on a
+    site with NO pre-ensure at all (unlike the design_voice/synthesize sites
+    #1975 already covered).
+
+    Simulates a cold engine: `_base` starts None. `_ensure_base_loaded` is
+    replaced with an event-gated fake standing in for a real multi-second
+    weights pull. While parked, a second thread calls `engine.unload()` and
+    must return within a bound — proving the lock isn't held across the cold
+    load.
+
+    Mutation that must fail it — breaks the PRODUCER: delete clone_voice's
+    hoisted `self._ensure_base_loaded(device=device)` call (the one
+    immediately before `with self._synth_lock:`). `unload()` then queues
+    behind the parked load and the 0.5s bound trips.
+    """
+    engine = fake_qwen_runtime["engine"]
+    engine._base = None
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return ["PROMPT"]
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(2400, dtype=np.float32)], 24000
+
+    calls = {"n": 0}
+
+    def fake_ensure_base(device=None) -> None:
+        if engine._base is not None:
+            return
+        calls["n"] += 1
+        entry.set()
+        assert release.wait(5), "release never set — test bug"
+        engine._base = _FakeBase()
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", fake_ensure_base)
+
+    clone_errors: list[BaseException] = []
+    clone_result: list[Any] = []
+
+    def run_clone() -> None:
+        try:
+            clone_result.append(
+                engine.clone_voice(
+                    "cloneme", np.zeros(4800, dtype=np.float32), 24000,
+                    "reference text", None,
+                )
+            )
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            clone_errors.append(e)
+
+    t = threading.Thread(target=run_clone, daemon=True)
+    t.start()
+
+    assert entry.wait(5), "the (simulated) cold Base load never started"
+
+    stop = threading.Thread(target=engine.unload, daemon=True)
+    stop.start()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked clone_voice Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
+    t.join(5)
+    assert not t.is_alive(), "clone_voice thread did not finish within 5s"
+    assert clone_errors == [], f"clone_voice raised: {clone_errors!r}"
+    assert len(clone_result) == 1
+    assert calls["n"] == 1
+
+
+def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_distil(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2021 (plan 273 T7/T8 shape) — mint_variant's DISTIL-phase
+    `_ensure_base_loaded()` (0.6B) must run BEFORE `_synth_lock` is taken.
+    Pre-fix it ran only inside the lock, so a cold 0.6B-Base load there held
+    Stop off for the load's whole duration — a site with NO pre-ensure at
+    all.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the distil
+    phase's hoisted `self._ensure_base_loaded()` call (the one immediately
+    before its `with self._synth_lock:`). `unload()` then queues behind the
+    parked load and the 0.5s bound trips.
+    """
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("v1", "A warm narrator.", "English", None, None)
+    monkeypatch.setattr(
+        engine, "_icl_instruct_synth",
+        lambda items, text, instr, lang: (np.zeros(6000, "float32"), 24000),
+    )
+    monkeypatch.setattr(
+        engine, "_load_voice_prompt",
+        lambda v: ([types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    engine._base17 = _FakeQwenModel("1.7b")  # warm — isolates the 0.6B distil phase
+    engine._base = None  # cold — the distil phase must reload it
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return "PROMPT"
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(2400, dtype=np.float32)], 24000
+
+    calls = {"n": 0}
+
+    def fake_ensure_base(device=None) -> None:
+        if engine._base is not None:
+            return
+        calls["n"] += 1
+        entry.set()
+        assert release.wait(5), "release never set — test bug"
+        engine._base = _FakeBase()
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", fake_ensure_base)
+
+    mint_errors: list[BaseException] = []
+    mint_result: list[Any] = []
+
+    def run_mint() -> None:
+        try:
+            mint_result.append(
+                engine.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+            )
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            mint_errors.append(e)
+
+    t = threading.Thread(target=run_mint, daemon=True)
+    t.start()
+
+    assert entry.wait(5), "the (simulated) cold Base reload never started"
+
+    stop = threading.Thread(target=engine.unload, daemon=True)
+    stop.start()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked mint_variant distil Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
+    t.join(5)
+    assert not t.is_alive(), "mint_variant thread did not finish within 5s"
+    assert mint_errors == [], f"mint_variant raised: {mint_errors!r}"
+    assert len(mint_result) == 1
+    assert calls["n"] == 1
+
+
+def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_audition(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2021 (plan 273 T7/T8 shape) — mint_variant's AUDITION-phase
+    `_ensure_base_loaded()` (after the distil phase) must run BEFORE
+    `_synth_lock` is taken. Pre-fix it ran only inside the lock — a site
+    with NO pre-ensure at all.
+
+    The distil phase runs for real and leaves `_base` warm; `_evict_17b_prompt`
+    (the last call before the audition phase) is wrapped to null `_base` right
+    there, standing in for a concurrent `/unload` landing in that exact gap —
+    same technique design_voice's own AUDITION-forward test (above) uses via
+    its analogous hook.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the audition
+    phase's hoisted `self._ensure_base_loaded()` call (the one immediately
+    before its `with self._synth_lock:`). `unload()` then queues behind the
+    parked load and the 0.5s bound trips.
+    """
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("v1", "A warm narrator.", "English", None, None)
+    monkeypatch.setattr(
+        engine, "_icl_instruct_synth",
+        lambda items, text, instr, lang: (np.zeros(6000, "float32"), 24000),
+    )
+    monkeypatch.setattr(
+        engine, "_load_voice_prompt",
+        lambda v: ([types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    engine._base17 = _FakeQwenModel("1.7b")
+
+    entry = threading.Event()
+    release = threading.Event()
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return "PROMPT"
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(2400, dtype=np.float32)], 24000
+
+    # Warm for the distil phase (calls before the audition ensure) — only the
+    # AUDITION ensure (after _base is nulled below) should cold-reload.
+    engine._base = _FakeBase()
+
+    calls = {"n": 0}
+
+    def fake_ensure_base(device=None) -> None:
+        if engine._base is not None:
+            return
+        calls["n"] += 1
+        entry.set()
+        assert release.wait(5), "release never set — test bug"
+        engine._base = _FakeBase()
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", fake_ensure_base)
+
+    orig_evict = engine._evict_17b_prompt
+
+    def racing_evict(voice_id: str) -> None:
+        orig_evict(voice_id)
+        engine._base = None  # a concurrent /unload lands in this exact gap
+
+    monkeypatch.setattr(engine, "_evict_17b_prompt", racing_evict)
+
+    mint_errors: list[BaseException] = []
+    mint_result: list[Any] = []
+
+    def run_mint() -> None:
+        try:
+            mint_result.append(
+                engine.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+            )
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            mint_errors.append(e)
+
+    t = threading.Thread(target=run_mint, daemon=True)
+    t.start()
+
+    assert entry.wait(5), "the (simulated) cold Base reload never started"
+
+    stop = threading.Thread(target=engine.unload, daemon=True)
+    stop.start()
+    try:
+        stop.join(0.5)
+        assert not stop.is_alive(), (
+            "unload() was blocked behind the parked mint_variant audition Base load"
+        )
+    finally:
+        # Always release the parked cold-load thread, even when the assert
+        # above fails — see finding 5, PR #2064 review.
+        release.set()
+    t.join(5)
+    assert not t.is_alive(), "mint_variant thread did not finish within 5s"
+    assert mint_errors == [], f"mint_variant raised: {mint_errors!r}"
+    assert len(mint_result) == 1
+    assert calls["n"] == 1
+
+
+def test_mint_variant_1_7b_forward_raises_when_base17_unloaded_in_gap(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2021 + #2022 — mint_variant's 1.7B anchoring forward must capture
+    `_base17` UNDER `_synth_lock` and raise the typed "Qwen 1.7B-Base model
+    was unloaded" RuntimeError when a concurrent `/unload {model:'1.7b'}`
+    wins the gap between the pre-lock `_ensure_base17_for_mint()` and the
+    lock body reading `self._base17` — instead of the pre-#2021 behaviour of
+    silently re-ensuring inside the lock, or (pre-#2022) crashing with a bare
+    AttributeError on `None.device`.
+
+    Simulates the gap: `_ensure_base17_for_mint` is replaced so its FIRST
+    call (the pre-lock one) leaves `_base17` warm, but immediately nulls it
+    right after returning — standing in for a concurrent /unload landing
+    exactly there.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base17 is None: raise RuntimeError(...)` guard. Without it this test
+    instead sees an AttributeError on `None.device` — a different exception,
+    proving the guard (not just any exception) is under test.
+    """
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("v1", "A warm narrator.", "English", None, None)
+    monkeypatch.setattr(
+        engine, "_load_voice_prompt",
+        lambda v: ([types.SimpleNamespace(ref_code=None, ref_text="calib")], "English", False),
+    )
+    engine._base17 = _FakeQwenModel("1.7b")  # already warm
+
+    calls = {"n": 0}
+
+    def racing_ensure_base17_for_mint(device=None) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            engine._base17 = None  # a concurrent /unload wins the gap right here
+
+    monkeypatch.setattr(engine, "_ensure_base17_for_mint", racing_ensure_base17_for_mint)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen 1.7B-Base model was unloaded before this mint's anchoring forward started",
+    ):
+        engine.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+
+    assert calls["n"] == 1, f"expected exactly 1 _ensure_base17_for_mint call, got {calls['n']}"
+
+
+# ── #2022: unguarded self._base17 derefs bypass #1975's typed error ──────
+
+
+def test_load_voice_prompt_17b_raises_when_base17_unloaded_in_gap(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#2022 — `_load_voice_prompt_17b` runs OUTSIDE `_synth_lock` (both
+    synthesize()'s 1.7B path and synthesize_batch()'s 1.7B loop call it
+    there), in the unguarded window between the caller's
+    `_ensure_base17_loaded()` and the eventual `_synth_lock` forward. A
+    concurrent `/unload {model:'1.7b'}` landing in that window used to
+    surface as a bare "'NoneType' object has no attribute 'device'" instead
+    of the typed, actionable RuntimeError every other unload-race site in
+    this engine raises.
+
+    Forces a cache MISS (so the derivation path — the one with the unguarded
+    derefs — actually runs) and nulls `_base17` right before calling
+    `_load_voice_prompt_17b` directly, standing in for the race. Monkeypatches
+    `_load_voice_prompt` to return a `ref_code` with a real `.to()` — same
+    reason `test_mint_variant_anchors_to_base_and_marks_json` does (:1479-1483):
+    the fixture's fake `torch.save`/`torch.load` round-trips through a
+    temp-name write (`_atomic_torch_save`) that the fake never registers under
+    the FINAL path, so a genuine disk re-read after `design_voice` returns the
+    dict fallback `{"_prompt": True}` instead of a real prompt item — which
+    would make this test fail on an unrelated `AttributeError: 'dict' object
+    has no attribute 'ref_code'` before ever reaching the guarded line, a
+    false-positive RED that wouldn't actually be testing the #2022 guard.
+
+    Mutation that must fail it — breaks the PRODUCER: delete the
+    `if base17 is None: raise RuntimeError(...)` guard this issue added.
+    Without it, `rc.to(base17.device)` raises an AttributeError on `None`
+    instead of the typed message asserted here.
+    """
+    engine = fake_qwen_runtime["engine"]
+
+    class _FakeRefCode:
+        def to(self, device: Any) -> "_FakeRefCode":
+            return self
+
+    monkeypatch.setattr(
+        engine, "_load_voice_prompt",
+        lambda v: ([types.SimpleNamespace(ref_code=_FakeRefCode(), ref_text="calib")], "English", False),
+    )
+    engine._base17 = None  # the race: unloaded before this call
+
+    with pytest.raises(
+        RuntimeError,
+        match="Qwen 1.7B-Base model was unloaded before this render could derive the voice prompt",
+    ):
+        engine._load_voice_prompt_17b("v1")
 
 
 def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> None:
@@ -1159,59 +1582,91 @@ def test_designed_voice_survives_restart_at_env_dir(monkeypatch, tmp_path) -> No
     assert restarted._base is not None  # loaded on demand, found the .pt
 
 
+def _real_legacy_voices_dir() -> str:
+    """The actual, shared, __file__-relative legacy dir _migrate_legacy_voices
+    resolves to when nothing overrides it — used ONLY as a before/after
+    witness (#2030) that a test didn't write there, never as a fixture dir
+    itself."""
+    return os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+
+
 def test_legacy_voices_migrated_to_env_dir(monkeypatch, tmp_path) -> None:
     """On init, if QWEN_VOICES_DIR relocates the cache and the legacy
     __file__-relative dir holds *.pt embeddings while the target is empty,
-    the legacy files are moved (shutil.move) into the new dir."""
-    # Seed a fake legacy voices/qwen dir next to main.py with one voice.
-    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    the legacy files are moved (shutil.move) into the new dir.
+
+    #2030: the legacy dir used to be seeded at the REAL, shared,
+    __file__-relative `voices/qwen` next to main.py (`__init__` has no
+    override seam for it, unlike `QWEN_VOICES_DIR` for the target dir) —
+    two concurrent pytest runs against the same worktree raced on that one
+    path. `_migrate_legacy_voices(legacy_dir)` itself already takes an
+    explicit dir; the only unseamed part was `__init__`'s bare `__file__`
+    lookup, which resolves against the module's globals — so patching
+    `main.__file__` closes the seam with NO production change."""
+    real_legacy_dir = _real_legacy_voices_dir()
+    before = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+
+    fake_module_dir = tmp_path / "fake_sidecar_root"
+    fake_module_dir.mkdir()
+    monkeypatch.setattr(main, "__file__", str(fake_module_dir / "main.py"))
+
+    # Seed the (now tmp_path-scoped) legacy voices/qwen dir with one voice.
+    legacy_dir = os.path.join(str(fake_module_dir), "voices", "qwen")
     os.makedirs(legacy_dir, exist_ok=True)
     legacy_pt = os.path.join(legacy_dir, "_migtest.pt")
     legacy_json = os.path.join(legacy_dir, "_migtest.json")
-    try:
-        with open(legacy_pt, "wb") as fh:
-            fh.write(b"\x00")
-        with open(legacy_json, "w", encoding="utf-8") as fh:
-            fh.write('{"voiceId": "_migtest"}')
+    with open(legacy_pt, "wb") as fh:
+        fh.write(b"\x00")
+    with open(legacy_json, "w", encoding="utf-8") as fh:
+        fh.write('{"voiceId": "_migtest"}')
 
-        target = tmp_path / "ws" / "voices" / "qwen"
-        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
-        main.QwenEngine()  # __init__ runs the migration
+    target = tmp_path / "ws" / "voices" / "qwen"
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+    main.QwenEngine()  # __init__ runs the migration
 
-        # Moved into the new dir, removed from the legacy dir.
-        assert (target / "_migtest.pt").is_file()
-        assert (target / "_migtest.json").is_file()
-        assert not os.path.exists(legacy_pt)
-        assert not os.path.exists(legacy_json)
-    finally:
-        for p in (legacy_pt, legacy_json):
-            if os.path.exists(p):
-                os.remove(p)
+    # Moved into the new dir, removed from the legacy dir.
+    assert (target / "_migtest.pt").is_file()
+    assert (target / "_migtest.json").is_file()
+    assert not os.path.exists(legacy_pt)
+    assert not os.path.exists(legacy_json)
+
+    # The REAL source-tree legacy dir was never touched by any of the above.
+    after = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+    assert before == after, "test wrote into the real source-tree legacy voices/qwen dir"
 
 
 def test_legacy_migration_skipped_when_target_already_populated(monkeypatch, tmp_path) -> None:
     """Migration is a no-op when the target dir already holds a designed
-    voice — never clobbers an existing workspace cache."""
-    legacy_dir = os.path.join(os.path.dirname(main.__file__), "voices", "qwen")
+    voice — never clobbers an existing workspace cache.
+
+    #2030: same tmp_path-scoped legacy dir as the sibling test above —
+    see its docstring for why."""
+    real_legacy_dir = _real_legacy_voices_dir()
+    before = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+
+    fake_module_dir = tmp_path / "fake_sidecar_root"
+    fake_module_dir.mkdir()
+    monkeypatch.setattr(main, "__file__", str(fake_module_dir / "main.py"))
+
+    legacy_dir = os.path.join(str(fake_module_dir), "voices", "qwen")
     os.makedirs(legacy_dir, exist_ok=True)
     legacy_pt = os.path.join(legacy_dir, "_migtest2.pt")
-    try:
-        with open(legacy_pt, "wb") as fh:
-            fh.write(b"\x00")
+    with open(legacy_pt, "wb") as fh:
+        fh.write(b"\x00")
 
-        target = tmp_path / "ws" / "voices" / "qwen"
-        target.mkdir(parents=True)
-        (target / "existing.pt").write_bytes(b"\x00")
-        monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
-        main.QwenEngine()
+    target = tmp_path / "ws" / "voices" / "qwen"
+    target.mkdir(parents=True)
+    (target / "existing.pt").write_bytes(b"\x00")
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(target))
+    main.QwenEngine()
 
-        # Target untouched; legacy file left in place (no merge).
-        assert (target / "existing.pt").is_file()
-        assert not (target / "_migtest2.pt").exists()
-        assert os.path.exists(legacy_pt)
-    finally:
-        if os.path.exists(legacy_pt):
-            os.remove(legacy_pt)
+    # Target untouched; legacy file left in place (no merge).
+    assert (target / "existing.pt").is_file()
+    assert not (target / "_migtest2.pt").exists()
+    assert os.path.exists(legacy_pt)
+
+    after = set(os.listdir(real_legacy_dir)) if os.path.isdir(real_legacy_dir) else None
+    assert before == after, "test wrote into the real source-tree legacy voices/qwen dir"
 
 
 def test_import_missing_qwen_tts_raises_with_pip_hint(monkeypatch) -> None:

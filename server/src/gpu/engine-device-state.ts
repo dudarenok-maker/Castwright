@@ -7,10 +7,21 @@
    so the GPU semaphore and the pre-load eviction guard both read the same
    ground truth. */
 
-import type { SidecarDeviceMap } from '../routes/sidecar-health.js';
 import { TRACKED_ENGINES, type TrackedEngine } from './tracked-engines.js';
 
 export type EngineDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu' | 'unknown';
+
+/** #2013 — the wire-level device family names + map, defined HERE rather than
+    in `routes/sidecar-health.ts` (which used to own them and export them back
+    to this module) so that `server/src/gpu/` never imports from a route
+    module, not even `import type` — CLAUDE.md "Conventions worth preserving"
+    is explicit that a type-only import still closes the cycle. Rebuilding it
+    is a straight relocation: `routes/sidecar-health.ts` now imports these
+    from here instead (routes/ -> gpu/ is the allowed direction), and re-
+    exports them under the same names so `routes/info.ts` (the other
+    consumer) needed no change. */
+export type SidecarDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu';
+export type SidecarDeviceMap = Record<TrackedEngine, SidecarDeviceFamily | null>;
 
 function emptyState(): Record<TrackedEngine, EngineDeviceFamily> {
   return { kokoro: 'unknown', coqui: 'unknown', qwen: 'unknown' };

@@ -44,10 +44,26 @@ export interface SegmentReplacement {
       #1972 — also carries `voiceName`, the voice ACTUALLY sent to the
       provider for this re-record. Same reasoning as the QA fields: a gain
       re-mix never synthesises, so it never sets this, and the segment keeps
-      whatever voiceName (if any) its last real render stamped. */
+      whatever voiceName (if any) its last real render stamped.
+
+      #1888 — also carries `voiceSubstitutedFrom`. Unlike the QA fields
+      (omitted when their gate didn't run, to leave a stale prior verdict
+      alone), a re-record always synthesises, so this key is always present
+      once `freshVerdict` is set at all — even when explicitly `undefined`,
+      which means "this take did not substitute" and must CLEAR any stale
+      substitution flag the segment carried from before the repair, not
+      preserve it. */
   freshVerdict?: Pick<
     ChapterSegment,
-    'qa' | 'suspect' | 'asr' | 'asrSuspect' | 'qaRetries' | 'asrRetries' | 'voiceName'
+    | 'qa'
+    | 'suspect'
+    | 'asr'
+    | 'asrSuspect'
+    | 'qaRetries'
+    | 'asrRetries'
+    | 'voiceName'
+    | 'baseVoiceName'
+    | 'voiceSubstitutedFrom'
   >;
 }
 

@@ -33,6 +33,7 @@ const bumpScript = resolve(here, '..', 'bump-version.mjs');
 // mojibake fixtures: "É™" reads as a mangled "ə", so "CAFÉ™" is a legitimate,
 // word-embedded false positive the allowlist marker exists for.
 const CAFE = 'CAFÉ™';
+const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone == unallowlistable
 
 // Strip GIT_* env vars before spawning git in a throwaway repo. When this
 // test runs from a git hook context (e.g. pre-commit via husky), the parent
@@ -369,6 +370,35 @@ test('bump-version echoes an honoured marker in --notes-file on stdout', () => {
   }
 });
 
+// #2025 — the echo's ORDERING relative to its failure branch was untested:
+// the test above only ever exercises a PASSING run (a clean --notes-file
+// with just the allowlisted CAFÉ™ span). Verified during the PR #2007
+// re-review: moving `if (echo) info(echo)` to sit AFTER the
+// `if (!mojibakeCheck.ok)` block leaves the whole suite green while
+// genuinely silencing the echo whenever the gate goes on to die/warn. This
+// fixture pairs an armed CAFÉ™ marker with a SEPARATE, unallowlistable
+// standalone mangle, so the run still fails overall but must still echo the
+// marker it DID honour along the way.
+test('bump-version echoes an honoured --notes-file marker even when the gate still fails', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-marker-fail-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.1\n\nFixes:\n` +
+        `- ships with a ${CAFE} badge.\n` +
+        `- a ${MOJIBAKE_EM_DASH} standing alone.\n`,
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+    assert.match(out.stderr, /Mojibake gate.*1 double-UTF-8-encoded mojibake span/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // PR #2007 review, Major 2 — bump-version.mjs's OTHER checkMojibake call site
 // (pre-flight 5c, against the committed RELEASE_NOTES.md itself) is provably
 // dead for a positive echo: the label there is always the literal string
@@ -394,6 +424,111 @@ test('bump-version never echoes a RELEASE_NOTES.md marker — it is refused inst
     assert.equal(out.status, 0, out.stderr);
     assert.doesNotMatch(out.stdout, /^\[allow\]/m);
     assert.match(out.stdout, /mojibake gate \(--force\).*refused in RELEASE_NOTES\.md \(#1985\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2018 — unresolved git conflict markers must never ship. Unlike the
+// mojibake gate above, this one has NO --force / --dry-run downgrade path:
+// checkConflictMarkers' doc comment explains why (there is no legitimate
+// reason for a marker to be here), and these three tests pin that bump-version
+// actually enforces it unconditionally rather than routing it through the
+// same force/dry-run branches as every other pre-flight in this file.
+const CONFLICT_FIXTURE =
+  '# v1.0.1\n\nFixes:\n<<<<<<< HEAD\n- Ours.\n=======\n- Theirs.\n>>>>>>> origin/main\n';
+
+test('bump-version refuses on a conflict marker in RELEASE_NOTES.md, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), CONFLICT_FIXTURE);
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /RELEASE_NOTES\.md contains 2 unresolved git conflict marker/);
+    assert.match(out.stderr, /line\(s\) 4, 8/);
+    assert.match(out.stderr, /no allowlist/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a conflict marker in RELEASE_NOTES.md even with --dry-run', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), CONFLICT_FIXTURE);
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--dry-run', '--allow-placeholder']);
+    assert.notEqual(out.status, 0);
+    assert.doesNotMatch(out.stdout, /DRY-RUN.*conflict/i);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a conflict marker in --notes-file, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-conflict-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, CONFLICT_FIXTURE);
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// PR #2049 review, F5 — the conflict check (#2018) was a NEW early exit
+// added in this same PR, and it originally ran BEFORE pre-flight 6b's
+// mojibake echo: a --notes-file carrying both a conflict marker and an
+// armed `allow` marker died naming only the conflict, with the armed marker
+// never echoed that run — silently regressing #1990's "an armed marker is
+// never silent" property. Fixed by computing 6b (and its echo) before 6a.
+test('bump-version echoes an armed marker even when a conflict marker is what fails the run', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-conflict-and-marker-${process.pid}-${Date.now()}.md`);
+    writeFileSync(
+      notes,
+      `<!-- release-notes-gate: allow "${CAFE}" -->\n\n# v1.0.1\n\nFixes:\n` +
+        `- ships with a ${CAFE} badge.\n\n${CONFLICT_FIXTURE}`,
+    );
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /unresolved git conflict marker/);
+    assert.match(out.stdout, /^\[allow\] .*honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version does not false-positive on a RELEASE_NOTES.md with no conflict markers', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--dry-run', '--allow-placeholder']);
+    assert.equal(out.status, 0, out.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

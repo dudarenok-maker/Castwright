@@ -487,14 +487,30 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/discard', async (req: Request, res
    fail-safe qwen's own '' (never-fetched) case already relies on, so a
    cold-started server can't flip every cloned coqui voice to 'stale' before
    the sidecar has answered even once. */
-function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
+/* Plan 276 Decision 2 [R3] — a persisted `status: 'failed'` must survive this
+   computation untouched. Before this fix, a failed-but-version-stale slot was
+   overwritten to `'stale'` here, so the client (which only ever sees the
+   post-this-function value) could never observe `derive-failed` — the render
+   still hard-fails on the raw on-disk status
+   (`clone-voice-resolver.ts:238` checks `'failed'` first), so the mismatch
+   was a false negative in the cast-time check, not a cosmetic one.
+   Staleness of a failed artifact is meaningless: nothing will re-derive it
+   until the failure itself is cleared (see the retry route), so there is
+   nothing to report as merely "stale" underneath it.
+
+   Plan 276 Task 8 — exported so the co-oracle contract test
+   (`server/src/tts/clone-readiness-contract.test.ts`) can route its client
+   side through the REAL transform rather than a reimplementation. See that
+   file's header for why a reimplementation would be blind to exactly the
+   class of bug this function exists to fix. */
+export function withComputedStaleness(entry: VoiceLibraryEntry): VoiceLibraryEntry {
   let result = entry;
   const qwen = entry.engines.qwen;
-  if (qwen && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
+  if (qwen && qwen.status !== 'failed' && isArtifactVersionStale(qwen.baseModel, currentQwenBaseModel())) {
     result = { ...result, engines: { ...result.engines, qwen: { ...qwen, status: 'stale' } } };
   }
   const xtts = entry.engines.xtts;
-  if (xtts && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
+  if (xtts && xtts.status !== 'failed' && isArtifactVersionStale(xtts.coquiVersion, getLastKnownCoquiVersion())) {
     result = { ...result, engines: { ...result.engines, xtts: { ...xtts, status: 'stale' } } };
   }
   return result;
@@ -524,6 +540,7 @@ interface PatchBody {
   pinned?: unknown;
   persona?: unknown;
   provenance?: unknown;
+  transcript?: unknown;
 }
 
 voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
@@ -556,6 +573,29 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
     if (body.persona !== undefined && typeof body.persona !== 'string') {
       return res.status(400).json({ error: '`persona` must be a string.' });
     }
+    /* Plan 276 Decision 6 — a clone's reference transcript becomes editable
+       after the fact (the "Add transcript" cast-time-gate CTA). Only a
+       cloned entry that actually carries a master clip has a transcript to
+       edit at all — a designed/imported voice, or a cloned entry whose
+       master is somehow absent, has nothing for this to mean. */
+    if (body.transcript !== undefined) {
+      if (existing.provenance !== 'cloned' || !existing.master) {
+        return res
+          .status(400)
+          .json({ error: '`transcript` can only be set on a cloned voice with a master clip.' });
+      }
+      if (typeof body.transcript !== 'string') {
+        return res.status(400).json({ error: '`transcript` must be a string.' });
+      }
+      /* #1836's cap, reused rather than duplicated — see MAX_CLONE_TRANSCRIPT_CHARS's
+         own doc comment for why 2000 characters bounds the wire even for a
+         multi-byte-heavy correction. */
+      if (body.transcript.length > MAX_CLONE_TRANSCRIPT_CHARS) {
+        return res
+          .status(400)
+          .json({ error: `Transcript is too long (max ${MAX_CLONE_TRANSCRIPT_CHARS} characters).` });
+      }
+    }
 
     /* fs-38 Wave 3c, Task 14 — mutate/write through the shared, per-uuid-
        locked `updateEntry`, spreading over a FRESH `fresh` (read under the
@@ -565,25 +605,179 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        two reads) — but writing `existing`'s `engines` back would silently
        clobber a concurrent engine-slot write (e.g. an in-flight xtts
        derive) that landed in the window between this handler's first read
-       and its write. */
-    const written = await updateEntry(voiceUuid, (fresh) =>
-      fresh
-        ? {
-            ...fresh,
-            ...(body.name !== undefined ? { name: body.name as string } : {}),
-            ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
-            ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
-            ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
-          }
-        : null,
-    );
+       and its write. The transcript edit below applies that SAME reasoning
+       to `master`/`engines`: it mutates off `fresh`, never `existing`. */
+    const written = await updateEntry(voiceUuid, (fresh) => {
+      if (!fresh) return null;
+      let next: VoiceLibraryEntry = {
+        ...fresh,
+        ...(body.name !== undefined ? { name: body.name as string } : {}),
+        ...(body.tags !== undefined ? { tags: body.tags as string[] } : {}),
+        ...(body.pinned !== undefined ? { pinned: body.pinned as boolean } : {}),
+        ...(body.persona !== undefined ? { persona: body.persona as string } : {}),
+      };
+      if (body.transcript !== undefined && fresh.master) {
+        const transcript = body.transcript as string;
+        /* Plan 276 Decision 6 [R3] — three invalidations a transcript edit
+           must carry, none of which is "re-derive the qwen .pt":
+
+           1. `entry.sampleTranscript` is a SECOND persisted copy of the
+              same text, written from `refText` at clone time (see the
+              /clone handler above, ~:1115). Leaving it stale makes the two
+              disagree and the UI read the wrong one.
+           2. `master.languageCode` / `entry.languageCode` are Whisper
+              stamps promoted from the ORIGINAL clip at clone time. A
+              user-edited transcript may be in a different language, so a
+              stamp that used to describe the clip now contradicts the
+              text. Cleared rather than guessed — re-detecting would need a
+              real Whisper call inside this handler for no clear benefit,
+              and `entry.languageCode` specifically feeds
+              `sidecarLanguageName` (tts/language.ts), which THROWS on an
+              unregistered code, so inventing a value here is strictly more
+              dangerous than the "no language" state a clip in an
+              unsupported language already reaches via the /clone handler's
+              own `clipLanguage` branch (workspace/voice-library.ts's
+              `VoiceMaster.languageCode` doc comment). Clearing lands in
+              that same, already-supported state.
+           3. The qwen `.pt` distilled against the OLD ref text is
+              DELIBERATELY left alone — it is acoustic, not lexical. A
+              corrected transcript changes what a FUTURE derive scores/
+              distills against, not the sound already baked into today's
+              artifact. Do not "fix" this by invalidating it. */
+        next = {
+          ...next,
+          sampleTranscript: transcript,
+          master: { ...fresh.master, transcript, transcriptSource: 'user', languageCode: undefined },
+          languageCode: undefined,
+        };
+        /* Decision 6's third clause — a non-empty corrected transcript
+           removes the CAUSE of a qwen `no-transcript`-flavoured derive
+           failure, so the terminal `failed` stamp comes off (same
+           slot-deletion mechanism as the retry route below). `''` clears
+           the text but supplies no fix, so it must NOT clear the stamp —
+           only qwen's derive needs a transcript at all (Coqui's clone is
+           purely acoustic, tts/derive-engine-artifact.ts), so only the
+           qwen slot is a candidate here. */
+        if (transcript.trim() && next.engines.qwen?.status === 'failed') {
+          const restEngines = { ...next.engines };
+          delete restEngines.qwen;
+          next = { ...next, engines: restEngines };
+        }
+      }
+      return next;
+    });
     if (!written) {
       return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
     }
-    res.json(written);
+    /* Plan 276 Decision 2 [R4] — this response goes through
+       `withComputedStaleness` for the same reason `GET /` does, and it is
+       load-bearing rather than cosmetic. `patchEntry.fulfilled`
+       (src/store/voice-library-slice.ts:237-240) REPLACES the slice's entry
+       with whatever this returns, so a raw response silently downgrades the
+       client's copy from the computed status to the persisted one. A
+       version-stale-but-`ready` slot then reads `'ready'` on the client
+       instead of `'stale'`, and `cloneReadiness`'s rules 5/6 — gated on
+       `slotStatus !== 'ready'` — stop firing. That is a false negative of
+       exactly the class that killed rev 2, and the plan's own "Add
+       transcript" flow triggers it: the CTA PATCHes, this response lands in
+       the slice, and the gate can then clear for the wrong reason. Every
+       route that hands an entry to the client must apply the same transform
+       or the "post-`withComputedStaleness`" contract is only true until the
+       first write. */
+    res.json(withComputedStaleness(written));
   } catch (e) {
     console.error('[voice-library] patch failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library update failed.' });
+  }
+});
+
+/* POST /api/voice-library/:voiceUuid/engines/:engine/retry — plan 276
+   Decision 7.
+
+   Deletes the engine's slot key from `entry.engines` (through the same
+   per-uuid-locked `updateEntry` the transcript edit above uses) rather than
+   rewriting its `status`: `VoiceLibraryEngineStatus.status` is required
+   (workspace/voice-library.ts), so there is no "unset" value to write, and
+   an absent slot already flows correctly through `classifyClonedVoice`
+   (clone-voice-resolver.ts:241-246) as "never derived". A fresh derive
+   rewrites the slot with its own version stamp. Nothing else needs
+   resetting — `master`, the clip file and the qwen `.pt` all stay exactly
+   as they are.
+
+   No-op (200, entry unchanged), not an error, when the slot isn't `failed`
+   — a `ready` slot needs no retry, and an absent slot has nothing to clear.
+   Distinguishing "slot present but healthy" from "slot absent" would add a
+   branch that behaves identically either way, so both fall through the same
+   early return.
+
+   [R3] Why this does not reintroduce the loop the `failed` stamp exists to
+   prevent. `cloneReadiness`'s rule 4 (`slotStatus === 'failed'` ->
+   `derive-failed`) is ordered BEFORE rules 5/6 (`missing-master` /
+   `no-transcript`) — see clone-readiness.ts. Once this route deletes the
+   stamp, the predicate re-evaluates the UNDERLYING cause on the next
+   check: a derive-failed voice with a blank transcript immediately reports
+   `no-transcript` again, and the cast-time gate stays up with the CTA that
+   actually fixes it. Only a failure whose cause isn't expressible in rules
+   5-6 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
+   again on the next derive — that residue is real and is why the CTA is
+   labelled "Retry derive", not "Fix"; a repeat failure simply re-stamps
+   `failed`. The policy `clone-voice-resolver.ts:229-231` protects is that a
+   failed derive is never SILENTLY retried (i.e. auto-retried on every
+   render); this is a user-initiated, explicit clear, not that. */
+voiceLibraryRouter.post('/:voiceUuid/engines/:engine/retry', async (req: Request, res: Response) => {
+  try {
+    const { voiceUuid } = req.params;
+    const engineParam = req.params.engine as TtsEngine;
+    if (!isCloneEngine(engineParam)) {
+      return res.status(400).json({ error: `"${req.params.engine}" is not a clone-capable engine.` });
+    }
+    const slotKey = manifestSlotFor(engineParam);
+
+    /* `entryFound`/`noop` are set from INSIDE the locked mutate callback,
+       not from a separate pre-lock read — the lock's own `fresh` read is
+       the single source of truth for both "does this uuid exist" and
+       "does the slot need clearing", so there's no separate stale read to
+       drift from it. Returning `undefined` from the callback tells
+       `updateEntry` to skip the write entirely (see its own doc comment on
+       :297) — the true no-op case never touches disk, so `updatedAt` (and
+       everything else) really is unchanged, not merely content-equal. */
+    let entryFound = true;
+    let noop: import('../workspace/voice-library.js').VoiceLibraryEntry | null = null;
+    const written = await updateEntry(voiceUuid, (fresh) => {
+      if (!fresh) {
+        entryFound = false;
+        return null;
+      }
+      if (fresh.engines[slotKey]?.status !== 'failed') {
+        noop = fresh;
+        return undefined;
+      }
+      const restEngines = { ...fresh.engines };
+      delete restEngines[slotKey];
+      return { ...fresh, engines: restEngines };
+    });
+
+    if (!entryFound) {
+      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+    }
+    /* Plan 276 Decision 2 [R4] — same transform as the PATCH above and for
+       the same reason: whatever this returns is what the client's slice
+       holds next. The no-op path needs it too — a `ready`-but-version-stale
+       slot is precisely the case that no-ops here AND is rewritten by the
+       transform, so returning it raw is the one shape where skipping this
+       actually changes the answer. */
+    if (!written) {
+      /* `noop` is set by the locked callback on exactly this path. The guard
+         is for TypeScript — it cannot narrow a variable assigned inside a
+         callback — but it is a real 500 rather than a silent `null` body if
+         the two paths ever drift apart. */
+      if (!noop) throw new Error('retry reached the no-op path with no entry captured');
+      return res.json(withComputedStaleness(noop));
+    }
+    res.json(withComputedStaleness(written));
+  } catch (e) {
+    console.error('[voice-library] retry failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Voice engine retry failed.' });
   }
 });
 

@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildSynthReplacements, isRerecordableSegment, findDivergentSentences } from './build-synth-replacement.js';
+import type { SynthOutput } from './build-synth-replacement.js';
 import type { ChapterSegment } from '../tts/synthesise-chapter.js';
 
 function seg(i: number, characterId: string, sentenceIds: number[]): ChapterSegment {
@@ -46,7 +47,7 @@ describe('buildSynthReplacements', () => {
       chapterSampleRate: 24_000,
       synth: async (s) => {
         calls.push(s);
-        return { pcm: pcmOfSamples(240), sampleRate: 24_000 };
+        return { pcm: pcmOfSamples(240), sampleRate: 24_000, voiceSubstitutedFrom: undefined };
       },
     });
     expect(reps.map((r) => [r.startSegmentIndex, r.endSegmentIndex])).toEqual([
@@ -67,7 +68,7 @@ describe('buildSynthReplacements', () => {
       chapterSampleRate: 24_000,
       synth: async (s) => {
         seen.push(s.sentenceIds);
-        return { pcm: pcmOfSamples(10), sampleRate: 24_000 };
+        return { pcm: pcmOfSamples(10), sampleRate: 24_000, voiceSubstitutedFrom: undefined };
       },
     });
     expect(seen).toEqual([[4, 5]]);
@@ -85,9 +86,15 @@ describe('buildSynthReplacements', () => {
         pcm: pcmOfSamples(100),
         sampleRate: 24_000,
         voiceName: 'kokoro-some-voice',
+        voiceSubstitutedFrom: undefined,
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({ voiceName: 'kokoro-some-voice' });
+    // #1888 — voiceSubstitutedFrom is now unconditionally present (undefined
+    // here, since this synth output didn't report one).
+    expect(reps[0].freshVerdict).toStrictEqual({
+      voiceName: 'kokoro-some-voice',
+      voiceSubstitutedFrom: undefined,
+    });
   });
 
   it('omits voiceName when the caller does not report one', async () => {
@@ -95,7 +102,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000 }),
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
     });
     expect('voiceName' in reps[0].freshVerdict!).toBe(false);
   });
@@ -105,7 +112,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(1000), sampleRate: 48_000 }),
+      synth: async () => ({ pcm: pcmOfSamples(1000), sampleRate: 48_000, voiceSubstitutedFrom: undefined }),
     });
     // 1000 samples @48k downsampled to 24k → ~500 samples = ~1000 bytes.
     const bytes = reps[0].pcm.length;
@@ -119,7 +126,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm, sampleRate: 24_000 }),
+      synth: async () => ({ pcm, sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
     });
     expect(reps[0].pcm.length).toBe(pcm.length);
   });
@@ -135,6 +142,7 @@ describe('buildSynthReplacements', () => {
         qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         suspect: undefined,
         signalQaRan: true,
+        voiceSubstitutedFrom: undefined,
       }),
     });
     // toStrictEqual (not toEqual) so a key present-but-undefined is
@@ -143,6 +151,9 @@ describe('buildSynthReplacements', () => {
       qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
       suspect: undefined,
       qaRetries: undefined,
+      // #1888 — unconditionally present (undefined; this synth output
+      // reported no substitution).
+      voiceSubstitutedFrom: undefined,
     });
     // The asr/asrSuspect/asrRetries keys are OMITTED entirely (asrRan wasn't
     // set) — not merely `undefined`-valued.
@@ -164,6 +175,7 @@ describe('buildSynthReplacements', () => {
         asrRan: true,
         asr: { verdict: 'clean', reasons: [] } as unknown as ChapterSegment['asr'],
         asrSuspect: undefined,
+        voiceSubstitutedFrom: undefined,
       }),
     });
     expect('asr' in reps[0].freshVerdict!).toBe(true);
@@ -186,9 +198,12 @@ describe('buildSynthReplacements', () => {
         pcm: pcmOfSamples(100),
         sampleRate: 24_000,
         // signalQaRan omitted (falsy) — the caller's gate never ran.
+        voiceSubstitutedFrom: undefined,
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({});
+    // #1888 — voiceSubstitutedFrom is unconditionally present regardless of
+    // the QA gates' on/off state.
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
     expect('qa' in reps[0].freshVerdict!).toBe(false);
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
     expect('qaRetries' in reps[0].freshVerdict!).toBe(false);
@@ -205,6 +220,7 @@ describe('buildSynthReplacements', () => {
         signalQaRan: true,
         qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         // asrRan omitted (falsy) — ASR never ran for this call.
+        voiceSubstitutedFrom: undefined,
       }),
     });
     expect('asr' in reps[0].freshVerdict!).toBe(false);
@@ -233,6 +249,7 @@ describe('buildSynthReplacements', () => {
         asrRan: true,
         asr: { verdict: 'drift', reasons: [] } as unknown as ChapterSegment['asr'],
         suspect: true, // ASR's quarantined-calibration-bleed check fired.
+        voiceSubstitutedFrom: undefined,
       }),
     });
     expect(reps[0].freshVerdict?.suspect).toBe(true);
@@ -254,6 +271,7 @@ describe('buildSynthReplacements', () => {
         qa: { status: 'suspect', reasons: ['clipping'], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         suspect: true,
         // asrRan omitted (false) — ASR never ran for this call.
+        voiceSubstitutedFrom: undefined,
       }),
     });
     expect(reps[0].freshVerdict?.suspect).toBe(true);
@@ -271,9 +289,11 @@ describe('buildSynthReplacements', () => {
         sampleRate: 24_000,
         suspect: true, // stray/meaningless — neither gate ran, must be ignored.
         // signalQaRan and asrRan both omitted (false).
+        voiceSubstitutedFrom: undefined,
       }),
     });
-    expect(reps[0].freshVerdict).toStrictEqual({});
+    // #1888 — voiceSubstitutedFrom is unconditionally present regardless.
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
   });
 
@@ -289,11 +309,13 @@ describe('buildSynthReplacements', () => {
         sampleRate: 24_000,
         voiceName: 'qwen-wren__angry',
         baseVoiceName: 'qwen-wren',
+        voiceSubstitutedFrom: undefined,
       }),
     });
     expect(reps[0].freshVerdict).toStrictEqual({
       voiceName: 'qwen-wren__angry',
       baseVoiceName: 'qwen-wren',
+      voiceSubstitutedFrom: undefined,
     });
   });
 
@@ -302,9 +324,66 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x' }),
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x', voiceSubstitutedFrom: undefined }),
     });
     expect('baseVoiceName' in reps[0].freshVerdict!).toBe(false);
+  });
+
+  /* #1888 — unlike voiceName/baseVoiceName (omitted when the caller doesn't
+     report one, so an unmigrated caller can't wipe a segment's prior value),
+     voiceSubstitutedFrom must ALWAYS be present on freshVerdict, because a
+     re-record always synthesises and therefore always has a definite answer
+     for "did THIS take substitute" — undefined is a meaningful, current
+     answer ("no"), not "the gate didn't run." Omitting the key here would let
+     spliceChapterSegments's `{...segment, ...freshVerdict}` spread leave a
+     stale prior substitution flag in place on a now-clean take. */
+  it('carries voiceSubstitutedFrom from the synth output onto the replacement when the take substituted', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      synth: async () => ({
+        pcm: pcmOfSamples(100),
+        sampleRate: 24_000,
+        voiceSubstitutedFrom: 'Requested Voice',
+      }),
+    });
+    expect(reps[0].freshVerdict?.voiceSubstitutedFrom).toBe('Requested Voice');
+  });
+
+  it('includes voiceSubstitutedFrom as an explicit undefined key (not omitted) when the take reports no substitution — must not let the merge preserve a stale prior value (#1888)', async () => {
+    const reps = await buildSynthReplacements({
+      segments,
+      targetIndices: [0],
+      chapterSampleRate: 24_000,
+      // #2034 — voiceSubstitutedFrom is now a REQUIRED key on SynthOutput
+      // (value still permits undefined), so this literal must supply it
+      // explicitly; the assertions below still prove buildSynthReplacements
+      // itself always sets the key on freshVerdict regardless.
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
+    });
+    // toStrictEqual (not toEqual) so a key present-but-undefined is
+    // distinguished from an omitted key — the whole point of this fix.
+    expect('voiceSubstitutedFrom' in reps[0].freshVerdict!).toBe(true);
+    expect(reps[0].freshVerdict?.voiceSubstitutedFrom).toBeUndefined();
+  });
+});
+
+describe('SynthOutput#voiceSubstitutedFrom (#2034 — required, not optional)', () => {
+  /* This is a COMPILE-TIME assertion, not a runtime one: vitest transpiles
+     via esbuild and never evaluates `@ts-expect-error`, so this test always
+     passes when run with `vitest run`. The real gate is `npm run typecheck`
+     (tsc), which requires the line below to be an actual type error — if
+     `voiceSubstitutedFrom` ever reverts to optional (`voiceSubstitutedFrom?:`
+     on SynthOutput), tsc reports "Unused '@ts-expect-error' directive" and
+     `npm run typecheck` goes red. Mutation-verified by reverting the `:71`
+     production line and re-running `npm run typecheck` (see PR description /
+     commit message for the pasted red output). */
+  it('a SynthOutput literal that omits voiceSubstitutedFrom fails typecheck', () => {
+    // @ts-expect-error — voiceSubstitutedFrom is a required key (value still
+    // permits `undefined`); omitting the key entirely must not compile (#2034).
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000 };
+    expect(bad).toBeTruthy();
   });
 });
 

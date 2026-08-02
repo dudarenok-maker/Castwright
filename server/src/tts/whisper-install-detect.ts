@@ -9,13 +9,21 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { configValue } from '../config/resolver.js';
 
 export type WhisperInstallState = 'not-installed' | 'model-missing' | 'ready';
 
 /* faster-whisper resolves a size name ("base") to the Systran CTranslate2 repo.
-   Env-overridable in lockstep with the sidecar's ASR_MODEL so a relocated model
-   is probed where it actually lives. */
-const ASR_MODEL = process.env.ASR_MODEL || 'base';
+   ASR_MODEL is a registered registry knob (`qa.asr.model`), settable from
+   Advanced Configuration and not just `server/.env` — so the default MUST be
+   resolved per call through configValue(), never cached in a module-level
+   const (PR #2008 review, Major 1). configValue still gives env precedence
+   over the override, so a plain `.env`-only deployment resolves identically
+   to before; what changes is that a UI-set override now actually reaches this
+   probe too, in lockstep with the sidecar's own env-injected ASR_MODEL. */
+function currentAsrModel(): string {
+  return configValue<string>('qa.asr.model');
+}
 /* CTranslate2 Whisper snapshots ship `model.bin` (not .safetensors). */
 const WEIGHT_NAMES = ['model.bin'];
 
@@ -37,7 +45,7 @@ function hubCacheDir(): string {
 
 /** True if the model snapshot holds the CTranslate2 weight blob (`model.bin`) —
     so a half-finished download (metadata only) doesn't read as ready. */
-export function whisperModelPresent(model: string = ASR_MODEL): boolean {
+export function whisperModelPresent(model: string = currentAsrModel()): boolean {
   const repo = modelRepo(model);
   const repoDir = join(hubCacheDir(), 'models--' + repo.replace(/\//g, '--'));
   const snapshots = join(repoDir, 'snapshots');
@@ -79,7 +87,7 @@ export function fasterWhisperInstalled(repoRoot: string): boolean {
 /** not-installed | model-missing | ready. */
 export function detectWhisperInstallStateOnDisk(
   repoRoot: string,
-  model: string = ASR_MODEL,
+  model: string = currentAsrModel(),
 ): WhisperInstallState {
   if (!fasterWhisperInstalled(repoRoot)) return 'not-installed';
   if (!whisperModelPresent(model)) return 'model-missing';

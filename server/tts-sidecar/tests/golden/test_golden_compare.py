@@ -22,8 +22,10 @@ from tests.golden.compare import (
     FIRST_BLESS_MAX_WER,
     assert_content,
     bless_guard,
+    bless_guard_thresholds,
     compare_to_baseline,
     content_edits,
+    describe_measurement_move,
     measure_pcm,
     normalize_words,
     rms,
@@ -89,10 +91,22 @@ def test_normalize_words_lowercases_and_splits():
     assert normalize_words("The Lighthouse Keeper.") == ["the", "lighthouse", "keeper"]
 
 
-def test_normalize_words_strips_possessive_s():
-    # Matches segment-asr-qa.ts:276-277 -- "'s" and any stray apostrophe drop,
-    # rather than splitting into two tokens.
-    assert normalize_words("Aldric's before noon") == ["aldric", "before", "noon"]
+def test_normalize_words_does_not_collapse_possessive_s():
+    # #2005: deliberately does NOT mirror segment-asr-qa.ts:276-277's
+    # possessive-strip -- that production line only ever strips a genuine
+    # possessive because a prior step in normalizeForWer already expanded
+    # contractions; this function never did, so stripping "'s" here
+    # collapsed contractions ("he's" == "he") too, defeating the golden
+    # gate's whole single-word-drift purpose. An apostrophe now just falls
+    # out as ordinary punctuation, splitting the word either side of it.
+    assert normalize_words("Aldric's before noon") == ["aldric", "s", "before", "noon"]
+
+
+def test_normalize_words_does_not_collapse_apostrophe_s_contractions():
+    # The live bug (#2005): stripping "'s" made a dropped/added contraction
+    # invisible to a gate whose advertised purpose is catching exactly this.
+    assert normalize_words("he's here") != normalize_words("he here")
+    assert normalize_words("it's fine") != normalize_words("it fine")
 
 
 def test_normalize_words_strips_punctuation_and_dashes():
@@ -101,6 +115,7 @@ def test_normalize_words_strips_punctuation_and_dashes():
         "she",
         "said",
         "it",
+        "s",
         "fine",
     ]
 
@@ -159,8 +174,8 @@ def test_assert_content_passes_on_an_exact_match():
 
 
 def test_assert_content_passes_on_a_normalisation_only_difference():
-    # Casing/punctuation/possessive differences carry no content signal --
-    # both sides are Whisper output, so this is not the bless-path case.
+    # Casing/punctuation differences carry no content signal -- both sides
+    # are Whisper output, so this is not the bless-path case.
     assert assert_content("Wait, she said!", "wait she said") is None
 
 
@@ -314,6 +329,87 @@ def test_bless_guard_g2_allows_exactly_the_plus_one_boundary():
     assert "text_edits" in reason
 
 
+def test_bless_guard_missing_transcript_key_fails_closed_not_first_bless():
+    # #2003 repro 1: `existing` is present (this line has been blessed
+    # before -- it carries `text_edits`/`voice`) but its `transcript` KEY is
+    # absent (e.g. a hand-resolved merge conflict). That must NOT be treated
+    # as a first bless -- the first-bless branch has no G1/opt-in check at
+    # all, so a genuine one-word substitution ("grey" -> "green") sailed
+    # through silently before this fix.
+    existing = {"text_edits": 1, "voice": "af_heart"}
+    reason = bless_guard(
+        "The lighthouse keeper watched the grey sea roll in.",
+        existing,
+        "The lighthouse keeper watched the green sea roll in.",
+    )
+    assert reason is not None
+    assert "GOLDEN_REBLESS_CONTENT" in reason
+
+
+def test_bless_guard_missing_text_edits_key_fails_closed_not_open_cap():
+    # #2003 repro 2: `existing` has a `transcript` (so G1 is reachable and
+    # bypassed here via the flag) but no `text_edits` key. G2's cap must
+    # still apply -- not silently disable, which previously let a totally
+    # unrelated transcript through once G1 was bypassed.
+    existing = {"transcript": "hello world"}
+    reason = bless_guard(
+        "hello world",
+        existing,
+        "utterly different words here entirely nothing alike",
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
+def test_bless_guard_null_valued_transcript_fails_closed_like_a_missing_key():
+    # #2003 follow-up (independent review of #2032, F2): JSON `null` is the
+    # sibling corruption shape to a missing key -- a hand-resolved merge
+    # conflict produces it just as easily. `normalize_words(None)` returns
+    # [] (`text or ""`), so an unguarded null transcript previously compared
+    # equal to an empty FRESH transcript (silence) and sailed through. The
+    # cap here (99) is deliberately huge so only G1 -- not G2 -- can catch
+    # this: the old code accepted it outright.
+    existing = {"transcript": None, "text_edits": 99}
+    reason = bless_guard(
+        "The lighthouse keeper watched the grey sea roll in.",
+        existing,
+        "",  # silence
+    )
+    assert reason is not None
+    assert "GOLDEN_REBLESS_CONTENT" in reason
+
+
+def test_bless_guard_null_text_edits_treated_as_missing_not_a_crash():
+    # #2003 follow-up (F2, row 2): a null `text_edits` must not raise
+    # (`None + 1` was a TypeError before this fix) -- it gets the same
+    # strictest-possible-cap (0) treatment as a missing key.
+    existing = {"transcript": "one two three four five", "text_edits": None}
+    reason = bless_guard(
+        "one two three four five",
+        existing,
+        "one two threee fourr five",  # 2 edits > 0 + 1 cap
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
+def test_bless_guard_wrong_type_text_edits_treated_as_missing_not_a_crash():
+    # #2003 follow-up (F2, row 3): a wrong-typed `text_edits` (e.g. a string
+    # from a hand-resolved merge conflict) must not raise (`"2" + 1` was a
+    # TypeError before this fix) and must not be trusted as a numeric cap.
+    existing = {"transcript": "one two three four five", "text_edits": "2"}
+    reason = bless_guard(
+        "one two three four five",
+        existing,
+        "one two threee fourr five",  # 2 edits > 0 + 1 cap ("2" not trusted)
+        allow_rebless_content=True,
+    )
+    assert reason is not None
+    assert "text_edits" in reason
+
+
 def test_bless_guard_g2_protects_a_perfectly_transcribing_line():
     # #1911 s2c's key argument for G2: a line with 0 recorded edits over many
     # tokens is structurally unprotectable by a flat WER floor (a fraction of
@@ -339,3 +435,160 @@ def test_bless_guard_g2_protects_a_perfectly_transcribing_line():
     )
     assert reason2 is not None
     assert "text_edits" in reason2
+
+
+# ── bless_guard_thresholds -- instruct-baseline.json's tolerances (#1995) ──
+
+
+def test_bless_guard_thresholds_first_bless_has_nothing_to_protect():
+    # A never-before-blessed baseline has no committed tolerances to protect.
+    assert bless_guard_thresholds(None, {"rtf_max": 1.31}) is None
+
+
+def test_bless_guard_thresholds_silent_when_the_computed_value_is_unchanged():
+    tol = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
+    assert bless_guard_thresholds(dict(tol), dict(tol)) is None
+
+
+def test_bless_guard_thresholds_refuses_a_silent_change_without_the_flag():
+    # #1995 repro: a --bless run performed for an unrelated reason (recording
+    # Whisper transcripts elsewhere) silently raised rtf_max 1.0 -> 1.31.
+    existing = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
+    computed = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.31}
+    reason = bless_guard_thresholds(existing, computed)
+    assert reason is not None
+    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+
+
+def test_bless_guard_thresholds_allows_the_change_with_the_flag():
+    existing = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
+    computed = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.31}
+    assert bless_guard_thresholds(existing, computed, allow_rebless_thresholds=True) is None
+
+
+def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_fails_closed():
+    # #2003-shaped hole inside the #1995 fix (independent review of #2032,
+    # F1): `existing is None` was the guard's ONLY signal, which makes "this
+    # baseline was never blessed" (nothing to protect) and "this blessed
+    # baseline lost its `tolerances` key" (e.g. a hand-resolved merge
+    # conflict) the same state. The caller must pass `previously_blessed`
+    # (its own `baseline.get("identity")` truthiness) so the two states are
+    # distinguishable, and the latter must fail CLOSED.
+    reason = bless_guard_thresholds(None, {"rtf_max": 1.31}, previously_blessed=True)
+    assert reason is not None
+    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+
+
+def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_allows_with_the_flag():
+    reason = bless_guard_thresholds(
+        None, {"rtf_max": 1.31}, previously_blessed=True, allow_rebless_thresholds=True
+    )
+    assert reason is None
+
+
+# ── bless_guard_thresholds epsilon -- noise-tolerant measurement fields (#2045 F1) ──
+
+
+def test_bless_guard_thresholds_default_epsilon_is_exact_equality():
+    # epsilon=0.0 (the default) must behave EXACTLY like the pre-#2045
+    # equality check -- this is what keeps `tolerances` (quantised, no
+    # legitimate noise) refusing on ANY change with no epsilon widening it.
+    existing = {"rtf_max": 1.0}
+    computed = {"rtf_max": 1.0001}  # a tiny float move is still a REAL move for tolerances
+    reason = bless_guard_thresholds(existing, computed)
+    assert reason is not None
+    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+
+
+def test_bless_guard_thresholds_accepts_a_noise_sized_move_within_epsilon():
+    # #2045 F1 repro: identity is a raw stochastic measurement (4dp), not a
+    # quantised threshold -- exact equality refuses on every honest re-bless.
+    existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
+    computed = {"anchor": "neutral", "cosine": {"whisper": 0.0130}, "max": 0.0130}  # 0.0005 move
+    assert bless_guard_thresholds(existing, computed, epsilon=0.015, label="identity") is None
+
+
+def test_bless_guard_thresholds_refuses_a_move_beyond_epsilon():
+    existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
+    computed = {"anchor": "neutral", "cosine": {"whisper": 0.06}, "max": 0.06}  # 0.0475 move
+    reason = bless_guard_thresholds(existing, computed, epsilon=0.015, label="identity")
+    assert reason is not None
+    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+    assert "identity" in reason
+
+
+def test_bless_guard_thresholds_allows_a_beyond_epsilon_move_with_the_flag():
+    existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
+    computed = {"anchor": "neutral", "cosine": {"whisper": 0.06}, "max": 0.06}
+    reason = bless_guard_thresholds(
+        existing, computed, epsilon=0.015, label="identity", allow_rebless_thresholds=True
+    )
+    assert reason is None
+
+
+def test_bless_guard_thresholds_epsilon_ignores_a_missing_leaf_never_masks_it():
+    # A leaf present on only one side is a STRUCTURAL change, not numeric
+    # noise -- must refuse regardless of how large epsilon is set.
+    existing = {"whisper": -30.0, "neutral": -20.0}
+    computed = {"whisper": -30.0}  # "neutral" silently dropped
+    reason = bless_guard_thresholds(existing, computed, epsilon=1000.0, label="loudness_dbfs")
+    assert reason is not None
+
+
+def test_bless_guard_thresholds_epsilon_ignores_a_changed_non_numeric_leaf():
+    # A non-numeric leaf that changed (e.g. `identity`'s `anchor` string)
+    # must refuse regardless of epsilon -- it is never "noise".
+    existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
+    computed = {"anchor": "different", "cosine": {"whisper": 0.0125}, "max": 0.0125}
+    reason = bless_guard_thresholds(existing, computed, epsilon=1000.0, label="identity")
+    assert reason is not None
+
+
+# ── describe_measurement_move (#2045 F1) ────────────────────────────────────
+
+
+def test_describe_measurement_move_none_on_first_bless():
+    assert describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4) is None
+
+
+def test_describe_measurement_move_none_when_nothing_changed():
+    existing = {"whisper": -30.0, "neutral": -20.0}
+    assert describe_measurement_move(existing, dict(existing), epsilon=0.4) is None
+
+
+def test_describe_measurement_move_reports_every_moved_leaf():
+    existing = {"whisper": -30.0, "neutral": -20.0}
+    computed = {"whisper": -30.1, "neutral": -20.0}  # only whisper moved
+    desc = describe_measurement_move(existing, computed, epsilon=0.4)
+    assert desc is not None
+    assert "whisper" in desc
+    assert "neutral" not in desc  # unchanged leaf isn't reported as "moved"
+
+
+def test_describe_measurement_move_labels_a_within_epsilon_move_as_noise():
+    existing = {"whisper": -30.0}
+    computed = {"whisper": -30.1}  # 0.1 move, epsilon 0.4 -- genuinely noise
+    desc = describe_measurement_move(existing, computed, epsilon=0.4)
+    assert desc is not None
+    assert desc.startswith("within epsilon")
+    assert "BEYOND" not in desc and "FORCED" not in desc
+
+
+def test_describe_measurement_move_labels_a_beyond_epsilon_move_as_forced_not_noise():
+    """#2045 F1 defect (independent review of the shipped fix): the shipped
+    `describe_measurement_move` unconditionally formatted every move as
+    "within epsilon ... (noise)", even one that only reaches this function
+    because `bless_guard_thresholds` was forced through via
+    `allow_rebless_thresholds` despite being WELL beyond epsilon -- the
+    reviewer's repro was a 0.13 identity move (8.7x the 0.015 epsilon of the
+    time) echoed as "within epsilon 0.015 (noise)". The label must reflect
+    the actual move, not the caller's decision to accept it: a move beyond
+    epsilon must say BEYOND/FORCED, never "noise"."""
+    existing = {"cosine": {"whisper": 0.0125}}
+    computed = {"cosine": {"whisper": 0.1425}}  # 0.13 move, 8.7x epsilon 0.015
+    desc = describe_measurement_move(existing, computed, epsilon=0.015)
+    assert desc is not None
+    assert desc.startswith("BEYOND epsilon")
+    assert "FORCED" in desc and "GOLDEN_REBLESS_THRESHOLDS" in desc
+    assert "noise" not in desc
+    assert "cosine.whisper" in desc

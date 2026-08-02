@@ -59,6 +59,24 @@ export interface SynthOutput {
       quote that happens to carry an emotion variant doesn't stamp its
       `__<emotion>`-suffixed voiceName onto the character-level snapshot. */
   baseVoiceName?: ChapterSegment['baseVoiceName'];
+  /** #1888 — the voice this re-recorded segment REQUESTED, set only when
+      the sidecar substituted a fallback for THIS specific take
+      (`ChapterSegment['voiceSubstitutedFrom']`). UNLIKE `voiceName` above,
+      a re-record always has a definite answer for "did this take
+      substitute" — `undefined` here is a meaningful, current "no", not "the
+      caller hasn't wired this through." `buildSynthReplacements` must
+      therefore always set this key on `freshVerdict` (never omit it), or a
+      clean re-record would leave a stale substitution flag from the
+      segment's prior render in place.
+
+      #2034 — REQUIRED (not `?:`), unlike every other field on this
+      interface: an optional key lets a caller's returned object literal
+      omit it with no compile error, and `buildSynthReplacements` would then
+      read `undefined` off a genuinely-absent property indistinguishably
+      from a genuine "no substitution" — silently wiping a real prior
+      substitution flag. Requiring the key (its value still permits
+      `undefined`) forces every caller to make that choice explicitly. */
+  voiceSubstitutedFrom: ChapterSegment['voiceSubstitutedFrom'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -110,6 +128,11 @@ export async function buildSynthReplacements(
       // M1 — same omit-don't-overwrite rule for the base (pre-emotion-variant)
       // voice name.
       ...(out.baseVoiceName ? { baseVoiceName: out.baseVoiceName } : {}),
+      // #1888 — UNCONDITIONAL, unlike the fields above: a re-record always
+      // synthesises and always has a definite substitution answer, so this
+      // key must always be set (even to `undefined`) so a clean take clears
+      // any stale substitution flag the segment's prior render carried.
+      voiceSubstitutedFrom: out.voiceSubstitutedFrom,
     };
     replacements.push({
       startSegmentIndex: i,

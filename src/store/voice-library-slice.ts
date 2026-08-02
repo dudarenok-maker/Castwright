@@ -27,7 +27,7 @@
    store-level side effects (e.g. the router) are wired up post-creation. */
 
 import { createSlice, createAsyncThunk, createSelector, type PayloadAction } from '@reduxjs/toolkit';
-import { api, type VoiceLibraryEntry, type VoiceLibraryPatch, type VoiceLibraryUsageEntry, type CloneVoiceBody } from '../lib/api';
+import { api, type VoiceLibraryEntry, type VoiceLibraryPatch, type VoiceLibraryUsageEntry, type CloneVoiceBody, type CloneEngineSlot } from '../lib/api';
 import type { TtsModelKey } from '../lib/types';
 
 export type VoiceLibraryStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -116,6 +116,19 @@ export const patchEntry = createAsyncThunk(
       await dispatch(fetchVoiceLibrary());
       throw err;
     }
+  },
+);
+
+/** Plan 276 Decision 7 — the "Retry derive" cast-time-gate CTA. Not
+ *  optimistic (unlike `patchEntry`'s field edits): the server decides
+ *  whether the slot was actually `failed` (a no-op returns the entry
+ *  unchanged), so there is nothing safe to predict locally. Reconciles
+ *  fully from the response, same as every other non-`patchEntry` mutation
+ *  in this slice. */
+export const retryEngine = createAsyncThunk(
+  'voiceLibrary/retryEngine',
+  async (args: { voiceUuid: string; engine: CloneEngineSlot }) => {
+    return api.retryCloneEngine(args.voiceUuid, args.engine);
   },
 );
 
@@ -235,6 +248,11 @@ export const voiceLibrarySlice = createSlice({
         entry.updatedAt = new Date().toISOString();
       })
       .addCase(patchEntry.fulfilled, (state, action: PayloadAction<VoiceLibraryEntry>) => {
+        const idx = state.entries.findIndex((e) => e.voiceUuid === action.payload.voiceUuid);
+        if (idx >= 0) state.entries[idx] = action.payload;
+        else state.entries.push(action.payload);
+      })
+      .addCase(retryEngine.fulfilled, (state, action: PayloadAction<VoiceLibraryEntry>) => {
         const idx = state.entries.findIndex((e) => e.voiceUuid === action.payload.voiceUuid);
         if (idx >= 0) state.entries[idx] = action.payload;
         else state.entries.push(action.payload);

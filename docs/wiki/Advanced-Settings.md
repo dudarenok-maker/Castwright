@@ -162,6 +162,7 @@ sidecar — not instant, but your books/cast/voices are untouched.
 | Preload Qwen at startup | Eager-load Qwen Base at boot (~1.2GB VRAM) | `false` | boolean | restart · sidecar | high |
 | Preload Qwen 1.7B-Base at startup | Eager-load 1.7B-Base for anchored emotion variants (~3.4GB) | `false` | boolean | restart · sidecar | high |
 | Qwen degeneracy guard | Catches near-silent Qwen renders and reloads/retries instead of shipping them — leave on unless isolating a false-positive | `true` | boolean | restart · sidecar | medium |
+| Coqui degeneracy guard | Catches near-silent Coqui/XTTS renders and retries with a fresh sample instead of shipping them — leave on unless isolating a false-positive (#2026) | `true` | boolean | restart · sidecar | medium |
 | Pin Coqui import order at startup | Eagerly imports Coqui's TTS.api at boot so a prior ECAPA speaker-embed can't leave Coqui unloadable until a restart (#1944) | `true` | boolean | restart · sidecar | medium |
 
 **Qwen codec device** ships off by default, so it changes nothing on its
@@ -181,6 +182,14 @@ retries the line, and escalates to a voice-engine recycle rather than shipping
 the bad render. Turning it off removes that protection — only do so to isolate
 a suspected false-positive on unusual text, and switch it back on afterwards.
 See [Troubleshooting](Troubleshooting#a-line-came-out-silent-or-nearly-empty-qwen-degeneracy-guard).
+
+**Coqui degeneracy guard** is the same idea, on the XTTS path (#2026): it
+catches a Coqui render that comes back implausibly short for a substantial
+line and retries once with a fresh sample — XTTS's decoder has no fixed
+seed, so a bad render is usually just an unlucky draw, not a broken model,
+and a resample alone clears it. On by default; turn it off only to isolate a
+suspected false-positive on unusual text, and switch it back on afterwards.
+See [Troubleshooting](Troubleshooting#a-coqui-line-came-out-silent-or-nearly-empty-coqui-degeneracy-guard).
 
 A read-only **Analyzer (Ollama) device** row appears at the end of this
 group when the local analyzer is active — Ollama's device isn't
@@ -211,9 +220,9 @@ app-pinnable, so it just reports what the daemon is currently doing.
   <img alt="Per-sentence QA gates" src="images/advanced-settings/07-per-sentence-qa-gates.png">
 </picture>
 
-Group risk is **low** overall, but 3 knobs in this group are individually
-**medium** risk (Voice-QA device, Content-QA device, Auto-fix voice
-mismatches) — the table's risk column shows each correctly.
+Group risk is **low** overall, but 4 knobs in this group are individually
+**medium** risk (Voice-QA device, Content-QA device, Content-QA model, Auto-fix
+voice mismatches) — the table's risk column shows each correctly.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -233,6 +242,7 @@ mismatches) — the table's risk column shows each correctly.
 | Render-integrity QA (voice match) | ECAPA speaker-embed match check per rendered line | `false` | boolean | live | low |
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |
+| Content-QA (Whisper) model | faster-whisper model size/name; cap at `base` on an 8 GB card | `base` | string | restart · sidecar | **medium** |
 | Auto-fix voice mismatches | Re-render+replace severe voice mismatches | `false` | boolean | live | **medium** |
 | ASR max deletion run | Longest deletion run → truncation/drop drift | 4 | integer | live | low |
 | ASR min chars | Sentences shorter than this aren't scored | 12 | integer | live | low |

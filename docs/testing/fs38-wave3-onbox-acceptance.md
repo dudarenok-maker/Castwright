@@ -1495,6 +1495,44 @@ Copy-Item "$BOOK\.audiobook\cast.json" "$BOOK\.audiobook\cast.json.bak"
 
 **Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
 
+**Run-3 finding (2026-07-31) — fires, and was NOT surfaced.** This exact path
+fired naturally on *Заказ Коалфолла* ch.2: `cast.json` has `mairin`/
+`coalfall-dragon`, the analysis cache and rendered `segments.json` have
+`mayrin`/`coalfall` — 21 of 72 segments (60.3 s) rendered in the **narrator's**
+voice, logged once per orphan id per render and surfaced **nowhere else**
+(`renderedFallbackByCharacter` stayed `{}`). Filed
+[#2023](https://github.com/dudarenok-maker/Castwright/issues/2023) — fixed by
+the PR carrying this edit. Two sub-cases now extend this test, both merged into
+this PR and covered by automated tests (fake resolver deps, no live GPU
+needed for the LOGIC gate) — **the on-box run below still proves the FULL
+integration** (a real cloned voice, a real sidecar, a real cast/analysis id
+drift) and remains owed:
+
+- **C-05a (Piece 2 — the actual guarantee gap).** Repeat the steps above with
+  the narrator's cloned voice **HEALTHY** (not revoked) instead. Before #2023
+  this rendered the orphaned line silently on the cloned narrator's voice —
+  the guarantee was safe only by luck (every affected narrator in the 5
+  wrong-voice-audio books happened to be a *designed*, not cloned, voice).
+  **Expected (post-fix):** the chapter now fails with `cloned-voice-broken`
+  naming the narrator, exactly like the revoked case — a healthy cloned voice
+  must never be substituted for another character's line either. See
+  `synthesise-chapter-cloned-resolver.test.ts`'s "#2023 Piece 2" case for the
+  automated pin of this exact scenario.
+- **C-05b (Piece 1 — record + surface, non-cloned narrator).** Repeat with a
+  **designed** (non-cloned) narrator voice — the render still falls back
+  (falling back may be correct behaviour; only the *silence* was the bug).
+  **Expected (post-fix):** the chapter completes normally, AND (a) the
+  rendered `<slug>.segments.json`'s orphaned-id segment carries a
+  `renderedFallbackCharacterId` naming the narrator, (b) `GET
+  /api/books/:id/state`'s `orphanedCharacterFallbacks` map names the orphaned
+  id + the voice actually used, and (c) the Cast view shows the amber
+  "N character id(s) not found in this book's cast" advisory banner naming
+  the orphaned id(s).
+
+**Result (C-05a):** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+**Result (C-05b):** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
 ---
 
 #### C-06 — A **Repairable** voice transparently re-derives and the chapter completes
@@ -2615,6 +2653,20 @@ Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and 
 
 ---
 
+#### #2026 — additional acceptance criteria: Russian XTTS quality (leading-dash pause, Coqui degeneracy guard)
+
+Not an E-10 (same reason as #1967 above — the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the three defects filed as [#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), found while running this same run sheet's §5 Section E, E-04. **This PR deliberately does NOT add a register row for these items** — `docs/testing/onbox-acceptance-register.md` is being actively edited by a concurrent PR (#2039, annotating the E-04 row itself), so recording this debt there is left for a follow-up reconciliation rather than risking a collision on the same file. The criteria below are the complete record in the meantime; do not let them go missing when the register row is eventually added — the reconciliation (adding the row once #2039 merges, and republishing the register's live HTML twin at its existing artifact URL) is tracked on [#2057](https://github.com/dudarenok-maker/Castwright/issues/2057).
+
+**Preconditions:** a stock catalogue Coqui voice (no clone needed — every defect reproduces on `Damien Black` per the issue), `language: ru`, the acceptance chapter used for E-04 (or any Russian manuscript with dialogue lines opening on `—`).
+
+1. **Defect 2 — leading em-dash pause, by ear.** Generate (or `POST /synthesize` directly) a dialogue line that opens with `—` (e.g. `— Кто бы это ни был, пусть стучит.`). Listen for an audible beat before the speech starts — the fix (`server/src/tts/text-normalize.ts`'s `softenDashes`) converts the leading dash to `... ` server-side, on the theory that a leading ellipsis produces a pause where a leading comma didn't; **this has NOT been confirmed by ear on real audio**, only pinned as a wire-text transform (`server/src/tts/text-normalize.test.ts`). Compare against the SAME line with no leading punctuation at all, and against an interior-dash sentence, as the two reference points the original issue measured (2.41 s / 4.22 s for a 24-/regression-length line).
+2. **Defect 3 — Coqui degeneracy guard, live.** The guard (`tts.coqui.degenGuard`, `server/tts-sidecar/main.py`'s `_coqui_synth_is_degenerate`) is pinned by a scripted-fake pytest (`server/tts-sidecar/tests/test_coqui_degeneracy_guard.py`) but has never run against the REAL XTTS model. Owed: (a) confirm it does NOT false-positive on ordinary short Russian lines (2-3 words) at normal speaking pace — the 20 ms/speakable-char floor is reused verbatim from the Qwen guard's own calibration, not independently measured for Coqui's actual healthy short-utterance duration; (b) if a live repro of the original degenerate collapse (`Хорошее олово.` → Finnish, `Тёплое море.` → English) can be captured, confirm the guard's retry actually recovers it — the guard's own docstring is explicit that it can only catch an implausibly SHORT render, not a plausible-duration wrong-language collapse, so a live repro may show the guard does NOT catch these specific historical cases even when working as designed.
+3. **Defect 1 — neuter `-ее` mispronunciation.** No local fix was attempted (see the finding posted to issue #2026) — this item is a standing invariant check, not new acceptance: confirm the defect still reproduces on `main` (so a future coqui-tts upgrade can be checked against it) rather than something to sign off as fixed.
+
+**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+
+---
+
 ## 6. Known limitations — verify as EXPECTED, do not file as defects
 
 Everything in this table is a **documented, accepted** limitation of the shipped
@@ -2695,7 +2747,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **B** | needs a full-chapter render — blocked by the side-11 leak (see §7.2 BLOCKER-1) |
 | C-03 | Broken voice not in this chapter doesn't fail it | | |
 | C-04 | Title-beat narrator path is gated | | |
-| C-05 | Orphaned-characterId narrator path is gated | | |
+| C-05 | Orphaned-characterId narrator path is gated | **F** (fires, and is **not** surfaced) | Fired naturally during the run-3 render. `cast.json` has `mairin`/`coalfall-dragon`; the analysis cache and `segments.json` have `mayrin`/`coalfall` — so **21 of 72 segments (60.3 s) rendered in the NARRATOR's voice**. Logged twice per render (`… which is not in this book's cast — falling back to the narrator voice`), **absent from `renderedFallbackByCharacter`** (`{}`), never surfaced in the UI. ECAPA confirms same voice: narrator vs mayrin **0.932**, narrator vs coalfall **0.965** (one real person across two clips = 0.891). **Not one book — 5 affected**: Playing with Fire 2.8 min, Unlocked 2.1, Exile 1.9 (incl. Silveny), Заказ Коалфолла 1.0, Everblaze 0.9. Escapes breaching the cloned-voice guarantee only by luck — every affected narrator is a *designed* voice. Filed [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023). **Caught by ear by the owner**, from audio the measurements had already flagged and I had misread |
 | C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | | |
 | C-07 | Base-model bump → same re-derive | | |
 | C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | | |
@@ -2726,11 +2778,13 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | **P** (derive + language only) | Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check |
+| **E-01** ⭐ | Clone → cast on a Coqui-routed (Russian) book → generate | **P** (mechanism) · **by-ear NEGATIVE** | **Run 3 (2026-08-01) — first genuine exercise; supersedes run 2's retracted entry below.** Full **chapter generation**, not a splice (#1972 makes a splice unsafe on this book). Russian Coalfall ch.2, `oduvan` → clone `0abceba4-…`, `ttsEngine: coqui`. Chapter completed **71/71**, `audioEngines {qwen: 3, coqui: 1}`, 323 s. `xtts-$U.pt` mtime **unchanged** → **no re-derive**. `/transcribe` auto-detect → **`ru`**. **Identity measured through `/synthesize` → `/embed`, never off `resolvedVoiceName`:** rendered oduvan vs the clone's source **0.2159** against a **0.0221** floor (rendered narrator vs the same source), and vs its own audition **0.5515** against floors of 0.105 / 0.051 — the render and the audition are the same voice. `renderedFallbackByCharacter` `{}` — no silent substitution of the cloned character. **⚠️ By-ear half FAILS.** Owner: *"2 does not sound like 4 much, cross language is not working well."* Mechanism passes; perceptual identity does not. **Root cause isolated by controlled experiment** — a second clone built from a **Russian** 15.84 s clip and rendered in the SAME chapter scored **0.7824** against its own source vs the English-sourced clone's **0.2321**. It is the *source clip's language*, not XTTS cloning. Caveat: the RU floor is contaminated (narrator vs RU source already 0.577, because Qwen Russian voices cluster). Feeds [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998). Ear kit: `C:ixturess38\_EARCHECK\e01-russian-clone\` and `e-ru-source-clone\` |
+
+> **Run 2 (superseded, kept for history):** Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
 | E-03 | Revoke lands during an in-flight Coqui derive | | |
-| E-04 | A long sentence on a cloned Coqui voice | | |
-| E-05 | Audition matches render (KL-o caveat) | | |
+| E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
+| E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
 | **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |

@@ -66,6 +66,7 @@ import {
   rejectForeignCloneKeys,
 } from '../workspace/preserve-cast-voices.js';
 import {
+  collectOrphanedCharacterFallbacks,
   collectRenderedFallbackEngines,
   collectRenderedInstructHashesByChapter,
   collectRenderedSpeakerMaps,
@@ -455,6 +456,18 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* #2023 Piece 1 — per-orphaned-characterId render-time substitution,
+       aggregated the same way as renderedFallbackByCharacter just above but
+       keyed by the ORPHANED id (a manuscript attribution with no cast entry
+       at all, e.g. a cast/analysis id-romanisation drift) rather than a real
+       cast id. Silence was the bug: today this fact is logged once per orphan
+       id per render and surfaced nowhere else. Empty `{}` when nothing has
+       substituted. Tolerant of a missing audio dir. */
+    const orphanedCharacterFallbacks = await collectOrphanedCharacterFallbacks(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend
        diffs it against the live manuscript to flag a `done` chapter whose
        sentences were reassigned after it rendered — precise (no false positives)
@@ -508,6 +521,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       chapterCharacters,
       chapterLufs,
       renderedFallbackByCharacter,
+      orphanedCharacterFallbacks,
       renderedSpeakersByChapter,
       renderedTextByChapter,
       renderedInstructByChapter,

@@ -1,15 +1,15 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-08-01
 owner: null
 ---
 
 # Cast-time warning — and fix — when a cloned voice cannot render on its routed engine
 
-> Status: draft
+> Status: stable
 > Key files: `server/src/tts/clone-readiness.ts` (new, shared by both sides), `src/store/voice-readiness-selectors.ts`, `src/store/start-generation-flow.ts`, `src/modals/clone-readiness-gate.tsx` (new), `server/src/routes/voice-library.ts`
 > URL surface: `#/books/<id>/cast` ("Approve cast & start generating") and `#/books/<id>/generation` ("Resume generation")
-> OpenAPI ops: `PATCH /api/voices/{voiceUuid}` (**extended**), `POST /api/voices/{voiceUuid}/engines/{engine}/retry` (**new**)
+> OpenAPI ops: `PATCH /api/voice-library/{voiceUuid}` (**extended**), `POST /api/voice-library/{voiceUuid}/engines/{engine}/retry` (**new**)
 
 Closes #1980. Complements #1933 (PR #1991, merged 2026-07-31 as `d496ce6d`).
 
@@ -32,6 +32,16 @@ Closes #1980. Complements #1933 (PR #1991, merged 2026-07-31 as `d496ce6d`).
 > **[R3]**. The most important is C1: the client never sees the persisted slot
 > status, so rev 3 as first written reproduced rev 2's false negative by a new
 > route.
+>
+> **[R4] Path correction, made during implementation.** Every revision wrote
+> these routes as `/api/voices/...`. **That is a different, existing endpoint
+> family** — `GET /api/voices` (`openapi.yaml:1815`) walks every confirmed
+> `cast.json` in the workspace and has nothing to do with the voice library. The
+> library is mounted at **`/api/voice-library`** (`app.ts:195`), which is what
+> `withComputedStaleness` serves and what the client actually fetches
+> (`api.ts:9576`). Corrected throughout. Left uncorrected it would have had
+> Task 9 document two routes that do not exist, under a name that collides with
+> a real and unrelated one.
 
 ## Benefit / Rationale
 
@@ -77,7 +87,7 @@ all its force from unactionability. Decisions 6 and 7 remove that.
 |---|---|---|
 | `no-transcript` | **Add transcript** | Decision 6 — sets `master.transcript`, clears the failed slot, voice becomes derivable |
 | `derive-failed` | **Retry derive** | Decision 7 — clears the terminal stamp; the predicate then re-evaluates the *underlying* cause |
-| `wrong-engine` | **Cast on _other engine_** | sets `character.ttsEngine`; offered only when Decision 5's `otherEngineOk` holds |
+| `wrong-engine` | **Cast on _<engine>_** | sets `character.ttsEngine`; offered only when Decision 5's `castOnEngine` **[R4]** is non-null, and it names the engine |
 | `missing-entry` **[R3]** | **Assign a different voice** | opens the cast profile drawer — the library entry is gone, so re-assignment is the only repair |
 | `revoked`, `missing-master` | *(none)* | explanatory copy only — consent withdrawal and a discarded clip have no in-app repair |
 
@@ -99,7 +109,7 @@ accepts a client-side mirror of this rule (`_mockClonedAssignBlock`,
 `src/lib/api.ts:9950-9956`).
 
 The verdict is a **pure selector**, and the flow reuses the existing
-`fetchVoiceLibrary` thunk (`voice-library-slice.ts:61`, `GET /api/voices`) to
+`fetchVoiceLibrary` thunk (`voice-library-slice.ts:61`, `GET /api/voice-library`) to
 ensure entries are present. That matters: `fetchVoiceLibrary` is dispatched from
 exactly one place — `src/components/voices/my-voices-section.tsx:30` — so on the
 cast view the slice is empty unless the user visited My Voices. The check must
@@ -110,7 +120,7 @@ no per-character `stat()`, and no possibility of the readiness call and the
 generation call disagreeing about the engine — they read the same session value.
 
 **[R3] What the client does NOT see — the correction that matters most.**
-`GET /api/voices` maps every entry through `withComputedStaleness`
+`GET /api/voice-library` maps every entry through `withComputedStaleness`
 (`routes/voice-library.ts:509-513`, impl `:489-500`), which **overwrites** `status`
 with `'stale'` whenever the stored version stamp differs from current — *including
 a slot whose persisted status is `'failed'`*. The render reads the raw on-disk
@@ -126,6 +136,22 @@ Three things follow, all required:
 2. **`slotStatus` is defined as the post-`withComputedStaleness` value** — see
    Decision 3's input contract. Server-side callers apply the same transform before
    calling, so both sides see identical input by construction.
+
+   **[R4] "By construction" was false as written, and the plan's own primary flow
+   broke it.** The transform was applied on `GET /` **only**. But
+   `patchEntry.fulfilled` (`src/store/voice-library-slice.ts:237-240`)
+   **replaces** the slice's entry with the PATCH response, so after any edit the
+   client held the **raw persisted** status. A version-stale-but-`ready` slot then
+   read `'ready'` instead of `'stale'`, rules 5/6 stopped firing, and the result
+   is a false negative of exactly the class that killed rev 2 — arriving by a
+   *third* route. Decision 6's "Add transcript" CTA is a PATCH, so the fix flow
+   itself was the trigger: the gate could clear for the wrong reason.
+   **Every route that hands an entry to the client applies the transform**, the
+   retry route's no-op path included — a `ready`-but-version-stale slot is both
+   the case that no-ops there and the case the transform rewrites, so it is the
+   one shape where returning raw changes the answer. Found by checking the
+   invariant against *every* entry-returning route rather than only the one this
+   decision names.
 3. **The contract test routes its client side through `withComputedStaleness`**, or
    it is blind to exactly this class. Rev 3 fed both sides raw entries and would
    have missed it.
@@ -231,6 +257,16 @@ works, but a twice-rewritten plan should not rest on that: **Task 1 runs
 `npm run build` and greps `dist/assets` for a `clone-readiness` symbol**, and
 records the result here before any other task starts.
 
+> **Gate result — PASSED, 2026-08-01.** A throwaway `server/src/tts/clone-readiness.ts`
+> value-importing `isCloneEngine` from `./clone-engines.js`, imported (extensionless,
+> matching the `help-failures.ts` precedent) from `src/data/help-failures.ts`:
+> `npm run build` succeeded and the probe's marker string landed in
+> `dist/assets/help-failures-*.js`, i.e. Vite resolved the `.js` specifier to the
+> `.ts` source and bundled the value. `npm run typecheck` (frontend `tsc --noEmit`,
+> `moduleResolution: Bundler`) was clean over the same import. Decision 3's
+> shared-module approach stands as written; the probe was reverted before Task 2.
+
+
 **Binding to the render.** A shared module removes implementation drift but not
 behavioural drift — `cloneReadiness` is still a second opinion about what
 `resolveClonedVoicesForChapter` (`clone-voice-resolver.ts:415`) will do. A
@@ -246,7 +282,7 @@ reading the same session value the generation POST will send. The verdict and th
 render therefore cannot disagree about routing, which is what "survives a
 book-level engine switch" reduces to.
 
-## Decision 5 — entry condition, `otherEngineOk`, and its own modal
+## Decision 5 — entry condition, `castOnEngine`, and its own modal
 
 **Entry condition: any character carrying a cloned slot**, via
 `characterHasClonedSlot(character)` (`clone-engines.ts:77-94`) — *not* "any cloned
@@ -275,8 +311,36 @@ its warn set. Routing is what the check *evaluates*, never what gates it.
 early return; the tier prompt keeps `castRendersOnQwen`. A Coqui-only cast must
 reach the clone gate and must **not** see a tier chooser.
 
-**`otherEngineOk`** — whether the "Cast on other engine" CTA appears — is
-`cloneReadiness({...input, engine: otherEngine, characterHasSlot: hasClonedProvenance(character, otherEngine)}) === null`.
+**[R4] `otherEngineOk` became `castOnEngine: CloneEngine | null`.** The formula
+below is kept for its reasoning, but "the other engine" is not well defined and
+the boolean was not sufficient:
+
+- **Not well defined.** A blind binary swap (`engine === 'qwen' ? 'coqui' :
+  'qwen'`) lands on `'qwen'` for *any* non-qwen engine. So a character routed to
+  **Kokoro** whose voice is cloned only on **Coqui** scored `false` and got a
+  `wrong-engine` verdict with **no CTA** — even though re-casting to Coqui works.
+  Decision 1 says a gate with no fix must fail review, and Decision 5
+  *deliberately* admits the Kokoro-routed character, so the formula failed a case
+  this very decision includes on purpose.
+- **Not sufficient.** Decision 1's CTA is labelled "Cast on _<engine>_". A boolean
+  cannot supply that name when the routed engine is Kokoro. The shape had to
+  change for the modal regardless of the bug.
+
+Now: scan `CLONE_ENGINE_LIST`, **excluding the character's routed engine**, and
+take the first candidate for which the formula below returns `null`.
+`CLONE_ENGINE_LIST` order is the deterministic tie-break when a character carries
+both cloned slots — arbitrary but stable, not accidental. This **subsumes** the
+binary case exactly: a qwen-routed character has only `coqui` as a candidate.
+
+The routed-engine exclusion is **semantically right but not currently
+distinguishable by any test**, and that was verified rather than assumed:
+re-including the routed engine recomputes `characterHasSlot` to the same value
+that produced the `wrong-engine` verdict, so it always self-rejects on rule 3.
+It is kept as defence against a third clone-capable engine or a relaxed rule 3.
+Do not delete it as dead, and do not write a test that pretends to cover it.
+
+The per-candidate formula is unchanged:
+`cloneReadiness({...input, engine: candidate, characterHasSlot: hasClonedProvenance(character, candidate)}) === null`.
 **[R3]** Note the exact helper and arity: rev 3 wrote
 `characterHasClonedSlot(character, otherEngine)`, which takes one argument and is
 engine-agnostic — written literally it does not compile, and "fixed" by dropping
@@ -312,7 +376,7 @@ advisory it could not compute — and the CTA **disables while in flight**.
 Folded on the repo owner's instruction ("no follow ups, fix it now"). This makes
 Decision 1's primary CTA real.
 
-Extend `PATCH /api/voices/{voiceUuid}` (`routes/voice-library.ts:528-587`) to accept
+Extend `PATCH /api/voice-library/{voiceUuid}` (`routes/voice-library.ts:528-587`) to accept
 `transcript`:
 
 - Rejected unless `provenance === 'cloned'` and `existing.master` is present.
@@ -352,7 +416,7 @@ not an absent field. A fixture omitting it will not typecheck.
 
 ## Decision 7 (folded) — a `failed` slot can be cleared
 
-`POST /api/voices/{voiceUuid}/engines/{engine}/retry` **deletes the engine's slot
+`POST /api/voice-library/{voiceUuid}/engines/{engine}/retry` **deletes the engine's slot
 key** from `entry.engines`, through the same `updateEntry` lock. **[R3]** Deletion
 rather than a status rewrite: `VoiceLibraryEngineStatus.status` is required
 (`workspace/voice-library.ts:24-29`) so there is no "unset", and an absent slot
@@ -415,9 +479,25 @@ after round 3 — including two of rev 3's own that were themselves placebos.
   → red. **[R3]** (rev 3's false positive)
 - `slotStatus: 'ready'` + `hasMaster: false` → `null`. Mutation: ungate rule 5 →
   red. **[R3]**
-- `slotStatus: 'stale'` + blank transcript + Qwen → `no-transcript`. Mutation:
-  restore rev 2's `status === 'ready' → null` short-circuit → red.
+- `slotStatus: 'stale'` + blank transcript + Qwen → `no-transcript`.
+  **[R4] Mutation corrected:** rev 3 named "restore rev 2's
+  `status === 'ready' → null` short-circuit". That mutation is **inert** — the
+  guard is false for a `'stale'` input by construction, so it cannot redden any
+  fixture, and an implementer who runs it as written gets a green suite and a
+  false all-clear. The mutation that actually targets this case is **narrowing
+  rule 6's gate from `slotStatus !== 'ready'` to `slotStatus === undefined`**
+  (i.e. "only warn if never derived"), which is the plausible wrong
+  implementation. Verified red on exactly this case.
 - `entryFound: false` → `missing-entry`. **[R3]**
+- **[R4] One case per verdict — rules 2, 4 and 5 must each be asserted
+  positively**, on an otherwise-healthy input: `consentRevoked` → `revoked`,
+  `slotStatus: 'failed'` → `derive-failed`, and (on **Coqui**, so rule 6 cannot
+  supply the verdict instead) `!hasMaster` → `missing-master`. Without these,
+  each of those three rules can be **deleted outright** with the whole suite
+  still green — measured, not hypothesised. Every mutation rev 3 named probes a
+  gate or an ordering; **none probes existence**, so the named list passed in
+  full against a predicate missing half its rules. Existence mutations are part
+  of the bar, not an extra.
 - `wrong-engine` outranks slot status on a **doubly-broken** input (not
   clone-capable *and* a `failed` slot); with a healthy slot, precedence is untested
   and reversed-order code passes.
@@ -440,7 +520,7 @@ wrong-helper bugs live, and where rev 3 had no coverage:
   case goes wrong → red.
 - `slotStatus` is the post-`withComputedStaleness` value.
 - **The C1 regression:** `{status:'failed', baseModel:'old'}` served through
-  `GET /api/voices` still yields `derive-failed`. Mutation: restore
+  `GET /api/voice-library` still yields `derive-failed`. Mutation: restore
   `withComputedStaleness`'s overwrite of a failed status → red.
 
 **Co-oracle contract (`server/src/tts/clone-readiness-contract.test.ts`)** — the
@@ -475,8 +555,11 @@ CTA is rendered when one exists" is satisfiable by a single always-on button:
 
 - each reason renders its own CTA and no other;
 - `revoked` / `missing-master` render explanatory copy and **no** CTA;
-- "Cast on other engine" is **hidden** when the character lacks the other engine's
-  cast slot.
+- **[R4]** "Cast on _<engine>_" is **hidden** when `castOnEngine` is null, and
+  when it is non-null the button **names that engine** — a Kokoro-routed
+  character cloned only on Coqui must read "Cast on Coqui", not "Cast on Qwen"
+  and not a generic label. A test asserting only that *some* re-cast button
+  appears passes against the blind-swap bug this replaced.
 
 **Decisions 6 & 7 (`server/src/routes/voice-library.test.ts`)**
 
@@ -547,4 +630,38 @@ owner's instruction.
 
 ## Ship notes
 
-_To fill on merge: shipped date, commit SHA._
+**Shipped 2026-08-01** — PR [#2067](https://github.com/dudarenok-maker/Castwright/pull/2067),
+merge commit `8127c68e`. Closes #1980.
+
+All nine tasks landed, plus the e2e spec. Four defects were found and fixed
+during implementation rather than filed: `withComputedStaleness` overwriting a
+persisted `'failed'` status; the same transform running on `GET /` only, so
+`patchEntry.fulfilled` put a raw status back in the slice and the plan's own
+"Add transcript" CTA could clear the gate for the wrong reason; `otherEngineOk`'s
+blind binary engine swap, replaced by `castOnEngine`; and six misleading
+`baseModel: 'current-model'` fixture stamps. Each is recorded as an `[R4]` note
+against the decision it corrects.
+
+**Four placebo tests were caught and repaired**, one of them authored by this
+plan. Rules 2, 4 and 5 of the predicate could each be deleted outright with the
+whole suite green, because every mutation the plan named probed a gate or an
+ordering and none probed existence; the transcript-lock test pinned only the
+first of the handler's two reads of the fresh snapshot; the contract test's 1v2
+row was not actually doubly-broken; and the fail-open test exercised a branch
+that could not execute, because a `createAsyncThunk` dispatch never rejects
+without `.unwrap()`. That last one meant the gate failed **closed** — reporting
+`missing-entry` for every cloned character whenever `GET /api/voice-library`
+failed. Found by the `code-review` gate, not by the suite.
+
+**Owed on-box acceptance:** register row **A31** and
+[`docs/testing/clone-readiness-gate-onbox-acceptance.md`](../../testing/clone-readiness-gate-onbox-acceptance.md).
+No automated layer proves that pressing the CTAs repairs the render — they all
+stop at the API response — and `derive-failed` / "Retry derive" is unreachable
+in mock mode by construction.
+
+**Follow-ups filed:** [#2054](https://github.com/dudarenok-maker/Castwright/issues/2054)
+(a cloned slot with no resolvable `libraryUuid` gets no verdict while the render
+hard-fails `misconfigured`) and
+[#2068](https://github.com/dudarenok-maker/Castwright/issues/2068) (four residual
+gaps from the review, incl. a debounce race between "Cast on _engine_" and
+"Proceed anyway").

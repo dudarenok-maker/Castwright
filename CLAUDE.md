@@ -289,7 +289,42 @@ Design rationale:
   (~+50%) — `GOLDEN_ASR=0` disables the check for a run where that's a problem.
   A `--bless` that would silently overwrite a DIFFERING recorded transcript is
   refused unless `GOLDEN_REBLESS_CONTENT=1` is also set (see
-  `tests/golden/compare.py`'s `bless_guard`, G1/G2).
+  `tests/golden/compare.py`'s `bless_guard`, G1/G2) — this also fails CLOSED
+  (refuses, same flag) when an existing entry is missing its `transcript` key
+  outright (or the key is present but `null`/non-string — the same corruption
+  shape) rather than silently reopening the no-op first-bless path; a missing
+  (or `null`/non-int) `text_edits` key is a separate mechanism — it neither
+  refuses nor needs the flag, it just applies the strictest possible recorded
+  cap (`0 + 1`), so it only refuses if the fresh transcript's edit count
+  exceeds that cap (#2003). Separately, `instruct-baseline.json` mixes a
+  THRESHOLD (`tolerances.rtf_max` etc.) with raw stochastic measurements
+  (`identity` cosines, `loudness_dbfs`) that later assertions are diffed
+  against — a `--bless` that would move ANY of the three is guarded by
+  `bless_guard_thresholds` (#1995, widened by #2035/#2045), but not
+  identically: `tolerances` is quantised, so an EXACT change refuses
+  outright; `identity`/`loudness_dbfs` are noisy (~0.0014 run-to-run
+  identity spread per the committed baseline's own `metadata.notes`), so a
+  move under a field-specific `epsilon` (`compare.LOUDNESS_DBFS_EPSILON` is
+  10% of the ±`loudness_dbfs_abs` window the field is diffed against;
+  `compare.IDENTITY_COSINE_EPSILON` has no equivalent window — `identity`
+  feeds an absolute ceiling, not a diff — so it's calibrated instead off the
+  committed baseline's own ~0.0014 run-to-run noise) is
+  WRITTEN and echoed to stdout rather than refused — an exact-equality
+  guard on those two was found to refuse on every honest re-bless, which
+  trained an operator to reach for the shared flag on a ROUTINE bless and
+  silently re-open the `tolerances` hole one level down. All three fields
+  refusing beyond their own bar need `GOLDEN_REBLESS_THRESHOLDS=1`,
+  including when a previously-blessed baseline lost one of its keys
+  outright (same merge-conflict shape as above; disambiguated from a
+  genuine first bless via `any(baseline.get(k) is not None for k in ("rtf",
+  "identity", "loudness_dbfs", "tolerances"))`, not any single key and not
+  bare `k in baseline` — a single-key probe was tried twice and both times
+  left a narrower version of the same blind spot, and a bare presence check
+  refuses the documented first-bless scaffold shape (all four keys present
+  but `null`) — so an unrelated bless (e.g. one only meant to re-record
+  Kokoro transcripts) can't silently loosen a throughput/identity/loudness
+  ceiling, or re-centre identity/loudness beyond noise, to whatever the
+  blessing box happened to measure.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
@@ -390,7 +425,7 @@ not replace them.
   router/redux/layout seams (Vitest+jsdom can lie about layout, focus, and
   hashchange timing). One Playwright spec per feature surface is the bar.
 - **Flaky tests** route through `quarantinedIt` (`server/src/test-utils/quarantine.ts`) into the non-gating lane (`npm run test:quarantine`); each is logged in `docs/testing/flaky-register.md`. Never add a raw `it.skipIf(process.env.CI)`.
-- **Behaviour only real hardware can prove** — a live GPU, a real sidecar, a real analyzer, a real book — is logged in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) when it cannot be verified inside its own PR. Complex work routinely cannot be accepted at PR time, so **owed acceptance never blocks a merge — it converts into a row there.** *Recording* that debt does block: the register, the per-feature run sheet, and the live HTML register linked from the register's header all move in the shipping PR. The add/remove rule is Before-shipping checklist step 3.
+- **Behaviour only real hardware can prove** — a live GPU, a real sidecar, a real analyzer, a real book — is logged in [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) when it cannot be verified inside its own PR. Complex work routinely cannot be accepted at PR time, so **owed acceptance never blocks a merge — it converts into a row there.** *Recording* that debt does block: the register, the per-feature run sheet, and the register's live view ([`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html), the file published to the artifact URL) all move in the shipping PR. The add/remove rule is Before-shipping checklist step 3.
 
 Harnesses (five tiers):
 
@@ -475,7 +510,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live HTML register linked from the register's own header** — updated via the `url` recorded there, never re-published from scratch. Publishing without that URL mints a *second* register and is the most likely way this rule gets silently broken. Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over.
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute.
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 

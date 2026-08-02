@@ -13,6 +13,8 @@ import {
   mockAssignLibraryVoice,
   mockRevokeVoiceLibraryEntry,
   mockCloneVoice,
+  mockPatchVoiceLibrary,
+  mockRetryCloneEngine,
   _mockAssignGuardError,
   _mockAssignAdvisory,
   _mockAssignWrittenSlots,
@@ -555,6 +557,149 @@ describe('mock assign guards (fs-38 Wave 3c, Task 29)', () => {
       });
       expect(entry.consent?.personName).toBe('Ana');
       expect(entry.consent?.attestedBy).toBe('Dana');
+    });
+  });
+});
+
+/* Plan 276 (fs-cast-readiness), Decisions 6/7 — mock mirrors of the transcript
+   PATCH and the engine-retry route, added by ed40432a with no paired tests
+   (the gap this describe closes). Cases below are DERIVED from the
+   server-side ones in server/src/routes/voice-library.test.ts's
+   `describe('transcript edit (plan 276, Decision 6)')` and
+   `describe('POST /api/voice-library/:voiceUuid/engines/:engine/retry (plan
+   276, Decision 7)')`, so the two sides are provably mirrored.
+
+   None of MOCK_VOICE_LIBRARY_ENTRIES carries a `failed` engine slot — mock
+   mode never fails a clone derive (mockCloneVoice always seeds `qwen: {
+   status: 'ready' }`) — so the failed-slot fixtures below clone a fresh
+   entry via mockCloneVoice and then mutate the SAME object mockCloneVoice
+   already pushed into the module's private entries array (JS objects are
+   by-reference, and mockCloneVoice returns the exact instance it stored).
+   This is the only way to reach that state without adding a new canned
+   fixture — which would perturb e2e/voice-library.spec.ts's hardcoded
+   voice-library-card counts (6/7/8/9), well outside this task's scope. */
+describe('mock PATCH transcript + retry (plan 276, Decisions 6/7)', () => {
+  async function makeClone(): Promise<VoiceLibraryEntry> {
+    return mockCloneVoice({
+      candidateId: 'cand-1',
+      consent: {
+        personName: 'Dad',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedBy: 'me',
+      },
+    });
+    // engines: { qwen: { status: 'ready', baseModel: 'qwen3-tts-0.6b-2026-05' } }
+    // master.transcript: the canned Whisper text, transcriptSource: 'whisper'
+  }
+
+  describe('transcript edit', () => {
+    it('persists master.transcript with transcriptSource "user" (mirrors the server route)', async () => {
+      const entry = await makeClone();
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, {
+        transcript: 'the corrected transcript',
+      });
+
+      expect(updated.master?.transcript).toBe('the corrected transcript');
+      expect(updated.master?.transcriptSource).toBe('user');
+    });
+
+    it('updates `sampleTranscript` in the SAME write as the transcript edit — the second persisted copy the naive `...patch` spread would have missed', async () => {
+      const entry = await makeClone();
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, {
+        transcript: 'the corrected transcript',
+      });
+
+      expect(updated.sampleTranscript).toBe('the corrected transcript');
+    });
+
+    it('clears both language stamps (entry.languageCode and master.languageCode) rather than leaving them contradicting the new text', async () => {
+      const entry = await makeClone();
+      entry.languageCode = 'en';
+      entry.master = { ...entry.master!, languageCode: 'en' };
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, {
+        transcript: 'un texte corrigé en français',
+      });
+
+      expect(updated.languageCode).toBeUndefined();
+      expect(updated.master?.languageCode).toBeUndefined();
+    });
+
+    it('clears a `failed` qwen slot when the new transcript is non-empty', async () => {
+      const entry = await makeClone();
+      entry.engines = { qwen: { status: 'failed', baseModel: 'old' } };
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, {
+        transcript: 'the fix that unblocks a derive',
+      });
+
+      expect(updated.engines.qwen).toBeUndefined();
+    });
+
+    it('does NOT clear a `failed` qwen slot when the new transcript is blank', async () => {
+      const entry = await makeClone();
+      entry.engines = { qwen: { status: 'failed', baseModel: 'old' } };
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, { transcript: '' });
+
+      expect(updated.engines.qwen).toEqual({ status: 'failed', baseModel: 'old' });
+    });
+
+    it('leaves a HEALTHY (non-failed) qwen slot untouched by a transcript edit', async () => {
+      const entry = await makeClone(); // engines.qwen.status === 'ready'
+
+      const updated = await mockPatchVoiceLibrary(entry.voiceUuid, {
+        transcript: 'a corrected transcript',
+      });
+
+      expect(updated.engines.qwen).toEqual(entry.engines.qwen);
+    });
+  });
+
+  describe('retry engine', () => {
+    it('deletes the slot key for a `failed` qwen slot', async () => {
+      const entry = await makeClone();
+      entry.engines = { qwen: { status: 'failed', baseModel: 'old' } };
+
+      const updated = await mockRetryCloneEngine(entry.voiceUuid, 'qwen');
+
+      expect(updated.engines.qwen).toBeUndefined();
+      expect('qwen' in updated.engines).toBe(false);
+    });
+
+    it('is a no-op on a `ready` slot', async () => {
+      const entry = await makeClone(); // engines.qwen.status === 'ready'
+
+      const updated = await mockRetryCloneEngine(entry.voiceUuid, 'qwen');
+
+      expect(updated.engines.qwen).toEqual(entry.engines.qwen);
+    });
+
+    it('is a no-op on an absent slot', async () => {
+      const entry = await makeClone(); // no xtts key at all
+
+      const updated = await mockRetryCloneEngine(entry.voiceUuid, 'coqui');
+
+      expect(updated.engines.xtts).toBeUndefined();
+    });
+
+    /* Invariant 2 (plan 276) — library slots are keyed `qwen`/`xtts`, but the
+       ENGINE name for Coqui is `coqui`. `mockRetryCloneEngine` must map via
+       `manifestSlotFor`, never a hardcoded ternary (the shape this commit
+       replaces) or a raw `entry.engines.coqui` index (which doesn't exist on
+       the type at all). Reached via the engine name, not the slot key, so a
+       wrong-slot mapping bug is exactly what this catches. */
+    it('retry via engine name `coqui` clears the `xtts` slot, leaving the qwen slot untouched', async () => {
+      const entry = await makeClone();
+      entry.engines = { ...entry.engines, xtts: { status: 'failed', coquiVersion: 'old' } };
+
+      const updated = await mockRetryCloneEngine(entry.voiceUuid, 'coqui');
+
+      expect(updated.engines.xtts).toBeUndefined();
+      expect(updated.engines.qwen).toEqual(entry.engines.qwen);
     });
   });
 });

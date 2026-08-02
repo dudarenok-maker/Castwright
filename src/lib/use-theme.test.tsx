@@ -50,6 +50,8 @@ function makeStore({
     rebaselineBookId: null,
     startGenPrompt: null,
     voiceReadinessGate: null,
+    cloneReadinessGate: null,
+    startGenerationPending: false,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,
