@@ -35,15 +35,18 @@ let workspaceRoot: string;
 let bookDir: string;
 let app: Express;
 let bookId: string;
+let castJsonPath: (bookDir: string) => string;
 
 beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'cast-id-history-survival-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
+  const [{ bookStateRouter }, paths] = await Promise.all([
     import('../routes/book-state.js'),
     import('../workspace/paths.js'),
   ]);
+  const makeBookId = (paths as typeof import('../workspace/paths.js')).makeBookId;
+  castJsonPath = (paths as typeof import('../workspace/paths.js')).castJsonPath;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -118,6 +121,14 @@ describe('cast-id-history survival', () => {
 
     expect(putRes.status).toBe(204);
 
+    // Assert the PUT actually changed cast.json: the new character is present, the old is gone
+    const castPath = castJsonPath(bookDir);
+    expect(existsSync(castPath)).toBe(true);
+    const castAfter = JSON.parse(readFileSync(castPath, 'utf8'));
+    const characterIds = castAfter.characters.map((c: { id: string }) => c.id);
+    expect(characterIds).toContain('mairin');
+    expect(characterIds).not.toContain('mayrin');
+
     // The history file must still exist and contain the mapping
     const historyPath = castIdHistoryPath(bookDir);
     expect(existsSync(historyPath)).toBe(true);
@@ -144,6 +155,10 @@ describe('cast-id-history survival', () => {
       .send({});
 
     expect(reParseRes.status).toBe(200);
+
+    // Assert reparse actually deleted cast.json (its destructive effect)
+    const castPath = castJsonPath(bookDir);
+    expect(existsSync(castPath)).toBe(false);
 
     // The history file must STILL exist after reparse deletes cast.json
     expect(existsSync(historyPath)).toBe(true);
