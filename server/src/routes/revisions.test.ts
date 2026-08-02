@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { retireCharacterId } from '../store/cast-id-history.js';
 
 const AUTHOR = 'Drift Test';
 const SERIES = 'Standalones';
@@ -583,5 +584,40 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
+  });
+});
+
+describe('GET .../revisions — resolves a snapshot keyed by a SUPERSEDED characterId (#2040)', () => {
+  it('finds the renamed character via the real cast-id-history.json and still emits its drift, instead of silently `continue`-ing as "removed from cast"', async () => {
+    /* `retireCharacterId` is the real writer (store/cast-id-history.ts) — not
+       a hand-rolled JSON fixture — so this exercises the same on-disk shape
+       production retirement actually produces. */
+    await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+    seed({
+      // The chapter was rendered under the OLD id; the cast has since been
+      // renamed to 'eliza' via retireCharacterId above. Without resolving
+      // through the history, `castById.get('old-eliza')` (pre-#2040) or a
+      // resolver built on the default `{}` history finds nothing, and the
+      // route's `if (!current) continue;` silently drops this snapshot —
+      // the character's real voiceId drift never surfaces.
+      snapshots: { 'old-eliza': { voiceId: 'old' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    const drift = res.body.drift as DriftEventOut[];
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({
+      // The RAW snapshot key is preserved on the event (existing contract —
+      // see synthesise-chapter.orphan-alias.test.ts's identical note), even
+      // though resolution happened through the history to find `current`.
+      id: `drift:${bookId}:1:old-eliza:voice`,
+      characterId: 'old-eliza',
+      factor: 'voice',
+      severity: 'severe',
+    });
+    // The drift compares against the RESOLVED live cast row, not a blank —
+    // proving `current` really is the 'eliza' cast entry, not a fallback.
+    expect(drift[0].current).toMatchObject({ voiceId: 'new' });
   });
 });

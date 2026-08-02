@@ -393,38 +393,45 @@ describe('findDivergentSentences (#1972 shared predicate)', () => {
     seg(1, 'castor', [2]),
     seg(2, 'wren', [3, 4]),
   ];
+  // #2040 — findDivergentSentences resolves both sides through the cast (+
+  // an optional castIdHistory, defaulting to {} — see the alias-specific
+  // coverage in build-synth-replacement.alias.test.ts). None of these ids
+  // are aliased, so this cast only needs to make every id below an EXACT
+  // hit — these tests pin the pre-existing raw-comparison behaviour, which
+  // must be unaffected by the resolver conversion.
+  const cast = [{ id: 'amy' }, { id: 'castor' }, { id: 'wren' }, { id: 'narrator' }];
 
   it('finds nothing when segFile and the current analysis agree', () => {
     const current = [
       { id: 1, characterId: 'amy', text: 'Hi.' },
       { id: 2, characterId: 'castor', text: 'Bye.' },
     ];
-    expect(findDivergentSentences(segs, [0, 1], current)).toEqual([]);
+    expect(findDivergentSentences(segs, [0, 1], current, cast)).toEqual([]);
   });
 
   it('flags a sentence the current analysis moved to a DIFFERENT character, naming the new owner', () => {
     const current = [{ id: 2, characterId: 'narrator', text: 'Actually narration.' }];
-    expect(findDivergentSentences(segs, [1], current)).toEqual([
+    expect(findDivergentSentences(segs, [1], current, cast)).toEqual([
       { segmentIndex: 1, sentenceId: 2, newOwner: 'narrator' },
     ]);
   });
 
   it('flags a sentence id ABSENT from the current analysis (re-segmentation renumbered ids) — newOwner is null, not the stale characterId', () => {
-    expect(findDivergentSentences(segs, [1], [])).toEqual([
+    expect(findDivergentSentences(segs, [1], [], cast)).toEqual([
       { segmentIndex: 1, sentenceId: 2, newOwner: null },
     ]);
   });
 
   it('flags a sentence marked excludeFromSynthesis (fs-58) — buildSentenceGroups would drop it, splicing silence', () => {
     const current = [{ id: 2, characterId: 'castor', text: 'Bye.', excludeFromSynthesis: true }];
-    expect(findDivergentSentences(segs, [1], current)).toEqual([
+    expect(findDivergentSentences(segs, [1], current, cast)).toEqual([
       { segmentIndex: 1, sentenceId: 2, newOwner: null },
     ]);
   });
 
   it('flags a sentence that normalises to empty text — buildSentenceGroups drops it too', () => {
     const current = [{ id: 2, characterId: 'castor', text: '   ' }];
-    expect(findDivergentSentences(segs, [1], current)).toEqual([
+    expect(findDivergentSentences(segs, [1], current, cast)).toEqual([
       { segmentIndex: 1, sentenceId: 2, newOwner: null },
     ]);
   });
@@ -434,7 +441,7 @@ describe('findDivergentSentences (#1972 shared predicate)', () => {
       { id: 3, characterId: 'wren', text: 'Mine.' }, // agrees
       { id: 4, characterId: 'narrator', text: 'Not mine.' }, // diverges
     ];
-    expect(findDivergentSentences(segs, [2], current)).toEqual([
+    expect(findDivergentSentences(segs, [2], current, cast)).toEqual([
       { segmentIndex: 2, sentenceId: 4, newOwner: 'narrator' },
     ]);
   });
@@ -444,6 +451,6 @@ describe('findDivergentSentences (#1972 shared predicate)', () => {
       { id: 1, characterId: 'amy', text: 'Agrees, and IS targeted.' },
       { id: 2, characterId: 'narrator', text: 'Diverged, but not targeted.' },
     ];
-    expect(findDivergentSentences(segs, [0], current)).toEqual([]);
+    expect(findDivergentSentences(segs, [0], current, cast)).toEqual([]);
   });
 });

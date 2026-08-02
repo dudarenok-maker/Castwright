@@ -13,6 +13,7 @@ import type { SegmentReplacement } from './splice-chapter.js';
 import { resamplePcm16 } from '../tts/resample-pcm16.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { normaliseForTts } from '../tts/text-normalize.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 
 /** A segment can be re-recorded only if it's backed by manuscript sentences.
     The synthetic chapter-title beat (`kind:'title'`, empty `sentenceIds`) has
@@ -176,13 +177,36 @@ export interface DivergentSentence {
     to re-record. Returns one entry per diverged SENTENCE — a segment
     spanning several sentence ids can contribute more than one entry; a
     caller that only needs "which segments" should dedupe by
-    `segmentIndex`. */
+    `segmentIndex`.
+
+    #2040 — the segFile's characterId and the current analysis's characterId
+    can each independently be a RETIRED id (a superseded-id rename can land
+    on either side of a stale render). Comparing the two raw strings then
+    reads a merely-renamed character as a genuine reattribution — exactly
+    the false-positive this wave exists to fix (spec §4.3): QA repair would
+    quarantine every one of that character's segments into `stillSuspect`,
+    and a splice would refuse outright. `cast` + `castIdHistory` (the same
+    `.supersededBy` map `synthesise-chapter.ts` threads through, see
+    `loadCastIdHistory`) resolve both sides through `buildCastResolver`
+    before comparing. The fallback is deliberately asymmetric: two ids only
+    count as the same person when BOTH resolve AND resolve to the same cast
+    id — two unresolvable ids that merely look alike are still a divergence.
+    Guessing here can destroy correct audio (#1972's lesson). */
 export function findDivergentSentences(
   segments: ChapterSegment[],
   targetIndices: number[],
   currentSentences: Pick<SentenceOutput, 'id' | 'characterId' | 'text' | 'excludeFromSynthesis'>[],
+  cast: readonly { id: string }[],
+  castIdHistory: Readonly<Record<string, string>> = {},
 ): DivergentSentence[] {
   const byId = new Map(currentSentences.map((s) => [s.id, s]));
+  const resolver = buildCastResolver(cast, castIdHistory);
+  const sameCharacter = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    const ra = resolver.resolve(a)?.character.id;
+    const rb = resolver.resolve(b)?.character.id;
+    return Boolean(ra && rb && ra === rb);
+  };
   const out: DivergentSentence[] = [];
   for (const idx of targetIndices) {
     const seg = segments[idx];
@@ -198,7 +222,7 @@ export function findDivergentSentences(
         out.push({ segmentIndex: idx, sentenceId: id, newOwner: null });
         continue;
       }
-      if (current.characterId !== seg.characterId) {
+      if (!sameCharacter(current.characterId, seg.characterId)) {
         out.push({ segmentIndex: idx, sentenceId: id, newOwner: current.characterId });
       }
     }
