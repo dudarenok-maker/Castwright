@@ -13,6 +13,20 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* #1981 Task 9 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the two
+   fan-out race tests near the bottom of this file can deterministically
+   intercept voices.ts's OWN `readJson` call (bound at voices.ts's own
+   module-load time, before any runtime spy could attach to it) — same
+   rationale as book-state-preserve-voices.test.ts's and qwen-voice.test.ts's
+   own #1981 race tests. Defaults to a plain passthrough, so every other test
+   in this file behaves exactly as if this mock weren't here; only the two
+   race tests below override `mockImplementation` for the duration of their
+   own `it`, then restore it. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_ONE = 'Book One';
@@ -34,6 +48,7 @@ let applyTierToCastFiles: (
   seriesFilter?: { author: string; series: string },
 ) => Promise<number>;
 let applyOverrideToCastFiles: typeof import('./voices.js').applyOverrideToCastFiles;
+let writeVoiceStylePersona: typeof import('./cast-design.js').writeVoiceStylePersona;
 let standaloneA: { bookDir: string };
 let standaloneB: { bookDir: string };
 
@@ -96,17 +111,14 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [
-    { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf },
-    paths,
-    baseVoices,
-  ] = await Promise.all([
-    import('./voices.js'),
-    import('../workspace/paths.js'),
-    import('../tts/base-voices.js'),
-  ]);
+  const { voicesRouter, applyTierToCastFiles: atcf, applyOverrideToCastFiles: aotcf } =
+    await import('./voices.js');
+  const paths = await import('../workspace/paths.js');
+  const baseVoices = await import('../tts/base-voices.js');
+  const castDesign = await import('./cast-design.js');
   applyTierToCastFiles = atcf;
   applyOverrideToCastFiles = aotcf;
+  writeVoiceStylePersona = castDesign.writeVoiceStylePersona;
   invalidateBaseVoiceCache = baseVoices.invalidateBaseVoiceCache;
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
   bookTwoId = paths.makeBookId(AUTHOR, SERIES, BOOK_TWO);
@@ -1763,5 +1775,197 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
     expect(
       (b.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name,
     ).toBe('qwen-workspace-wide');
+  });
+});
+
+/* #1981 Task 9 — `forEachMatchingCastCharacter` is the fan-out writer behind
+   voice-override propagation: one call can touch every book in a series (or
+   the whole workspace), which makes it the worst place for a lost write —
+   one unlocked collision silently drops an entire propagation. Both of its
+   branches (the `onlyBookDir` fast path and the workspace/series walk) now
+   take a per-book `withCastLock` around their own read-modify-write, with
+   the `readJson` moved inside the lock. Each race below scripts the
+   interleaving deterministically (the bare-`Promise.all` shape measured as
+   low as 50% detection elsewhere on this branch — see cast-lock.race and
+   qwen-voice.test.ts's own #1981 hardening notes) by intercepting the raced
+   book's own `readJson` call, reading real bytes immediately (so the read
+   genuinely happens-before the concurrent writer's write) but holding the
+   JS-visible resolution open behind a manually-released gate. The concurrent
+   writer gets a generous, one-directional head start: it completes fully
+   when unlocked (the bug window) or queues behind the held lock when locked
+   (the fix) — either way nothing depends on tuning a tight timing window. */
+describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
+  function narratorCastPath(bookDir: string): string {
+    return join(bookDir, '.audiobook', 'cast.json');
+  }
+
+  function resetNarrator(bookDir: string): void {
+    const path = narratorCastPath(bookDir);
+    const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const narrator = cast.characters.find((c) => c.id === 'narrator');
+    if (narrator) {
+      delete narrator.overrideTtsVoices;
+      delete narrator.voiceStyle;
+    }
+    writeFileSync(path, JSON.stringify(cast));
+  }
+
+  afterEach(() => {
+    resetNarrator(standaloneA.bookDir);
+    resetNarrator(standaloneB.bookDir);
+  });
+
+  it('onlyBookDir fast path: a concurrent override write and a direct persona write to the same book both survive', async () => {
+    const bookDir = standaloneA.bookDir;
+    const castPath = narratorCastPath(bookDir);
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === castPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let n: number;
+    let wrote: boolean;
+    try {
+      const overridePromise = applyOverrideToCastFiles(
+        'narrator',
+        { engine: 'qwen', name: 'qwen-fastpath-race' },
+        undefined,
+        bookDir,
+      );
+      // Let the override call reach (and get stuck behind) the intercepted
+      // read. Poll rather than a fixed sleep — a direct function call has no
+      // network/Express dispatch overhead ahead of the read (unlike an HTTP
+      // race), so a fixed short window occasionally lands before the read
+      // under system load; polling removes that flake without widening the
+      // window for the common (fast) case.
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      const personaPromise = writeVoiceStylePersona(bookDir, 'narrator', 'a fastpath persona');
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [n, wrote] = await Promise.all([overridePromise, personaPromise]);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
+    expect(n).toBe(1);
+    expect(wrote).toBe(true);
+
+    const after = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const narrator = after.characters.find((c) => c.id === 'narrator')!;
+    expect(
+      (narrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen?.name,
+    ).toBe('qwen-fastpath-race');
+    expect(narrator.voiceStyle).toBe('a fastpath persona');
+  });
+
+  it('workspace walk: a concurrent propagation and a direct persona write to a book in the match set both survive', async () => {
+    // The walk touches every book whose bare id matches 'narrator' —
+    // standaloneA AND standaloneB. Race the SECOND one it reaches (matched
+    // by path, not call order, so this holds regardless of directory scan
+    // order): one of possibly several books visited before it must not
+    // hold this book's lock, and the concurrent direct writer must not
+    // clobber (or be clobbered by) the walk's own write to it.
+    const raceBookDir = standaloneB.bookDir;
+    const raceCastPath = narratorCastPath(raceBookDir);
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === raceCastPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before the persona write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let n: number;
+    let wrote: boolean;
+    try {
+      const walkPromise = applyOverrideToCastFiles('narrator', {
+        engine: 'qwen',
+        name: 'qwen-walk-race',
+      });
+      // The walk visits every book in this file's whole workspace fixture
+      // before it necessarily reaches the raced one — poll instead of a
+      // fixed sleep so this isn't tuned to today's fixture count.
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      const personaPromise = writeVoiceStylePersona(raceBookDir, 'narrator', 'a walk persona');
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [n, wrote] = await Promise.all([walkPromise, personaPromise]);
+    } finally {
+      spy.mockImplementation(actual.readJson);
+    }
+    /* Other unrelated fixtures elsewhere in this file also use the bare id
+       'narrator' and share this workspace (see the fs-61 describe's own
+       note above) — assert our two specifically, not the exact total. */
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(wrote).toBe(true);
+
+    const after = JSON.parse(readFileSync(raceCastPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const narrator = after.characters.find((c) => c.id === 'narrator')!;
+    expect(
+      (narrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen?.name,
+    ).toBe('qwen-walk-race');
+    expect(narrator.voiceStyle).toBe('a walk persona');
+
+    // The OTHER book the walk touched also got the propagated override —
+    // confirms the raced book's lock didn't stall or skip the rest of the walk.
+    const otherAfter = JSON.parse(readFileSync(narratorCastPath(standaloneA.bookDir), 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const otherNarrator = otherAfter.characters.find((c) => c.id === 'narrator')!;
+    expect(
+      (otherNarrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen
+        ?.name,
+    ).toBe('qwen-walk-race');
   });
 });

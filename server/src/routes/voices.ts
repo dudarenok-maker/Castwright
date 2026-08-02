@@ -38,6 +38,7 @@ import {
   voicesMetaPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   resolveVoiceAssignment,
@@ -786,21 +787,36 @@ export async function forEachMatchingCastCharacter(
      PUT /:voiceId/override 'workspace' scope. */
   onlyBookDir?: string,
 ): Promise<number> {
+  /* #1981 — this function is a fan-out writer: one call can touch every book
+     in a series (or the whole workspace), so it's the worst place for a lost
+     write. Each book's cast.json gets its OWN `withCastLock` span, taken
+     individually as the walk reaches it — never one lock held across the
+     whole directory scan, which would serialise every book in the workspace
+     against every other cast writer for the span of a full walk. The
+     `readJson` for cast.json (and every decision derived from it — which
+     characters match, what `mutate` returns) lives inside the lock; the
+     state.json read that decides whether a book is even in scope stays
+     outside it (rule 2 only covers the read this function's OWN write is
+     based on). Per cast-lock.ts rule 1, this makes the function a locked
+     leaf: no caller may hold a cast lock for a book this call will also
+     lock. */
   if (!seriesFilter && onlyBookDir) {
-    const cast = await readJson<CastJson>(castJsonPath(onlyBookDir));
-    if (!cast?.characters?.length) return 0;
-    let updated = 0;
-    let dirty = false;
-    for (let i = 0; i < cast.characters.length; i++) {
-      const original = cast.characters[i];
-      const id = original.voiceId ?? original.id;
-      if (id !== voiceId) continue;
-      cast.characters[i] = mutate(original);
-      dirty = true;
-      updated += 1;
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
-    return updated;
+    return withCastLock(onlyBookDir, async () => {
+      const cast = await readJson<CastJson>(castJsonPath(onlyBookDir));
+      if (!cast?.characters?.length) return 0;
+      let updated = 0;
+      let dirty = false;
+      for (let i = 0; i < cast.characters.length; i++) {
+        const original = cast.characters[i];
+        const id = original.voiceId ?? original.id;
+        if (id !== voiceId) continue;
+        cast.characters[i] = mutate(original);
+        dirty = true;
+        updated += 1;
+      }
+      if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
+      return updated;
+    });
   }
   let updated = 0;
   for (const authorName of listDirs(BOOKS_ROOT)) {
@@ -814,20 +830,24 @@ export async function forEachMatchingCastCharacter(
           if (state.author !== seriesFilter.author || state.series !== seriesFilter.series)
             continue;
         }
-        const cast = await readJson<CastJson>(castJsonPath(bookDir));
-        if (!cast?.characters?.length) continue;
-        let dirty = false;
-        for (let i = 0; i < cast.characters.length; i++) {
-          const original = cast.characters[i];
-          const id = original.voiceId ?? original.id;
-          if (id !== voiceId) continue;
-          cast.characters[i] = mutate(original);
-          dirty = true;
-          updated += 1;
-        }
-        if (dirty) {
-          await writeJsonAtomic(castJsonPath(bookDir), cast);
-        }
+        updated += await withCastLock(bookDir, async () => {
+          const cast = await readJson<CastJson>(castJsonPath(bookDir));
+          if (!cast?.characters?.length) return 0;
+          let bookUpdated = 0;
+          let dirty = false;
+          for (let i = 0; i < cast.characters.length; i++) {
+            const original = cast.characters[i];
+            const id = original.voiceId ?? original.id;
+            if (id !== voiceId) continue;
+            cast.characters[i] = mutate(original);
+            dirty = true;
+            bookUpdated += 1;
+          }
+          if (dirty) {
+            await writeJsonAtomic(castJsonPath(bookDir), cast);
+          }
+          return bookUpdated;
+        });
       }
     }
   }
