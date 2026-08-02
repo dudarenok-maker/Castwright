@@ -1326,7 +1326,7 @@ master clip. *Criteria:* the run sheet
 walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
 cloning session, which already stages a real clone on this card.
 
-### A32 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), plan [277](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
+### A32 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
 
 Wave 1 ships a **read-time** fix only: `buildCastResolver` resolves a frozen
 segment's `characterId` through a separator/case normaliser before the code
