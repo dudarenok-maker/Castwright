@@ -100,7 +100,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**48 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**49 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1325,6 +1325,53 @@ master clip. *Criteria:* the run sheet
 [`clone-readiness-gate-onbox-acceptance.md`](clone-readiness-gate-onbox-acceptance.md);
 walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
 cloning session, which already stages a real clone on this card.
+
+### A32 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), plan [277](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
+
+Wave 1 ships a **read-time** fix only: `buildCastResolver` resolves a frozen
+segment's `characterId` through a separator/case normaliser before the code
+falls back to the narrator. It is fully unit- and route-tested against
+synthetic fixtures. What no automated suite proves is the thing the feature
+is *for* — that re-rendering an already-drifted chapter on the real workspace
+now puts the character's own voice on their lines rather than the
+narrator's. A read-only, dry-run resolver check already ran against the real
+20-book workspace (design spec §6: 68 of 188 orphaned segments recover via
+the normalised-id tier alone, with an empty history) — **that measured id
+resolution, not a render.** This row is the render.
+
+Real, already-affected fixture (confirmed 2026-08-02, not synthetic):
+*Playing with Fire* (Derek Landy) at `C:\AudiobookWorkspace\books\Derek
+Landy\Skulduggery Pleasant\Playing with Fire`. `the-torment` (67 segments,
+cast id `the_torment`, a **tuned Qwen 1.7B voice**) and `lightning-dave` (1
+segment, cast id `lightning_dave`) both recover under the normalised-id
+tier — RC2's underscore-vs-hyphen split. `pool-player-2` (6 segments, cast id
+`pool_player`) shares chapter 16 with `lightning-dave` and is the row's
+built-in **negative control**: its `-2` collision suffix must still defeat
+resolution, unchanged, since that needs Wave 2/3.
+
+- Re-render chapter 19 (`the-torment`, 37 of its 67 segments) and chapter 16
+  (`lightning-dave` + `pool-player-2` together). Confirm the fresh
+  `segments.json` gains a `characterSnapshots` entry for `the-torment` /
+  `lightning-dave` naming their own voice (Torment's tuned
+  `qwen-YaC5ot82IqTLpeDbHd77F`, not `qwen-narrator`), and that
+  `renderedFallbackEngine: "kokoro"` — present on every affected segment
+  today — is gone from those two.
+- **Listen.** Torment's line at chapter 19 `groupIndex: 25` ("Kill the
+  child.") must be audibly a different voice from the narrator, not merely a
+  different id in the JSON.
+- Confirm `pool-player-2` is unchanged: still `renderedFallbackEngine:
+  "kokoro"`, no snapshot entry. A resolution here would mean the resolver is
+  matching more aggressively than designed.
+- Cross-check the Cast screen's orphaned-id banner (#2023) no longer names
+  `the-torment` / `lightning-dave` for this book after the two re-renders,
+  while still naming `pool-player-2`.
+
+*Needs:* the 8 GB card, a real sidecar with Qwen resident, and the real
+workspace book above (back up its two affected chapter files before
+re-rendering). *Criteria:* the run sheet
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md).
+*Cost:* short — two single-chapter re-renders on an already-imported,
+already-analysed book.
 
 ---
 
