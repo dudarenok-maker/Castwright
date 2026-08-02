@@ -52,6 +52,7 @@ import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 import { spliceChapterSegments, secToByteOffset, type SegmentReplacement } from '../audio/splice-chapter.js';
 import {
   buildSynthReplacements,
@@ -273,6 +274,16 @@ chapterQaRepairRouter.post(
       if (!cast?.characters?.length) return fail('Cast not confirmed yet — open the cast view first.');
       cast.characters = await hydrateCastReusedVoices(cast.characters);
 
+      /* #2040 — resolve a characterId through the book's retired-id history
+         before treating it as orphaned. Loaded once for this repair pass —
+         reused below both by `findDivergentSentences` and by the resolver
+         lookup that replaces the acoustic pre-filter's raw cast `.find` —
+         and by every `synthesiseChapter` call inside the synth loop
+         further down. Never throws (see loadCastIdHistory's own doc
+         comment). */
+      const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+      const castResolver = buildCastResolver(cast.characters, castIdHistory);
+
       /* Displace any in-flight regen of this chapter, and register so a later
          regen displaces us — the two never race the same files. */
       abortInFlightChapterJob(bookId, chapterId);
@@ -404,11 +415,15 @@ chapterQaRepairRouter.post(
             continue;
           }
           const seg = segFile.segments[f.segmentIndex];
+          /* #2040 — resolve through the cast + retired-id history instead of
+             an exact-id `.find`, so a segment stamped with a since-renamed
+             characterId still finds its cast row (and its real engine)
+             instead of silently falling through to the `{}` default (which
+             always reads as non-qwen — this branch could OK an engine that's
+             actually unavailable). `?? {}` stays for a TRUE miss (the id
+             doesn't resolve at all). */
           const charEngine = seg
-            ? resolveCharacterEngine(
-                cast.characters.find((c) => c.id === seg.characterId) ?? {},
-                engine,
-              )
+            ? resolveCharacterEngine(castResolver.resolve(seg.characterId)?.character ?? {}, engine)
             : engine;
           const engineUnavailable = charEngine === 'qwen' ? qwenUnavailable : false;
           if (engineUnavailable) {
@@ -440,18 +455,22 @@ chapterQaRepairRouter.post(
          untouched — never re-recorded under a voice this pass can't
          verify — and it surfaces to the user the same way any other
          still-suspect segment does. */
-      const divergent = findDivergentSentences(segFile.segments, targetIndices, sentences);
+      const divergent = findDivergentSentences(
+        segFile.segments,
+        targetIndices,
+        sentences,
+        cast.characters,
+        castIdHistory,
+      );
       const divergentSegmentIndices = new Set(divergent.map((d) => d.segmentIndex));
       const safeTargetIndices = targetIndices.filter((i) => !divergentSegmentIndices.has(i));
       for (const i of divergentSegmentIndices) {
         if (!stillSuspect.includes(i)) stillSuspect.push(i);
       }
 
-      /* #2040 — resolve a re-recorded segment's characterId through the
-         book's retired-id history before treating it as orphaned. Loaded
-         once for this repair pass, not per segment/attempt inside `synth`
-         below. Never throws (see loadCastIdHistory's own doc comment). */
-      const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+      // #2040 — castIdHistory is loaded once above (right after cast), reused
+      // here so every synthesiseChapter call inside the synth loop below
+      // resolves orphaned ids through the same history map.
 
       const replacements: SegmentReplacement[] = await buildSynthReplacements({
         segments: segFile.segments,
