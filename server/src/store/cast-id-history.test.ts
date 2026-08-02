@@ -44,6 +44,17 @@ describe('cast id history', () => {
     });
   });
 
+  it('REPOINTS regardless of retirement order - retiring INTO an already-superseded id', async () => {
+    await retireCharacterId(dir, 'a', 'b');
+    await retireCharacterId(dir, 'c', 'a');
+    // 'a' is no longer a live target; 'c' must dereference through to 'b'
+    // rather than being left pointing at the now-superseded 'a'.
+    expect((await loadCastIdHistory(dir)).supersededBy).toEqual({
+      a: 'b',
+      c: 'b',
+    });
+  });
+
   describe('never-throws guarantee', () => {
     it('returns empty history for truncated/invalid JSON', async () => {
       // Hits the catch branch in the try/catch

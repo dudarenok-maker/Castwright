@@ -48,4 +48,18 @@ describe('buildCastResolver', () => {
     const c = [{ id: 'foo_bar', name: 'A' }, { id: 'foo-bar', name: 'B' }];
     expect(buildCastResolver(c).resolve('foo bar')).toBeUndefined();
   });
+
+  it('a tier-3 normalised tie stops at the orphan path rather than falling through to tier 4', () => {
+    // pool_player_2 and pool-player-2 both normalise to the same key, so tier
+    // 3 (byNormId) is an ambiguous tie (`null`). A history entry also
+    // normalises to that same key and would resolve cleanly at tier 4 if the
+    // tier-3 tie were mistaken for a miss (`null` is falsy) — it must not be.
+    const c = [{ id: 'pool_player_2', name: 'A' }, { id: 'pool-player-2', name: 'B' }];
+    const h = { 'Pool-Player-2': 'pool-player-2' };
+    expect(buildCastResolver(c, h).resolve('pool player 2')).toBeUndefined();
+  });
+
+  it('resolving a non-string characterId returns undefined rather than throwing', () => {
+    expect(buildCastResolver(cast, history).resolve(undefined as unknown as string)).toBeUndefined();
+  });
 });

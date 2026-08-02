@@ -60,18 +60,34 @@ export function buildCastResolver<T extends CastRecord>(
 
   return {
     resolve(characterId: string): CastResolution<T> | undefined {
+      /* `characterId` can originate from untrusted on-disk JSON (a segment
+         missing its `characterId` reads as `undefined` at runtime despite the
+         `string` type above) — guard at this single entry point rather than
+         trusting every caller, so a non-string falls through to the
+         orphan/narrator path exactly like a genuine miss instead of throwing
+         inside `normaliseIdKey`. */
+      if (typeof characterId !== 'string') return undefined;
+
       const exact = byId.get(characterId);
       if (exact) return { character: exact };
 
       const hist = byHistory.get(characterId);
       if (hist) return { character: hist, viaAlias: characterId };
 
+      /* `null` in either map means "ambiguous — stop": a tier-3 or tier-4 tie
+         must return undefined without consulting the next tier, so `.has()`
+         (present vs. absent) — not truthiness — is what decides whether to
+         fall through. */
       const key = normaliseIdKey(characterId);
-      const normId = byNormId.get(key);
-      if (normId) return { character: normId, viaAlias: characterId };
+      if (byNormId.has(key)) {
+        const normId = byNormId.get(key);
+        return normId ? { character: normId, viaAlias: characterId } : undefined;
+      }
 
-      const normHist = byNormHistory.get(key);
-      if (normHist) return { character: normHist, viaAlias: characterId };
+      if (byNormHistory.has(key)) {
+        const normHist = byNormHistory.get(key);
+        return normHist ? { character: normHist, viaAlias: characterId } : undefined;
+      }
 
       return undefined;
     },
