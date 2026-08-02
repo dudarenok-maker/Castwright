@@ -417,10 +417,15 @@ chapterQaRepairRouter.post(
           const seg = segFile.segments[f.segmentIndex];
           /* #2040 — resolve through the cast + retired-id history instead of
              an exact-id `.find`, so a segment stamped with a since-renamed
-             characterId still finds its cast row (and its real engine)
-             instead of silently falling through to the `{}` default (which
-             always reads as non-qwen — this branch could OK an engine that's
-             actually unavailable). `?? {}` stays for a TRUE miss (the id
+             characterId still finds its cast row (and its real per-character
+             `ttsEngine` override) instead of silently falling through to the
+             `{}` default. `{}` has no `ttsEngine` of its own, so
+             `resolveCharacterEngine` falls back to the route's default
+             `engine` regardless of what the actual (unresolved) character's
+             override says — masking a real per-character engine mismatch in
+             either direction (reading an actually-qwen character as the
+             route's non-qwen default, or vice versa) rather than reliably
+             reading as non-qwen. `?? {}` stays for a TRUE miss (the id
              doesn't resolve at all). */
           const charEngine = seg
             ? resolveCharacterEngine(castResolver.resolve(seg.characterId)?.character ?? {}, engine)
