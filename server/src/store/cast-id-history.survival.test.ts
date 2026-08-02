@@ -100,9 +100,9 @@ afterAll(() => {
 describe('cast-id-history survival', () => {
   it('a client cast PUT leaves the id history intact', async () => {
     // Seed history with a mapping: mayrin -> mairin
-    const historyBefore = await retireCharacterId(bookDir, 'mayrin', 'mairin');
+    await retireCharacterId(bookDir, 'mayrin', 'mairin');
 
-    // Verify the history was written
+    // Verify the history was written (before-state assertion)
     const loadedBefore = await loadCastIdHistory(bookDir);
     expect(loadedBefore.supersededBy).toHaveProperty('mayrin', 'mairin');
 
