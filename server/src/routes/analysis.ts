@@ -115,6 +115,7 @@ import {
   type Retirement,
 } from '../store/merge-analysis-cast.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
+import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
@@ -4669,10 +4670,35 @@ export async function runMainAnalyzerJob(
       );
     }
 
-    const characters = applyNarratorIdentity(
+    const characters0 = applyNarratorIdentity(
       attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
       bookLanguage,
     );
+
+    /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
+       re-slugged, before anything derives from the fresh ids. Roster and sentences
+       move together: phase1ValidIds (below) is built from the roster, and
+       reconcileSentenceCharacterIds would otherwise demote every renamed
+       character's lines to the narrator.
+
+       §11 Q2 — composed against the SAME dedup→fold cumulative rewrite table
+       Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
+       later applies to the prior cast, so a prior row already headed
+       elsewhere via THIS run's own dedup is recognised as already-converged
+       instead of being matched here first and rewritten backwards. Recomputed
+       here (composeRewrites is pure and dd/folded are already in scope) —
+       the later computation at the cast.json persist point (currently
+       :4833, feeding applyRewriteToPriorCast) is left as written, not
+       hoisted, so this never touches its own retirement bookkeeping. */
+    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+    const remappedToPrior = remapFreshToPriorIds(
+      characters0,
+      folded.sentences,
+      priorCastForMerge,
+      cumulativeForRemap,
+    );
+    const characters = remappedToPrior.characters;
+    folded.sentences = remappedToPrior.sentences;
 
     /* Phase 1 character-id reconciliation (see reconcileSentenceCharacterIds
        comment for motivation). Demote orphan ids to narrator before the
@@ -4789,7 +4815,10 @@ export async function runMainAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters));
+          // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
+          // §4.4) — prune against characters0, not the remapped `characters`,
+          // or every suggestion fails both id checks and the list empties.
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }

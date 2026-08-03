@@ -3552,6 +3552,234 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   );
 });
 
+describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', () => {
+  /* Wiring-level regression for the genuine drift case, distinct from the
+     unit suite in remap-fresh-to-prior.test.ts: a re-analysis re-slugs an
+     EXISTING, UNAMBIGUOUS character under a fresh id with no same-run dedup
+     collision involved at all — this run's own dd.rewrites/folded.rewrites
+     table has NO entry for either id, so §11 Q2's convergence-skip must NOT
+     fire. Added per the round-2 fix alongside the Task 8 guard test above:
+     without this, a change that disabled the remap entirely (e.g. an
+     over-eager convergence check that skips unconditionally) would leave the
+     Task 8 test green while the actual feature — adopting the prior id at
+     all — silently stopped working. */
+  // Same dialogue-tag shape as the Task 8 guard fixture above (proven not to
+  // trigger the dialogue-structure engine's escalation path) — only the
+  // character's name/id changed, to keep this test isolated to the remap.
+  const CHAPTER_BODY = '“Are you sure this will work,” Мэйрин asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'mayrin',
+        name: 'Мэйрин',
+        role: 'lead',
+        color: '#111111',
+        gender: 'female',
+        evidence: [{ quote: 'Мэйрин asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'mayrin',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-early-remap-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_early_remap_e2e_test',
+        manuscriptId,
+        title: 'Early Remap E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Early Remap E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'a fresh id with no same-run dedup collision still adopts the prior cast id by name',
+    async () => {
+      const manuscriptId = `test-early-remap-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      // Prior cast under a DIFFERENT id but the SAME name as this run's
+      // fresh 'mayrin' row — no dedup collision on either side, so
+      // dd.rewrites/folded.rewrites carry no entry for either id and §11
+      // Q2's convergence-skip must not fire.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [{ id: 'mairin', name: 'Мэйрин', voiceState: 'locked', voiceUuid: 'U-mairin' }],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        // The remap adopted the prior 'mairin' id — the fresh 'mayrin' id
+        // never reaches cast.json.
+        expect(idsAfter).not.toContain('mayrin');
+        expect(idsAfter).toContain('mairin');
+
+        // Roster and sentences moved together (spec §4.4 point 3): the
+        // authoritative manuscript-edits.json attributes to 'mairin', not the
+        // orphaned pre-remap 'mayrin' — proof reconcileSentenceCharacterIds
+        // never saw 'mayrin' as a candidate id and so never demoted these
+        // lines to the narrator.
+        const editsFile = JSON.parse(
+          readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'),
+        ) as { sentences: Array<{ characterId: string }> };
+        const editIds = new Set(editsFile.sentences.map((s) => s.characterId));
+        expect(editIds.has('mayrin')).toBe(false);
+        expect(editIds.has('mairin')).toBe(true);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
 describe('#1447 third-party front-matter guard — main-route integration', () => {
   /* Front-matter chapter (index 0, within the guard's default front-region)
      whose title does NOT match Signal 1 (isNonStoryEssayTitle) — the guard

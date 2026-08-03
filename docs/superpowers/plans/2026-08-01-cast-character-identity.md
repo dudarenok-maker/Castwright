@@ -733,7 +733,8 @@ keeps the write on one path.
 - Test: `server/src/store/remap-fresh-to-prior.test.ts`
 
 **Interfaces:**
-- Produces:
+- Produces (as originally planned; see the §11 Q2 resolution below the
+  placement note for the 4th parameter the shipped signature actually adds):
   ```ts
   export function remapFreshToPriorIds<C extends { id: string }, S extends { characterId: string }>(
     fresh: C[], sentences: S[], priorCast: ReadonlyArray<{ id: string } & Record<string, unknown>>,
@@ -747,6 +748,33 @@ before `:4643` makes `phase1ValidIds` correct for free. Remapping only the
 roster would make `reconcileSentenceCharacterIds` demote every renamed
 character's lines to the narrator and could trip `attributionDriftExceeded`,
 refusing the cast.json write entirely.
+
+**§11 Q2 resolution (added post-implementation, round 2 fix).** Q2 asked
+whether the remap must *"compose into [the cumulative dedup→fold rewrite]
+table or run strictly after it is applied."* The answer is **compose** —
+"run strictly after" is incompatible with the load-bearing placement above,
+since `composeRewrites(dd.rewrites, folded.rewrites)` (spec §4.4 point 4) is
+only assembled and consumed at the `applyRewriteToPriorCast` call, long after
+`phase1ValidIds`. `remapFreshToPriorIds` therefore takes a fourth parameter,
+`priorRewrites` (that same cumulative table, recomputed early — pure and
+cheap — rather than hoisting the later call site), and matches a prior
+candidate by its raw id but **adopts** `priorRewrites[id] ?? id`: the id that
+row's own lineage is heading to this run, not its stale current one. When
+that destination already equals the fresh candidate's own id, the pair has
+already converged via Site 1 (`applyRewriteToPriorCast`) or Site 3
+(`mergeAnalysisResultWithExistingCast`'s name-fallback) and the remap must
+skip — otherwise it fires first (this remap runs before either site) and
+rewrites the fresh survivor's id backwards onto the stale prior one, the
+opposite direction those two sites already drive it. This was caught as a
+real regression, not a hypothetical: it broke the Task 8 end-to-end guard
+(`analysis.test.ts` — "cast id history end-to-end guard (#2040 Task 8)" —
+"a throwing history write never blocks the authoritative cast.json persist"),
+whose fixture's prior `anton-x` row happens to collide with a same-run
+dedup key. See `server/src/store/remap-fresh-to-prior.ts`'s module doc for
+the implementation-level detail, and the wiring-level regression added in
+`analysis.test.ts` ("runMainAnalyzerJob — early remap pass, main path
+(#2040 Task 10)") pinning that the genuine drift case (no cumulative-table
+entry involved) still remaps.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -808,6 +836,11 @@ const characters = remappedToPrior.characters;
 folded.sentences = remappedToPrior.sentences;
 ```
 
+**Superseded by the §11 Q2 resolution above** — the shipped call also computes
+and passes `cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites)`
+as a fourth argument (`dd` and `folded` are already in scope at this point);
+the snippet above is the plan's original, pre-fix form, kept for history.
+
 Rename the existing `:4633` binding to `characters0`.
 
 - [ ] **Step 5: Snapshot the roster for `pruneSuggestionsToRoster`**
@@ -838,6 +871,20 @@ Same helper, second call site. Per spec §11, it goes **after** the reuse-link
 block at `:5776-5796`, keeping the two paths symmetric with the main path (which
 runs `seedReuseGuardsFromPriorCast` at `:3702`, long before its own insertion
 point). Apply the same `pruneSuggestionsToRoster` snapshot at `:5907`.
+
+**§11 Q2 applies identically here — same fix, same reason.** Task 10's
+resolution above is not main-path-specific: `remapFreshToPriorIds`'s fourth
+parameter (`priorRewrites`) must be supplied at this call site too, composed
+from THIS route's own `dd`/`folded` (the subset path's `dedupAndPrepare` /
+`foldMinorCast` equivalents), not reused from the main path's. Skipping this
+here reintroduces the identical bug spec §4.4 point 3 and §11 Q2 describe —
+this remap must precede `phase1ValidIds`-equivalent (so "run strictly after
+the cumulative table is applied" is unavailable here either), yet a prior row
+already converging via this route's own Site 1/Site 3 equivalents would
+otherwise be rewritten backwards. Add a wiring-level regression mirroring
+`analysis.test.ts`'s "runMainAnalyzerJob — early remap pass, main path (#2040
+Task 10)" test for the subset route, plus a case exercising the same
+convergence-skip the Task 8 guard caught on the main path.
 
 - [ ] **Step 1: Write a subset-path regression test** mirroring Task 10's, driving the per-chapter re-analysis route.
 - [ ] **Step 2: Run it, confirm it fails.**
