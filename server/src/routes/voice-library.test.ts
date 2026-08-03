@@ -145,25 +145,14 @@ beforeEach(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
-  const [
-    { voiceLibraryRouter },
-    voiceLibMod,
-    modelPathsMod,
-    userSettings,
-    pathsMod,
-    qwenVoiceMod,
-    sampleCacheMod,
-    coquiVersionStateMod,
-  ] = await Promise.all([
-    import('./voice-library.js'),
-    import('../workspace/voice-library.js'),
-    import('../tts/model-paths.js'),
-    import('../workspace/user-settings.js'),
-    import('../workspace/paths.js'),
-    import('./qwen-voice.js'),
-    import('../tts/voice-sample-cache.js'),
-    import('../tts/coqui-version-state.js'),
-  ]);
+  const { voiceLibraryRouter } = await import('./voice-library.js');
+  const voiceLibMod = await import('../workspace/voice-library.js');
+  const modelPathsMod = await import('../tts/model-paths.js');
+  const userSettings = await import('../workspace/user-settings.js');
+  const pathsMod = await import('../workspace/paths.js');
+  const qwenVoiceMod = await import('./qwen-voice.js');
+  const sampleCacheMod = await import('../tts/voice-sample-cache.js');
+  const coquiVersionStateMod = await import('../tts/coqui-version-state.js');
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;

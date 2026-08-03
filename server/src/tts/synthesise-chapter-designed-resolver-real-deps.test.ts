@@ -125,7 +125,8 @@ beforeEach(async () => {
   vi.resetModules();
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => fakeFailingFfmpegChild());
-  [mod, paths] = await Promise.all([import('./synthesise-chapter.js'), import('../workspace/paths.js')]);
+  mod = await import('./synthesise-chapter.js');
+  paths = await import('../workspace/paths.js');
   mkdirSync(paths.qwenVoicesDir(), { recursive: true });
 });
 

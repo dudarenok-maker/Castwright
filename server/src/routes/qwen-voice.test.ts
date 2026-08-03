@@ -226,11 +226,9 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
 
-  const [{ qwenVoiceRouter }, { voiceSampleRouter }, { makeBookId }] = await Promise.all([
-    import('./qwen-voice.js'),
-    import('./voice-sample.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { qwenVoiceRouter } = await import('./qwen-voice.js');
+  const { voiceSampleRouter } = await import('./voice-sample.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
 
   app = express();

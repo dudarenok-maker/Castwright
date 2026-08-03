@@ -74,10 +74,8 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-preserve-voices-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
-    import('./book-state.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { bookStateRouter } = await import('./book-state.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
 

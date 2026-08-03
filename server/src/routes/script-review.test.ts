@@ -213,8 +213,9 @@ const CANNED_OPS: ScriptReviewOutput = {
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-script-review-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci, priorChapterIdFor: pcif }, { makeBookId }] =
-    await Promise.all([import('./script-review.js'), import('../workspace/paths.js')]);
+  const { scriptReviewRouter, buildReviewSentencesInput: build, priorChapterBoundaryExchange: pcbe, buildScriptReviewChapterInbox: bsrci, priorChapterIdFor: pcif } =
+    await import('./script-review.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   buildReviewSentencesInput = build;
   priorChapterBoundaryExchange = pcbe;
   buildScriptReviewChapterInbox = bsrci;

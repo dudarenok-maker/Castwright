@@ -120,10 +120,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-not-linked-to-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castNotLinkedToRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-not-linked-to.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { castNotLinkedToRouter } = await import('./cast-not-linked-to.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   exileBookId = makeBookId(AUTHOR, SERIES, EXILE_BOOK);
   otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);

@@ -1869,6 +1869,11 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released();
       [n, wrote] = await Promise.all([overridePromise, personaPromise]);
     } finally {
+      // Idempotent: also fires here so a throw ANYWHERE above (before the
+      // happy-path call) still releases a held `readJson` rather than
+      // leaving it stuck on `await gate` forever. Resolving an
+      // already-resolved promise a second time is a no-op.
+      released();
       // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
       // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
       // default passthrough behaviour explicitly.
@@ -1940,6 +1945,11 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       released();
       [n, wrote] = await Promise.all([walkPromise, personaPromise]);
     } finally {
+      // Idempotent: also fires here so a throw ANYWHERE above (before the
+      // happy-path call) still releases a held `readJson` rather than
+      // leaving it stuck on `await gate` forever. Resolving an
+      // already-resolved promise a second time is a no-op.
+      released();
       spy.mockImplementation(actual.readJson);
     }
     /* Other unrelated fixtures elsewhere in this file also use the bare id
@@ -1967,5 +1977,114 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       (otherNarrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen
         ?.name,
     ).toBe('qwen-walk-race');
+  });
+
+  /* #1981 Task 9 fix round — F3. Neither test above actually pins the task's
+     PRIMARY constraint: that each book gets its OWN `withCastLock` span,
+     taken and released as the walk reaches it, rather than one lock hoisted
+     around the entire directory walk. Both tests above stay green under that
+     violation (a hoisted lock still serialises the SAME book against a
+     concurrent writer on that SAME book — indistinguishable from the fix by
+     either test above).
+
+     The observable difference is instead about a book the walk ALSO
+     touches, but hasn't reached yet: under per-book locking, an unrelated
+     writer on that book is blocked only while ITS OWN write is in flight;
+     under a single lock hoisted around the whole walk, that writer must wait
+     for the ENTIRE walk, including whatever other book the walk is stuck on.
+     This gates the held book's read (same scripted-interleaving technique as
+     above) and fires an independent writer — `writeVoiceStylePersona`, which
+     never goes through `forEachMatchingCastCharacter` at all — against a
+     SECOND matching book, then asserts that writer settles WHILE the first
+     book is still gated. */
+  it('per-book lock: an independent writer on a different matching book is never blocked by another matching book still in flight', async () => {
+    const heldBookDir = standaloneA.bookDir;
+    const heldCastPath = narratorCastPath(heldBookDir);
+    const targetBookDir = standaloneB.bookDir;
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === heldCastPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before the target write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let n: number;
+    let writerSettled = false;
+    try {
+      const walkPromise = applyOverrideToCastFiles('narrator', {
+        engine: 'qwen',
+        name: 'qwen-hoist-check',
+      });
+      // Poll for the walk to reach (and get stuck behind) the held book's
+      // read — regardless of directory scan order, same as the walk test above.
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      const writerPromise = writeVoiceStylePersona(
+        targetBookDir,
+        'narrator',
+        'a hoist-check persona',
+      ).then((w) => {
+        writerSettled = true;
+        return w;
+      });
+
+      // Generous window: settles quickly when locking is per-book (what this
+      // pins); never settles within it when one lock spans the whole walk,
+      // since the target book's own key would still be held by the walk.
+      await new Promise((r) => setTimeout(r, 150));
+
+      // THE assertion: an unrelated matching book's own writer completes
+      // WHILE this book's read is still gated — proving the walk does not
+      // hold a single lock across every book it touches.
+      expect(writerSettled).toBe(true);
+
+      released();
+      n = await walkPromise;
+      await writerPromise;
+    } finally {
+      // Idempotent — see the finally block above for why.
+      released();
+      spy.mockImplementation(actual.readJson);
+    }
+
+    /* Other unrelated fixtures elsewhere in this file also use the bare id
+       'narrator' and share this workspace — assert our two specifically. */
+    expect(n).toBeGreaterThanOrEqual(2);
+
+    const heldAfter = JSON.parse(readFileSync(heldCastPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const heldNarrator = heldAfter.characters.find((c) => c.id === 'narrator')!;
+    expect(
+      (heldNarrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen
+        ?.name,
+    ).toBe('qwen-hoist-check');
+
+    const targetAfter = JSON.parse(readFileSync(narratorCastPath(targetBookDir), 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    const targetNarrator = targetAfter.characters.find((c) => c.id === 'narrator')!;
+    expect(
+      (targetNarrator.overrideTtsVoices as Record<string, { name?: string }> | undefined)?.qwen
+        ?.name,
+    ).toBe('qwen-hoist-check');
+    expect(targetNarrator.voiceStyle).toBe('a hoist-check persona');
   });
 });

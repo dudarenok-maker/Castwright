@@ -51,10 +51,8 @@ beforeEach(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
-  const [{ voiceLibraryRouter }, cloneFidelityMod] = await Promise.all([
-    import('./voice-library.js'),
-    import('../tts/clone-fidelity.js'),
-  ]);
+  const { voiceLibraryRouter } = await import('./voice-library.js');
+  const cloneFidelityMod = await import('../tts/clone-fidelity.js');
   CLONE_FIDELITY_MIN = cloneFidelityMod.CLONE_FIDELITY_MIN;
 
   app = express();

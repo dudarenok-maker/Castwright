@@ -132,10 +132,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-library-override-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ libraryCastOverrideRouter }, { makeBookId }] = await Promise.all([
-    import('./library-cast-override.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { libraryCastOverrideRouter } = await import('./library-cast-override.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   novellaBookId = makeBookId(AUTHOR, SERIES, NOVELLA);
   novelBookId = makeBookId(AUTHOR, SERIES, FULL_NOVEL);
 

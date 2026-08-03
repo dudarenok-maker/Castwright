@@ -104,11 +104,9 @@ beforeAll(async () => {
 
   // All imports are dynamic so WORKSPACE_DIR (above) is set before paths.ts
   // reads process.env.WORKSPACE_DIR at module load time.
-  const [{ singleDesignRouter }, { makeBookId }, lock] = await Promise.all([
-    import('./single-design.js'),
-    import('../workspace/paths.js'),
-    import('../tts/design-lock.js'),
-  ]);
+  const { singleDesignRouter } = await import('./single-design.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const lock = await import('../tts/design-lock.js');
   designLock = lock;
 
   BOOK_ID = makeBookId(AUTHOR, SERIES, BOOK);

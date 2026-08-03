@@ -122,10 +122,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-link-prior-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castLinkPriorRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-link-prior.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { castLinkPriorRouter } = await import('./cast-link-prior.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   newBookId = makeBookId(AUTHOR, SERIES, NEW_BOOK);
   otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);
