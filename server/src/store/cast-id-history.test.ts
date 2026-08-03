@@ -55,6 +55,38 @@ describe('cast id history', () => {
     });
   });
 
+  describe('direct reversal (#2040 Task 8 fix round 1, item 3)', () => {
+    it('inverts a same-run reversal instead of collapsing into a dead self-loop — order A (dedupe then remap)', async () => {
+      // Reviewer's repro: a dedupe pass records "антон"->"anton", then a
+      // later remap in the SAME run records the reverse "anton"->"антон"
+      // (the roster ended up live on "антон"). The old code produced
+      // {"антон":"anton","anton":"anton"} — a dead self-loop that orphans
+      // BOTH ids, since neither target is live.
+      await retireCharacterId(dir, 'антон', 'anton');
+      await retireCharacterId(dir, 'anton', 'антон');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ anton: 'антон' });
+    });
+
+    it('inverts a same-run reversal — order B (the calls in the opposite order)', async () => {
+      await retireCharacterId(dir, 'anton', 'антон');
+      await retireCharacterId(dir, 'антон', 'anton');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ антон: 'anton' });
+    });
+
+    it('repoints a THIRD entry that targeted the now-dead id onto the new live id', async () => {
+      // 'anton-typo' was retired in favour of 'anton' before the reversal.
+      // Once 'anton' itself dies in favour of 'антон', 'anton-typo' must
+      // follow it there rather than being left pointing at a dead target.
+      await retireCharacterId(dir, 'anton-typo', 'anton');
+      await retireCharacterId(dir, 'антон', 'anton');
+      await retireCharacterId(dir, 'anton', 'антон');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({
+        'anton-typo': 'антон',
+        anton: 'антон',
+      });
+    });
+  });
+
   describe('never-throws guarantee', () => {
     it('returns empty history for truncated/invalid JSON', async () => {
       // Hits the catch branch in the try/catch

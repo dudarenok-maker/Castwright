@@ -172,6 +172,46 @@ function readDisk<T>(rel: string): T {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', rel), 'utf8')) as T;
 }
 
+/* Self-sufficient merge helper (#2040 Task 8 fix round 1, item 6) — appends a
+   FRESH, uniquely-named source/target pair (with their own sentences) onto
+   whatever cast.json/manuscript-edits.json state the test suite is currently
+   in, then merges them. A test built on this never depends on an earlier
+   `it` having already run a merge — it seeds and drives its own. Returns the
+   merge's response plus the ids/sentence-ids the caller can assert against. */
+async function mergeFreshPair(): Promise<{
+  res: request.Response;
+  sourceId: string;
+  targetId: string;
+  sentenceIds: number[];
+}> {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sourceId = `echo-src-${unique}`;
+  const targetId = `echo-tgt-${unique}`;
+
+  const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+  cast.characters.push(
+    { id: sourceId, name: 'Echo Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    { id: targetId, name: 'Echo Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+  );
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+  const edits = readDisk<{ sentences: Array<Record<string, unknown>> }>('manuscript-edits.json');
+  const baseId = Date.now();
+  const sentenceIds = [baseId, baseId + 1];
+  edits.sentences.push(
+    { id: sentenceIds[0], chapterId: 1, characterId: sourceId, text: 'Echo one.' },
+    { id: sentenceIds[1], chapterId: 2, characterId: sourceId, text: 'Echo two.' },
+  );
+  writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+
+  const res = await request(app)
+    .post(`/api/books/${bookId}/cast/merge`)
+    .set('Content-Type', 'application/json')
+    .send({ sourceId, targetId });
+
+  return { res, sourceId, targetId, sentenceIds };
+}
+
 describe('cast-merge router', () => {
   it('folds source into target, builds aliases, remaps sentences, updates cache', async () => {
     const res = await request(app)
@@ -246,10 +286,13 @@ describe('cast-merge router', () => {
     }
   });
 
-  it('records a manual journal entry with chapter-qualified affected sentences', async () => {
-    /* The first test merged wren → wren-sparrow. wren spoke sentences
-       id1/id2 (chapter 1) and id3 (chapter 2). The journal must record those
-       three as chapter-qualified pairs under a single manual entry. */
+  it('records a manual journal entry with chapter-qualified affected sentences (#2040 Task 8 fix round 1, item 6 — self-sufficient)', async () => {
+    // Self-contained: seeds and merges its OWN pair (mergeFreshPair) rather
+    // than relying on the earlier "folds source into target" test having
+    // already run — this used to only pass because of execution order.
+    const { res, sourceId, targetId, sentenceIds } = await mergeFreshPair();
+    expect(res.status).toBe(200);
+
     const journal = readDisk<{
       entries: Array<{
         kind: string;
@@ -260,29 +303,30 @@ describe('cast-merge router', () => {
       }>;
     }>('cast-merges.json');
 
-    expect(journal.entries).toHaveLength(1);
-    const entry = journal.entries[0];
+    const entry = journal.entries.find((e) => e.sourceId === sourceId && e.targetId === targetId);
+    expect(entry).toBeDefined();
     expect(entry).toMatchObject({
       kind: 'manual',
-      sourceId: 'wren',
-      sourceName: 'Wren',
-      targetId: 'wren-sparrow',
+      sourceId,
+      sourceName: 'Echo Source',
+      targetId,
     });
-    expect(entry.affected).toEqual([
-      { chapterId: 1, sentenceId: 1 },
-      { chapterId: 1, sentenceId: 2 },
-      { chapterId: 2, sentenceId: 3 },
+    expect(entry!.affected).toEqual([
+      { chapterId: 1, sentenceId: sentenceIds[0] },
+      { chapterId: 2, sentenceId: sentenceIds[1] },
     ]);
   });
 
-  it('records the merge as a retirement in cast-id-history.json (#2040 Task 8)', async () => {
-    // The first test in this describe already merged wren -> wren-sparrow.
+  it('records the merge as a retirement in cast-id-history.json (#2040 Task 8; fix round 1 item 6 — self-sufficient)', async () => {
     // §4.4 call site 5: performCastMerge must retire the source id through
     // the SAME choke point every other id-losing path uses, so a segment
-    // still tagged 'wren' resolves at render time instead of orphaning.
+    // still tagged with the source id resolves at render time instead of
+    // orphaning. Self-contained (mergeFreshPair) rather than relying on an
+    // earlier test's merge — see the item-6 note on the sibling test above.
+    const { sourceId, targetId } = await mergeFreshPair();
     const { loadCastIdHistory } = await import('../store/cast-id-history.js');
     const history = await loadCastIdHistory(bookDir);
-    expect(history.supersededBy).toHaveProperty('wren', 'wren-sparrow');
+    expect(history.supersededBy).toHaveProperty(sourceId, targetId);
   });
 
   it('400s when sourceId equals targetId', async () => {

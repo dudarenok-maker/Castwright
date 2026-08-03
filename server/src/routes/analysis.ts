@@ -2848,7 +2848,14 @@ export async function runMainAnalyzerJob(
             .join(', ')}).`,
         );
       }
-      await recordRetirements(recordRef.bookDir, reconciled.retirements);
+      /* §4.4 / Task 8 fix round 1 (item 1) — a throwing history write
+         (EPERM/ENOSPC on cast-id-history.json) must never fail the analysis
+         persist. Mirrors writeFoldJournal/writeDedupJournal below. */
+      try {
+        await recordRetirements(recordRef.bookDir, reconciled.retirements);
+      } catch (historyErr) {
+        console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
+      }
     }
 
     if (requestedFresh) {
@@ -3575,11 +3582,16 @@ export async function runMainAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              /* §4.4 / Task 8 fix round 1 (item 4) — this write persists a
+                 PROVISIONAL roster (no sentence counts yet; the authoritative
+                 end-of-run write below clobbers it). Recording retirements
+                 from it can permanently claim a live id is retired, pointing
+                 at an id that never existed, with no un-record path — so
+                 don't. Only §4.4's five listed sites record. */
               const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
                 characters: mergedInterim.characters,
               });
-              await recordRetirements(recordRef.bookDir, mergedInterim.retirements);
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
@@ -3782,11 +3794,14 @@ export async function runMainAnalyzerJob(
               assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
               [],
             );
+            // §4.4 / Task 8 fix round 1 (item 4) — preview-folded roster, no
+            // sentence counts yet; the authoritative write below clobbers it.
+            // Don't record retirements from it (see the interim-write comment
+            // above for the full rationale).
             const mergedStage1 = mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast);
             await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
               characters: mergedStage1.characters,
             });
-            await recordRetirements(recordRef.bookDir, mergedStage1.retirements);
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
@@ -4795,12 +4810,20 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          await recordRetirements(record.bookDir, remapped.retirements);
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
             characters: mergedFinal.characters,
           });
-          await recordRetirements(record.bookDir, mergedFinal.retirements);
+          /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
+             authoritative cast.json write, and never let a throwing history
+             write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
+             state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
+          try {
+            await recordRetirements(record.bookDir, remapped.retirements);
+            await recordRetirements(record.bookDir, mergedFinal.retirements);
+          } catch (historyErr) {
+            console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+          }
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
@@ -5247,6 +5270,7 @@ export async function runSubsetAnalyzerJob(
 
   /* Fix 2 — same-name prior-cast collapse (see streaming path). Applied here so
      the subset re-analysis path's writes + seed also see one prior row per name. */
+  let dedupRetirements: Retirement[] = [];
   if (priorCastForMerge.length > 1) {
     const reconciled = dedupePriorCastByName(priorCastForMerge);
     priorCastForMerge = reconciled.cast;
@@ -5258,7 +5282,7 @@ export async function runSubsetAnalyzerJob(
           .join(', ')}).`,
       );
     }
-    await recordRetirements(record.bookDir, reconciled.retirements);
+    dedupRetirements = reconciled.retirements;
   }
 
   /* Used inside the persist guards below in place of the old `clientGone`
@@ -5269,6 +5293,19 @@ export async function runSubsetAnalyzerJob(
   const isAborted = (): boolean => abortController.signal.aborted;
 
   try {
+    /* §4.4 / Task 8 fix round 1 (items 1 + 2) — the DEDUP call above computes
+       `dedupRetirements` synchronously (can't throw), but recording them is
+       async I/O — moved inside this try so a throw can't reject before the
+       try starts (runSubsetAnalyzerJob is fire-and-forget with no outer
+       catch; a rejection there would skip `endJob`, leaving the SSE response
+       open and the job stuck in `inFlightSubsetByManuscript` forever). Also
+       wrapped in its own try/catch so a throwing history write still can't
+       fail the analysis persist — mirrors writeFoldJournal/writeDedupJournal. */
+    try {
+      await recordRetirements(record.bookDir, dedupRetirements);
+    } catch (historyErr) {
+      console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
+    }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
@@ -5447,11 +5484,14 @@ export async function runSubsetAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              // §4.4 / Task 8 fix round 1 (item 4) — provisional roster, no
+              // sentence counts yet; the authoritative write below clobbers
+              // it. Don't record retirements from it (see the main route's
+              // interim-write comment for the full rationale).
               const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(record.bookDir), {
                 characters: mergedInterim.characters,
               });
-              await recordRetirements(record.bookDir, mergedInterim.retirements);
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
@@ -5954,12 +5994,19 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          await recordRetirements(record.bookDir, remapped.retirements);
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
             characters: mergedFinal.characters,
           });
-          await recordRetirements(record.bookDir, mergedFinal.retirements);
+          /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
+             authoritative cast.json write; wrapped so a throwing history
+             write can't skip cast.json / state.json. */
+          try {
+            await recordRetirements(record.bookDir, remapped.retirements);
+            await recordRetirements(record.bookDir, mergedFinal.retirements);
+          } catch (historyErr) {
+            console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+          }
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),

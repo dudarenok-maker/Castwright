@@ -41,14 +41,14 @@ import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
-import { loadCastIdHistory, retireCharacterId } from '../store/cast-id-history.js';
+import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
 
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
@@ -3151,61 +3151,62 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
      (runMainAnalyzerJob) against a real bookDir with real file I/O — no
      mocked cast-id-history — pre-seed the history with an entry from an
      EARLIER run, and assert after a full analysis that the pre-existing
-     entry survived AND a new one was recorded for the id drift this run's
-     analyzer output introduces.
+     entry survived AND two NEW entries were recorded, one per §4.4 site:
 
-     Coverage note: this exercises the interim + final `cast.json` writes'
-     `mergeAnalysisResultWithExistingCast` name-fallback path (§4.4 call site
-     3) on the MAIN route. It does not drive `dedupePriorCastByName` (call
-     site 2 needs 2+ same-name prior rows) or the dedup→fold `rewrites` table
-     `applyRewriteToPriorCast` consumes (call site 1 needs a same-run
-     collision) — both are pinned directly at the unit level above. It also
-     does not cover the subset route or `performCastMerge` (call site 5,
-     also unit-pinned above). */
+     - Site 1 (`applyRewriteToPriorCast`): the prior cast carries a voiced row
+       under id `anton-x`. THIS run's own fresh roster introduces two
+       same-name rows across chapters (`anton-x` in chapter 1, `anton-y` in
+       chapters 2-3, both "Anton Prime" — mirroring the analyzer's documented
+       non-determinism) that `dedupeRosterByName`'s Tier-1 collapses to a
+       third canonical id, producing a real `dd.rewrites` hit. Because the
+       prior row's id is a REWRITE KEY (not just a same-run collision that
+       never touches the prior cast), `applyRewriteToPriorCast` remaps it —
+       exercising the same-run-collision path a unit test can't reach without
+       synthesising the rewrite table by hand.
+     - Site 2 (`dedupePriorCastByName`): the prior cast ALSO carries two rows
+       sharing the (unrelated) name "Legacy Duplicate" — collapsed before the
+       chapter loop even starts.
+
+     Fold round 1 review finding: the original version of this guard only
+     exercised the (correctly non-recording, per item 4) interim-write path —
+     it went red for the wrong reason once that path stopped recording.
+     Rewritten to pin the sites §4.4 actually lists. Round-1 fix item 5.
+
+     Coverage note: does not cover the subset route or `performCastMerge`
+     (call site 5) — those remain unit-pinned above / in cast-merge.test.ts. */
   const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
 
-  function stage1Roster(): CharacterOutput[] {
+  /* Chapter 1 introduces 'anton-x'; chapters 2-3 introduce 'anton-y' — same
+     name, different id, exactly the drift dedupeRosterByName's Tier-1
+     collapses. mergeRosterChapter merges by id, so both survive as distinct
+     rows in the whole-book roster dedupAndPrepare receives. Combined lines
+     (1 + 2 = 3) clear foldMinorCast's MIN_LINES_DEFAULT so the merged
+     survivor isn't folded into the unknown-male bucket before this reaches
+     the merge. */
+  function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
+    const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
     return [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
-      // The analyzer relabels this run's Anton under a FRESH id — simulating
-      // exactly the non-determinism merge-analysis-cast.ts's own doc comment
-      // names (`coalfall` -> `coalfall-dragon`). The prior cast (seeded below)
-      // carries the OLD id under a voiced row, so the merge's name-fallback
-      // must retire it onto this fresh id.
       {
-        id: 'anton-fresh',
-        name: 'Anton',
+        id: antonId,
+        name: 'Anton Prime',
         role: 'lead',
         color: '#111111',
         gender: 'male',
         evidence: [{ quote: 'Anton asked' }],
       },
-      {
-        id: 'olga',
-        name: 'Olga',
-        role: 'lead',
-        color: '#222222',
-        gender: 'female',
-        evidence: [{ quote: 'Olga nodded' }],
-      },
     ];
   }
 
-  function mockAttributionSentences(chapterId: number): SentenceOutput[] {
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
     return [
       {
         id: chapterId * 100 + 1,
         chapterId,
-        characterId: 'anton-fresh',
+        characterId: antonId,
         confidence: 0.9,
         text: 'Are you sure this will work',
-      },
-      {
-        id: chapterId * 100 + 2,
-        chapterId,
-        characterId: 'narrator',
-        confidence: 0.9,
-        text: 'Olga nodded and looked away',
       },
     ];
   }
@@ -3213,8 +3214,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   function buildPhase0Analyzer(): Analyzer {
     return {
       runStage1: () => Promise.reject(new Error('not used')),
-      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
-        return { characters: stage1Roster() };
+      async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter(chapterId) };
       },
       runStage2Chapter: () =>
         Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
@@ -3236,7 +3237,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         _prompt: string,
         _call: StageCall,
       ): Promise<Stage2ChapterOutput> {
-        return { sentences: mockAttributionSentences(chapterId) };
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
       },
       runEmotionChapter: () => Promise.reject(new Error('not used')),
       runScriptReviewChapter: () => Promise.reject(new Error('not used')),
@@ -3316,7 +3317,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   }
 
   it(
-    'a full analysis over a book whose history already has an entry: that entry survives AND a new one is recorded',
+    'a full analysis over a book whose history already has an entry: that entry survives AND site-1 + site-2 each record a new one',
     async () => {
       const manuscriptId = `test-cast-id-history-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -3329,20 +3330,34 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
          anything this run touches. Must still be there after the run. */
       await retireCharacterId(bookDir, 'old-eliza', 'eliza');
 
-      /* Prior cast.json: a VOICED row under the id the analyzer will NOT
-         reuse this run (simulating the analyzer's own documented
-         non-determinism). isVoicedOrReused (voiceUuid) makes it eligible for
-         the merge's name-fallback carry-forward. */
+      /* Prior cast.json seeds BOTH §4.4 sites this test pins:
+         - 'anton-x': voiced, id matches a key THIS run's own fresh-roster
+           dedup (dedupeRosterByName Tier-1) will rewrite — site 1
+           (applyRewriteToPriorCast).
+         - 'dup-a' / 'dup-b': two prior rows sharing an (unrelated) name —
+           site 2 (dedupePriorCastByName), collapsed before the chapter loop
+           even starts, independent of anything the analyzer detects. */
       writeFileSync(
         join(bookDir, '.audiobook', 'cast.json'),
         JSON.stringify({
           characters: [
             {
-              id: 'anton-legacy',
-              name: 'Anton',
+              id: 'anton-x',
+              name: 'Anton Prime',
               voiceUuid: 'U-anton',
               ttsEngine: 'qwen',
               overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+            {
+              id: 'dup-a',
+              name: 'Legacy Duplicate',
+              voiceState: 'locked',
+              voiceUuid: 'U-dup-a',
+            },
+            {
+              id: 'dup-b',
+              name: 'Legacy Duplicate',
+              voiceState: 'generated',
             },
           ],
         }),
@@ -3380,20 +3395,139 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           requestedModel: undefined,
         });
 
-        // The fresh roster actually landed under the NEW id (sanity check —
-        // if this fails the fixture itself is wrong, not the history wiring).
+        // The fresh roster's Tier-1 name-dedup actually collapsed anton-x/
+        // anton-y to a THIRD canonical id (sanity check — if this fails the
+        // fixture itself is wrong, not the history wiring).
         const castAfter = JSON.parse(
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
-        ) as { characters: Array<{ id: string }> };
-        const ids = castAfter.characters.map((c) => c.id);
-        expect(ids).toContain('anton-fresh');
-        expect(ids).not.toContain('anton-legacy');
+        ) as { characters: Array<{ id: string; name: string }> };
+        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
+        expect(antonPrime).toBeDefined();
+        const antonPrimeId = antonPrime!.id;
+        expect(antonPrimeId).not.toBe('anton-x');
+        expect(antonPrimeId).not.toBe('anton-y');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-x');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-y');
 
         const history = await loadCastIdHistory(bookDir);
         // The pre-existing entry from before this run survived the run.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        // A new entry was recorded for THIS run's id drift.
-        expect(history.supersededBy).toHaveProperty('anton-legacy', 'anton-fresh');
+        // Site 1 (applyRewriteToPriorCast): the prior 'anton-x' row's id is a
+        // same-run dedup rewrite key, so the prior cast is remapped onto the
+        // fresh survivor.
+        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
+        // Site 2 (dedupePriorCastByName): the two "Legacy Duplicate" prior
+        // rows collapse, keeping the stronger voiceState's own id.
+        expect(history.supersededBy).toHaveProperty('dup-b', 'dup-a');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'a throwing history write never blocks the authoritative cast.json persist (round 1 fix item 1)',
+    async () => {
+      /* cast-id-history.json's PATH is occupied by a directory, so every
+         retireCharacterId() call's writeJsonAtomic (rename onto an existing
+         path) throws EPERM/EEXIST-shaped for real — no mocking. Same fixture
+         as the sibling test above (guarantees BOTH §4.4 sites this run
+         touches actually attempt a write and throw), so the only variable
+         is whether that throw reaches the caller. */
+      const manuscriptId = `test-cast-id-history-throw-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      mkdirSync(castIdHistoryPath(bookDir), { recursive: true });
+
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'anton-x',
+              name: 'Anton Prime',
+              voiceUuid: 'U-anton',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+            { id: 'dup-a', name: 'Legacy Duplicate', voiceState: 'locked', voiceUuid: 'U-dup-a' },
+            { id: 'dup-b', name: 'Legacy Duplicate', voiceState: 'generated' },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // Must not reject — a throwing history write is caught and warned,
+        // never propagated.
+        await expect(
+          runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+            requestedFresh: false,
+            allowStage1Shrink: true,
+            requestedModel: undefined,
+          }),
+        ).resolves.toBeUndefined();
+
+        // The authoritative cast.json write happened DESPITE every retirement
+        // write throwing — this is the actual property under test.
+        //
+        // NOT a sufficient check on its own: the PER-CHAPTER interim write
+        // (buildInterimCast -> previewFoldForLiveView -> dedupeRosterByName)
+        // ALSO Tier-1-collapses anton-x/anton-y under a `lines: 0` PLACEHOLDER
+        // — so an id-only assertion would pass even if the AUTHORITATIVE
+        // final write were skipped entirely by the outer persistErr catch
+        // (confirmed by direct experiment: this exact assertion shape passed
+        // against the unfixed code, for the wrong reason). The final write is
+        // the only one that stamps REAL Phase-1 line counts, so assert on
+        // `lines` to actually distinguish "interim placeholder" from
+        // "authoritative write completed".
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string; lines?: number }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        expect(idsAfter).not.toContain('anton-x');
+        expect(idsAfter).not.toContain('dup-b');
+        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
+        expect(antonPrime).toBeDefined();
+        // 1 attributed line per chapter x 3 chapters — real Phase-1 output,
+        // not the interim write's `lines: 0` placeholder.
+        expect(antonPrime!.lines).toBe(3);
+
+        // The history path is still a directory — the throwing writes never
+        // got far enough to corrupt anything there either.
+        expect(existsSync(castIdHistoryPath(bookDir))).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
