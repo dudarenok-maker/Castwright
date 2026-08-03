@@ -3333,17 +3333,30 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
       /* Prior cast.json seeds BOTH §4.4 sites this test pins:
          - 'anton-x': voiced, id matches a key THIS run's own fresh-roster
            dedup (dedupeRosterByName Tier-1) will rewrite — site 1
-           (applyRewriteToPriorCast).
+           (applyRewriteToPriorCast). Its NAME ("Anton Legacy Voice")
+           deliberately does NOT match the fresh roster's "Anton Prime"
+           (round-2 review fix): if it did,
+           `mergeAnalysisResultWithExistingCast`'s own same-name fallback
+           (§4.4 site 3, merge-analysis-cast.ts:148-186) could independently
+           produce an identical `anton-x -> <canonical>` entry even if
+           `applyRewriteToPriorCast`'s retirement bookkeeping were broken —
+           masking a regression there. Diverging the names means the ONLY
+           way this row's id can be overlaid/retired is via the id-space
+           rewrite table (`composeRewrites(dd.rewrites, folded.rewrites)`),
+           which is exactly what site 1 is.
          - 'dup-a' / 'dup-b': two prior rows sharing an (unrelated) name —
            site 2 (dedupePriorCastByName), collapsed before the chapter loop
-           even starts, independent of anything the analyzer detects. */
+           even starts, independent of anything the analyzer detects. This
+           half is already exclusive: "Legacy Duplicate" never appears in
+           the fresh roster, so nothing else in the final merge can produce
+           `dup-b -> dup-a`. */
       writeFileSync(
         join(bookDir, '.audiobook', 'cast.json'),
         JSON.stringify({
           characters: [
             {
               id: 'anton-x',
-              name: 'Anton Prime',
+              name: 'Anton Legacy Voice',
               voiceUuid: 'U-anton',
               ttsEngine: 'qwen',
               overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
