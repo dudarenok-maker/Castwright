@@ -49,6 +49,7 @@ import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.j
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
+import { loadSuggestions } from '../store/cast-merge-suggestions.js';
 
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
@@ -3891,6 +3892,199 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         // Task 10's own recording.
         const history = await loadCastIdHistory(bookDir);
         expect(history.supersededBy).toHaveProperty('mayrin', 'mairin');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "the Step-5 fix: a dedup diminutive suggestion survives a same-run remap (pruneSuggestionsToRoster gets characters0, not the remapped roster)",
+    async () => {
+      /* task-10-brief.md Step 5, never actually pinned until this fix round:
+         dd.suggestions carries ids in the PRE-remap space. Fresh roster this
+         run: 'Оля' (diminutive, few lines) + 'Ольга' (full name, more lines)
+         — dedupeRosterByName's Tier-2b suggests a merge WITHOUT auto-merging
+         (proven pairing, same one roster-dedup.test.ts's own Tier-2b test
+         uses). The prior cast holds 'Ольга' under a DIFFERENT id
+         ('olga-legacy'), so Task 10's remap fires for 'olga' -> 'olga-legacy'
+         — the fresh id the suggestion's targetId still points at. Passing
+         the REMAPPED roster (`characters`) to pruneSuggestionsToRoster would
+         fail `ids.has('olga')` (no such id anymore) and silently drop the
+         suggestion; passing characters0 (this fix) keeps it. */
+      const SUGGESTION_CHAPTER_BODY =
+        '“Are you sure this will work,” Оля asked.\n\n“I am certain of it,” Ольга replied.\n\n“Let us proceed,” Ольга added.';
+
+      function suggestionStage1Roster(): CharacterOutput[] {
+        return [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          {
+            id: 'olya',
+            name: 'Оля',
+            role: 'supporting',
+            color: '#222222',
+            gender: 'female',
+            evidence: [{ quote: 'Оля asked' }],
+          },
+          {
+            id: 'olga',
+            name: 'Ольга',
+            role: 'lead',
+            color: '#111111',
+            gender: 'female',
+            evidence: [{ quote: 'Ольга replied' }],
+          },
+        ];
+      }
+
+      function suggestionSentencesForChapter(chapterId: number): SentenceOutput[] {
+        return [
+          {
+            id: chapterId * 100 + 1,
+            chapterId,
+            characterId: 'olya',
+            confidence: 0.9,
+            text: 'Are you sure this will work',
+          },
+          {
+            id: chapterId * 100 + 2,
+            chapterId,
+            characterId: 'olga',
+            confidence: 0.9,
+            text: 'I am certain of it',
+          },
+          {
+            id: chapterId * 100 + 3,
+            chapterId,
+            characterId: 'olga',
+            confidence: 0.9,
+            text: 'Let us proceed',
+          },
+        ];
+      }
+
+      const suggestionPhase0Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+          return { characters: suggestionStage1Roster() };
+        },
+        runStage2Chapter: () =>
+          Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      };
+
+      const suggestionPhase1Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () =>
+          Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+        async runStage2Chapter(
+          _manuscriptId: string,
+          chapterId: number,
+          _prompt: string,
+          _call: StageCall,
+        ): Promise<Stage2ChapterOutput> {
+          return { sentences: suggestionSentencesForChapter(chapterId) };
+        },
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () =>
+          Promise.reject(new Error('no flagged windows — escalation should never be called')),
+      };
+
+      const manuscriptId = `test-early-remap-suggestions-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: SUGGESTION_CHAPTER_BODY },
+        { id: 2, title: 'Chapter Two', body: SUGGESTION_CHAPTER_BODY },
+        { id: 3, title: 'Chapter Three', body: SUGGESTION_CHAPTER_BODY },
+      ];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Early Remap Suggestions E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+
+      // Prior cast holds 'Ольга' under a DIFFERENT id than this run mints —
+      // the remap target. No prior entry for 'Оля', so only 'olga' moves.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { id: 'olga-legacy', name: 'Ольга', voiceState: 'locked', voiceUuid: 'U-olga' },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(suggestionPhase0Analyzer, 'phase0-model');
+      const phase1Selection = buildSelection(suggestionPhase1Analyzer, 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // Sanity check on the fixture itself: the remap actually fired (the
+        // roster carries 'olga-legacy', not the fresh 'olga') — otherwise a
+        // green suggestions assertion below would prove nothing about the
+        // remap/prune interaction this test targets.
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        expect(idsAfter).not.toContain('olga');
+        expect(idsAfter).toContain('olga-legacy');
+
+        const suggestionsFile = await loadSuggestions(bookDir);
+        expect(suggestionsFile.suggestions.length).toBeGreaterThan(0);
+        // The diminutive suggestion references the PRE-remap 'olga' id
+        // (dd.suggestions is built before the remap runs) — confirms this
+        // survived because pruneSuggestionsToRoster was checked against
+        // characters0, not because some unrelated suggestion snuck through.
+        expect(
+          suggestionsFile.suggestions.some((s) => s.sourceId === 'olga' || s.targetId === 'olga'),
+        ).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

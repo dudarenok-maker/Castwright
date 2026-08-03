@@ -4688,8 +4688,8 @@ export async function runMainAnalyzerJob(
        instead of being matched here first and rewritten backwards. Recomputed
        here (composeRewrites is pure and dd/folded are already in scope) —
        the later computation at the cast.json persist point (currently
-       :4833, feeding applyRewriteToPriorCast) is left as written, not
-       hoisted, so this never touches its own retirement bookkeeping. */
+       :4834, feeding applyRewriteToPriorCast at :4835) is left as written,
+       not hoisted, so this never touches its own retirement bookkeeping. */
     const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
     const remappedToPrior = remapFreshToPriorIds(
       characters0,

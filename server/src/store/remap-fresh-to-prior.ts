@@ -37,12 +37,19 @@ function nameKeyOf(c: Record<string, unknown>): string {
   return typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
 }
 
-/** True when `row.notLinkedTo` names `targetId` — either as a bare string
-    (this module's own within-book edge) or as the cross-book `{ characterId
-    }` shape `POST /not-linked-to` writes (`server/src/routes/
-    cast-not-linked-to.ts`). Both are honoured so a user's "these two are NOT
-    the same person" decision blocks the auto-remap regardless of which path
-    recorded it. */
+/** True when `row.notLinkedTo` names `targetId` in either entry shape the
+    field is written in: a bare string (a hypothetical within-book edge this
+    module accepts defensively, though nothing mints it today) or the real
+    on-disk `{ bookId, characterId }` shape `POST /not-linked-to` writes
+    (`server/src/routes/cast-not-linked-to.ts:238`; typed in `voices.ts:104`
+    / `voice-override-linked.ts:65`). Matches on `characterId` alone,
+    ignoring `bookId` — so a cross-book "not the same person" decision also
+    blocks a within-book remap sharing that character id. That is
+    deliberately fail-safe, not a bug: `merge-analysis-cast.ts:377-388`
+    (`groupHasNotLinkedEdge`) makes the identical trade for the same
+    reason — a false "linked" is silent data corruption (two people
+    collapsed into one), a false "not linked" only costs a remap that a
+    user can still do by hand. */
 function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
   const nl = row.notLinkedTo;
   if (!Array.isArray(nl)) return false;

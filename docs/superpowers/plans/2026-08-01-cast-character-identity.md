@@ -753,9 +753,12 @@ refusing the cast.json write entirely.
 whether the remap must *"compose into [the cumulative dedup→fold rewrite]
 table or run strictly after it is applied."* The answer is **compose** —
 "run strictly after" is incompatible with the load-bearing placement above,
-since `composeRewrites(dd.rewrites, folded.rewrites)` (spec §4.4 point 4) is
-only assembled and consumed at the `applyRewriteToPriorCast` call, long after
-`phase1ValidIds`. `remapFreshToPriorIds` therefore takes a fourth parameter,
+since `composeRewrites(dd.rewrites, folded.rewrites)` is only assembled and
+consumed at the `applyRewriteToPriorCast` call, long after `phase1ValidIds`
+(spec §11 Q2 records this ordering question — not §4.4 point 4, which is the
+`pruneSuggestionsToRoster` snapshot; §4.4's call-site list item 4 is the
+separate remap-as-retirement obligation, unrelated to this composition).
+`remapFreshToPriorIds` therefore takes a fourth parameter,
 `priorRewrites` (that same cumulative table, recomputed early — pure and
 cheap — rather than hoisting the later call site), and matches a prior
 candidate by its raw id but **adopts** `priorRewrites[id] ?? id`: the id that
@@ -891,10 +894,15 @@ Spec §4.4's call-site list entry 4 — *"§4.4's remap — every entry in its
 `rewrites` map is a retirement"* — is a property of the remap itself, not of
 the main path specifically. This route's authoritative `cast.json` write
 (`:6027` area) needs the identical addition Task 10 made at its own
-`writeJsonAtomic`/`recordRetirements` block: convert `enriched`'s own
-`rewrites` map (`{freshId: priorId}`) into `Retirement[]` (`{from: freshId,
-to: rewrites[freshId]}` — already the post-`priorRewrites` destination, do
-not re-derive it) and record it via the existing `recordRetirements` helper,
+`writeJsonAtomic`/`recordRetirements` block. `enriched` is only the roster
+binding (Step 3's rename target) and has no `rewrites` field of its own —
+the map lives on the `remapFreshToPriorIds(...)` CALL'S RESULT, the subset
+analogue of Task 10's `remappedToPrior` (i.e. if this route's own remap call
+is likewise assigned to a `remappedToPrior`-named result, the map to convert
+is `remappedToPrior.rewrites`, NOT anything hung off `enriched`). Convert
+that `{freshId: priorId}` map into `Retirement[]` (`{from: freshId, to:
+rewrites[freshId]}` — already the post-`priorRewrites` destination, do not
+re-derive it) and record it via the existing `recordRetirements` helper,
 inside the same try/catch that already wraps `remapped.retirements` /
 `mergedFinal.retirements` there. Without it, this route's fresh ids that
 merely got re-slugged never reach `cast-id-history.json`, so a later
