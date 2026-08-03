@@ -886,6 +886,25 @@ otherwise be rewritten backwards. Add a wiring-level regression mirroring
 Task 10)" test for the subset route, plus a case exercising the same
 convergence-skip the Task 8 guard caught on the main path.
 
+**Site 4 recording is required here too (round 3 fix, added post-Task-10).**
+Spec §4.4's call-site list entry 4 — *"§4.4's remap — every entry in its
+`rewrites` map is a retirement"* — is a property of the remap itself, not of
+the main path specifically. This route's authoritative `cast.json` write
+(`:6027` area) needs the identical addition Task 10 made at its own
+`writeJsonAtomic`/`recordRetirements` block: convert `enriched`'s own
+`rewrites` map (`{freshId: priorId}`) into `Retirement[]` (`{from: freshId,
+to: rewrites[freshId]}` — already the post-`priorRewrites` destination, do
+not re-derive it) and record it via the existing `recordRetirements` helper,
+inside the same try/catch that already wraps `remapped.retirements` /
+`mergedFinal.retirements` there. Without it, this route's fresh ids that
+merely got re-slugged never reach `cast-id-history.json`, so a later
+`chapterCast`/segment reference minted under the pre-remap id has nothing to
+resolve through (§11 Q3 — the analysis cache is written before the remap
+runs). Test it the same way Task 10 did: a drift-fixture assertion that the
+history gains the entry, AND a same-name-converging fixture proving the
+skip path records nothing — verify neither is satisfiable by this route's
+own Site 1/Site 3 equivalents before trusting either assertion.
+
 - [ ] **Step 1: Write a subset-path regression test** mirroring Task 10's, driving the per-chapter re-analysis route.
 - [ ] **Step 2: Run it, confirm it fails.**
 - [ ] **Step 3: Wire the remap in after `:5796`, renaming the `enriched` binding as in Task 10.**

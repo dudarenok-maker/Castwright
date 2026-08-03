@@ -3432,6 +3432,15 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         // Site 2 (dedupePriorCastByName): the two "Legacy Duplicate" prior
         // rows collapse, keeping the stronger voiceState's own id.
         expect(history.supersededBy).toHaveProperty('dup-b', 'dup-a');
+        // NOTE: this fixture's prior 'anton-x' row is deliberately named
+        // "Anton Legacy Voice", NOT "Anton Prime" (see the comment above the
+        // cast.json seed) — so remapFreshToPriorIds's own name-match never
+        // even attempts this pair here, and asserting "Task 10 recorded
+        // nothing" against this fixture would be vacuous (confirmed: it
+        // still passes with priorIdAfter reverted to the raw pre-composition
+        // id — the earlier round-2 bug). The real convergence-skip
+        // "recorded nothing" pin lives in the dedicated test below, whose
+        // fixture's prior name DOES match the fresh roster's.
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -3541,6 +3550,104 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         // The history path is still a directory — the throwing writes never
         // got far enough to corrupt anything there either.
         expect(existsSync(castIdHistoryPath(bookDir))).toBe(true);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'site 4 (#2040 Task 10 round 3): the convergence-skip records nothing, even though Site 1 records its own entry for the same fresh survivor',
+    async () => {
+      /* Same roster/attribution shape as the sibling tests above (anton-x
+         ch1 / anton-y ch2-3, both "Anton Prime" — Tier-1-deduped to a fresh
+         canonical id), but the prior 'anton-x' row's NAME matches "Anton
+         Prime" (unlike the FIRST sibling test above, which deliberately
+         diverges the name so Site 3/Task 10's name-matcher never even
+         attempts the pair) and the history path is a real file, not a
+         corrupted directory (unlike the SECOND sibling test, whose every
+         write throws and so proves nothing about what got recorded). This
+         is the one fixture where remapFreshToPriorIds actually attempts the
+         anton-x/CANON pair, finds it already converged via the cumulative
+         table Site 1 also consumes, and must record NOTHING for it — a
+         spurious entry here would be the same-run-reversal shape
+         `retireCharacterId`'s inversion branch (cast-id-history.ts:65-77)
+         exists to clean up after, not a case that should arise in the
+         first place. */
+      const manuscriptId = `test-cast-id-history-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'anton-x',
+              name: 'Anton Prime',
+              voiceUuid: 'U-anton',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
+        expect(antonPrime).toBeDefined();
+        const antonPrimeId = antonPrime!.id;
+        // Confirms the remap correctly skipped (converged) rather than
+        // reversing the roster back onto the stale prior id.
+        expect(antonPrimeId).not.toBe('anton-x');
+
+        const history = await loadCastIdHistory(bookDir);
+        // Site 1 still records its own entry for this exact pair.
+        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
+        // Task 10's remap recorded NOTHING — no reversed
+        // `antonPrimeId -> anton-x` entry alongside Site 1's.
+        expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -3769,6 +3876,21 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         const editIds = new Set(editsFile.sentences.map((s) => s.characterId));
         expect(editIds.has('mayrin')).toBe(false);
         expect(editIds.has('mairin')).toBe(true);
+
+        // Site 4 (#2040 Task 10 round 3 — spec §4.4 call site 4): the remap
+        // itself is a retirement and must reach cast-id-history.json, not
+        // just the roster. This fixture has NO same-run dedup collision (a
+        // single fresh 'mayrin' row, no name duplicate to collapse) so
+        // dd.rewrites/folded.rewrites are empty — cumulative carries no
+        // 'mairin' entry, meaning Site 1 (applyRewriteToPriorCast) cannot
+        // produce this retirement. And because Task 10's remap already
+        // renamed the roster's 'mayrin' row to 'mairin' before Site 3
+        // (mergeAnalysisResultWithExistingCast) runs, Site 3's overlay finds
+        // an EXACT id match and never reaches its name-fallback branch — the
+        // only place it records anything. This entry can only have come from
+        // Task 10's own recording.
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).toHaveProperty('mayrin', 'mairin');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

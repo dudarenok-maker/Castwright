@@ -4850,6 +4850,16 @@ export async function runMainAnalyzerJob(
           try {
             await recordRetirements(record.bookDir, remapped.retirements);
             await recordRetirements(record.bookDir, mergedFinal.retirements);
+            /* §4.4 call site 4 — the early remap (Task 10) also retires an
+               id, one entry per `remappedToPrior.rewrites` key. The fresh id
+               it retires never lands on disk, but the analysis cache is
+               written BEFORE the remap runs (§11 Q3) and keeps the pre-remap
+               fresh ids, so without this the resolver has no way to map a
+               later cache/segment reference back onto the live prior id. */
+            const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
+              ([from, to]) => ({ from, to }),
+            );
+            await recordRetirements(record.bookDir, remapRetirements);
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
