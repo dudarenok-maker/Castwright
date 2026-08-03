@@ -388,14 +388,17 @@ describe('pruneStaleReuseLinks', () => {
   it('prune-then-merge: a cross-series link does NOT resurrect via the cast.json merge', async () => {
     const prior = stalePellPrior();
     await pruneStaleReuseLinks(COALFALL, prior, opts());
-    const merged = mergeAnalysisResultWithExistingCast(prior as unknown as MergeExisting, freshPell());
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(
+      prior as unknown as MergeExisting,
+      freshPell(),
+    );
     const t = merged[0] as Record<string, unknown>;
     expect(t.matchedFrom).toBeFalsy();
     expect(t.overrideTtsVoices).toBeFalsy();
   });
 
   it('sanity: WITHOUT the prune, the merge would have carried the stale link', async () => {
-    const merged = mergeAnalysisResultWithExistingCast(
+    const { characters: merged } = mergeAnalysisResultWithExistingCast(
       stalePellPrior() as unknown as MergeExisting,
       freshPell(),
     );

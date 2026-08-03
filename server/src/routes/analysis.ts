@@ -112,7 +112,9 @@ import {
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
+  type Retirement,
 } from '../store/merge-analysis-cast.js';
+import { retireCharacterId } from '../store/cast-id-history.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
@@ -178,6 +180,23 @@ export async function readPriorCastForMerge(
     ).catch(() => null)
   )?.characters;
   return fromCarryover ?? [];
+}
+
+/* §4.4 — the choke point every id-retiring call site records through.
+   `applyRewriteToPriorCast`, `dedupePriorCastByName` and
+   `mergeAnalysisResultWithExistingCast` are pure/synchronous by design (unit-
+   testable, no file I/O); this is where their reported retirements actually
+   reach `cast-id-history.json`, at the route level where bookDir is in
+   scope. No-op when bookDir is absent (legacy non-workspace path) or the
+   list is empty. */
+async function recordRetirements(
+  bookDir: string | null | undefined,
+  retirements: ReadonlyArray<Retirement>,
+): Promise<void> {
+  if (!bookDir || !retirements.length) return;
+  for (const { from, to } of retirements) {
+    await retireCharacterId(bookDir, from, to);
+  }
 }
 
 /* srv-13 — when the merge re-adds voiced/reused characters the fresh roster
@@ -2829,6 +2848,7 @@ export async function runMainAnalyzerJob(
             .join(', ')}).`,
         );
       }
+      await recordRetirements(recordRef.bookDir, reconciled.retirements);
     }
 
     if (requestedFresh) {
@@ -3555,9 +3575,11 @@ export async function runMainAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+                characters: mergedInterim.characters,
               });
+              await recordRetirements(recordRef.bookDir, mergedInterim.retirements);
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
@@ -3760,9 +3782,11 @@ export async function runMainAnalyzerJob(
               assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
               [],
             );
+            const mergedStage1 = mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast);
             await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast),
+              characters: mergedStage1.characters,
             });
+            await recordRetirements(recordRef.bookDir, mergedStage1.retirements);
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
@@ -4771,9 +4795,12 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
+          await recordRetirements(record.bookDir, remapped.retirements);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, characters),
+            characters: mergedFinal.characters,
           });
+          await recordRetirements(record.bookDir, mergedFinal.retirements);
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
@@ -5231,6 +5258,7 @@ export async function runSubsetAnalyzerJob(
           .join(', ')}).`,
       );
     }
+    await recordRetirements(record.bookDir, reconciled.retirements);
   }
 
   /* Used inside the persist guards below in place of the old `clientGone`
@@ -5419,9 +5447,11 @@ export async function runSubsetAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+                characters: mergedInterim.characters,
               });
+              await recordRetirements(record.bookDir, mergedInterim.retirements);
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
@@ -5924,9 +5954,12 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
+          await recordRetirements(record.bookDir, remapped.retirements);
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched),
+            characters: mergedFinal.characters,
           });
+          await recordRetirements(record.bookDir, mergedFinal.retirements);
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),

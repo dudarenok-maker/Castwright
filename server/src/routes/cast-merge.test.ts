@@ -180,8 +180,11 @@ describe('cast-merge router', () => {
       .send({ sourceId: 'wren', targetId: 'wren-sparrow' });
 
     expect(res.status).toBe(200);
-    const body = res.body as { characters: Array<{ id: string }> };
+    const body = res.body as { characters: Array<{ id: string }>; sourceId: string };
     expect(body.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
+    // §4.4 call site 5 (#2040 Task 8) — performCastMerge reports the folded-away
+    // id so the route can record its retirement.
+    expect(body.sourceId).toBe('wren');
 
     /* cast.json on disk has the merged target. */
     const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
@@ -270,6 +273,16 @@ describe('cast-merge router', () => {
       { chapterId: 1, sentenceId: 2 },
       { chapterId: 2, sentenceId: 3 },
     ]);
+  });
+
+  it('records the merge as a retirement in cast-id-history.json (#2040 Task 8)', async () => {
+    // The first test in this describe already merged wren -> wren-sparrow.
+    // §4.4 call site 5: performCastMerge must retire the source id through
+    // the SAME choke point every other id-losing path uses, so a segment
+    // still tagged 'wren' resolves at render time instead of orphaning.
+    const { loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const history = await loadCastIdHistory(bookDir);
+    expect(history.supersededBy).toHaveProperty('wren', 'wren-sparrow');
   });
 
   it('400s when sourceId equals targetId', async () => {

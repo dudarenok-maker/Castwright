@@ -46,6 +46,15 @@ export const PRESERVED_VOICE_FIELDS = [
 
 type CastRecord = { id: string } & Record<string, unknown>;
 
+/** A single character-id retirement: `from` is no longer live and has been
+    superseded by `to`. Callers record these via `retireCharacterId`
+    (`store/cast-id-history.ts`) at the route level, where `bookDir` is in
+    scope — these functions stay pure/synchronous and never touch disk. */
+export interface Retirement {
+  from: string;
+  to: string;
+}
+
 /** Reuse-continuity fields — a voice matched/linked from ANOTHER book or the
     library, plus the "not the same person" guard. A `fresh: true` ("Start
     fresh") re-analysis re-derives these from scratch. The bespoke DESIGNED-voice
@@ -122,12 +131,15 @@ export function voicedSurvivorsDropped(
 /** Overlay the existing cast's voice-design fields onto the freshly-analysed
     roster (matched by `id`, with a same-name fallback for analyzer id drift),
     union aliases, and re-add voiced characters the fresh roster dropped.
-    Returns a new array; inputs are not mutated. */
+    Returns a new array plus the id retirements the name-fallback performed
+    (a dropped-by-id existing row matched to a differently-id'd fresh row);
+    inputs are not mutated. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
-): T[] {
-  if (!existing.length) return fresh;
+): { characters: T[]; retirements: Retirement[] } {
+  if (!existing.length) return { characters: fresh, retirements: [] };
+  const retirements: Retirement[] = [];
   const byId = new Map(existing.map((c) => [c.id, c]));
   const freshIds = new Set(fresh.map((f) => f.id));
   const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
@@ -169,6 +181,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
         if (cand) {
           old = cand;
           claimedByName.add(cand.id);
+          retirements.push({ from: cand.id, to: f.id });
         }
       }
     }
@@ -200,7 +213,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     if (freshIds.has(old.id) || claimedByName.has(old.id)) continue;
     if (isVoicedOrReused(old)) overlaid.push(old as unknown as T);
   }
-  return overlaid;
+  return { characters: overlaid, retirements };
 }
 
 /** Strength order for voiceState collision resolution. Higher = stronger. */
@@ -219,19 +232,31 @@ function voiceStateRank(state: unknown): number {
     table). When two rows collide on the same canonical id, keep the one with
     the strongest `voiceState` (locked > tuned > reused > generated, undefined
     weakest); tie-break by more lines if available, else first encountered.
-    Returns a new array of remapped rows and a list of dropped rows (original id
-    + voiceState) for caller logging. Inputs are not mutated. */
+    Returns a new array of remapped rows, a list of dropped rows (original id
+    + voiceState) for caller logging, and the id retirements this remap
+    performed — one per row whose id actually changed, whether it won or lost
+    a collision (a collision loser whose own id already equalled the
+    canonical id needs no retirement: that id string stays live, just under
+    the winner's data). Inputs are not mutated. */
 export function applyRewriteToPriorCast<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
   rewrites: Record<string, string>,
-): { priorCast: T[]; droppedVoices: Array<{ id: string; voiceState?: string }> } {
+): {
+  priorCast: T[];
+  droppedVoices: Array<{ id: string; voiceState?: string }>;
+  retirements: Retirement[];
+} {
   // Map from canonical id → { row (with remapped id), originalId }
   const winners = new Map<string, { row: T; originalId: string }>();
   const droppedVoices: Array<{ id: string; voiceState?: string }> = [];
+  const retirements: Retirement[] = [];
 
   for (const row of priorCast) {
     const originalId = row.id;
     const canonicalId = rewrites[originalId] ?? originalId;
+    if (canonicalId !== originalId) {
+      retirements.push({ from: originalId, to: canonicalId });
+    }
     const remapped: T = canonicalId === originalId ? row : { ...row, id: canonicalId };
     const existing = winners.get(canonicalId);
     if (!existing) {
@@ -271,7 +296,11 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     });
   }
 
-  return { priorCast: Array.from(winners.values()).map((w) => w.row), droppedVoices };
+  return {
+    priorCast: Array.from(winners.values()).map((w) => w.row),
+    droppedVoices,
+    retirements,
+  };
 }
 
 /** Seed the Facet-A guard fields (`notLinkedTo`, `matchedFrom`) from the prior
@@ -363,12 +392,17 @@ function groupHasNotLinkedEdge(group: ReadonlyArray<CastRecord>): boolean {
     reuse link; narrator rows and notLinkedTo-separated pairs are never
     collapsed; the dropped rows' names/aliases fold onto the survivor (never the
     survivor's own name). Returns a new array (original order, survivor at the
-    first member's slot) + a dropped-row log for the change-log. Input is not
-    mutated. */
+    first member's slot) + a dropped-row log for the change-log + the id
+    retirements this collapse performed (each dropped row's id, superseded by
+    the survivor's id). Input is not mutated. */
 export function dedupePriorCastByName<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
-): { cast: T[]; dropped: Array<{ id: string; name?: string; voiceState?: string }> } {
-  if (priorCast.length < 2) return { cast: [...priorCast], dropped: [] };
+): {
+  cast: T[];
+  dropped: Array<{ id: string; name?: string; voiceState?: string }>;
+  retirements: Retirement[];
+} {
+  if (priorCast.length < 2) return { cast: [...priorCast], dropped: [], retirements: [] };
 
   const nameKeyOf = (c: CastRecord): string =>
     typeof c.name === 'string' ? normaliseNameKey(c.name) : '';
@@ -384,6 +418,7 @@ export function dedupePriorCastByName<T extends CastRecord>(
   }
 
   const dropped: Array<{ id: string; name?: string; voiceState?: string }> = [];
+  const retirements: Retirement[] = [];
   const survivorByKey = new Map<string, T>();
   const collapsedKeys = new Set<string>();
 
@@ -421,11 +456,12 @@ export function dedupePriorCastByName<T extends CastRecord>(
         ...(typeof row.name === 'string' ? { name: row.name } : {}),
         ...(typeof row.voiceState === 'string' ? { voiceState: row.voiceState } : {}),
       });
+      if (row.id !== best.id) retirements.push({ from: row.id, to: best.id });
     }
     survivorByKey.set(key, aliases ? ({ ...best, aliases } as T) : best);
   }
 
-  if (!collapsedKeys.size) return { cast: [...priorCast], dropped: [] };
+  if (!collapsedKeys.size) return { cast: [...priorCast], dropped: [], retirements: [] };
 
   const emitted = new Set<string>();
   const out: T[] = [];
@@ -439,5 +475,5 @@ export function dedupePriorCastByName<T extends CastRecord>(
     emitted.add(key);
     out.push(survivorByKey.get(key)!);
   }
-  return { cast: out, dropped };
+  return { cast: out, dropped, retirements };
 }

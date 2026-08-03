@@ -48,6 +48,7 @@ import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.j
 import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
+import { loadCastIdHistory, retireCharacterId } from '../store/cast-id-history.js';
 
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
@@ -3131,6 +3132,268 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         expect(narr.name).toBe('Narrator');
         expect(narr.aliases).toContain('Narrator');
         expect(narr.voiceStyle).toContain('folkloric warmth');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)', () => {
+  /* This is the test that would have caught all three rounds of "green but
+     inert": a unit test on a pure function proves it RETURNS a retirement
+     list; it proves nothing about whether that list ever reaches
+     cast-id-history.json in production. Here we drive the REAL route
+     (runMainAnalyzerJob) against a real bookDir with real file I/O — no
+     mocked cast-id-history — pre-seed the history with an entry from an
+     EARLIER run, and assert after a full analysis that the pre-existing
+     entry survived AND a new one was recorded for the id drift this run's
+     analyzer output introduces.
+
+     Coverage note: this exercises the interim + final `cast.json` writes'
+     `mergeAnalysisResultWithExistingCast` name-fallback path (§4.4 call site
+     3) on the MAIN route. It does not drive `dedupePriorCastByName` (call
+     site 2 needs 2+ same-name prior rows) or the dedup→fold `rewrites` table
+     `applyRewriteToPriorCast` consumes (call site 1 needs a same-run
+     collision) — both are pinned directly at the unit level above. It also
+     does not cover the subset route or `performCastMerge` (call site 5,
+     also unit-pinned above). */
+  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+  function stage1Roster(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      // The analyzer relabels this run's Anton under a FRESH id — simulating
+      // exactly the non-determinism merge-analysis-cast.ts's own doc comment
+      // names (`coalfall` -> `coalfall-dragon`). The prior cast (seeded below)
+      // carries the OLD id under a voiced row, so the merge's name-fallback
+      // must retire it onto this fresh id.
+      {
+        id: 'anton-fresh',
+        name: 'Anton',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Anton asked' }],
+      },
+      {
+        id: 'olga',
+        name: 'Olga',
+        role: 'lead',
+        color: '#222222',
+        gender: 'female',
+        evidence: [{ quote: 'Olga nodded' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentences(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'anton-fresh',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'narrator',
+        confidence: 0.9,
+        text: 'Olga nodded and looked away',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1Roster() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentences(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-cast-id-history-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_cast_id_history_e2e_test',
+        manuscriptId,
+        title: 'Cast Id History E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    // Anton needs >= MIN_LINES_DEFAULT (3) attributed lines or foldMinorCast
+    // folds him into the unknown-male bucket before this test's id-drift
+    // scenario ever reaches the merge — 3 chapters, 1 anton-fresh line each.
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Cast Id History E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'a full analysis over a book whose history already has an entry: that entry survives AND a new one is recorded',
+    async () => {
+      const manuscriptId = `test-cast-id-history-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      /* Pre-existing history entry from an EARLIER run/repair, unrelated to
+         anything this run touches. Must still be there after the run. */
+      await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+
+      /* Prior cast.json: a VOICED row under the id the analyzer will NOT
+         reuse this run (simulating the analyzer's own documented
+         non-determinism). isVoicedOrReused (voiceUuid) makes it eligible for
+         the merge's name-fallback carry-forward. */
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'anton-legacy',
+              name: 'Anton',
+              voiceUuid: 'U-anton',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // The fresh roster actually landed under the NEW id (sanity check —
+        // if this fails the fixture itself is wrong, not the history wiring).
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string }> };
+        const ids = castAfter.characters.map((c) => c.id);
+        expect(ids).toContain('anton-fresh');
+        expect(ids).not.toContain('anton-legacy');
+
+        const history = await loadCastIdHistory(bookDir);
+        // The pre-existing entry from before this run survived the run.
+        expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+        // A new entry was recorded for THIS run's id drift.
+        expect(history.supersededBy).toHaveProperty('anton-legacy', 'anton-fresh');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
