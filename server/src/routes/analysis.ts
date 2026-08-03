@@ -5873,7 +5873,7 @@ export async function runSubsetAnalyzerJob(
         `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`,
       );
     }
-    const enriched = applyNarratorIdentity(
+    const enriched0 = applyNarratorIdentity(
       attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
       bookLanguage,
     );
@@ -5884,15 +5884,15 @@ export async function runSubsetAnalyzerJob(
        Mirrors the main route's pass; failure is non-fatal. */
     if (record.bookId) {
       try {
-        seedReuseGuardsFromPriorCast(priorCastForMerge, enriched);
-        const staleDropped = await pruneStaleReuseLinks(record.bookId, enriched);
+        seedReuseGuardsFromPriorCast(priorCastForMerge, enriched0);
+        const staleDropped = await pruneStaleReuseLinks(record.bookId, enriched0);
         if (staleDropped > 0) {
           log(
             0,
             `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`,
           );
         }
-        const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched);
+        const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched0);
         if (linked > 0) {
           log(
             0,
@@ -5903,6 +5903,32 @@ export async function runSubsetAnalyzerJob(
         console.warn('[analysis] subset series reuse-link pass failed', linkErr);
       }
     }
+
+    /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
+       re-slugged, before anything derives from the fresh ids. Mirrors the main
+       route's same-named block (currently :4678-4701) — the subset path's
+       second (and last) call site from spec §4.4's five-entry list. Runs AFTER
+       the reuse-link block above (§11 — keeps the two paths symmetric: the main
+       route's own reuse-link pass, seedReuseGuardsFromPriorCast at :3702, also
+       runs long before its remap). Roster and sentences move together:
+       subsetValidIds (below) is built from the roster, and
+       reconcileSentenceCharacterIds would otherwise demote every renamed
+       character's lines to the narrator.
+
+       §11 Q2 — composed against the SAME dedup→fold cumulative rewrite table
+       Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
+       later applies to the prior cast, so a prior row already headed
+       elsewhere via THIS run's own dedup is recognised as already-converged
+       instead of being matched here first and rewritten backwards. */
+    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+    const remappedToPrior = remapFreshToPriorIds(
+      enriched0,
+      folded.sentences,
+      priorCastForMerge,
+      cumulativeForRemap,
+    );
+    const enriched = remappedToPrior.characters;
+    folded.sentences = remappedToPrior.sentences;
 
     /* Phase 1 character-id reconciliation — see the main route's same
        block plus the comment on reconcileSentenceCharacterIds. The
@@ -6013,7 +6039,10 @@ export async function runSubsetAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched));
+          // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
+          // §4.4) — prune against enriched0, not the remapped `enriched`, or
+          // every suggestion fails both id checks and the list empties.
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
@@ -6043,6 +6072,16 @@ export async function runSubsetAnalyzerJob(
           try {
             await recordRetirements(record.bookDir, remapped.retirements);
             await recordRetirements(record.bookDir, mergedFinal.retirements);
+            /* §4.4 call site 4 — the early remap (Task 11) also retires an
+               id, one entry per `remappedToPrior.rewrites` key. The fresh id
+               it retires never lands on disk, but the analysis cache is
+               written BEFORE the remap runs (§11 Q3) and keeps the pre-remap
+               fresh ids, so without this the resolver has no way to map a
+               later cache/segment reference back onto the live prior id. */
+            const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
+              ([from, to]) => ({ from, to }),
+            );
+            await recordRetirements(record.bookDir, remapRetirements);
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
           }

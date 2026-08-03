@@ -4096,6 +4096,611 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
   );
 });
 
+describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)', () => {
+  /* Mirrors "runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)"
+     above, driving runSubsetAnalyzerJob instead — the SAME helper wired into
+     the second (subset/chapter-retry) call site per spec §4.4's five-entry
+     list. cache.stage1 is pre-seeded so the subset route takes the "book
+     already fully analysed" branch (stage1Existed === true) and actually
+     reaches Phase 1 / the persist block where the remap lives — otherwise it
+     ends after cast-update and none of this ever runs. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Мэйрин asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'mayrin',
+        name: 'Мэйрин',
+        role: 'lead',
+        color: '#111111',
+        gender: 'female',
+        evidence: [{ quote: 'Мэйрин asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'mayrin',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-early-remap-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_early_remap_e2e_test',
+        manuscriptId,
+        title: 'Subset Early Remap E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Subset Early Remap E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function makeSubsetJob(manuscriptId: string, bookDir: string, chapterIds: number[]): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'subset',
+      subsetChapterIds: chapterIds,
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it(
+    'a fresh id with no same-run dedup collision still adopts the prior cast id by name (mirrors Task 10 main-path test)',
+    async () => {
+      const manuscriptId = `test-subset-early-remap-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      // Prior cast under a DIFFERENT id but the SAME name as this run's fresh
+      // 'mayrin' row — no dedup collision on either side (a single fresh
+      // roster row merged by id across all 3 chapters, not a name
+      // collision), so dd.rewrites/folded.rewrites carry no entry for either
+      // id and §11 Q2's convergence-skip must not fire.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [{ id: 'mairin', name: 'Мэйрин', voiceState: 'locked', voiceUuid: 'U-mairin' }],
+        }),
+      );
+
+      // stage1Existed === true so Phase 1 (and the persist block the remap
+      // lives in) actually runs this pass.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1RosterForChapter(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        // The remap adopted the prior 'mairin' id — the fresh 'mayrin' id
+        // never reaches cast.json. Not explainable by Site 3
+        // (mergeAnalysisResultWithExistingCast's name-fallback) alone: that
+        // mechanism keeps the FRESH row's OWN id and only carries the
+        // prior's voice FIELDS onto it, so absent this task's remap
+        // 'mayrin' would still be the id in idsAfter.
+        expect(idsAfter).not.toContain('mayrin');
+        expect(idsAfter).toContain('mairin');
+
+        // Roster and sentences moved together (spec §4.4 point 3): the
+        // authoritative manuscript-edits.json attributes to 'mairin', not
+        // the orphaned pre-remap 'mayrin'.
+        const editsFile = JSON.parse(
+          readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'),
+        ) as { sentences: Array<{ characterId: string }> };
+        const editIds = new Set(editsFile.sentences.map((s) => s.characterId));
+        expect(editIds.has('mayrin')).toBe(false);
+        expect(editIds.has('mairin')).toBe(true);
+
+        // §4.4 call site 4: the remap itself is a retirement and must reach
+        // cast-id-history.json. No same-run dedup collision in this fixture
+        // (dd.rewrites/folded.rewrites empty), so Site 1
+        // (applyRewriteToPriorCast) cannot produce this entry; and because
+        // the remap already renamed the roster's 'mayrin' row to 'mairin'
+        // before Site 3 (mergeAnalysisResultWithExistingCast) runs, Site 3's
+        // overlay finds an EXACT id match and never reaches its
+        // name-fallback branch. This entry can only have come from this
+        // task's own recording.
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).toHaveProperty('mayrin', 'mairin');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'the Step-5 fix on the subset path: a dedup diminutive suggestion survives a same-run remap (pruneSuggestionsToRoster gets the pre-remap roster, not the remapped one)',
+    async () => {
+      /* Same fixture shape as the main-path Step-5 test: fresh roster this
+         run has 'Оля' (diminutive, few lines) + 'Ольга' (full name, more
+         lines) — dedupeRosterByName's Tier-2b suggests a merge WITHOUT
+         auto-merging. The prior cast holds 'Ольга' under a DIFFERENT id
+         ('olga-legacy'), so the remap fires for 'olga' -> 'olga-legacy' — the
+         fresh id the suggestion's targetId/sourceId still points at. Passing
+         the REMAPPED roster to pruneSuggestionsToRoster would fail
+         `ids.has('olga')` and silently drop the suggestion; passing the
+         pre-remap roster (this fix) keeps it. */
+      const SUGGESTION_CHAPTER_BODY =
+        '“Are you sure this will work,” Оля asked.\n\n“I am certain of it,” Ольга replied.\n\n“Let us proceed,” Ольга added.';
+
+      function suggestionStage1Roster(): CharacterOutput[] {
+        return [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          {
+            id: 'olya',
+            name: 'Оля',
+            role: 'supporting',
+            color: '#222222',
+            gender: 'female',
+            evidence: [{ quote: 'Оля asked' }],
+          },
+          {
+            id: 'olga',
+            name: 'Ольга',
+            role: 'lead',
+            color: '#111111',
+            gender: 'female',
+            evidence: [{ quote: 'Ольга replied' }],
+          },
+        ];
+      }
+
+      function suggestionSentencesForChapter(chapterId: number): SentenceOutput[] {
+        return [
+          {
+            id: chapterId * 100 + 1,
+            chapterId,
+            characterId: 'olya',
+            confidence: 0.9,
+            text: 'Are you sure this will work',
+          },
+          {
+            id: chapterId * 100 + 2,
+            chapterId,
+            characterId: 'olga',
+            confidence: 0.9,
+            text: 'I am certain of it',
+          },
+          {
+            id: chapterId * 100 + 3,
+            chapterId,
+            characterId: 'olga',
+            confidence: 0.9,
+            text: 'Let us proceed',
+          },
+        ];
+      }
+
+      const suggestionPhase0Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+          return { characters: suggestionStage1Roster() };
+        },
+        runStage2Chapter: () =>
+          Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      };
+
+      const suggestionPhase1Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () =>
+          Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+        async runStage2Chapter(
+          _manuscriptId: string,
+          chapterId: number,
+          _prompt: string,
+          _call: StageCall,
+        ): Promise<Stage2ChapterOutput> {
+          return { sentences: suggestionSentencesForChapter(chapterId) };
+        },
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () =>
+          Promise.reject(new Error('no flagged windows — escalation should never be called')),
+      };
+
+      const manuscriptId = `test-subset-early-remap-suggestions-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: SUGGESTION_CHAPTER_BODY },
+        { id: 2, title: 'Chapter Two', body: SUGGESTION_CHAPTER_BODY },
+        { id: 3, title: 'Chapter Three', body: SUGGESTION_CHAPTER_BODY },
+      ];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Subset Early Remap Suggestions E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+
+      // Prior cast holds 'Ольга' under a DIFFERENT id than this run mints —
+      // the remap target. No prior entry for 'Оля', so only 'olga' moves.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { id: 'olga-legacy', name: 'Ольга', voiceState: 'locked', voiceUuid: 'U-olga' },
+          ],
+        }),
+      );
+
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: suggestionStage1Roster(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(suggestionPhase0Analyzer, 'phase0-model-subset');
+      const phase1Selection = buildSelection(suggestionPhase1Analyzer, 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // Sanity check on the fixture itself: the remap actually fired.
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        expect(idsAfter).not.toContain('olga');
+        expect(idsAfter).toContain('olga-legacy');
+
+        const suggestionsFile = await loadSuggestions(bookDir);
+        expect(suggestionsFile.suggestions.length).toBeGreaterThan(0);
+        // The diminutive suggestion references the PRE-remap 'olga' id
+        // (dd.suggestions is built before the remap runs) — confirms this
+        // survived because pruneSuggestionsToRoster was checked against the
+        // pre-remap roster, not because some unrelated suggestion snuck
+        // through.
+        expect(
+          suggestionsFile.suggestions.some((s) => s.sourceId === 'olga' || s.targetId === 'olga'),
+        ).toBe(true);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "site 4 convergence-skip on the subset path: no spurious retirement when the prior row already converged via this run's own dedup (mirrors the Task 8 / Task-10-round-3 guard)",
+    async () => {
+      /* Same roster/attribution shape as the main-path Task 8 guard fixture:
+         chapter 1 introduces 'anton-x', chapters 2-3 introduce 'anton-y' —
+         same name "Anton Prime", different id, which dedupeRosterByName's
+         Tier-1 collapses to a third canonical id (dd.rewrites hit). The
+         prior 'anton-x' row's NAME matches "Anton Prime" exactly, so
+         remapFreshToPriorIds attempts the pair — and because 'anton-x' is
+         ALSO a same-run dedup rewrite key, priorIdAfter('anton-x') already
+         resolves to the canonical survivor via the cumulative table (§11
+         Q2). The pair has already converged; the remap must record NOTHING
+         for it, while Site 1 (applyRewriteToPriorCast) still records its own
+         'anton-x' -> canonical entry via the SAME table. */
+      const CONVERGE_CHAPTER_BODY =
+        '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+      function convergeStage1RosterForChapter(chapterId: number): CharacterOutput[] {
+        const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+        return [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          {
+            id: antonId,
+            name: 'Anton Prime',
+            role: 'lead',
+            color: '#111111',
+            gender: 'male',
+            evidence: [{ quote: 'Anton asked' }],
+          },
+        ];
+      }
+
+      function convergeSentencesForChapter(chapterId: number): SentenceOutput[] {
+        const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+        return [
+          {
+            id: chapterId * 100 + 1,
+            chapterId,
+            characterId: antonId,
+            confidence: 0.9,
+            text: 'Are you sure this will work',
+          },
+        ];
+      }
+
+      const convergePhase0Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        async runStage1Chapter(
+          _manuscriptId: string,
+          chapterId: number,
+        ): Promise<Stage1ChapterOutput> {
+          return { characters: convergeStage1RosterForChapter(chapterId) };
+        },
+        runStage2Chapter: () =>
+          Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      };
+
+      const convergePhase1Analyzer: Analyzer = {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () =>
+          Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+        async runStage2Chapter(
+          _manuscriptId: string,
+          chapterId: number,
+          _prompt: string,
+          _call: StageCall,
+        ): Promise<Stage2ChapterOutput> {
+          return { sentences: convergeSentencesForChapter(chapterId) };
+        },
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () =>
+          Promise.reject(new Error('no flagged windows — escalation should never be called')),
+      };
+
+      const manuscriptId = `test-subset-early-remap-convergence-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+
+      const chapterHints: ChapterHint[] = [
+        { id: 1, title: 'Chapter One', body: CONVERGE_CHAPTER_BODY },
+        { id: 2, title: 'Chapter Two', body: CONVERGE_CHAPTER_BODY },
+        { id: 3, title: 'Chapter Three', body: CONVERGE_CHAPTER_BODY },
+      ];
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'Subset Early Remap Convergence E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+        chapterHints,
+        bookDir,
+      });
+
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'anton-x',
+              name: 'Anton Prime',
+              voiceUuid: 'U-anton',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+          ],
+        }),
+      );
+
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: convergeStage1RosterForChapter(1),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(convergePhase0Analyzer, 'phase0-model-subset');
+      const phase1Selection = buildSelection(convergePhase1Analyzer, 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
+        expect(antonPrime).toBeDefined();
+        const antonPrimeId = antonPrime!.id;
+        // Confirms the remap correctly skipped (converged) rather than
+        // reversing the roster back onto the stale prior id.
+        expect(antonPrimeId).not.toBe('anton-x');
+
+        const history = await loadCastIdHistory(bookDir);
+        // Site 1 still records its own entry for this exact pair.
+        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
+        // The early remap recorded NOTHING — no reversed
+        // `antonPrimeId -> anton-x` entry alongside Site 1's.
+        expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
 describe('#1447 third-party front-matter guard — main-route integration', () => {
   /* Front-matter chapter (index 0, within the guard's default front-region)
      whose title does NOT match Signal 1 (isNonStoryEssayTitle) — the guard
