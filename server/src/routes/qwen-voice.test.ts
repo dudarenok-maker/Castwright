@@ -228,6 +228,12 @@ beforeAll(async () => {
 
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   const { voiceSampleRouter } = await import('./voice-sample.js');
+  /* #1981 — castAliasesRouter and voiceLibraryRouter are mounted here (not
+     in their own race describes' beforeAlls further down) so the shared
+     `app` object is fully assembled once, up front, rather than mutated
+     mid-file by a later describe. */
+  const { castAliasesRouter } = await import('./cast-aliases.js');
+  const { voiceLibraryRouter } = await import('./voice-library.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
 
@@ -235,6 +241,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/voices', voiceSampleRouter);
+  app.use('/api/books', castAliasesRouter);
+  app.use('/api/voice-library', voiceLibraryRouter);
 });
 
 beforeEach(() => {
@@ -971,27 +979,19 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    20/20 external re-runs of THIS version go red against the same mutation
    (see the hardening report). */
 describe('#1981 — promote-voice races /assign for a different character', () => {
-  let raceVoiceLibraryRouter: typeof import('./voice-library.js').voiceLibraryRouter;
   let vl: typeof import('../workspace/voice-library.js');
   let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
-  let mounted = false;
 
   beforeAll(async () => {
-    const [{ voiceLibraryRouter }, voiceLibMod, { castJsonPath: cjp }] = await Promise.all([
-      import('./voice-library.js'),
+    /* voiceLibraryRouter itself is mounted in the file's top-level beforeAll,
+       alongside the other routers this file shares — this describe still
+       needs the workspace module + castJsonPath for its own test body. */
+    const [voiceLibMod, { castJsonPath: cjp }] = await Promise.all([
       import('../workspace/voice-library.js'),
       import('../workspace/paths.js'),
     ]);
-    raceVoiceLibraryRouter = voiceLibraryRouter;
     vl = voiceLibMod;
     castJsonPath = cjp;
-    /* Mount once — this describe's beforeAll only runs once, but guard
-       anyway since `app` is the file-shared instance every other describe
-       also exercises. */
-    if (!mounted) {
-      app.use('/api/voice-library', raceVoiceLibraryRouter);
-      mounted = true;
-    }
   });
 
   it('#1981 — keeps both promote-voice’s variant teardown and a concurrent /assign on a different character', async () => {
@@ -1123,17 +1123,8 @@ describe('#1981 — ensureCharacterVoiceUuid races a non-design cast writer', ()
      snapshot. Race it directly (not via HTTP) against the real add-alias
      route on the SAME book, a DIFFERENT character, so the two writes don't
      collide on which character index changes — only on whether the whole
-     file survives intact. */
-  let mounted = false;
-
-  beforeAll(async () => {
-    const { castAliasesRouter } = await import('./cast-aliases.js');
-    if (!mounted) {
-      app.use('/api/books', castAliasesRouter);
-      mounted = true;
-    }
-  });
-
+     file survives intact. castAliasesRouter is mounted in the file's
+     top-level beforeAll, alongside the other routers this file shares. */
   it('#1981 — an add-alias write on a different character survives a concurrent voiceUuid mint on this book', async () => {
     const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
 
@@ -1209,6 +1200,11 @@ describe('#1981 — ensureCharacterVoiceUuid races a non-design cast writer', ()
     const maerin = cast.characters.find((c) => c.id === 'maerin')!;
     /* add-alias's own mutation survived — the lost-update this test pins. */
     expect(maerin.aliases).toContain('The Wanderer');
+    /* the mint's own write survived too — read back from disk, not merely
+       inferred from the race not throwing (a silent no-op write would still
+       pass every assertion above). */
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    expect(nopersona.voiceUuid).toBeTruthy();
   });
 });
 
