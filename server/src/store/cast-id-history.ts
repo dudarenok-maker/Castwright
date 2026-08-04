@@ -15,6 +15,18 @@ import { withKeyLock } from '../workspace/file-lock.js';
 export interface CastIdHistory {
   schema: 1;
   supersededBy: Record<string, string>;
+  /** #2040 Task 14 review item 2b — ids `dropSupersededIdsReclaimedByLiveCast`
+   *  dropped from `supersededBy` because a fresh roster reclaimed the key as a
+   *  live cast id, keyed the same way `supersededBy` was before the drop
+   *  (id -> what it used to resolve to). This is the only surviving record of
+   *  that pair once the drop runs — losing it would mean every book that
+   *  re-analyses before Wave 3's banner ships loses the pair for good.
+   *  Additive and backwards-compatible: optional, never bumps `schema`. An
+   *  old reader that doesn't know this key still works — it only ever reads
+   *  `supersededBy`, which is unaffected. A file written before this change
+   *  simply has no `displaced` key; `loadCastIdHistory` tolerates its
+   *  absence. */
+  displaced?: Record<string, string>;
 }
 
 export function castIdHistoryPath(bookDir: string): string {
@@ -22,7 +34,11 @@ export function castIdHistoryPath(bookDir: string): string {
 }
 
 /** Load the cast id history from disk. Returns empty history if missing or malformed.
- *  Never throws — a lookup side-table must not be able to break a book's render. */
+ *  Never throws — a lookup side-table must not be able to break a book's render.
+ *  `displaced` is optional (#2040 Task 14 review item 2b) — absent entirely
+ *  on a file written before that change, and validated the same way as
+ *  `supersededBy` when present so a malformed `displaced` can't sneak a
+ *  throw past a caller that only reads `supersededBy`. */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
   try {
     const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir));
@@ -33,7 +49,11 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       raw.schema === 1 &&
       typeof raw.supersededBy === 'object' &&
       !Array.isArray(raw.supersededBy) &&
-      raw.supersededBy !== null
+      raw.supersededBy !== null &&
+      (raw.displaced === undefined ||
+        (typeof raw.displaced === 'object' &&
+          !Array.isArray(raw.displaced) &&
+          raw.displaced !== null))
     ) {
       return raw;
     }
@@ -130,13 +150,23 @@ export interface DisplacedHistoryEntry {
  *  rather than left to rot and mislead the next read. Called once per
  *  analysis write, after the roster that will be persisted is final.
  *
- *  Returns the dropped entries so the caller can surface what needs review
- *  (§4.6 — the banner split ships in Wave 3); this function only drops and
- *  reports, it does not decide what happens next.
+ *  The dropped pairs are moved into `displaced` (#2040 Task 14 review item
+ *  2b), not discarded — once dropped, `supersededBy` is the ONLY place they
+ *  lived, and losing them means every book that re-analyses before Wave 3's
+ *  banner ships permanently loses the pair (the segments become genuinely
+ *  unattributable, not just unreported). `displaced` accumulates across
+ *  calls/runs — a later drop merges in, it does not replace.
  *
- *  Never throws on read (loadCastIdHistory's own guarantee); a throw can
- *  still come from the write when there is something to drop — same as
- *  retireCharacterId, callers must guard it. */
+ *  Returns the dropped entries so the caller can also log them immediately
+ *  (operator-visible, #2040 Task 14 review item 2a) and so a future banner
+ *  can surface what needs review (§4.6, Wave 3); this function only drops,
+ *  persists, and reports — it does not decide what happens next.
+ *
+ *  Always writes, even when nothing was dropped (#2040 Task 14 review item
+ *  3) — a prior version skipped the write when `dropped` was empty, which
+ *  made "does not write" an untested claim. Never throws on read
+ *  (loadCastIdHistory's own guarantee); a throw can still come from the
+ *  write — same as retireCharacterId, callers must guard it. */
 export async function dropSupersededIdsReclaimedByLiveCast(
   bookDir: string,
   liveIds: ReadonlyArray<string>,
@@ -152,8 +182,13 @@ export async function dropSupersededIdsReclaimedByLiveCast(
       }
     }
     if (dropped.length) {
-      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+      const displaced = { ...(history.displaced ?? {}) };
+      for (const entry of dropped) {
+        displaced[entry.id] = entry.supersededBy;
+      }
+      history.displaced = displaced;
     }
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return dropped;
   });
 }

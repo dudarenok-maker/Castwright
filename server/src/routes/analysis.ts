@@ -4873,10 +4873,22 @@ export async function runMainAnalyzerJob(
                entries are reported so a future banner can flag their
                segments as needs-your-decision (§4.6, Wave 3) — this call
                only drops and returns, it does not surface anything itself. */
-            await dropSupersededIdsReclaimedByLiveCast(
+            const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
               record.bookDir,
               mergedFinal.characters.map((c) => c.id),
             );
+            /* #2040 Task 14 review item 2a — operator-visible, mirrors the
+               "Dedup collapsed N prior voiced row(s)..." log above. The
+               dropped pairs are also persisted (item 2b, cast-id-history.ts's
+               `displaced`), so this line is a heads-up, not the only record. */
+            if (displacedByReclaim.length) {
+              log(
+                1,
+                `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
@@ -6105,10 +6117,20 @@ export async function runSubsetAnalyzerJob(
                (re)write an entry whose key is live still gets cleaned up)
                and the live-id binding (`mergedFinal.characters`, the exact
                roster this write just persisted). */
-            await dropSupersededIdsReclaimedByLiveCast(
+            const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
               record.bookDir,
               mergedFinal.characters.map((c) => c.id),
             );
+            // #2040 Task 14 review item 2a — mirrors the main path's same-
+            // named block above.
+            if (displacedByReclaim.length) {
+              log(
+                1,
+                `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
           }

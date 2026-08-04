@@ -3646,8 +3646,15 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         const history = await loadCastIdHistory(bookDir);
         // Site 1 still records its own entry for this exact pair.
         expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
-        // Task 10's remap recorded NOTHING — no reversed
-        // `antonPrimeId -> anton-x` entry alongside Site 1's.
+        // #2040 Task 14 review item 4: this assertion no longer isolates the
+        // "Task 10's remap recorded nothing" claim it was written for —
+        // dropSupersededIdsReclaimedByLiveCast (Task 14) now guarantees a
+        // LIVE id (antonPrimeId IS the surviving row actually in cast.json)
+        // can never remain a history KEY after this write, regardless of
+        // whether the remap ever wrote the reversed entry. It would pass
+        // even if that bug came back. The real proof the bug isn't back is
+        // the sibling assertion one line up (Site 1's forward entry).
+        // Left in place (not deleted) as a secondary check.
         expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
       } finally {
         removeManuscript(manuscriptId);
@@ -4319,6 +4326,16 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         // The unrelated entry is untouched — this is a scoped drop, not a
         // wholesale history wipe.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+        // #2040 Task 14 review item 2b — the pair isn't discarded, it's
+        // moved to `displaced` so Wave 3 has something to read.
+        expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
+        // #2040 Task 14 review item 2a — an operator-visible log line names
+        // the dropped pair, mirroring the sibling dedup-collapse log.
+        expect(
+          job.replay.logs.some(
+            (l) => l.message.includes('Dropped 1 history alias') && l.message.includes('unknown-male -> timkin'),
+          ),
+        ).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -4921,9 +4938,230 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         const history = await loadCastIdHistory(bookDir);
         // Site 1 still records its own entry for this exact pair.
         expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
-        // The early remap recorded NOTHING — no reversed
-        // `antonPrimeId -> anton-x` entry alongside Site 1's.
+        // #2040 Task 14 review item 4: same note as the sibling test above
+        // (main path, ~:3648) — this assertion no longer isolates "the early
+        // remap recorded nothing" on its own, since
+        // dropSupersededIdsReclaimedByLiveCast guarantees a LIVE id
+        // (antonPrimeId) can never remain a history KEY after this write
+        // regardless of whether that bug exists. The real proof is the
+        // sibling assertion one line up. Left in place as a secondary check.
         expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (#2040 Task 14 review item 1)', () => {
+  /* Mirrors "runMainAnalyzerJob — a re-minted live id drops its history
+     entry (#2040 Task 14, spec §4.4 closing paragraph)" above, driving
+     runSubsetAnalyzerJob instead — the subset persist block is a SEPARATE
+     dropSupersededIdsReclaimedByLiveCast call site (analysis.ts's subset
+     branch), and before this test nothing exercised it: deleting that call
+     left both test:server and test:server-slow green (the same green-but-
+     inert shape the Wave 1 final review's one Important finding was).
+
+     Same fixture pattern as the Task 11 subset describe above:
+     cache.stage1 must be pre-seeded so the subset route takes the "book
+     already fully analysed" branch (stage1Existed === true) and actually
+     reaches Phase 1 / the persist block where the drop lives — otherwise it
+     ends after cast-update and none of this ever runs. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'unknown-male',
+        name: 'Anton',
+        role: 'background',
+        color: 'narrator',
+        gender: 'male',
+        evidence: [{ quote: 'Anton asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'unknown-male',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-reclaimed-id-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_reclaimed_id_e2e_test',
+        manuscriptId,
+        title: 'Subset Reclaimed Id E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Subset Reclaimed Id E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function makeSubsetJob(manuscriptId: string, bookDir: string, chapterIds: number[]): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'subset',
+      subsetChapterIds: chapterIds,
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it(
+    'a fresh roster reintroducing a live "unknown-male" row drops the stale entry keyed to it, on the subset path',
+    async () => {
+      const manuscriptId = `test-subset-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      await retireCharacterId(bookDir, 'unknown-male', 'timkin');
+      await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+
+      // stage1Existed === true so Phase 1 (and the persist block the drop
+      // lives in) actually runs this pass, same as the Task 11 fixture.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1RosterForChapter(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // Sanity check: 'unknown-male' actually landed in cast.json live.
+        const castAfter = JSON.parse(
+          readFileSync(castJsonPath(bookDir), 'utf8'),
+        ) as { characters: Array<{ id: string }> };
+        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male');
+
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).not.toHaveProperty('unknown-male');
+        expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+        expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
+        expect(
+          job.replay.logs.some(
+            (l) => l.message.includes('Dropped 1 history alias') && l.message.includes('unknown-male -> timkin'),
+          ),
+        ).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

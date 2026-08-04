@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
@@ -162,7 +162,12 @@ describe('cast id history', () => {
       await retireCharacterId(dir, 'unknown-male', 'timkin');
       const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male', 'narrator']);
       expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
-      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      // Review item 2b — the dropped pair is not discarded, it moves to
+      // `displaced`. Losing it here would be the same loss the review
+      // flagged: the pair would be unrecoverable, not just unreported.
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
     });
 
     it('leaves an entry whose key is NOT live untouched', async () => {
@@ -173,7 +178,10 @@ describe('cast id history', () => {
       // function drops. Only 'old-eliza' (the key) reclaiming liveness would
       // qualify, and it hasn't here.
       expect(dropped).toEqual([]);
-      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      // Nothing dropped, so nothing displaced.
+      expect(history.displaced).toBeUndefined();
     });
 
     it('drops the reclaimed entry while an unrelated entry survives untouched, in the same call', async () => {
@@ -181,19 +189,55 @@ describe('cast id history', () => {
       await retireCharacterId(dir, 'old-eliza', 'eliza');
       const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
       expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
-      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
     });
 
-    it('is a no-op — returns [] and does not write — when nothing needs dropping', async () => {
+    it('accumulates displaced entries across multiple drop calls rather than overwriting', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      await retireCharacterId(dir, 'unknown-female', 'sela');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-female']);
+      expect(dropped).toEqual([{ id: 'unknown-female', supersededBy: 'sela' }]);
+      const history = await loadCastIdHistory(dir);
+      // Both drops survive — the second call's write must not clobber the
+      // first call's entry.
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin', 'unknown-female': 'sela' });
+    });
+
+    it('returns [] and still writes when nothing needs dropping (#2040 Task 14 review item 3)', async () => {
       await retireCharacterId(dir, 'old-eliza', 'eliza');
       const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['some-other-live-id']);
       expect(dropped).toEqual([]);
       expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
     });
 
-    it('returns [] against an empty/missing history rather than throwing', async () => {
+    it('writes a history file (empty supersededBy, no displaced) for a book that never had one, even though nothing is dropped', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
       const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
       expect(dropped).toEqual([]);
+      // The guard that skipped this write when nothing was dropped is gone
+      // (review item 3) — prove it by checking the file actually landed,
+      // not just that loadCastIdHistory's content looks the same either way.
+      expect(existsSync(castIdHistoryPath(dir))).toBe(true);
+      const history = await loadCastIdHistory(dir);
+      expect(history).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('displaced backwards-compatibility (#2040 Task 14 review item 2b)', () => {
+    it('loads a pre-Task-14 file with no `displaced` key at all', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.displaced).toBeUndefined();
+    });
+
+    it('returns empty history rather than throwing when `displaced` is malformed', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, displaced: 'not-an-object' }));
+      const result = await loadCastIdHistory(dir);
+      expect(result).toEqual({ schema: 1, supersededBy: {} });
     });
   });
 });
