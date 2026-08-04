@@ -228,23 +228,98 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
      adopted sidecars throughout their lifetime. */
   let isRecycling = true;
 
-  async function spawnOnce(): Promise<void> {
+  /* Shared "increment → check cap → log → delay → respawn" tail — used both
+     when an owned child EXITS (onChildExit) and when a spawn attempt is
+     REFUSED (spawnOnce, below — srv-2037 / #2037). A refusal (a foreign-
+     looking listener still on the port, an unidentifiable/unkillable stale
+     PID, or the OS-level spawn itself failing) is a failure, not a benign
+     no-spawn: it must feed the SAME consecutiveFailures budget an exit does
+     (D1 — no new cap, no second unbounded retry loop), so exhaustion still
+     surfaces through exhaustedEvent(). Callers must already have set
+     handle = null and isRecycling = true before calling this. */
+  function scheduleRespawnAttempt(
+    attemptLabel: string,
+    giveUpLabel: string,
+    /* D2 (#2037) — the pid of our own owned child that just exited, if this
+       retry chain started from an exit. Threaded through (not stored on the
+       supervisor) so it only ever describes the SPECIFIC exit this chain is
+       recovering from, and it lapses naturally the moment a fresh spawn
+       succeeds — a later, unrelated exit starts its own chain with its own
+       pid. Purely a hint for spawnSidecar's log message (D2); it never gates
+       recovery, which is this function's own backoff/cap regardless. */
+    expectedOwnedPid: number | null = null,
+  ): void {
+    const lived = nowFn() - lastSpawnAt;
+    if (lived >= QUICK_DEATH_MS) consecutiveFailures = 0; // ran a while → fresh incident.
+    consecutiveFailures += 1;
+    if (consecutiveFailures > maxConsecutiveFailures) {
+      warn(
+        `[sidecar] supervisor: ${consecutiveFailures} rapid ${giveUpLabel} in a row — ` +
+          `giving up respawn. TTS is DOWN; restart the server to recover.`,
+      );
+      return;
+    }
+    const delayMs = backoffsMs[Math.min(consecutiveFailures - 1, backoffsMs.length - 1)];
+    log(
+      `[sidecar] supervisor: ${attemptLabel}; respawning in ${delayMs}ms ` +
+        `(attempt ${consecutiveFailures}/${maxConsecutiveFailures}).`,
+    );
+    void (async () => {
+      await delayFn(delayMs);
+      if (stopped) return; // stop() raced during the backoff window.
+      try {
+        await spawnOnce(expectedOwnedPid);
+      } catch (err) {
+        warn(`[sidecar] supervisor: respawn failed (${(err as Error).message}).`);
+      }
+    })();
+  }
+
+  async function spawnOnce(expectedOwnedPid: number | null = null): Promise<void> {
     if (stopped) return;
     lastSpawnAt = nowFn();
     const base = await buildOpts();
-    /* spawnSidecar returns null for benign no-spawn (autoStart off, a spawn
-       error, or an already-listening healthy sidecar we adopt). For the adopt
-       case it invokes onAdoptExisting first, so the watchdog below can respawn
-       an owned child once that process disappears; the other null paths fire no
-       callback and leave supervision dormant — matching the pre-supervisor
-       contract (don't resurrect a disabled or deliberately-untouched sidecar). */
-    handle = await spawnFn({ ...base, onExit: onChildExit, onAdoptExisting: onAdopt });
+    /* spawnSidecar returns null for six distinct reasons. Two are BENIGN
+       no-spawns: autoStart===false, and an already-listening HEALTHY sidecar
+       we adopt (which invokes onAdoptExisting first, so the watchdog below
+       can respawn an owned child once that process disappears) — for both, a
+       fresh sidecar is either unwanted or already ready.
+       The other four are REFUSALS (srv-2037 / #2037): a listening process
+       that doesn't answer as ours, a stale sidecar whose PID couldn't be
+       identified, a killed stale PID whose port is still bound, or the
+       OS-level spawn itself failing. Those are failures, not "nothing to
+       do" — spawnSidecar fires onSpawnRefused for them so this function can
+       retry on the same backoff/cap onChildExit uses, instead of the old
+       unconditional `isRecycling = false` that silently declared a
+       nonexistent sidecar ready (the #2037 outage). */
+    let refusedReason: string | null = null;
+    handle = await spawnFn({
+      ...base,
+      onExit: onChildExit,
+      onAdoptExisting: onAdopt,
+      /* D2 (#2037) — lets spawnSidecar's not-ours warning tell "our own
+         just-exited child, still tearing down" from "a genuinely foreign
+         listener" (one extra findPidFn call, log-only). */
+      lastOwnedPid: expectedOwnedPid,
+      onSpawnRefused: (reason) => {
+        refusedReason = reason;
+      },
+    });
+    if (refusedReason !== null) {
+      isRecycling = true; // refused — no sidecar exists; keep dispatch held.
+      scheduleRespawnAttempt(
+        `spawn refused: ${refusedReason}`,
+        `spawn refusals (${refusedReason})`,
+        expectedOwnedPid,
+      );
+      return;
+    }
     /* A sidecar is now ready: either an owned child (handle non-null) or a
        healthy adopt (handle null, onAdoptExisting fired).  Either way the
-       queue can dispatch.  The autoStart-off / spawn-error null paths also
-       land here but those supervisors are never registered via
-       registerActiveSupervisor, so getActiveSupervisor() returns null and
-       queue.ts short-circuits to recycling:false independently. */
+       queue can dispatch.  The autoStart-off null path also lands here but
+       that supervisor is never registered via registerActiveSupervisor, so
+       getActiveSupervisor() returns null and queue.ts short-circuits to
+       recycling:false independently. */
     isRecycling = false;
   }
 
@@ -334,6 +409,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   }
 
   function onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
+    /* D2 (#2037) — capture the exiting child's own pid before `handle` is
+       nulled below, so the next spawn attempt can tell spawnSidecar "this is
+       the pid you should expect to still see tearing down :port" (log-only,
+       see spawnOnce/scheduleRespawnAttempt). */
+    const exitedPid = handle?.pid ?? null;
     if (stopped) return; // we killed it on purpose (shutdown) — don't resurrect.
     if (restart43Trip !== null) {
       // Already tripped — hold TTS down. Ignore any further exit (nothing
@@ -363,31 +443,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     }
     handle = null;
     isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
-    const lived = nowFn() - lastSpawnAt;
-    if (lived >= QUICK_DEATH_MS) consecutiveFailures = 0; // ran a while → fresh incident.
-    consecutiveFailures += 1;
-    if (consecutiveFailures > maxConsecutiveFailures) {
-      warn(
-        `[sidecar] supervisor: ${consecutiveFailures} rapid sidecar exits in a row ` +
-          `(last code=${code} signal=${signal}) — giving up respawn. TTS is DOWN; ` +
-          `restart the server to recover.`,
-      );
-      return;
-    }
-    const delayMs = backoffsMs[Math.min(consecutiveFailures - 1, backoffsMs.length - 1)];
-    log(
-      `[sidecar] supervisor: child exited (code=${code} signal=${signal}); ` +
-        `respawning in ${delayMs}ms (attempt ${consecutiveFailures}/${maxConsecutiveFailures}).`,
+    scheduleRespawnAttempt(
+      `child exited (code=${code} signal=${signal})`,
+      `sidecar exits (last code=${code} signal=${signal})`,
+      exitedPid,
     );
-    void (async () => {
-      await delayFn(delayMs);
-      if (stopped) return; // stop() raced during the backoff window.
-      try {
-        await spawnOnce();
-      } catch (err) {
-        warn(`[sidecar] supervisor: respawn failed (${(err as Error).message}).`);
-      }
-    })();
   }
 
   function resetAndRespawn(): Promise<void> {

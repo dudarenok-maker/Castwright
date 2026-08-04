@@ -100,7 +100,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**51 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**52 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1477,6 +1477,49 @@ as A32. *Criteria:* the run sheet
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §8
 (Wave 3). *Cost:* short — one script invocation against an already-imported,
 already-analysed workspace, then one chapter re-render.
+
+### A34 · Supervisor respawn survives a refused spawn attempt ([#2037](https://github.com/dudarenok-maker/Castwright/issues/2037)) · **single 8 GB card, live sidecar**
+
+Unit tests (`server/src/tts/sidecar-supervisor.test.ts`,
+`server/src/tts/spawn-sidecar.test.ts`) fully pin the fix's logic: a refused
+spawn attempt — a foreign-looking listener on the port, most commonly the
+just-exited child's own socket still in TCP teardown — now feeds the same
+backoff/cap budget an ordinary child exit already uses, instead of the old
+unconditional `isRecycling = false` that silently ended supervision. What no
+unit test can reach is the *real* race: whether a real OS socket actually
+stays bound for a real window after the child process exits, and whether the
+fix's backoff schedule (`[2s, 5s, 15s]`, capped at 5 attempts ≈ 52s total)
+outlasts that window on real hardware — the reported incident measured the
+port still held 4s after exit and free only "minutes later," and the
+implementation brief deliberately declined to widen the backoff without a
+real measurement behind it (D1).
+
+- With a chapter actively rendering, kill the sidecar's OS process directly —
+  **not** via `POST /api/sidecar/restart` (see the note below) — e.g.
+  `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the
+  process from Task Manager.
+- Grep the running server's own log for a fresh `[sidecar] spawned pid=` line
+  appearing on its own, with no operator action, within the backoff window.
+  Confirm the pid differs from the one killed.
+- While recovery is in flight, poll `GET /api/models/status` and confirm it
+  never reports the TTS engine ready while no sidecar is listening on
+  `:9000` — that silent "reports healthy while nothing is there" gap is
+  exactly what #2037 shipped.
+- Confirm the in-flight chapter either rides out the respawn (existing retry
+  behaviour) or fails cleanly and is resumable — not stuck forever.
+- If the box's real teardown-to-free window turns out to exceed the ~52s
+  backoff budget, that is a follow-up issue with a real measurement behind
+  it, not a reason to widen the backoff on the strength of this run alone.
+
+**Do not use `POST /api/sidecar/restart` to check this** — it restarts the
+sidecar itself rather than passively observing it, which is the same
+operational trap that produced the #2037 outage in the first place.
+
+*Needs:* a live sidecar, a book mid-render, and OS-level process-kill access.
+*Criteria:* the acceptance bullets above; the code-level contract is
+`scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` and
+`onSpawnRefused` in `server/src/tts/spawn-sidecar.ts`. *Cost:* short — one
+kill, one log grep, one status poll.
 
 ---
 
