@@ -1388,27 +1388,55 @@ live against dummy listeners (see `task-18-report.md`) — but nothing has ever
 exercised the actual `--apply` write path against the real
 `C:\AudiobookWorkspace\books` tree.
 
-**Dry-run result (most recent guard fixes applied, confirmed no drift since):**
+**Dry-run result (round-2 review fixes applied, re-measured 2026-08-05 with
+`CACHE_DIR` correctly pointed at the checkout that ran this workspace's
+analysis — confirmed no drift since):**
 
 - **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
   and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
   `lady-alina` → `dame-alina` (6 segments) in *Everblaze*. Each is an
   unambiguous, non-reserved exact name or id match with real rendered damage
-  behind it.
-- **93 ids reported for a human decision, 93 segments** — includes the three
+  behind it. Unchanged by the round-2 fixes below.
+- **93 ids reported for a human decision, 161 segments** (was misreported as
+  93 segments before the round-2 fix — see below) — includes the three
   reserved fold-bucket rows a pre-review-round-1 version of the script would
   have wrongly auto-recorded: *Exile*'s `unknown-male` (21 segments, spanning
   chapters 7/33/60 — the analysis cache separately names that bucket Timkin,
   Brant, Dwarf, Rex **and** Lord Cassius across the book) and `unknown-female`
   (14 segments), plus *Unlocked*'s `unknown-male` (34 segments). The remaining
   24 (`pool-player-2` 6, `sir-harding` 1, `silveny` 17) have no usable name
-  signal anywhere in the cache or a `cast.json.bak.*`.
+  signal anywhere in the cache or a `cast.json.bak.*`. Also includes *Playing
+  with Fire*'s `the-torment` (67 segments) and `lightning-dave` (1 segment) —
+  A32's own already-affected fixture (above): both already auto-reconcile live
+  via the normalised-id tier, so a round-2 review fix corrected their reported
+  reason from the misleading "zero rendered segments — no damage to repair"
+  (which contradicted the Cast banner's own auto-reconciled section for the
+  same ids) to "already auto-reconciles … already fixed, no separate alias
+  needed" — this is the 68-segment (67+1) delta between the old 93 and the
+  corrected 161. Neither is itself damage — both already render under their
+  live id today — which is why the re-render/damage total below is unchanged
+  at 120: the 161 report-only figure now mixes genuinely-orphaned segments
+  with a couple of already-fine ones the script merely name-matched, and is
+  no longer a proxy for "segments still needing repair".
 - **17 re-render rows, 120 segments** — unconditional on auto-record status;
   writing an alias fixes metadata attribution, not the audio bytes already on
-  disk.
+  disk. This, not the report-only total above, is the actual damage figure.
 - **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
   a workspace-wide file search before and after every dry run.
+- **0 books missing analysis-cache evidence** — the round-2 review's
+  fail-closed fix (see the precondition bullet below): a dry run from a
+  worktree whose own `server/handoff/cache` doesn't hold these 20 real books
+  reports **20** books missing cache evidence and **0** auto-recordable
+  aliases instead, since the cross-source ambiguity veto can't see cache
+  ambiguity without the file. Confirm this line reads `0` before trusting any
+  of the numbers above, and before `--apply`.
 
+- **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
+  fresh worktree's own (git-ignored, per-checkout — see the script's module
+  doc comment). Run the dry run first and confirm the summary reads `books
+  missing analysis-cache evidence: 0` — `--apply` now refuses outright
+  otherwise (round-2 review fail-closed fix for the cross-source ambiguity
+  veto's blind spot when cache evidence is absent).
 - Stop any real server bound to the configured probe port(s) (default `8080`
   and the LAN HTTPS `8443`) — `--apply` refuses outright while either answers,
   since the write is out-of-process and no in-process lock covers it. Confirm

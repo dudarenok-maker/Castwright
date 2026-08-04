@@ -274,7 +274,17 @@ redux → rendered DOM, not the server-side aggregation (which has its own
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS
   port. Filed as [#2090](https://github.com/dudarenok-maker/Castwright/issues/2090)
-  (ops-46).
+  (ops-50).
+- **Rejecting a needs-your-decision row writes a permanent id-wide block that
+  buys nothing there, with no visible row change.** `reject-orphan-match` calls
+  the same id-scoped `rejected` write (`cast-resolve.ts:113`) whichever banner
+  section the click came from. On an auto-reconciled row that's the point — stop
+  a wrong resolution. On a needs-your-decision row the id was never resolving in
+  the first place, so the only useful effect is the `notLinkedTo` edge; the
+  `rejected` entry instead permanently blocks that id from ever resolving via
+  history or either normalised tier again, with no undo (#2089) and no visible
+  sign in the UI that a permanent decision was made. Filed as
+  [#2092](https://github.com/dudarenok-maker/Castwright/issues/2092) (fs-79).
 
 ## On-box acceptance
 
@@ -290,11 +300,16 @@ and the run sheet
   keeps the cast's existing id (or correctly records a genuine change) instead of
   drifting it further.
 - **A33** (Wave 3) — the repair pass's `--apply` run against the real workspace.
-  **Never executed as of this plan's `active` status.** The dry run (2026-08-04/05,
-  most recent guard fixes applied) reports: **3 auto-recordable aliases covering
-  27 segments**, **93 ids reported for a human decision covering 93 segments**,
-  **17 re-render rows covering 120 segments**, **0 books modified**. See the run
-  sheet's Wave 3 section for the exact walkthrough.
+  **Never executed as of this plan's `active` status.** The dry run (2026-08-05,
+  round-2 review fixes applied, `CACHE_DIR` correctly pointed at the checkout
+  that ran this workspace's analysis) reports: **3 auto-recordable aliases
+  covering 27 segments**, **93 ids reported for a human decision covering 161
+  segments** (corrected from a prior 93 — see below), **17 re-render rows
+  covering 120 segments**, **0 books modified**, **0 books missing
+  analysis-cache evidence**. `--apply` now refuses outright if that last
+  number is nonzero (round-2 review fail-closed fix — a missing cache file
+  silently defeated the cross-source ambiguity veto). See the run sheet's
+  Wave 3 section for the exact walkthrough.
 
 ## Ship notes
 

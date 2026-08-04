@@ -255,18 +255,34 @@ probe was verified live against dummy TCP listeners (`task-18-report.md`) —
 but nothing has exercised the real write path against the real workspace.
 This section is that run.
 
-**Read-only dry-run measurement already ran** (most recent guard fixes
-applied) against `C:\AudiobookWorkspace\books`:
+**Read-only dry-run measurement already ran** (round-2 review fixes applied,
+re-measured 2026-08-05 with `CACHE_DIR` correctly pointed at the checkout that
+ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
 
 - **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8) and
   `coalfall` → `coalfall-dragon` (13), both in *Заказ Коалфолла*; `lady-alina`
-  → `dame-alina` (6) in *Everblaze*.
-- **93 ids reported for a human decision, 93 segments** — including the three
-  reserved fold-bucket rows a pre-review version of the script would have
-  wrongly auto-recorded (*Exile*'s `unknown-male`/`unknown-female`,
-  *Unlocked*'s `unknown-male`).
-- **17 re-render rows, 120 segments** (unconditional on auto-record status).
+  → `dame-alina` (6) in *Everblaze*. Unchanged by the round-2 fixes below.
+- **93 ids reported for a human decision, 161 segments** (was misreported as
+  93 segments — see below) — including the three reserved fold-bucket rows a
+  pre-review version of the script would have wrongly auto-recorded (*Exile*'s
+  `unknown-male`/`unknown-female`, *Unlocked*'s `unknown-male`). Also includes
+  §1's *Playing with Fire* fixture, `the-torment` (67) and `lightning-dave`
+  (1): both already auto-reconcile live via the normalised-id tier, so a
+  round-2 fix corrected their reported reason from the misleading "zero
+  rendered segments — no damage to repair" to "already auto-reconciles …
+  already fixed" — the 68-segment delta between the old 93 and the corrected
+  161. Neither is itself damage (both already render under their live id),
+  so this doesn't move the re-render/damage total below (still 120) — 161 is
+  no longer a proxy for "segments still needing repair".
+- **17 re-render rows, 120 segments** (unconditional on auto-record status) —
+  the actual damage figure.
 - **0 books modified.**
+- **0 books missing analysis-cache evidence** — confirm this reads `0` before
+  trusting any number above or running `--apply` (see §8.3's `CACHE_DIR`
+  precondition); a dry run from a worktree with no cache of its own for these
+  20 books instead reports 20 books missing cache evidence and 0
+  auto-recordable aliases, since the cross-source ambiguity veto can't see
+  cache ambiguity without the file (round-2 review fail-closed fix).
 
 ### 8.2 Fixture
 
@@ -290,6 +306,14 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
 - [ ] `cd server && npm run build` completed — `--apply` dynamically imports
       the compiled `buildCastResolver`/`retireCharacterId`/etc. from
       `server/dist/**` rather than re-implementing them.
+- [ ] `CACHE_DIR` set to the checkout that ran this workspace's analysis —
+      default `<repo>/server/handoff/cache` is git-ignored and per-checkout, so
+      a fresh worktree's copy is empty for these real books. Run the dry run
+      and confirm its summary reads `books missing analysis-cache evidence: 0`
+      before doing anything else — `--apply` now refuses outright otherwise
+      (round-2 review fail-closed fix: a missing cache file silently defeats
+      the cross-source ambiguity veto, since an empty cache index reads as
+      "confirmed unambiguous" rather than "unknown").
 - [ ] No Castwright server reachable on the configured probe port(s) — default
       `8080` and the LAN HTTPS `8443`. `--apply` refuses outright otherwise
       (it writes out-of-process; no in-process lock covers the write).
@@ -319,9 +343,12 @@ Result: _______________________________________________________________
    run.
 
 Expected console output: `mode: APPLY (writing cast-id-history.json)`,
-`auto-recordable aliases: 3 (27 segment(s))`, matching the dry-run numbers in
+`auto-recordable aliases: 3 (27 segment(s))`, and
+`books missing analysis-cache evidence: 0` — matching the dry-run numbers in
 §8.1 exactly (a diverging number here means the workspace changed since the
-last dry run — stop and re-measure before trusting anything below).
+last dry run — stop and re-measure before trusting anything below; if the
+cache-evidence line is nonzero, `--apply` refuses outright instead — fix
+`CACHE_DIR` per §8.3 and re-run the dry run first).
 
 Result (console summary matches §8.1): ______________
 
