@@ -326,6 +326,44 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged[0].voiceStyle).toBeUndefined(); // the narrator's voiceStyle must not weld on
     expect(retirements).toEqual([]); // the reserved 'narrator' id must not be retired away
   });
+
+  it('id drift: a fresh narrator-id row never adopts a dropped real character via the name-fallback (#2040 Task 12 follow-up, L1 fresh side)', () => {
+    // This direction PRE-DATES Task 12 — a voiced real character already
+    // satisfied the pre-Task-12 isVoicedOrReused precondition, so nothing
+    // ever excluded narrator on the fresh side; the widening did not create
+    // this exposure. Closed here anyway because it's the exact mirror of
+    // the candidate-side fix just landed, in the same block: a real
+    // character named "Erzähler" matched onto the fresh 'narrator' row
+    // would retire the REAL character's id to 'narrator' — every frozen
+    // segment that character ever rendered would then resolve to the
+    // narrator, precisely #2040's original bug. The reserved narrator id
+    // is code-seeded (NARRATOR_CHARACTER_IDS), never analyzer-minted, so
+    // there is no legitimate id-drift case here for the fallback to rescue.
+    const existing: C[] = [
+      {
+        id: 'erzahler-char',
+        name: 'Erzähler',
+        voiceState: 'tuned',
+        voiceUuid: 'U-erzahler',
+        overrideTtsVoices: { qwen: { name: 'qwen-erzahler' } },
+      },
+    ];
+    const fresh: C[] = [
+      { id: 'narrator', name: 'Erzähler', role: 'narrator', color: 'narrator' } as C,
+    ];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    // Blocked match, voiced row -> carried forward as its own orphan under
+    // its OWN id, same as any other blocked-match voiced row (mirrors the
+    // pre-existing "ambiguous name ... re-adds the orphan" test above) —
+    // not lost, and critically not welded onto the reserved narrator id.
+    expect(merged.map((c) => c.id).sort()).toEqual(['erzahler-char', 'narrator']);
+    expect(merged.find((c) => c.id === 'narrator')!.voiceUuid).toBeUndefined();
+    expect(merged.find((c) => c.id === 'erzahler-char')!.voiceUuid).toBe('U-erzahler');
+    expect(retirements).toEqual([]); // the real character's id must not be retired onto 'narrator'
+  });
 });
 
 describe('mergeAnalysisResultWithExistingCast — narrator name', () => {

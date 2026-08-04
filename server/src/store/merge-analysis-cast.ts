@@ -243,7 +243,21 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     let old = byId.get(f.id);
     if (!old) {
       const key = nameOf(f as T & Record<string, unknown>);
-      if (key && freshNameCounts.get(key) === 1) {
+      // A fresh narrator-id row never adopts a name-fallback candidate
+      // either. Unlike the droppedByName exclusion above, this direction
+      // PRE-DATES Task 12 — a voiced real character already satisfied the
+      // pre-Task-12 isVoicedOrReused precondition, so nothing ever excluded
+      // narrator here; the widening did not create this exposure. Closed
+      // here anyway (fix-now bar: adjacent to, and the exact mirror of, the
+      // exclusion just landed) because a real character matched onto the
+      // reserved narrator id would retire the REAL character's id to
+      // 'narrator' — every frozen segment that character ever rendered
+      // would then resolve to the narrator, precisely #2040's original bug.
+      // Safe to exclude unconditionally: the narrator id is code-seeded
+      // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
+      // legitimate id-drift case here for the fallback to rescue, and
+      // :263-269 already carries the narrator name forward on its own path.
+      if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
         const cand = dropMatchCandidateByName.get(key);
         // A notLinkedTo edge between this specific pair is the user's
         // explicit "not the same person" decision — widening the candidate
