@@ -113,12 +113,15 @@
  *                        bak-only evidence alone even if the (unseen) cache
  *                        would have vetoed it. Round-2 review made this
  *                        fail-closed: the script now counts every scanned
- *                        book whose cache file is missing OR fails to parse
- *                        (#2093 residual 1 — a present-but-corrupt file used
- *                        to read as "available" because the old gate only
- *                        checked path existence; it now requires the file to
- *                        both exist AND parse, via `readAnalysisCache`),
- *                        prints the count in the summary every run, and
+ *                        book whose cache file is missing, fails to parse,
+ *                        OR parses but names zero characters (#2093 residual
+ *                        1, widened by independent-review Critical C1 — a
+ *                        present-but-corrupt file, or one that validly
+ *                        parses but names nobody, both used to read as
+ *                        "available"; it now requires the file to exist,
+ *                        parse, AND supply at least one name/id entry, via
+ *                        `isCacheAvailable`), prints the count in the
+ *                        summary every run, and
  *                        refuses `--apply` outright whenever that count is
  *                        nonzero (dry run still runs and reports it) — see
  *                        `main()`'s `booksMissingCache` and
@@ -702,14 +705,19 @@ export function buildRerenderRows(bookLabel, orphans) {
 
 /** #2093 residual 2: `main()`'s global `--apply` refusal for "any scanned
  *  book had unavailable analysis-cache evidence" (round-2 review, Important
- *  1's "explicit and visible" refusal), extracted to a pure decision so a
- *  regression in wiring it is directly testable — `main` itself isn't
- *  exported (it needs `server/dist` built; see the module doc comment's
- *  Tests section), so before this extraction nothing caught a regression
- *  that silently degraded this from "explicit whole-run refusal" to
- *  "smaller numbers, no refusal" (still safe per-book, via
- *  `planBookRepairs`'s own `cacheAvailable` gate — but silently, not
- *  "explicit and visible" per the design). */
+ *  1's "explicit and visible" refusal), extracted to a pure decision.
+ *  **Scope correction (independent review I3, 2026-08-05):** this makes the
+ *  DECISION itself — `apply && booksMissingCache > 0` — directly unit
+ *  testable; it does NOT make main()'s WIRING of that decision (that it's
+ *  actually called with the right arguments, and that main() actually exits
+ *  1 on `true`) testable, and that wiring remains untested by anything
+ *  short of the live dry run — `main` isn't exported (it needs `server/dist`
+ *  built; see the module doc comment's Tests section), so there is no
+ *  automated regression net on the call site itself. A regression there
+ *  would still be safe per-book (`planBookRepairs`'s own `cacheAvailable`
+ *  gate never lets a book with missing evidence auto-record), just silent
+ *  at the whole-run level rather than "explicit and visible" per the
+ *  design. */
 export function shouldRefuseApplyForMissingCache(apply, booksMissingCache) {
   return apply === true && booksMissingCache > 0;
 }
@@ -839,16 +847,28 @@ function analysisCacheFileExists(cacheDir, manuscriptId) {
   return fs.existsSync(path.join(cacheDir, `${manuscriptId}.json`));
 }
 
-/** #2093 residual 1 fix: the actual `cacheAvailable` gate. A book's
- *  analysis-cache evidence counts as available only when the file both
- *  EXISTS and PARSES — `readAnalysisCache` already swallows a parse
- *  failure to `null` (same as a missing file); this just makes that the
- *  gate, in place of `analysisCacheFileExists`'s path-existence-only check.
- *  Round-2 review's fail-closed fix for the missing-file case is unchanged
- *  by this — it's the same guard, tightened to also catch a corrupt file
- *  that used to slip through. */
+/** #2093 residual 1 fix (widened by independent-review Critical C1,
+ *  2026-08-05): the actual `cacheAvailable` gate. A book's analysis-cache
+ *  evidence counts as available only when the file EXISTS, PARSES, **and
+ *  names at least one character** — not merely "exists and parses" (that
+ *  narrower check was C1's own finding: guard 2, the cross-source
+ *  ambiguity veto, doesn't consume "it parsed", it consumes
+ *  `cacheEntriesOf(cache)`, and BOTH `stage1.characters` and `chapterCast`
+ *  are OPTIONAL per the schema — `server/src/store/analysis-cache.ts:69-77`
+ *  — so a validly-parsing cache that names nobody used to pass this gate,
+ *  produce an EMPTY `cacheNameIndex`, and leave guard 2 exactly as blind as
+ *  a missing file would, without `booksMissingCache` ever counting it.
+ *  Measured against the real workspace's cache dir: 76 files parse, 0 are
+ *  unparseable, and **10 parse with zero character entries** — one of them
+ *  a real book (*Unlocked*, `mns_dLurz4I544`) that also carries bak-only
+ *  name evidence guard 2 must not treat as uncontested without the cache's
+ *  corroboration/veto. All three refusal states — missing, unparseable,
+ *  parses-but-names-nobody — now read the same way here; `main()`'s
+ *  diagnostic line still distinguishes them for the operator (see its own
+ *  comment). */
 export function isCacheAvailable(cacheDir, manuscriptId) {
-  return readAnalysisCache(cacheDir, manuscriptId) !== null;
+  const cache = readAnalysisCache(cacheDir, manuscriptId);
+  return cache !== null && cacheEntriesOf(cache).length > 0;
 }
 
 function cacheEntriesOf(cache) {
@@ -884,8 +904,30 @@ function cacheEntriesOf(cache) {
  *  refused, i.e. "possibly live, refuse the write"). A server that is
  *  running but unresponsive within the timeout window (mid-generation, a
  *  blocked event loop, a model load) must not read as absent just because
- *  it missed the window. */
-function probePortRefused(port, host = 'localhost') {
+ *  it missed the window.
+ *
+ *  **M6 (independent review, 2026-08-05): the default host is `127.0.0.1`,
+ *  NOT `'localhost'`.** `'localhost'` is a hostname Node resolves at
+ *  connect time, and on Windows can resolve `::1` (IPv6 loopback) before
+ *  `127.0.0.1` — so an IPv4-only server would answer on `127.0.0.1` while
+ *  this probe's `::1` connection collects a clean `ECONNREFUSED` and reads
+ *  "safe", with a live server actually listening. Verified against
+ *  `server/src/bind-host.ts`'s `selectBindHost`: the server's default plain-
+ *  HTTP bind (no `BIND_HOST`/`HOST` override, the mode `PORT`/8080 targets)
+ *  is literally `'127.0.0.1'`, and its LAN-HTTPS bind (`LAN_HTTPS_PORT`/8443)
+ *  is `'0.0.0.0'` (all interfaces, which includes `127.0.0.1`) — so probing
+ *  `127.0.0.1` explicitly is correct for both configured ports, not a
+ *  narrowing. Deliberately NOT also probing `::1` in parallel: on an
+ *  IPv6-less box (or one with IPv6 disabled) that would resolve `ENETUNREACH`
+ *  for every run, and under this probe's own fail-closed rule (only a
+ *  definitive `ECONNREFUSED` counts as safe) that would make `--apply`
+ *  refuse unconditionally, everywhere, forever — a worse failure mode than
+ *  the narrow, Windows-specific, dual-stack-server gap this leaves: an
+ *  IPv6-ONLY server (no IPv4 listener at all) is still invisible to this
+ *  probe. Not exploitable via `selectBindHost` above (neither of its two
+ *  outputs is IPv6-only), so this residual is real only for a server
+ *  started some other way that binds `::1` exclusively. */
+function probePortRefused(port, host = '127.0.0.1') {
   return new Promise((resolveP) => {
     const socket = net.connect({ host, port, timeout: 4000 });
     socket.once('connect', () => {
@@ -912,7 +954,9 @@ function probePortRefused(port, host = 'localhost') {
  *  invisible to a probe that only checked the exact configured port. Both
  *  `PORT`/`LAN_HTTPS_PORT` go through `listenWithAutoRebind` in
  *  `server/src/index.ts`, so both need the widened probe below. */
-const AUTO_REBIND_RANGE = 20;
+// Exported so scripts/tests/repair-cast-id-drift.test.mjs can size its own
+// fixtures off the real value instead of a hardcoded, driftable copy of 20.
+export const AUTO_REBIND_RANGE = 20;
 
 /** Probes every port a `listenWithAutoRebind` server could be bound to
  *  starting from `startPort` (spec §10 / #2090) — the exact configured port
@@ -932,7 +976,7 @@ const AUTO_REBIND_RANGE = 20;
  *  single-port probe by taking longer. Returns every port in the range
  *  that did NOT resolve a clear `ECONNREFUSED` — an empty array means every
  *  candidate gave a definitive "nothing is listening". */
-export async function probePortRangeRefused(startPort, host = 'localhost') {
+export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i);
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
@@ -1094,8 +1138,8 @@ async function main() {
     // started while 8080/8443 was held, and rebound to port+N, used to be
     // invisible to this probe.
     console.log(
-      `probing localhost:${port}-${port + AUTO_REBIND_RANGE - 1} (HTTP, incl. auto-rebind range) and ` +
-        `localhost:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} (LAN HTTPS, incl. auto-rebind range) for a ` +
+      `probing 127.0.0.1:${port}-${port + AUTO_REBIND_RANGE - 1} (HTTP, incl. auto-rebind range) and ` +
+        `127.0.0.1:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} (LAN HTTPS, incl. auto-rebind range) for a ` +
         `live server...`,
     );
     const [httpNotRefused, lanNotRefused] = await Promise.all([
@@ -1147,14 +1191,17 @@ async function main() {
 
     // Round-2 review, Important 1: the cross-source ambiguity veto (guard 2
     // in planBookRepairs) can only see cache ambiguity through this file —
-    // a MISSING (OR, #2093 residual 1, UNPARSEABLE) cache file must never
-    // silently read as "confirmed unambiguous". `cacheAvailable` is a
-    // per-book fact — does the file exist AND parse — computed
-    // independently of whether THIS book's cache happens to name any of
-    // its orphaned ids. Gated on `isCacheAvailable` (exists+parses), not
+    // a MISSING, UNPARSEABLE, or (#2093 residual 1, widened by
+    // independent-review Critical C1) VALIDLY-PARSING-BUT-NAMES-NOBODY
+    // cache file must never silently read as "confirmed unambiguous".
+    // `cacheAvailable` is a per-book fact — does the file exist, parse, AND
+    // supply usable evidence — computed independently of whether THIS
+    // book's cache happens to name any of its orphaned ids specifically.
+    // Gated on `isCacheAvailable` (exists+parses+non-empty), not
     // `analysisCacheFileExists` (exists only, which read a
-    // present-but-corrupt file as "available" — the exact fail-open shape
-    // the round-2 fix closed one level up, reopened here).
+    // present-but-corrupt OR present-but-empty file as "available" — the
+    // exact fail-open shape the round-2 fix closed one level up, reopened
+    // here twice).
     const cacheAvailable = isCacheAvailable(cacheDir, book.state.manuscriptId);
     if (!cacheAvailable) booksMissingCache += 1;
     const cache = readAnalysisCache(cacheDir, book.state.manuscriptId);
@@ -1186,14 +1233,27 @@ async function main() {
 
     console.log(`--- ${book.label} ---`);
     if (!cacheAvailable) {
-      // #2093 residual 1: distinguish "no file at all" from "file present
-      // but failed to parse" for the operator — `analysisCacheFileExists`
-      // is safe to use HERE (a diagnostic string), just never as the gate.
-      const fileExists = analysisCacheFileExists(cacheDir, book.state.manuscriptId);
+      // #2093 residual 1, widened by independent-review Critical C1:
+      // distinguish all THREE refusal states for the operator — "no file at
+      // all", "file present but failed to parse", and "file present, parses
+      // fine, but names zero characters" — even though `isCacheAvailable`
+      // now refuses all three identically. `cache` (read above, in scope
+      // here) already tells us whether it parsed; `analysisCacheFileExists`
+      // (a diagnostic-only helper, never the gate) distinguishes the two
+      // parse-failure sub-cases. `cacheAvailable === false` here always
+      // means one of these three, never a fourth case.
+      let desc, suffix;
+      if (cache === null) {
+        const fileExists = analysisCacheFileExists(cacheDir, book.state.manuscriptId);
+        desc = fileExists ? 'analysis-cache file exists but failed to parse' : 'no analysis-cache file found';
+        suffix = fileExists ? ' is not valid JSON' : ' does not exist';
+      } else {
+        desc = 'analysis-cache file parses but names zero characters';
+        suffix = ' has no usable stage1.characters or chapterCast entries';
+      }
       console.log(
-        `  (! ${fileExists ? 'analysis-cache file exists but failed to parse' : 'no analysis-cache file found'} ` +
-          `for this book — ${path.join(cacheDir, `${book.state.manuscriptId ?? '<no manuscriptId>'}.json`)}` +
-          `${fileExists ? ' is not valid JSON' : ' does not exist'}. ` +
+        `  (! ${desc} for this book — ${path.join(cacheDir, `${book.state.manuscriptId ?? '<no manuscriptId>'}.json`)}` +
+          `${suffix}. ` +
           `The cross-source ambiguity veto cannot see cache evidence for this book, so auto-record is withheld ` +
           `for every matched id below until CACHE_DIR points at the checkout that ran this book's analysis.)`,
       );

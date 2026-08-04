@@ -31,6 +31,7 @@ import {
   isCacheAvailable,
   probePortRangeRefused,
   buildOrphansFromSegments,
+  AUTO_REBIND_RANGE,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -549,9 +550,16 @@ describe('planBookRepairs', () => {
   });
 
   test('a Tier A match onto a reserved TARGET id is refused (falls through, not auto-recorded)', () => {
+    // I2 (independent review): this test omitted `cacheAvailable` before the
+    // #2093 residual 3 default flip (true -> false) and stayed green
+    // vacuously — with the new `false` default, `autoRecord` is empty for
+    // ANY input, so this assertion no longer discriminates the guard it's
+    // named for (proven by mutation: deleting the Tier A target-side
+    // reserved-id check entirely left this test green). `cacheAvailable:
+    // true` restores the guard this test actually exercises.
     const cacheNameIndex = buildNameIndex([{ id: 'weird-alias', name: 'Narrator' }], lc);
     const orphans = new Map([['weird-alias', renderedOrphan(2)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 0);
     assert.ok(!plan.autoRecord.some((a) => a.to === 'narrator'));
   });
@@ -804,10 +812,11 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
     });
   });
 
-  test('a valid cache file -> parses / available', () => {
+  test('a valid cache file naming at least one character -> parses / available', () => {
     withTempCacheDir((dir) => {
-      fs.writeFileSync(path.join(dir, 'good-book.json'), JSON.stringify({ stage1: { characters: [] } }));
-      assert.deepEqual(readAnalysisCache(dir, 'good-book'), { stage1: { characters: [] } });
+      const contents = { stage1: { characters: [{ id: 'mairin', name: 'Мэйрин' }] } };
+      fs.writeFileSync(path.join(dir, 'good-book.json'), JSON.stringify(contents));
+      assert.deepEqual(readAnalysisCache(dir, 'good-book'), contents);
       assert.equal(isCacheAvailable(dir, 'good-book'), true);
     });
   });
@@ -832,6 +841,43 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
       assert.equal(isCacheAvailable(dir, 'corrupt-book'), false);
     });
   });
+
+  test('CRITICAL C1 (independent review, 2026-08-05): a validly-parsing cache file that names ZERO characters reads as unavailable, not merely "it parsed"', () => {
+    // This is the residual 1 fix's own blind spot, found by independent
+    // review: guard 2 (the cross-source ambiguity veto) doesn't consume
+    // "did the file parse" — it consumes `cacheEntriesOf(cache)`, and BOTH
+    // `stage1.characters` and `chapterCast` are OPTIONAL per the schema
+    // (server/src/store/analysis-cache.ts:69-77). A bare `{}` parses fine —
+    // `readAnalysisCache` returns a real object, not `null` — but supplies
+    // zero name/id entries, which is exactly as blind to guard 2 as a
+    // missing file, yet the narrower "exists and parses" gate would have
+    // read it as available. Measured for real: 10 of the real workspace's
+    // 80 cache files parse but name zero characters (one of them a real
+    // book, *Unlocked*, with bak-only evidence this gate must withhold from
+    // guard 2's view too).
+    withTempCacheDir((dir) => {
+      const p = path.join(dir, 'empty-book.json');
+      fs.writeFileSync(p, '{}');
+      const parsed = readAnalysisCache(dir, 'empty-book');
+      assert.notEqual(parsed, null); // it DID parse...
+      assert.deepEqual(parsed, {});
+      assert.equal(isCacheAvailable(dir, 'empty-book'), false); // ...but is not usable evidence
+    });
+  });
+
+  test('CRITICAL C1 (independent review): a cache file with a present but entirely-empty chapterCast also reads as unavailable', () => {
+    // A second real shape of "parses but names nobody" — chapterCast keyed
+    // by chapter, present, but every chapter's array is empty (no
+    // stage1.characters at all). Distinct fixture from the bare `{}` case
+    // above so both of C1's named shapes are directly covered.
+    withTempCacheDir((dir) => {
+      const p = path.join(dir, 'empty-chapters-book.json');
+      fs.writeFileSync(p, JSON.stringify({ chapterCast: { 1: [] } }));
+      const parsed = readAnalysisCache(dir, 'empty-chapters-book');
+      assert.notEqual(parsed, null);
+      assert.equal(isCacheAvailable(dir, 'empty-chapters-book'), false);
+    });
+  });
 });
 
 describe('probePortRangeRefused (#2090)', () => {
@@ -843,10 +889,49 @@ describe('probePortRangeRefused (#2090)', () => {
     });
   }
 
+  /** M5 (independent review, 2026-08-05): a hardcoded "high, unusual" base
+   *  port is a guess, not a guarantee — some other process on a CI/dev box
+   *  could genuinely be listening anywhere in that window, which would fail
+   *  this test for a reason that has nothing to do with the code under
+   *  test. This instead PROVES a `rangeSize`-port CONSECUTIVE window is free
+   *  by actually binding a real listener on every port in it (an OS refuses
+   *  a bind on an occupied port, so a successful bind is real evidence, not
+   *  an assumption), then releases them immediately before the probe under
+   *  test runs. Retries with a fresh random base on a bind collision rather
+   *  than asserting anything about the failed candidate. There remains a
+   *  short residual race between releasing the verified-free ports and the
+   *  probe connecting to them — inherent to testing a TCP liveness probe at
+   *  all — but it is now bounded to that narrow window instead of "was this
+   *  static number ever free on this box in the first place". */
+  async function findVerifiedFreeRange(rangeSize, host = '127.0.0.1') {
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const base = 40000 + Math.floor(Math.random() * 20000);
+      const servers = [];
+      try {
+        for (let i = 0; i < rangeSize; i += 1) {
+          const s = net.createServer();
+          // Sequential (not Promise.all) deliberately — binding must prove
+          // each port individually so a collision on port N doesn't leave
+          // ports > N bound-but-unrecorded.
+          await new Promise((resolve, reject) => {
+            s.once('error', reject);
+            s.listen(base + i, host, resolve);
+          });
+          servers.push(s);
+        }
+        await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+        return base;
+      } catch {
+        await Promise.all(servers.map((s) => new Promise((resolve) => s.close(() => resolve()))));
+        // retry with a fresh random base
+      }
+    }
+    throw new Error(`could not find ${rangeSize} consecutive free ports after 25 attempts`);
+  }
+
   test('every port in the range gives a clean ECONNREFUSED when nothing is listening', async () => {
-    // A high, unusual base port to minimise the chance anything on a CI/dev
-    // box happens to be listening in this 20-port window.
-    const notRefused = await probePortRangeRefused(48213, '127.0.0.1');
+    const base = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    const notRefused = await probePortRangeRefused(base, '127.0.0.1');
     assert.deepEqual(notRefused, []);
   });
 
@@ -862,6 +947,28 @@ describe('probePortRangeRefused (#2090)', () => {
       const boundPort = server.address().port;
       const configuredPort = boundPort - 5; // pretend this was the configured port
       const notRefused = await probePortRangeRefused(configuredPort, '127.0.0.1');
+      assert.ok(notRefused.includes(boundPort), `expected ${boundPort} to be in ${JSON.stringify(notRefused)}`);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test('M6 (independent review, 2026-08-05): the DEFAULT host reaches an IPv4-loopback-only listener, not only when 127.0.0.1 is passed explicitly', async () => {
+    // Every other test in this describe block passes '127.0.0.1' explicitly
+    // and so never exercises probePortRangeRefused's own default host
+    // value — this one omits it entirely, pinning the default itself. The
+    // bug this closes (`net.connect({ host: 'localhost' })` can resolve
+    // `::1` before `127.0.0.1` on Windows, missing an IPv4-only server) is
+    // resolver-order-dependent and not guaranteed to reproduce identically
+    // on every CI box, but the fix — default to '127.0.0.1' outright,
+    // sidestepping hostname resolution altogether — is correct on every box
+    // regardless, and this test pins that default directly rather than
+    // relying on the mutation happening to manifest.
+    const server = await listenOnEphemeralPort(); // binds 127.0.0.1 only, no ::1
+    try {
+      const boundPort = server.address().port;
+      const configuredPort = boundPort - 5;
+      const notRefused = await probePortRangeRefused(configuredPort); // host omitted -> exercises the default
       assert.ok(notRefused.includes(boundPort), `expected ${boundPort} to be in ${JSON.stringify(notRefused)}`);
     } finally {
       await new Promise((resolve) => server.close(resolve));
