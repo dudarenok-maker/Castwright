@@ -7,6 +7,7 @@ import {
   retireCharacterId,
   castIdHistoryPath,
   dropSupersededIdsReclaimedByLiveCast,
+  refuseRetirementsOfLiveIds,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -238,6 +239,52 @@ describe('cast id history', () => {
       writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, displaced: 'not-an-object' }));
       const result = await loadCastIdHistory(dir);
       expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  /* Wave 2 final-review finding 1(b) — the recording-boundary half of the
+     live-id guard. `retireCharacterId`'s repoint loop is only sound when
+     `from` is dead, so a retirement naming a LIVE cast id is bogus by
+     definition and must never reach it. */
+  describe('refuseRetirementsOfLiveIds', () => {
+    it('refuses a retirement whose `from` is still a live cast id', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [{ from: 'brann', to: 'brann-weir' }],
+        ['brann', 'brann-weir'],
+      );
+      expect(r.keep).toEqual([]);
+      expect(r.refused).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+    });
+
+    it('keeps a retirement whose `from` is genuinely dead', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [{ from: 'mayrin', to: 'mairin' }],
+        ['mairin', 'narrator'],
+      );
+      expect(r.keep).toEqual([{ from: 'mayrin', to: 'mairin' }]);
+      expect(r.refused).toEqual([]);
+    });
+
+    it('partitions a mixed batch, preserving order within each side', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [
+          { from: 'dead-1', to: 'x' },
+          { from: 'live-1', to: 'x' },
+          { from: 'dead-2', to: 'x' },
+          { from: 'live-2', to: 'x' },
+        ],
+        ['live-1', 'live-2', 'x'],
+      );
+      expect(r.keep.map((e) => e.from)).toEqual(['dead-1', 'dead-2']);
+      expect(r.refused.map((e) => e.from)).toEqual(['live-1', 'live-2']);
+    });
+
+    it('never judges on `to` — retiring INTO a live id is the normal case', () => {
+      // The whole point of a retirement is that `to` is live. A guard that
+      // tested `to` instead of `from` would refuse every legitimate entry
+      // while letting the dangerous one through.
+      const r = refuseRetirementsOfLiveIds([{ from: 'mayrin', to: 'mairin' }], ['mairin']);
+      expect(r.refused).toEqual([]);
     });
   });
 });

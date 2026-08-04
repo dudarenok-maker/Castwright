@@ -114,7 +114,11 @@ import {
   dedupePriorCastByName,
   type Retirement,
 } from '../store/merge-analysis-cast.js';
-import { retireCharacterId, dropSupersededIdsReclaimedByLiveCast } from '../store/cast-id-history.js';
+import {
+  retireCharacterId,
+  dropSupersededIdsReclaimedByLiveCast,
+  refuseRetirementsOfLiveIds,
+} from '../store/cast-id-history.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -189,13 +193,38 @@ export async function readPriorCastForMerge(
    testable, no file I/O); this is where their reported retirements actually
    reach `cast-id-history.json`, at the route level where bookDir is in
    scope. No-op when bookDir is absent (legacy non-workspace path) or the
-   list is empty. */
+   list is empty.
+
+   `liveIds` is the roster that is actually persisted at this point — pass
+   `mergedFinal.characters`' ids at a final cast.json write. Anything naming
+   one of them as `from` is refused and logged (Wave 2 final-review finding
+   1(b); see `refuseRetirementsOfLiveIds` for why that shape is bogus by
+   definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
+   where no roster is final yet, and say why at the call site — the parameter
+   is deliberately required rather than optional so a new call site cannot
+   skip the filter by omission. */
 async function recordRetirements(
   bookDir: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
+  liveIds: ReadonlyArray<string> | null,
+  log: (phaseId: number, message: string) => void,
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
-  for (const { from, to } of retirements) {
+  const { keep, refused } = liveIds
+    ? refuseRetirementsOfLiveIds(retirements, liveIds)
+    : { keep: retirements, refused: [] as Retirement[] };
+  /* Operator-visible, mirroring the "Dropped N history alias(es)…" line at
+     the final write: a silently-dropped retirement is exactly how this class
+     of bug hid for two waves. */
+  if (refused.length) {
+    log(
+      1,
+      `Refused ${refused.length} character-id retirement(s) naming a still-live cast id (${refused
+        .map((r) => `${r.from} -> ${r.to}`)
+        .join(', ')}) — recording one would repoint unrelated history onto the wrong character.`,
+    );
+  }
+  for (const { from, to } of keep) {
     await retireCharacterId(bookDir, from, to);
   }
 }
@@ -2852,8 +2881,17 @@ export async function runMainAnalyzerJob(
       /* §4.4 / Task 8 fix round 1 (item 1) — a throwing history write
          (EPERM/ENOSPC on cast-id-history.json) must never fail the analysis
          persist. Mirrors writeFoldJournal/writeDedupJournal below. */
+      /* `liveIds: null` — this runs at the single prior-cast LOAD point,
+         before the analyzer has produced anything, so no roster is final and
+         there is none to force (Wave 2 final-review finding 1(b) explicitly
+         calls this site out). It needs none: every `from` here is a prior row
+         `dedupePriorCastByName` just removed from `priorCastForMerge`, which
+         is the only roster in hand, and the one case where a `from` could
+         come back live — this run's fresh roster re-minting it — is handled
+         at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
+         against the roster that actually got persisted. */
       try {
-        await recordRetirements(recordRef.bookDir, reconciled.retirements);
+        await recordRetirements(recordRef.bookDir, reconciled.retirements, null, log);
       } catch (historyErr) {
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
@@ -4848,8 +4886,16 @@ export async function runMainAnalyzerJob(
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
              state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
           try {
-            await recordRetirements(record.bookDir, remapped.retirements);
-            await recordRetirements(record.bookDir, mergedFinal.retirements);
+            /* Wave 2 final-review finding 1(b) — every retirement recorded
+               at this final write is filtered against the roster that was
+               just persisted (`mergedFinal.characters`, the same binding the
+               drop below uses, so "live" means the same thing to both). A
+               retirement naming a live id is bogus by construction here; the
+               filter is defence in depth for a future producer that stops
+               guaranteeing that, not a fix for a reachable case today. */
+            const liveIds = mergedFinal.characters.map((c) => c.id);
+            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -4859,7 +4905,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements);
+            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -4875,7 +4921,7 @@ export async function runMainAnalyzerJob(
                only drops and returns, it does not surface anything itself. */
             const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
               record.bookDir,
-              mergedFinal.characters.map((c) => c.id),
+              liveIds,
             );
             /* #2040 Task 14 review item 2a — operator-visible, mirrors the
                "Dedup collapsed N prior voiced row(s)..." log above. The
@@ -5369,8 +5415,10 @@ export async function runSubsetAnalyzerJob(
        open and the job stuck in `inFlightSubsetByManuscript` forever). Also
        wrapped in its own try/catch so a throwing history write still can't
        fail the analysis persist — mirrors writeFoldJournal/writeDedupJournal. */
+    /* `liveIds: null` — same reasoning as the main route's dedup site: no
+       roster is final here. See that call site's comment. */
     try {
-      await recordRetirements(record.bookDir, dedupRetirements);
+      await recordRetirements(record.bookDir, dedupRetirements, null, log);
     } catch (historyErr) {
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
@@ -6099,8 +6147,16 @@ export async function runSubsetAnalyzerJob(
              authoritative cast.json write; wrapped so a throwing history
              write can't skip cast.json / state.json. */
           try {
-            await recordRetirements(record.bookDir, remapped.retirements);
-            await recordRetirements(record.bookDir, mergedFinal.retirements);
+            /* Wave 2 final-review finding 1(b) — every retirement recorded
+               at this final write is filtered against the roster that was
+               just persisted (`mergedFinal.characters`, the same binding the
+               drop below uses, so "live" means the same thing to both). A
+               retirement naming a live id is bogus by construction here; the
+               filter is defence in depth for a future producer that stops
+               guaranteeing that, not a fix for a reachable case today. */
+            const liveIds = mergedFinal.characters.map((c) => c.id);
+            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -6110,7 +6166,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements);
+            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -6119,7 +6175,7 @@ export async function runSubsetAnalyzerJob(
                roster this write just persisted). */
             const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
               record.bookDir,
-              mergedFinal.characters.map((c) => c.id),
+              liveIds,
             );
             // #2040 Task 14 review item 2a — mirrors the main path's same-
             // named block above.

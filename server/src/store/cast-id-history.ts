@@ -134,6 +134,40 @@ export async function retireCharacterId(
   });
 }
 
+/** Split a batch of retirements into the ones that may be recorded and the
+ *  ones that must not, given the roster that is actually live.
+ *
+ *  Wave 2 final-review finding 1(b), defence in depth for the Critical the
+ *  same review found in `remapFreshToPriorIds`. `retireCharacterId` repoints
+ *  every entry whose VALUE is `from` (:123-127) — sound only when `from` is
+ *  genuinely dead, which is what the history entry asserts. A retirement whose
+ *  `from` is a LIVE cast id is therefore bogus by definition, and recording it
+ *  does damage that `dropSupersededIdsReclaimedByLiveCast` cannot undo: that
+ *  function removes the reclaimed KEY at the end of the run, after the
+ *  collateral repoint has already rewritten unrelated chains onto the wrong
+ *  character.
+ *
+ *  Judged on `from` only. `to` being live is the normal, required case — a
+ *  guard that tested `to` would refuse every legitimate retirement and let the
+ *  dangerous one through.
+ *
+ *  Pure and synchronous, like the retirement producers themselves; the caller
+ *  (`analysis.ts`'s `recordRetirements`) holds both the persisted roster and
+ *  the run log, and is responsible for surfacing anything refused. */
+export function refuseRetirementsOfLiveIds<T extends { from: string; to: string }>(
+  retirements: ReadonlyArray<T>,
+  liveIds: ReadonlyArray<string>,
+): { keep: T[]; refused: T[] } {
+  const live = new Set(liveIds);
+  const keep: T[] = [];
+  const refused: T[] = [];
+  for (const entry of retirements) {
+    if (live.has(entry.from)) refused.push(entry);
+    else keep.push(entry);
+  }
+  return { keep, refused };
+}
+
 /** A history entry dropped because a fresh roster reintroduced its key as a
  *  live cast id. `id` is the (formerly-superseded) history key; `supersededBy`
  *  is what it used to resolve to before the live row reclaimed it. */
