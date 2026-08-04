@@ -26,6 +26,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId } from '../util/safe-id.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { normaliseIdKey } from '../util/character-id.js';
 
 export const castCreateRouter = Router();
 
@@ -78,20 +79,50 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
      the first place, rather than drop the history entry that is actively
      guarding real rendered segments to hand the id to an empty new
      character. Treat history keys as additional "taken" ids for exactly
-     that reason. */
+     that reason.
+
+     Review round 1 (Critical) — the check must be NORMALISED, not raw. A
+     mint is always a `normaliseIdKey` fixed point (`safeId`'s output, and
+     both its own and this route's collision suffixes are already in
+     normal form), but a history key — or a pre-RC2 live id — is whatever
+     string was on disk, e.g. an underscore slug (`the_torment`) or LLM
+     free text. A raw-only check leaves the gap open in exactly the
+     dangerous direction: cast.json has `the_torment`, frozen segments
+     carry `the-torment` (tier-4 normalised match); merging `the_torment`
+     into some other character records `{the_torment: <target>}`;
+     re-creating "The Torment" mints `the-torment` (safeId's normal form),
+     which isn't a raw match for `the_torment` in either `existingIds` or
+     `historyKeys` — so the raw-only check would have let it through, tier
+     1 would then beat the tier-4 history redirect, and every segment
+     carrying the drifted spelling would hijack onto the new, empty
+     character. This is the exact `Unknown_Male`-vs-normalised defect
+     shape `repair-cast-id-drift.mjs`'s guard was already fixed for
+     (#2040 Wave 3 review) — carried over here.
+
+     This also closes a pre-existing SIBLING bug with no history involved
+     at all: a live `the_torment` with nothing retired, re-created as "The
+     Torment", used to mint `the-torment` — tier 1 then beats tier 4 for
+     the drifted-spelling segments AND collapses `byNormId` for both
+     spellings to `undefined` (two live rows sharing a normalised key),
+     killing tier 3 resolution for both. The normalised taken-check below
+     covers this case too, since it also normalises `existingIds`, not
+     only `historyKeys`. */
   const history = await loadCastIdHistory(located.bookDir);
   const historyKeys = new Set(Object.keys(history.supersededBy));
   const takenIds = new Set([...existingIds, ...historyKeys]);
+  const takenNorm = new Set([...takenIds].map(normaliseIdKey));
+  const isTaken = (id: string) => takenIds.has(id) || takenNorm.has(normaliseIdKey(id));
 
   // safeId's own collision suffix is a hash of the NAME, checked once — a
   // second character sharing a name gets a distinct id, but a third
   // collides with the second (same name -> same hash, and safeId never
   // re-checks its own output). Guarantee uniqueness here regardless of how
-  // many characters share a name (or how many retired ids share a name).
+  // many characters share a name (or how many retired/live ids share a
+  // normalised name).
   let newId = safeId(name, { taken: takenIds });
-  if (takenIds.has(newId)) {
+  if (isTaken(newId)) {
     let n = 2;
-    while (takenIds.has(`${newId}-${n}`)) n += 1;
+    while (isTaken(`${newId}-${n}`)) n += 1;
     newId = `${newId}-${n}`;
   }
 
@@ -101,13 +132,18 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
      and keeps protecting the retired id's segments. Only the id this NEW
      character receives differs from what an unprotected mint would have
      picked. Computed against `existingIds` alone (not `takenIds`) so this
-     reports exactly the case the bug describes: the id a pre-fix mint would
-     have produced collided with a history entry. */
+     reports exactly the case the bug describes: the id a pre-fix mint
+     would have produced collided with a history entry — matched by
+     NORMALISED key (review round 1), so the report doesn't go silent in
+     exactly the new case the fix above now catches. */
   const unprotectedId = safeId(name, { taken: existingIds });
-  if (historyKeys.has(unprotectedId) && unprotectedId !== newId) {
+  const unprotectedNorm = normaliseIdKey(unprotectedId);
+  const collidingHistoryKey = [...historyKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
+  if (collidingHistoryKey && unprotectedId !== newId) {
     console.log(
-      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — cast-id-history ` +
-        `still redirects it to "${history.supersededBy[unprotectedId]}"; minted "${newId}" instead.`,
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" (collides with ` +
+        `history-protected "${collidingHistoryKey}") — cast-id-history still redirects it to ` +
+        `"${history.supersededBy[collidingHistoryKey]}"; minted "${newId}" instead.`,
     );
   }
 

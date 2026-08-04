@@ -6,7 +6,7 @@
    No auth/CSRF middleware in the test harness — mirrors cast-add-from-roster.test.ts. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -170,6 +170,16 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
     join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST, '.audiobook', 'cast-id-history.json');
   const bookDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
 
+  // The outer `beforeEach` (module-level) only rewrites cast.json/state.json
+  // via `writeBookOnDisk` — it never touches cast-id-history.json, so a file
+  // one test writes (directly, or via a real merge) survives into the next
+  // test in this describe unless removed here. Review round 1 (Important)
+  // caught the "no history file" test below running with a stale history
+  // file left behind by an earlier test, passing for the wrong reason.
+  beforeEach(() => {
+    rmSync(historyPath(), { force: true });
+  });
+
   it('does not re-mint an id a merge retired — the merge-then-recreate repro', async () => {
     // Seed a cast with the two characters the issue's repro merges.
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
@@ -226,11 +236,57 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
   });
 
   it('mints normally when no cast-id-history.json exists yet (the common case)', async () => {
-    // beforeEach already seeds a book with no history file. Confirm create
-    // proceeds without the history-check crashing or blocking anything.
+    // This describe's own beforeEach (above) removes any history file left
+    // behind by a previous test, so this genuinely exercises
+    // loadCastIdHistory's `raw === null` (absent-file) branch.
+    expect(existsSync(historyPath())).toBe(false);
     const res = await callCreate(bookId, { name: 'Nobody Retired This' });
     expect(res.status).toBe(200);
     expect(res.body.character.id).toBe('nobody-retired-this');
+  });
+
+  it('does not re-mint an id whose history key is a differently-spelled encoding of the same name (review round 1, Critical)', async () => {
+    // Real-workspace shape (docs/testing/cast-id-drift-onbox-acceptance.md):
+    // cast.json historically held the pre-RC2 underscore id "the_torment"
+    // for "The Torment", while frozen segments already carried the
+    // analyzer's hyphen spelling "the-torment", resolving via the
+    // normalised-id tier. A merge folding "the_torment" into some other
+    // character records history keyed on the RAW pre-RC2 spelling.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'lightning-dave', name: 'Lightning Dave', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({ schema: 1, supersededBy: { the_torment: 'lightning-dave' } }),
+    );
+
+    // A naive re-create of "The Torment" mints safeId's hyphen normal form,
+    // "the-torment" — NOT a raw match for the history key "the_torment".
+    // Only a normalised comparison catches the collision.
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).not.toBe('the-torment');
+
+    // The history entry survives — this route avoids the id, it doesn't
+    // drop the entry.
+    const history = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(history.supersededBy).toEqual({ the_torment: 'lightning-dave' });
+  });
+
+  it('does not re-mint an id that collides, only after normalisation, with a LIVE character — no history involved (review round 1, sibling defect)', async () => {
+    // Same encoding gap, no merge/history at all: a live character already
+    // holds the pre-RC2 underscore spelling. Re-creating under the name
+    // whose normal-form mint is the hyphen spelling used to collide with it
+    // only after normalisation — invisible to a raw existingIds check, but
+    // it collapses `byNormId` for both spellings the instant it lands.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'the_torment', name: 'The Torment', role: 'character', color: 'unset' },
+    ]);
+
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).not.toBe('the-torment');
   });
 
   it('does not crash and does not block minting when cast-id-history.json is malformed', async () => {

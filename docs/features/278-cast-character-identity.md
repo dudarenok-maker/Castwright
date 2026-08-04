@@ -106,16 +106,27 @@ owner: null
    duplicate-matching-logic defect class Task 16's CRITICAL finding came from
    (see "Deviations from the spec").
 8. **`cast-create`'s mint checks `cast-id-history.json` too, not just the live
-   roster** (srv-86, #2085) — `server/src/routes/cast-create.ts` treats every key
-   in `supersededBy` as an additional "taken" id alongside the live cast, so a
-   name whose naive mint collides with a retired id gets the existing collision-
-   suffix path instead. This is the mirror image of invariant 5/the analyzer's
-   `dropSupersededIdsReclaimedByLiveCast`: those paths don't control the mint (an
-   LLM produced the id, and a fresh roster legitimately reclaimed it) so they
-   drop the stale history entry; `cast-create` DOES control the mint, so it avoids
-   the collision instead of sacrificing a history entry that is still protecting
-   real rendered segments. Reported via a `console.log` line when the avoidance
-   fires — no `displaced` entry is written, because nothing is dropped.
+   roster — and the check is `normaliseIdKey`-equivalence, not raw string
+   equality** (srv-86, #2085) — `server/src/routes/cast-create.ts` treats every
+   key in `supersededBy`, and every live cast id, as "taken" alongside an exact
+   match: a name whose naive mint collides with a retired or live id **after
+   normalisation** (e.g. mints `the-torment` where the id on disk is the pre-RC2
+   `the_torment`) gets the existing collision-suffix path instead. A raw-only
+   check is insufficient — `safeId`'s output (and its own and this route's
+   collision suffixes) is always a `normaliseIdKey` fixed point, but a history
+   key or a pre-RC2 live id is whatever spelling actually landed on disk, so the
+   gap is one-directional and opens exactly where invariant 3's normalised-id
+   tier already has real drift to protect (review round 1, Critical; caught
+   against the real *Playing with Fire* `the_torment`/`the-torment` shape,
+   `docs/testing/cast-id-drift-onbox-acceptance.md:40-44`). This is the mirror
+   image of the analyzer's `dropSupersededIdsReclaimedByLiveCast`: that path
+   doesn't control the mint (an LLM produced the id, and a fresh roster
+   legitimately reclaimed it) so it drops the stale history entry; `cast-create`
+   DOES control the mint, so it avoids the collision instead of sacrificing a
+   history entry that is still protecting real rendered segments. Reported via a
+   `console.log` line, matched by the same normalised comparison, when the
+   avoidance fires — no `displaced` entry is written, because nothing is
+   dropped.
 
 ## Deviations from the spec
 
@@ -221,9 +232,13 @@ down, each a deliberate controller ruling made during implementation:
 - `server/src/routes/cast-create.test.ts` (srv-86, #2085) — the merge-then-
   recreate repro driven through the real merge and create routes: a re-created
   character never re-mints an id `cast-id-history.json` still protects, the
-  avoidance is logged, the history entry survives untouched, and the route
-  neither crashes nor silently disables the check when
-  `cast-id-history.json` is absent or malformed (the latter also logs).
+  avoidance is logged, the history entry survives untouched; a raw spelling
+  drift (the real `the_torment`/`the-torment` shape, review round 1) is caught
+  by the normalised comparison whether the drifted id is in history or only in
+  the live roster; and the route neither crashes nor silently disables the
+  check when `cast-id-history.json` is genuinely absent (confirmed via
+  `existsSync`, not merely "the previous test happened not to write one") or
+  malformed (the latter also logs).
 
 ### Manual acceptance walkthrough
 
