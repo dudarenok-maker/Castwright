@@ -634,7 +634,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
-          orphanedCharacterFallbacks: { mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' } },
+          orphanedCharacterFallbacks: {
+            mayrin: {
+              characterId: 'narrator',
+              voiceName: 'qwen-oduvan',
+              resolution: 'unresolved' as const,
+              segments: 1,
+            },
+          },
         },
       },
     });

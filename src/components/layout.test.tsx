@@ -465,7 +465,12 @@ describe('Layout — per-book hydration: orphaned-characterId fallback banner (#
       chapterCharacters: {},
       changeLog: null,
       orphanedCharacterFallbacks: {
-        mayrin: { characterId: 'narrator', voiceName: 'qwen-lib-narrator-clone' },
+        mayrin: {
+          characterId: 'narrator',
+          voiceName: 'qwen-lib-narrator-clone',
+          resolution: 'unresolved',
+          segments: 1,
+        },
       },
     });
 
@@ -492,7 +497,12 @@ describe('Layout — per-book hydration: orphaned-characterId fallback banner (#
        dispatch is missing, green when it's there. */
     await waitFor(() => {
       expect(store.getState().cast.orphanedCharacterFallbacks).toEqual({
-        mayrin: { characterId: 'narrator', voiceName: 'qwen-lib-narrator-clone' },
+        mayrin: {
+          characterId: 'narrator',
+          voiceName: 'qwen-lib-narrator-clone',
+          resolution: 'unresolved',
+          segments: 1,
+        },
       });
     });
   });

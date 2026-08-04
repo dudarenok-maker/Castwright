@@ -60,13 +60,22 @@ export interface CastState {
       pill. Optional (absent on pre-fe-16 preloaded test stores) — selectors
       read it through a `?? {}` guard. */
   renderedFallbackByCharacter?: Record<string, string>;
-  /** #2023 — orphaned characterId → who actually rendered it. Hydrated from
-      the book-state GET alongside `renderedFallbackByCharacter` above, but
-      keyed by a manuscript id with NO cast entry at all (substituted with
-      the narrator) rather than a real cast id whose engine changed. Optional
-      for the same reason as its sibling — selectors read it through a
-      `?? {}` guard. */
-  orphanedCharacterFallbacks?: Record<string, { characterId: string; voiceName?: string }>;
+  /** #2023, widened #2040 Wave 3 — orphaned characterId → resolution info.
+      Hydrated from the book-state GET alongside `renderedFallbackByCharacter`
+      above, but keyed by a manuscript id that does NOT exactly match a live
+      cast id rather than a real cast id whose engine changed. Optional for
+      the same reason as its sibling — selectors read it through a `?? {}`
+      guard (`src/views/cast.tsx` reads only the map's KEYS today). */
+  orphanedCharacterFallbacks?: Record<
+    string,
+    {
+      characterId?: string;
+      voiceName?: string;
+      resolution: 'alias' | 'normalised' | 'unresolved';
+      resolvedCharacterId?: string;
+      segments: number;
+    }
+  >;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -94,11 +103,23 @@ export const castSlice = createSlice({
     setRenderedFallback: (s, a: PayloadAction<Record<string, string>>) => {
       s.renderedFallbackByCharacter = a.payload ?? {};
     },
-    /* #2023 — overwrite the orphaned-characterId fallback map from the
-       book-state GET, mirroring setRenderedFallback above. */
+    /* #2023, widened #2040 Wave 3 — overwrite the orphaned-characterId
+       fallback map from the book-state GET, mirroring setRenderedFallback
+       above. */
     setOrphanedCharacterFallbacks: (
       s,
-      a: PayloadAction<Record<string, { characterId: string; voiceName?: string }>>,
+      a: PayloadAction<
+        Record<
+          string,
+          {
+            characterId?: string;
+            voiceName?: string;
+            resolution: 'alias' | 'normalised' | 'unresolved';
+            resolvedCharacterId?: string;
+            segments: number;
+          }
+        >
+      >,
     ) => {
       s.orphanedCharacterFallbacks = a.payload ?? {};
     },

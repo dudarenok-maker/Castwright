@@ -1079,18 +1079,30 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
     const next = castSlice.reducer(
       start,
       castActions.setOrphanedCharacterFallbacks({
-        mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+        mayrin: {
+          characterId: 'narrator',
+          voiceName: 'qwen-oduvan',
+          resolution: 'unresolved',
+          segments: 1,
+        },
       }),
     );
     expect(next.orphanedCharacterFallbacks).toEqual({
-      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+      mayrin: {
+        characterId: 'narrator',
+        voiceName: 'qwen-oduvan',
+        resolution: 'unresolved',
+        segments: 1,
+      },
     });
   });
 
   it('clears stale entries when the new map is empty (post-fix re-render)', () => {
     const start = {
       characters: [makeChar('narrator')],
-      orphanedCharacterFallbacks: { mayrin: { characterId: 'narrator' } },
+      orphanedCharacterFallbacks: {
+        mayrin: { characterId: 'narrator', resolution: 'unresolved' as const, segments: 1 },
+      },
     };
     const next = castSlice.reducer(start, castActions.setOrphanedCharacterFallbacks({}));
     expect(next.orphanedCharacterFallbacks).toEqual({});

@@ -346,12 +346,27 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
         ],
       }),
     );
+    // #2040 Wave 3 — 'narrator' must be a live cast id so it does NOT itself
+    // read as orphaned (it's the character the substitution rendered AS,
+    // not the orphaned id); 'mayrin' has no cast entry and no history entry,
+    // so it resolves as a genuine miss.
+    const castJsonFile = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castJsonFile,
+      JSON.stringify({ characters: [{ id: 'narrator', name: 'Narrator' }] }),
+    );
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(res.body.orphanedCharacterFallbacks).toEqual({
-      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+      mayrin: {
+        characterId: 'narrator',
+        voiceName: 'qwen-oduvan',
+        resolution: 'unresolved',
+        segments: 1,
+      },
     });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+    rmSync(castJsonFile, { force: true });
   });
 });
 

@@ -51,6 +51,7 @@ import {
 import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -455,16 +456,22 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
-    /* #2023 Piece 1 — per-orphaned-characterId render-time substitution,
-       aggregated the same way as renderedFallbackByCharacter just above but
-       keyed by the ORPHANED id (a manuscript attribution with no cast entry
-       at all, e.g. a cast/analysis id-romanisation drift) rather than a real
-       cast id. Silence was the bug: today this fact is logged once per orphan
-       id per render and surfaced nowhere else. Empty `{}` when nothing has
-       substituted. Tolerant of a missing audio dir. */
+    /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
+       render-time substitution, aggregated the same way as
+       renderedFallbackByCharacter just above but keyed by the ORPHANED id (a
+       manuscript attribution that does not exactly match a live cast id,
+       e.g. a cast/analysis id-romanisation drift) rather than a real cast
+       id. Reported for every such segment now, classified against the live
+       cast + the id-history side-table via the same `buildCastResolver` the
+       drift detector (`revisions.ts`) uses — not gated on the #2023 stamp,
+       which measured 0/188 coverage across all 20 books (spec §4.6). Empty
+       `{}` when nothing is orphaned. Tolerant of a missing audio dir /
+       missing history file. */
     const orphanedCharacterFallbacks = await collectOrphanedCharacterFallbacks(
       bookDir,
       state.chapters,
+      (cast?.characters ?? []) as Array<{ id: string }>,
+      (await loadCastIdHistory(bookDir)).supersededBy,
     ).catch(() => ({}));
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend

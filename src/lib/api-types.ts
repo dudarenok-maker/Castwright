@@ -5459,21 +5459,42 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description #2023 — orphaned characterId → who actually rendered it. Keyed by
-             *     a manuscript `characterId` that has NO entry in this book's cast at
-             *     all (e.g. a cast/analysis id-romanisation drift) and so was
-             *     substituted with the narrator, aggregated across any rendered
+             * @description #2023, widened #2040 Wave 3 — orphaned characterId → resolution
+             *     info. Keyed by a manuscript `characterId` that does NOT exactly
+             *     match a live cast id (e.g. a cast/analysis id-romanisation drift,
+             *     or a since-superseded id), aggregated across any rendered
              *     chapter. Distinct from `renderedFallbackByCharacter` above (which
              *     is keyed by a REAL cast id whose configured ENGINE changed) — this
-             *     is a wrong-CHARACTER substitution, not an engine one. Empty/absent
-             *     when nothing has substituted.
+             *     is a wrong-CHARACTER substitution, not an engine one. Reported for
+             *     every such segment, not only ones whose render stamped who
+             *     actually spoke it. Empty/absent when nothing is orphaned.
              */
             orphanedCharacterFallbacks?: {
                 [key: string]: {
-                    /** @description The cast character id that actually spoke the line (usually the narrator). */
-                    characterId: string;
+                    /**
+                     * @description The cast character id that actually rendered the line
+                     *     (usually the narrator), when the render stamped it. Absent
+                     *     on a render that predates that stamp.
+                     */
+                    characterId?: string;
                     /** @description The voice name actually sent to the provider, when recorded. */
                     voiceName?: string;
+                    /**
+                     * @description How this orphaned id resolves against the live cast + id
+                     *     history: `alias` via the id-history side-table, `normalised`
+                     *     via separator/case normalisation of a live cast id,
+                     *     `unresolved` when neither applies.
+                     * @enum {string}
+                     */
+                    resolution: "alias" | "normalised" | "unresolved";
+                    /**
+                     * @description The live cast id this orphaned id resolves onto, when
+                     *     `resolution` is `alias` or `normalised`. Absent when
+                     *     `unresolved`.
+                     */
+                    resolvedCharacterId?: string;
+                    /** @description How many rendered segments (across every rendered chapter) carry this orphaned id. */
+                    segments: number;
                 };
             };
             /** @description Editorial activity trail; null when no change-log.json exists yet. */
