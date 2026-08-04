@@ -114,6 +114,28 @@ function unionAliases(a: unknown, b: unknown): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/** True when `row.notLinkedTo` names `targetId`, in either shape the field is
+    written in: a bare string (defensive; nothing mints this shape today) or
+    the real on-disk `{ bookId, characterId }` shape `POST /not-linked-to`
+    writes (`server/src/routes/cast-not-linked-to.ts:238`; typed in
+    `voices.ts:104`/`voice-override-linked.ts:65`). Matches on `characterId`
+    alone, ignoring `bookId` — the identical trade `remap-fresh-to-prior.ts`'s
+    own `notLinkedToId` helper makes (§2040 Task 10/11), for the same reason:
+    a false "linked" is silent data corruption (two people collapsed into
+    one), a false "not linked" only costs a match a user can still do by
+    hand. */
+function notLinkedToId(row: Record<string, unknown>, targetId: string): boolean {
+  const nl = row.notLinkedTo;
+  if (!Array.isArray(nl)) return false;
+  return nl.some((entry) => {
+    if (typeof entry === 'string') return entry === targetId;
+    if (entry && typeof entry === 'object') {
+      return (entry as { characterId?: unknown }).characterId === targetId;
+    }
+    return false;
+  });
+}
+
 /** Voiced/reused characters present in `existing` but dropped by the fresh
     roster — i.e. the rows that carry-forward re-adds. Exposed so a caller can
     name them in a change-log entry. */
@@ -187,16 +209,18 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     if (list) list.push(old);
     else droppedByName.set(key, [old]);
   }
+  // No separate "ambiguous names" set: an ambiguous key is simply left OUT of
+  // dropMatchCandidateByName below (neither branch calls .set() for it), so
+  // .get(key) at the call site already returns undefined for it — a second
+  // set tracking the same fact would be redundant by construction, not just
+  // in practice (verified: #2040 Task 12 follow-up).
   const dropMatchCandidateByName = new Map<string, CastRecord>();
-  const ambiguousNames = new Set<string>();
   for (const [key, rows] of droppedByName) {
     const voiced = rows.filter(isVoicedOrReused);
     if (voiced.length === 1) {
       dropMatchCandidateByName.set(key, voiced[0]);
     } else if (voiced.length === 0 && rows.length === 1) {
       dropMatchCandidateByName.set(key, rows[0]);
-    } else {
-      ambiguousNames.add(key);
     }
   }
   const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
@@ -205,9 +229,20 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     let old = byId.get(f.id);
     if (!old) {
       const key = nameOf(f as T & Record<string, unknown>);
-      if (key && !ambiguousNames.has(key) && freshNameCounts.get(key) === 1) {
+      if (key && freshNameCounts.get(key) === 1) {
         const cand = dropMatchCandidateByName.get(key);
-        if (cand) {
+        // A notLinkedTo edge between this specific pair is the user's
+        // explicit "not the same person" decision — widening the candidate
+        // set past isVoicedOrReused must not let the fallback silently
+        // override it. A blocked match falls through to the id-only path
+        // exactly like an ambiguous one: refusing is always safe, matching
+        // wrongly is not (#2040 spec §9 — the match now also retires the id,
+        // durably, via retireCharacterId).
+        if (
+          cand &&
+          !notLinkedToId(cand, f.id) &&
+          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id)
+        ) {
           old = cand;
           claimedByName.add(cand.id);
           retirements.push({ from: cand.id, to: f.id });

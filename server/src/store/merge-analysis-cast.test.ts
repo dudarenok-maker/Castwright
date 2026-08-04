@@ -259,6 +259,51 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged[0].voiceState).toBe('tuned');
     expect(retirements).toEqual([{ from: 'alden-voiced', to: 'alden-new' }]);
   });
+
+  it('id drift: a notLinkedTo edge on the PRIOR row blocks the name-fallback match (#2040 Task 12 follow-up)', () => {
+    // Real on-disk shape written by POST /not-linked-to (cast-not-linked-to.ts:238).
+    // Without this guard, widening past isVoicedOrReused (this same task) lets
+    // the fallback silently override a user's explicit "not the same person"
+    // decision — and durably, since the match now also calls
+    // retireCharacterId (spec §9's "durability" hazard).
+    const existing: C[] = [
+      {
+        id: 'alden-old',
+        name: 'Alden',
+        aliases: ['Al'],
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'alden-new' }],
+      },
+    ];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']); // no orphan (unvoiced), no weld
+    expect(merged[0].aliases).toBeUndefined(); // the edge blocks the weld
+    expect(retirements).toEqual([]);
+  });
+
+  it('id drift: a notLinkedTo edge on the FRESH row also blocks the match (symmetry, #2040 Task 12 follow-up)', () => {
+    // Same scenario, but the edge is recorded on the fresh side (e.g. seeded
+    // by seedReuseGuardsFromPriorCast earlier in the same run) rather than
+    // the prior side. Isolates the second half of the OR check.
+    const existing: C[] = [{ id: 'alden-old', name: 'Alden', aliases: ['Al'] }];
+    const fresh: C[] = [
+      {
+        id: 'alden-new',
+        name: 'Alden',
+        notLinkedTo: [{ bookId: 'book-1', characterId: 'alden-old' }],
+      } as C,
+    ];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']);
+    expect(merged[0].aliases).toBeUndefined();
+    expect(retirements).toEqual([]);
+  });
 });
 
 describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
