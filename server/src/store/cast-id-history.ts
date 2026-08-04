@@ -189,7 +189,12 @@ export interface DisplacedHistoryEntry {
  *  lived, and losing them means every book that re-analyses before Wave 3's
  *  banner ships permanently loses the pair (the segments become genuinely
  *  unattributable, not just unreported). `displaced` accumulates across
- *  calls/runs — a later drop merges in, it does not replace.
+ *  calls/runs KEY BY KEY: a later drop merges its pairs into the existing map
+ *  rather than replacing it, so a key dropped by an earlier run survives a
+ *  later drop that does not mention it. It is NOT append-only per key —
+ *  dropping the same id twice overwrites the first pair with the second,
+ *  keeping only the most recent target. Deliberate: `displaced` records what
+ *  an id last resolved to, not its full lineage.
  *
  *  Returns the dropped entries so the caller can also log them immediately
  *  (operator-visible, #2040 Task 14 review item 2a) and so a future banner

@@ -204,8 +204,26 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
   /* §4.4 call site 5 — a merge drops sourceId outright; every segment that
      row already rendered would otherwise orphan the instant this lands.
      Record the retirement through the same choke point every other
-     id-losing path uses, so the resolver (§4.3) picks it up at render time. */
-  await retireCharacterId(bookDir, sourceId, targetId);
+     id-losing path uses, so the resolver (§4.3) picks it up at render time.
+
+     Wrapped (Wave 2 final review, finding 4). This call sits between the
+     authoritative cast.json write above and the analysis-cache
+     reconciliation below, and was the only one of the seven retirement sites
+     left unguarded — an EPERM/ENOSPC/AV-lock here rejected the whole merge
+     with cast.json ALREADY missing sourceId while the cache still held it,
+     the exact state the comment below says must not happen, plus a 500 on a
+     half-applied merge. Kept HERE rather than moved after the cache update:
+     the position is correct (record after the authoritative write, #2040
+     Task 8 fix round 1 item 1) and moving it would not help — an unguarded
+     throw still rejects, just later. The side-table is never authoritative
+     for identity (spec §4.1), so losing an entry degrades to today's
+     behaviour while losing the merge does not. Mirrors the six analysis-path
+     sites. */
+  try {
+    await retireCharacterId(bookDir, sourceId, targetId);
+  } catch (historyErr) {
+    console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+  }
 
   /* Analysis cache update — stage1.characters AND per-chapter sentences.
      The cache is what the route replays on resume, so leaving the source

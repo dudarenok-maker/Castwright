@@ -329,6 +329,102 @@ describe('cast-merge router', () => {
     expect(history.supersededBy).toHaveProperty(sourceId, targetId);
   });
 
+  it('a throwing history write never fails the merge or leaves cast.json and the analysis cache disagreeing (#2040 Wave 2 final review, finding 4)', async () => {
+    /* `performCastMerge`'s retirement call sat between the cast.json write
+       and the analysis-cache reconciliation with no try/catch — unlike all
+       six analysis-path sites, which have been wrapped since Task 8 fix round
+       1. An EPERM/ENOSPC/AV-lock on cast-id-history.json therefore rejected
+       the whole call with cast.json ALREADY missing the source id while the
+       cache still held it — exactly the state the code's own comment below
+       that call says must not happen ("leaving the source in here would
+       reintroduce the duplicate as soon as the user clicks resume") — plus a
+       500 on a half-applied merge.
+
+       The history is a lookup side-table and is never authoritative for
+       identity (spec §4.1: "losing the file degrades to today's behaviour…
+       at worst it stops helping"), so a failure to write it must cost the
+       entry, not the merge.
+
+       No mocking: cast-id-history.json's PATH is occupied by a directory, so
+       writeJsonAtomic's rename onto it throws for real. Same technique as
+       analysis.test.ts's sibling "a throwing history write never blocks the
+       authoritative cast.json persist". */
+    const { castIdHistoryPath } = await import('../store/cast-id-history.js');
+    const historyPath = castIdHistoryPath(bookDir);
+
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `eperm-src-${unique}`;
+    const targetId = `eperm-tgt-${unique}`;
+    const sentenceId = Date.now();
+
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Eperm Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      { id: targetId, name: 'Eperm Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+    const edits = readDisk<{ sentences: Array<Record<string, unknown>> }>('manuscript-edits.json');
+    edits.sentences.push({
+      id: sentenceId,
+      chapterId: 1,
+      characterId: sourceId,
+      text: 'Eperm line.',
+    });
+    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+
+    /* Seed the cache too, so the "cache still holds the source" half of the
+       inconsistency is actually observable rather than vacuously true. */
+    const cacheBefore = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      stage1: { characters: Array<Record<string, unknown>> };
+      chapters: Record<string, Array<Record<string, unknown>>>;
+    };
+    cacheBefore.stage1.characters.push(
+      { id: sourceId, name: 'Eperm Source' },
+      { id: targetId, name: 'Eperm Target' },
+    );
+    cacheBefore.chapters['1'] = [
+      ...cacheBefore.chapters['1'],
+      { id: sentenceId, chapterId: 1, characterId: sourceId, text: 'Eperm line.' },
+    ];
+    writeFileSync(cachePath, JSON.stringify(cacheBefore));
+
+    rmSync(historyPath, { recursive: true, force: true });
+    mkdirSync(historyPath, { recursive: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId, targetId });
+
+      // Not a 500 on a half-applied merge.
+      expect(res.status).toBe(200);
+
+      const castAfter = readDisk<{ characters: Array<{ id: string }> }>('cast.json');
+      expect(castAfter.characters.map((c) => c.id)).not.toContain(sourceId);
+
+      /* The specific invariant the unwrapped call could break: everything
+         AFTER the retirement still ran, so the cache agrees with cast.json.
+         An id-only check on cast.json would pass even with the throw
+         propagating (that write precedes the retirement), which is why the
+         assertions that matter are these. */
+      const cacheAfter = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+        stage1: { characters: Array<{ id: string }> };
+        chapters: Record<string, Array<{ characterId: string }>>;
+      };
+      expect(cacheAfter.stage1.characters.map((c) => c.id)).not.toContain(sourceId);
+      for (const arr of Object.values(cacheAfter.chapters)) {
+        for (const s of arr) expect(s.characterId).not.toBe(sourceId);
+      }
+
+      // The journal write, last of all, ran too.
+      const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
+      expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
+    } finally {
+      rmSync(historyPath, { recursive: true, force: true });
+    }
+  });
+
   it('400s when sourceId equals targetId', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
