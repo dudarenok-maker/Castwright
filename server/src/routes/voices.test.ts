@@ -1842,8 +1842,12 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
 
     let n: number;
     let wrote: boolean;
+    // Hoisted so the `finally` below can await them on the failure path
+    // instead of leaving them orphaned and still running past the test.
+    let overridePromise: Promise<number> | undefined;
+    let personaPromise: Promise<boolean> | undefined;
     try {
-      const overridePromise = applyOverrideToCastFiles(
+      overridePromise = applyOverrideToCastFiles(
         'narrator',
         { engine: 'qwen', name: 'qwen-fastpath-race' },
         undefined,
@@ -1861,7 +1865,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       }
       expect(intercepted).toBe(true);
 
-      const personaPromise = writeVoiceStylePersona(bookDir, 'narrator', 'a fastpath persona');
+      personaPromise = writeVoiceStylePersona(bookDir, 'narrator', 'a fastpath persona');
       // Generous head start: completes fully when unlocked, queues harmlessly
       // behind the held lock when locked. Not a tight window either way.
       await new Promise((r) => setTimeout(r, 50));
@@ -1878,6 +1882,10 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
       // default passthrough behaviour explicitly.
       spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while the walk
+      // is still running against fixtures `afterAll` is about to delete.
+      await Promise.allSettled([overridePromise, personaPromise]);
     }
     expect(n).toBe(1);
     expect(wrote).toBe(true);
@@ -1923,8 +1931,12 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
 
     let n: number;
     let wrote: boolean;
+    // Hoisted so the `finally` below can await them on the failure path
+    // instead of leaving them orphaned and still running past the test.
+    let walkPromise: Promise<number> | undefined;
+    let personaPromise: Promise<boolean> | undefined;
     try {
-      const walkPromise = applyOverrideToCastFiles('narrator', {
+      walkPromise = applyOverrideToCastFiles('narrator', {
         engine: 'qwen',
         name: 'qwen-walk-race',
       });
@@ -1937,7 +1949,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       }
       expect(intercepted).toBe(true);
 
-      const personaPromise = writeVoiceStylePersona(raceBookDir, 'narrator', 'a walk persona');
+      personaPromise = writeVoiceStylePersona(raceBookDir, 'narrator', 'a walk persona');
       // Generous head start: completes fully when unlocked, queues harmlessly
       // behind the held lock when locked. Not a tight window either way.
       await new Promise((r) => setTimeout(r, 50));
@@ -1951,6 +1963,10 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       // already-resolved promise a second time is a no-op.
       released();
       spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while the walk
+      // is still running against fixtures `afterAll` is about to delete.
+      await Promise.allSettled([walkPromise, personaPromise]);
     }
     /* Other unrelated fixtures elsewhere in this file also use the bare id
        'narrator' and share this workspace (see the fs-61 describe's own
@@ -2023,8 +2039,12 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
 
     let n: number;
     let writerSettled = false;
+    // Hoisted so the `finally` below can await them on the failure path
+    // instead of leaving them orphaned and still running past the test.
+    let walkPromise: Promise<number> | undefined;
+    let writerPromise: Promise<boolean> | undefined;
     try {
-      const walkPromise = applyOverrideToCastFiles('narrator', {
+      walkPromise = applyOverrideToCastFiles('narrator', {
         engine: 'qwen',
         name: 'qwen-hoist-check',
       });
@@ -2036,7 +2056,7 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       }
       expect(intercepted).toBe(true);
 
-      const writerPromise = writeVoiceStylePersona(
+      writerPromise = writeVoiceStylePersona(
         targetBookDir,
         'narrator',
         'a hoist-check persona',
@@ -2062,6 +2082,10 @@ describe('#1981 Task 9 — forEachMatchingCastCharacter locks per book', () => {
       // Idempotent — see the finally block above for why.
       released();
       spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while the walk
+      // is still running against fixtures `afterAll` is about to delete.
+      await Promise.allSettled([walkPromise, writerPromise]);
     }
 
     /* Other unrelated fixtures elsewhere in this file also use the bare id
