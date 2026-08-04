@@ -1,12 +1,14 @@
 # Cast/analysis characterId drift — on-box acceptance run sheet
 
 > **This is a working document.** Fill in the `Result:` lines AS you run this on
-> the box, with a real sidecar (Wave 1) or a real analyzer (Wave 2) and the
-> real, already-affected book. Do not pre-fill them.
+> the box, with a real sidecar (Wave 1), a real analyzer (Wave 2), or the
+> repair script plus a real sidecar (Wave 3) and the real, already-affected
+> book(s). Do not pre-fill them.
 >
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below) and [B3](onbox-acceptance-register.md) (Wave 2, §7 below)
+> Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
+> Register rows: [`onbox-acceptance-register.md` A32](onbox-acceptance-register.md) (Wave 1, §§1-6 below), [B3](onbox-acceptance-register.md) (Wave 2, §7 below), and [A33](onbox-acceptance-register.md) (Wave 3, §8 below)
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -156,8 +158,8 @@ Result: _______________________________________________________________
 Record what was observed, by whom, and when — here and in the register row.
 "The JSON fields look right" is not a substitute for the by-ear check in §3
 step 3. **Do not run the Wave-3 repair pass or the Wave-2 remap against this
-book as part of this acceptance run** — they don't exist yet on this branch,
-and this row is scoped to the resolver alone.
+book as part of this acceptance run** — this row is scoped to the resolver
+alone; Wave 2 and Wave 3 have their own sections (§7, §8) below.
 
 ---
 
@@ -231,4 +233,162 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 - [ ] §§7.4-7.6 run
 - [ ] Defects filed: ____________________________________
 
-Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — it does not exist yet on this branch.
+Record what was observed, by whom, and when — here and in register row B3. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
+
+---
+
+## 8. Wave 3 — the repair pass's `--apply` run
+
+> Register row: [`onbox-acceptance-register.md` A33](onbox-acceptance-register.md)
+
+### 8.1 Purpose & scope
+
+Waves 1 and 2 (above) prove the *mechanisms* against a single already-drifted
+chapter or book each. `scripts/repair-cast-id-drift.mjs` is the pass meant to
+sweep the **whole** 20-book workspace in one run, and as of this section being
+written **it has never been run with `--apply`** — every dry-run number below
+was produced without writing anything. The pure helpers (candidate ranking,
+the reserved-source and cross-source-ambiguity guards, the re-render list
+shape) are unit-tested against synthetic fixtures
+(`scripts/tests/repair-cast-id-drift.test.mjs`), and the `--apply` liveness
+probe was verified live against dummy TCP listeners (`task-18-report.md`) —
+but nothing has exercised the real write path against the real workspace.
+This section is that run.
+
+**Read-only dry-run measurement already ran** (most recent guard fixes
+applied) against `C:\AudiobookWorkspace\books`:
+
+- **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8) and
+  `coalfall` → `coalfall-dragon` (13), both in *Заказ Коалфолла*; `lady-alina`
+  → `dame-alina` (6) in *Everblaze*.
+- **93 ids reported for a human decision, 93 segments** — including the three
+  reserved fold-bucket rows a pre-review version of the script would have
+  wrongly auto-recorded (*Exile*'s `unknown-male`/`unknown-female`,
+  *Unlocked*'s `unknown-male`).
+- **17 re-render rows, 120 segments** (unconditional on auto-record status).
+- **0 books modified.**
+
+### 8.2 Fixture
+
+The same two books §7's fixture already establishes, plus a third:
+
+- *Заказ Коалфолла* at
+  `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла` — the
+  `mayrin`/`coalfall` pair (§7.2 above).
+- *Everblaze* — carries `lady-alina` (6 segments, orphaned) against a live
+  cast row `dame-alina` ("Dame Alina"); its `chapterCast[60]`/`[61]` name the
+  character `lady-alina` even though its finalised `stage1.characters` roster
+  already reads `dame-alina` (§4.7's evidence table calls this pair
+  "unattributed" — the repair pass's own dry run traced the mechanism: an
+  exact, unambiguous Tier A name match against the live cast row, not a
+  genuine miss).
+
+No `.audiobook/cast-id-history.json` exists yet for either book.
+
+### 8.3 Preconditions
+
+- [ ] `cd server && npm run build` completed — `--apply` dynamically imports
+      the compiled `buildCastResolver`/`retireCharacterId`/etc. from
+      `server/dist/**` rather than re-implementing them.
+- [ ] No Castwright server reachable on the configured probe port(s) — default
+      `8080` and the LAN HTTPS `8443`. `--apply` refuses outright otherwise
+      (it writes out-of-process; no in-process lock covers the write).
+- [ ] The real workspace is present and untouched since the last dry run.
+- [ ] SHA and a clean tree recorded below.
+
+SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+
+### 8.4 Confirm the safety rail against a real server first
+
+1. Start `cd server && npm run dev` (or `npm start`) against the real
+   workspace.
+2. Run `node scripts/repair-cast-id-drift.mjs --apply`.
+
+Expected: refuses immediately, naming the reachable port(s), exit code 1, no
+`cast-id-history.json` written anywhere (confirm via a workspace-wide file
+search before and after).
+
+Result: _______________________________________________________________
+
+3. Stop the server before continuing.
+
+### 8.5 Run `--apply`
+
+4. Run `node scripts/repair-cast-id-drift.mjs --apply` against the real
+   workspace, with the same `WORKSPACE_DIR`/`CACHE_DIR` as every prior dry
+   run.
+
+Expected console output: `mode: APPLY (writing cast-id-history.json)`,
+`auto-recordable aliases: 3 (27 segment(s))`, matching the dry-run numbers in
+§8.1 exactly (a diverging number here means the workspace changed since the
+last dry run — stop and re-measure before trusting anything below).
+
+Result (console summary matches §8.1): ______________
+
+### 8.6 After `--apply` — confirm what was and wasn't written
+
+5. Read `.audiobook/cast-id-history.json` for *Заказ Коалфолла*.
+
+Result (`supersededBy` contains `mayrin: "mairin"` and
+`coalfall: "coalfall-dragon"`): ______________
+
+6. Read `.audiobook/cast-id-history.json` for *Everblaze*.
+
+Result (`supersededBy` contains `"lady-alina": "dame-alina"`): ______________
+
+7. Search the whole workspace for `cast-id-history.json`. Expected: **exactly
+   two** files — the two above. No other book gained one.
+
+Result (file count and locations): ______________
+
+8. Diff every book's `cast.json` against its pre-run state (mtime, then
+   content). Expected: byte-unchanged everywhere — the pass never touches
+   `cast.json`.
+
+Result: ______________
+
+9. Re-run the script in **dry-run** mode (no `--apply`) immediately after.
+   Expected: the three now-recorded aliases no longer appear in the
+   auto-record list (already resolved through history), and the 93
+   report-only ids are unchanged from §8.1 — proving the write was durable,
+   not merely printed once.
+
+Result: ______________
+
+### 8.7 Confirm the fix reaches actual audio
+
+10. Re-render *Заказ Коалфолла* chapter 2 (the chapter carrying the
+    `mayrin`/`coalfall` orphaned segments — see §7.2's evidence).
+11. Read the fresh `segments.json`.
+
+Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
+now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
+
+Result: ______________
+
+12. **Listen.** Confirm both characters' lines are audibly distinct from the
+    narrator, not merely a different id in the JSON.
+
+Result (by ear): ______________
+
+### 8.8 Cast-screen banner cross-check
+
+13. Open the Cast screen for *Заказ Коалфолла* and *Everblaze*.
+
+Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
+Коалфолла) and `lady-alina` (Everblaze). The needs-your-decision section
+still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
+negative control (a reserved-bucket source must still refuse to auto-record).
+
+Result: ______________
+
+### 8.9 Outcome
+
+- [ ] §§8.4-8.8 run
+- [ ] Defects filed: ____________________________________
+
+Record what was observed, by whom, and when — here and in register row A33.
+This is the first time the repair pass has ever written to the real
+workspace; if anything here diverges from the dry-run numbers in §8.1, stop
+and investigate before treating the run as clean — do not paper over a
+discrepancy by re-running until the numbers happen to match.

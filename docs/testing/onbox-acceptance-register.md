@@ -100,7 +100,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**50 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**51 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1372,6 +1372,83 @@ re-rendering). *Criteria:* the run sheet
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md).
 *Cost:* short — two single-chapter re-renders on an already-imported,
 already-analysed book.
+
+---
+
+### A33 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
+
+Wave 1 (A32) and Wave 2 (B3) are proven or pending against a single already-drifted
+chapter/book each. Wave 3's `scripts/repair-cast-id-drift.mjs` is the pass meant
+to sweep the **whole** 20-book workspace at once, and **has never been run with
+`--apply`** — every number below comes from its dry-run mode, which writes
+nothing. No automated test can substitute for the real run: the pure helpers
+(candidate ranking, ambiguity/reserved-source guards, the re-render list shape)
+are unit-tested against synthetic fixtures, and the liveness probe was verified
+live against dummy listeners (see `task-18-report.md`) — but nothing has ever
+exercised the actual `--apply` write path against the real
+`C:\AudiobookWorkspace\books` tree.
+
+**Dry-run result (most recent guard fixes applied, confirmed no drift since):**
+
+- **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
+  and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
+  `lady-alina` → `dame-alina` (6 segments) in *Everblaze*. Each is an
+  unambiguous, non-reserved exact name or id match with real rendered damage
+  behind it.
+- **93 ids reported for a human decision, 93 segments** — includes the three
+  reserved fold-bucket rows a pre-review-round-1 version of the script would
+  have wrongly auto-recorded: *Exile*'s `unknown-male` (21 segments, spanning
+  chapters 7/33/60 — the analysis cache separately names that bucket Timkin,
+  Brant, Dwarf, Rex **and** Lord Cassius across the book) and `unknown-female`
+  (14 segments), plus *Unlocked*'s `unknown-male` (34 segments). The remaining
+  24 (`pool-player-2` 6, `sir-harding` 1, `silveny` 17) have no usable name
+  signal anywhere in the cache or a `cast.json.bak.*`.
+- **17 re-render rows, 120 segments** — unconditional on auto-record status;
+  writing an alias fixes metadata attribution, not the audio bytes already on
+  disk.
+- **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
+  a workspace-wide file search before and after every dry run.
+
+- Stop any real server bound to the configured probe port(s) (default `8080`
+  and the LAN HTTPS `8443`) — `--apply` refuses outright while either answers,
+  since the write is out-of-process and no in-process lock covers it. Confirm
+  the refusal fires first, against the *real* dev server (not only a dummy
+  listener): start `cd server && npm run dev`, run `--apply`, confirm it exits
+  1 naming the reachable port and writes nothing, then stop the server.
+- Run `cd server && npm run build`, then
+  `node scripts/repair-cast-id-drift.mjs --apply` against the real workspace
+  with the same `WORKSPACE_DIR`/`CACHE_DIR` as every prior dry run.
+- Confirm `.audiobook/cast-id-history.json` now exists for *Заказ Коалфолла*
+  with `supersededBy` containing `mayrin: "mairin"` and
+  `coalfall: "coalfall-dragon"`, and for *Everblaze* with `supersededBy`
+  containing `"lady-alina": "dame-alina"` — and that **no other book** in the
+  workspace gained a `cast-id-history.json` file.
+- Confirm every book's `cast.json` is byte-unchanged (mtime + diff) — the pass
+  writes only the history side-table, never the cast itself.
+- Re-run the script in dry-run mode immediately after. Confirm the three
+  now-recorded aliases no longer appear in the auto-record list (already
+  resolved through the history) and the 93 report-only ids are unchanged —
+  proving the write was durable, not merely printed once.
+- Re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall` orphaned
+  chapter) and confirm the same shape A32 pins: the fresh `segments.json`
+  gains `characterSnapshots` entries for `mayrin`/`coalfall` naming Мэйрин's
+  and Коалфолл's own live voices, not the narrator — **listen** to confirm
+  audibly, not only from the JSON.
+- Cross-check the Cast screen for both affected books: the auto-reconciled
+  section now names `mayrin`/`coalfall`/`lady-alina`; the needs-your-decision
+  section still names the 93 remaining ids untouched by this run (spot-check
+  `unknown-male` in *Exile* as the negative control — a reserved-bucket source
+  must still refuse to auto-record, unchanged).
+
+*Needs:* no GPU or TTS engine — the pass itself only reads the analysis cache
+and any `cast.json.bak.*` files and writes `cast-id-history.json`. Needs the
+real 20-book workspace, a completed `server` build, and the ability to stop any
+locally-running Castwright server for the duration of the `--apply` call.
+Re-rendering the confirmation chapter needs the 8 GB card + Qwen resident, same
+as A32. *Criteria:* the run sheet
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §8
+(Wave 3). *Cost:* short — one script invocation against an already-imported,
+already-analysed workspace, then one chapter re-render.
 
 ---
 
