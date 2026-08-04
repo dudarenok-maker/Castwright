@@ -1018,17 +1018,36 @@ a stamp either: the "auto-reconciled" list would be empty by construction
 - Create: `scripts/repair-cast-id-drift.mjs`
 - Create: `scripts/tests/repair-cast-id-drift.test.mjs`
 
-- [ ] **Step 1: Write failing unit tests for the pure helpers** — candidate ranking (using `characterSnapshots`' `tone`/`gender`/`ageRange` and any `cast.json.bak.*` naming), and the re-render list's shape.
-- [ ] **Step 2: Run, confirm they fail.**
-- [ ] **Step 3: Implement,** with these behaviours, all of which are requirements rather than suggestions:
+- [x] **Step 1: Write failing unit tests for the pure helpers** — candidate ranking (using `characterSnapshots`' `tone`/`gender`/`ageRange` and any `cast.json.bak.*` naming), and the re-render list's shape.
+- [x] **Step 2: Run, confirm they fail.**
+- [x] **Step 3: Implement,** with these behaviours, all of which are requirements rather than suggestions:
   - **dry-run by default**; `--apply` to write;
   - **refuses `--apply` if a server is reachable** on the configured port — it writes `cast-id-history.json` out-of-process, which no in-process lock covers (spec §10);
   - writes `cast-id-history.json.bak.id-drift-<date>` before any change (the pass writes `cast-id-history.json`, never `cast.json` — spec §4.7);
   - auto-records only Tier A / Tier B matches; reports everything else;
   - emits the re-render list (book, chapter, id, segment count, approximate duration).
-- [ ] **Step 4: Run `npm run test:hooks` → green** (NOT `npm run test:scripts` — that only runs Pester `.Tests.ps1` files and never executes a `.test.mjs`; `test:hooks` is `scripts/run-hooks-tests.mjs`, the actual runner for `scripts/tests/*.test.mjs`, and is wired into `test:fast`/`test:all`/`verify:fast:branch`).
-- [ ] **Step 5: Run the script in DRY-RUN against the real workspace.** Expected: it proposes aliases for the drifted ids and reports the 24 unattributed segments (`silveny` 17, `lady-alina` 6, `sir-harding` 1) as needing a decision. **Do not pass `--apply` without the repo owner's explicit go-ahead** — it mutates real books.
-- [ ] **Step 6: Commit** — `chore(scripts): add the cast id-drift repair pass`
+  - **Review round 1 (two Criticals) added three more auto-record guards** on
+    top of the two tiers: a reserved fold-bucket/narrator id is never
+    auto-recorded as a SOURCE regardless of evidence (plan 122's own
+    invariant — a bucket is a shared many-to-one slot, not a renamed
+    character); an ambiguous source (cache or `cast.json.bak.*` naming an id
+    more than one thing) vetoes an auto-record from EITHER source for that
+    id; and a match against an id with zero rendered segments is report-only
+    (this pass repairs on-disk damage, it does not mint pre-emptive
+    cache-only guesses). See `task-18-report.md`'s round-1 addendum for the
+    full account.
+- [x] **Step 4: Run `npm run test:hooks` → green** (NOT `npm run test:scripts` — that only runs Pester `.Tests.ps1` files and never executes a `.test.mjs`; `test:hooks` is `scripts/run-hooks-tests.mjs`, the actual runner for `scripts/tests/*.test.mjs`, and is wired into `test:fast`/`test:all`/`verify:fast:branch`).
+- [x] **Step 5: Run the script in DRY-RUN against the real workspace.** Actual
+  (post round-1 fixes): it auto-records 3 aliases with real rendered damage
+  (`mayrin`→`mairin` 8 segments, `coalfall`→`coalfall-dragon` 13, `lady-alina`→`dame-alina`
+  6 — the last one contradicts this step's original expectation that
+  `lady-alina` was "unattributed": it has a real, unambiguous name match in
+  Everblaze's `chapterCast`, see the report) and reports everything else,
+  including the three reserved fold-bucket ids (`unknown-male`×2,
+  `unknown-female`) that the pre-round-1 version had wrongly auto-recorded.
+  **Do not pass `--apply` without the repo owner's explicit go-ahead** — it
+  mutates real books.
+- [x] **Step 6: Commit** — `chore(scripts): add the cast id-drift repair pass`
 
 ### Task 19: documentation and the shipping checklist
 
