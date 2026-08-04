@@ -150,11 +150,10 @@ export async function persistEmotionVariant(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return;
-  const baseVoiceId = qwenStorageKey(character, characterId);
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
-  const addVariant = (c: CastCharacter): CastCharacter => {
+  const addVariant = (c: CastCharacter, baseVoiceId: string): CastCharacter => {
     const map = { ...(c.overrideTtsVoices ?? {}) };
     const qwen = map.qwen ?? { name: baseVoiceId };
     map.qwen = {
@@ -167,15 +166,31 @@ export async function persistEmotionVariant(
 
   if (seriesFilter) {
     /* Linked-cast propagation across the series (matches on the linked
-       identity `voiceId ?? id`, the same key applyOverrideToCastFiles uses). */
-    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, addVariant);
+       identity `voiceId ?? id`, the same key applyOverrideToCastFiles uses).
+       forEachMatchingCastCharacter takes its own per-book cast lock as it
+       walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
+       unlocked and delegating; it must not gain a lock of its own. */
+    const baseVoiceId = qwenStorageKey(character, characterId);
+    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
+      addVariant(c, baseVoiceId),
+    );
     return;
   }
 
-  /* No series context — book-scoped write. */
-  const idx = cast.characters.findIndex((c) => c.id === characterId);
-  cast.characters[idx] = addVariant(character);
-  await writeJsonAtomic(castJsonPath(bookDir), cast);
+  /* Book-scoped write — this function carries no other lock, so the read
+     above is an early-out optimisation only: a concurrent book-scoped writer
+     can land between it and the write below. Re-read and re-decide inside
+     the cast lock, including `baseVoiceId` (the default slot name), which
+     must come from the FRESH character, not the one captured above. */
+  await withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) return;
+    const freshCharacter = fresh.characters[idx];
+    const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
+    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+  });
 }
 
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
@@ -197,24 +212,41 @@ export async function ensureCharacterVoiceUuid(
     if (!cast || !character) return undefined;
     if (character.voiceUuid) return character.voiceUuid;
 
-    const uuid = nanoid();
-    const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
-
     if (seriesFilter) {
+      /* forEachMatchingCastCharacter takes its own per-book cast lock as it
+         walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
+         unlocked and delegating; it must not gain a lock of its own. */
+      const uuid = nanoid();
+      const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
       await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, stamp);
       return uuid;
     }
-    /* Book-scoped — stamp every character in THIS book sharing the linked id. */
-    const linkId = character.voiceId ?? character.id;
-    let dirty = false;
-    for (let i = 0; i < cast.characters.length; i++) {
-      if ((cast.characters[i].voiceId ?? cast.characters[i].id) === linkId) {
-        cast.characters[i] = stamp(cast.characters[i]);
-        dirty = true;
+
+    /* Book-scoped — the design lock above serialises only against OTHER
+       design-lock holders (e.g. another design on this book), not against a
+       non-design cast.json writer (e.g. cast-aliases), so the read above is
+       an early-out optimisation only. Re-read and re-decide inside the cast
+       lock: re-check `voiceUuid` (another concurrent mint may have landed)
+       and re-derive the linked-sibling set from a FRESH cast, not the one
+       captured above. */
+    return withCastLock(bookDir, async () => {
+      const freshCast = await readJson<CastFile>(castJsonPath(bookDir));
+      const freshChar = freshCast?.characters?.find((c) => c.id === characterId);
+      if (!freshCast || !freshChar) return undefined;
+      if (freshChar.voiceUuid) return freshChar.voiceUuid;
+
+      const uuid = nanoid();
+      const linkId = freshChar.voiceId ?? freshChar.id;
+      let dirty = false;
+      for (let i = 0; i < freshCast.characters.length; i++) {
+        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+          freshCast.characters[i] = { ...freshCast.characters[i], voiceUuid: uuid };
+          dirty = true;
+        }
       }
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), cast);
-    return uuid;
+      if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
+      return uuid;
+    });
   });
 }
 

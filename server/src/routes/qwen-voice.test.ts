@@ -1111,6 +1111,107 @@ describe('#1981 — promote-voice races /assign for a different character', () =
   });
 });
 
+describe('#1981 — ensureCharacterVoiceUuid races a non-design cast writer', () => {
+  /* ensureCharacterVoiceUuid's whole book-scoped body sits inside
+     `withDesignLock(bookDir)`, which serialises it only against OTHER
+     design-lock holders (other designs on this book). It does nothing
+     against a writer that never takes the design lock at all — cast-aliases'
+     add-alias, which takes only the cast lock. Before this task's fix, the
+     uuid mint reads cast.json once (no cast lock), so a concurrent add-alias
+     that lands between that read and the eventual write is silently
+     clobbered when the mint's own writeJsonAtomic replays the stale
+     snapshot. Race it directly (not via HTTP) against the real add-alias
+     route on the SAME book, a DIFFERENT character, so the two writes don't
+     collide on which character index changes — only on whether the whole
+     file survives intact. */
+  let mounted = false;
+
+  beforeAll(async () => {
+    const { castAliasesRouter } = await import('./cast-aliases.js');
+    if (!mounted) {
+      app.use('/api/books', castAliasesRouter);
+      mounted = true;
+    }
+  });
+
+  it('#1981 — an add-alias write on a different character survives a concurrent voiceUuid mint on this book', async () => {
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+
+    const { ensureCharacterVoiceUuid: ensureFn } = await import('./qwen-voice.js');
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(bookDir);
+
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is the outer early-out read (lets it through — it's the
+         optimisation, not the write's basis). Call #2 is the fresh,
+         in-lock read the mint's own write is based on — hold it open so
+         add-alias gets a real chance to run underneath. Any later call
+         (add-alias's own read) passes straight through. */
+      if (callsForCastPath === 2) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before add-alias's write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let uuidPromise: Promise<string | undefined> | undefined;
+    let aliasPromise: request.Test | undefined;
+    let aliasRes: request.Response;
+    try {
+      uuidPromise = ensureFn(bookDir, 'nopersona');
+      uuidPromise.catch(() => {});
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      aliasPromise = request(app)
+        .post(`/api/books/${bookId}/cast/add-alias`)
+        .send({ characterId: 'maerin', aliasName: 'The Wanderer' });
+      aliasPromise.catch(() => {});
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [, aliasRes] = await Promise.all([uuidPromise, aliasPromise]);
+    } finally {
+      // Idempotent — also fires here so a throw ANYWHERE above still releases
+      // a held `readJson` rather than leaving it stuck on `await gate` forever.
+      released();
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while the mint is
+      // still running against fixtures `afterAll` is about to delete.
+      await Promise.allSettled([uuidPromise, aliasPromise]);
+    }
+
+    expect(aliasRes.status).toBe(200);
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    /* add-alias's own mutation survived — the lost-update this test pins. */
+    expect(maerin.aliases).toContain('The Wanderer');
+  });
+});
+
 describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (fs-34)', () => {
   const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 
@@ -1339,6 +1440,86 @@ describe('persistEmotionVariant', () => {
     const cast = JSON.parse(await readFile(join(bookDirFresh, '.audiobook', 'cast.json'), 'utf8'));
     expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe(expectedBaseName);
     expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({ name: variantVoiceId });
+  });
+
+  it('#1981 — two concurrent variant writes for the same character both survive (no design lock covers this path)', async () => {
+    /* Unlike ensureCharacterVoiceUuid, persistEmotionVariant carries NO design
+       lock at all — so the ordinary self-vs-self shape is a valid race here:
+       two concurrent book-scoped calls for the SAME character (different
+       emotions) is a classic read-modify-write collision if neither takes the
+       cast lock. Script the interleaving: hold the FIRST call's read open
+       until the second call's write has landed, then release — pre-fix, the
+       first call's writeJsonAtomic replays a stale snapshot (no 'sad' slot);
+       post-fix its cast-lock body re-reads fresh and merges both. */
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(bookDir);
+
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is 'angry''s outer early-out read (lets it through — it's
+         the optimisation, not the write's basis). Call #2 is 'angry''s
+         fresh, in-lock read the write is based on — hold it open so 'sad'
+         gets a real chance to run underneath. Any later call ('sad''s own
+         read) passes straight through. */
+      if (callsForCastPath === 2) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before 'sad''s write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let angryPromise: Promise<void> | undefined;
+    let sadPromise: Promise<void> | undefined;
+    try {
+      angryPromise = persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+      angryPromise.catch(() => {});
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      sadPromise = persistEmotionVariantFn(bookDir, 'wren', 'sad', 'qwen-wren__sad');
+      sadPromise.catch(() => {});
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      await Promise.all([angryPromise, sadPromise]);
+    } finally {
+      // Idempotent — also fires here so a throw ANYWHERE above still releases
+      // a held `readJson` rather than leaving it stuck on `await gate` forever.
+      released();
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while a write is
+      // still running against the fixture `afterEach` is about to delete.
+      await Promise.allSettled([angryPromise, sadPromise]);
+    }
+
+    const { readFile } = await import('node:fs/promises');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    const variants = cast.characters[0].overrideTtsVoices.qwen.variants;
+    /* Both writers' own mutations survived — the lost-update this test pins. */
+    expect(variants.angry).toEqual({ name: 'qwen-wren__angry' });
+    expect(variants.sad).toEqual({ name: 'qwen-wren__sad' });
   });
 });
 
