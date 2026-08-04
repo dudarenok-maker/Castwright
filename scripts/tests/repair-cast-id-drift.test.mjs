@@ -11,6 +11,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import {
   parseArgs,
   formatDuration,
@@ -21,6 +25,12 @@ import {
   rankSnapshotCandidates,
   planBookRepairs,
   buildRerenderRows,
+  shouldRefuseApplyForMissingCache,
+  formatReportRowSummary,
+  readAnalysisCache,
+  isCacheAvailable,
+  probePortRangeRefused,
+  buildOrphansFromSegments,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -391,7 +401,7 @@ describe('planBookRepairs', () => {
   test('Tier A auto-record via an unambiguous cache name, when the id has real rendered damage', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 1);
     assert.equal(plan.autoRecord[0].id, 'mayrin');
     assert.equal(plan.autoRecord[0].to, 'mairin');
@@ -404,7 +414,7 @@ describe('planBookRepairs', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'old-timkin-alias', name: 'Someone Else' }], lc);
     const bakNameIndex = buildNameIndex([{ id: 'old-timkin-alias', name: 'Timkin' }], lc);
     const orphans = new Map([['old-timkin-alias', renderedOrphan(5)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex, orphans }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex, orphans, cacheAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 1);
     assert.equal(plan.autoRecord[0].to, 'timkin');
     assert.match(plan.autoRecord[0].evidence, /cast\.json\.bak/);
@@ -482,7 +492,7 @@ describe('planBookRepairs', () => {
         },
       ],
     ]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.reportOnly.length, 1);
     assert.match(plan.reportOnly[0].reason, /disagree across chapters/);
@@ -546,12 +556,30 @@ describe('planBookRepairs', () => {
     assert.ok(!plan.autoRecord.some((a) => a.to === 'narrator'));
   });
 
+  test('RESIDUAL 4 (#2093): a Tier A match onto a case/separator-drifted reserved TARGET id is refused (target-side check normalises too)', () => {
+    // A live cast row whose id drifted to a case/separator variant of the
+    // reserved male fold-bucket id ('Unknown_Male' vs canonical
+    // 'unknown-male') — the mirror-side drift class of the MINOR (round 2)
+    // test above, which only covered the SOURCE-side check. Before this
+    // fix, the target-side guard was a raw `reservedIds.has(tierAMatch)`,
+    // which would MISS this spelling and wrongly auto-record onto it.
+    const driftedLiveCast = [...liveCast, { id: 'Unknown_Male', name: 'Bucket' }];
+    const cacheNameIndex = buildNameIndex([{ id: 'weird-alias-2', name: 'Bucket' }], lc);
+    const orphans = new Map([['weird-alias-2', renderedOrphan(3)]]);
+    const plan = planBookRepairs(
+      { liveCast: driftedLiveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.ok(!plan.autoRecord.some((a) => a.to === 'Unknown_Male'));
+  });
+
   test('IMPORTANT 2 (inverted): a Tier B id-shape match on a cache-only orphan (zero rendered segments) is report-only, never auto-recorded', () => {
     // 'TIMKIN' normalises (case-fold) to the same key as live 'timkin' —
     // purely an id-shape match, no name signal anywhere. Used to
     // auto-record; round 1 scoped auto-record to actual on-disk damage.
     const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans: new Map([['TIMKIN', { segments: 0, chapters: [], snapshots: [] }]]) },
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans: new Map([['TIMKIN', { segments: 0, chapters: [], snapshots: [] }]]), cacheAvailable: true },
       deps,
     );
     assert.equal(plan.autoRecord.length, 0);
@@ -563,7 +591,7 @@ describe('planBookRepairs', () => {
   test('IMPORTANT 2: a Tier A NAME match on a cache-only orphan (zero rendered segments) is also report-only', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'never-rendered-guy', name: 'Timkin' }], lc);
     // No entry in `orphans` at all -> falls back to segments: 0 inside planBookRepairs.
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map() }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), cacheAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.reportOnly.length, 1);
     assert.equal(plan.reportOnly[0].id, 'never-rendered-guy');
@@ -583,7 +611,7 @@ describe('planBookRepairs', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'The_Torment', name: 'Timkin' }], lc);
     const autoReconciled = new Map([['The_Torment', { segments: 9, resolvedTo: 'timkin' }]]);
     const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled },
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled, cacheAvailable: true },
       deps,
     );
     assert.equal(plan.autoRecord.length, 0);
@@ -597,7 +625,7 @@ describe('planBookRepairs', () => {
   test('MINOR (round 2, finding 4): a genuinely never-rendered id (absent from BOTH orphans and autoReconciled) still gets the original "zero rendered segments" reason', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'never-rendered-guy', name: 'Timkin' }], lc);
     const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled: new Map() },
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled: new Map(), cacheAvailable: true },
       deps,
     );
     assert.equal(plan.reportOnly[0].segments, 0);
@@ -624,13 +652,23 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /analysis-cache file was not found/);
   });
 
-  test('IMPORTANT (round 2, finding 1): cacheAvailable defaults to true when omitted, so every pre-existing auto-record test above is unaffected', () => {
+  test('RESIDUAL 3 (#2093, inverted): cacheAvailable now defaults to FALSE when omitted — the safe default for an otherwise fail-closed guard', () => {
+    // This test used to assert the OPPOSITE — that an omitted `cacheAvailable`
+    // defaults to `true` and lets an otherwise-clean auto-record through.
+    // #2093 residual 3 flipped the default: an omitted flag now reads as
+    // "unknown, refuse" (matching guard 1/2's own posture), not "confirmed
+    // available". The one production caller (main()) always passes it
+    // explicitly, so this default is a safety net for any future caller
+    // that forgets to — inverted per the review's explicit instruction, not
+    // deleted.
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
     // `input` deliberately omits `cacheAvailable` entirely.
     const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans }, deps);
-    assert.equal(plan.autoRecord.length, 1);
-    assert.equal(plan.autoRecord[0].id, 'mayrin');
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'mayrin');
+    assert.match(plan.reportOnly[0].reason, /analysis-cache file was not found/);
   });
 
   test('no name and no id-shape match -> reported with ranked snapshot candidates', () => {
@@ -700,5 +738,206 @@ describe('buildRerenderRows', () => {
     const rows = buildRerenderRows('Exile', orphans);
     assert.equal(rows.length, 3);
     assert.deepEqual(rows.map((r) => r.chapterId), [7, 33, 60]);
+  });
+});
+
+describe('shouldRefuseApplyForMissingCache (#2093 residual 2)', () => {
+  test('dry run never refuses, whatever booksMissingCache is', () => {
+    assert.equal(shouldRefuseApplyForMissingCache(false, 0), false);
+    assert.equal(shouldRefuseApplyForMissingCache(false, 5), false);
+  });
+
+  test('--apply with 0 books missing cache does not refuse', () => {
+    assert.equal(shouldRefuseApplyForMissingCache(true, 0), false);
+  });
+
+  test('--apply with >=1 book missing cache refuses', () => {
+    assert.equal(shouldRefuseApplyForMissingCache(true, 1), true);
+    assert.equal(shouldRefuseApplyForMissingCache(true, 20), true);
+  });
+});
+
+describe('formatReportRowSummary (#2093 residual 5, cosmetic)', () => {
+  test('normal report row includes the chapter count', () => {
+    assert.equal(
+      formatReportRowSummary({ id: 'silveny', segments: 17, chapters: [{ chapterId: 50 }] }),
+      'silveny (17 segment(s) across 1 chapter(s))',
+    );
+  });
+
+  test('an auto-reconciled report row (real segments, no chapter breakdown) omits the self-contradicting "0 chapter(s)"', () => {
+    // This is exactly the shape planBookRepairs's autoReconciled branch
+    // pushes: real rendered segments, but `chapters: []` because no
+    // per-chapter breakdown is tracked for that tier. The OLD unconditional
+    // suffix printed "the-torment (67 segment(s) across 0 chapter(s))" —
+    // self-contradicting, since a real segment count can never span zero
+    // chapters.
+    assert.equal(formatReportRowSummary({ id: 'the-torment', segments: 67, chapters: [] }), 'the-torment (67 segment(s))');
+  });
+
+  test('zero segments and zero chapters (a genuinely never-rendered id) also omits the chapter clause', () => {
+    assert.equal(formatReportRowSummary({ id: 'never-rendered-guy', segments: 0, chapters: [] }), 'never-rendered-guy (0 segment(s))');
+  });
+});
+
+describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
+  function withTempCacheDir(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-cache-'));
+    try {
+      return fn(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('missing manuscriptId -> null / unavailable', () => {
+    withTempCacheDir((dir) => {
+      assert.equal(readAnalysisCache(dir, undefined), null);
+      assert.equal(isCacheAvailable(dir, undefined), false);
+    });
+  });
+
+  test('no file at that path -> null / unavailable', () => {
+    withTempCacheDir((dir) => {
+      assert.equal(readAnalysisCache(dir, 'nonexistent-book'), null);
+      assert.equal(isCacheAvailable(dir, 'nonexistent-book'), false);
+    });
+  });
+
+  test('a valid cache file -> parses / available', () => {
+    withTempCacheDir((dir) => {
+      fs.writeFileSync(path.join(dir, 'good-book.json'), JSON.stringify({ stage1: { characters: [] } }));
+      assert.deepEqual(readAnalysisCache(dir, 'good-book'), { stage1: { characters: [] } });
+      assert.equal(isCacheAvailable(dir, 'good-book'), true);
+    });
+  });
+
+  test('CRITICAL (#2093 residual 1): a present-but-corrupt (truncated/invalid-JSON) cache file reads as unavailable, NOT as available', () => {
+    // This is the exact regression the fix closes: the OLD gate
+    // (`analysisCacheFileExists`) checked path existence only, so a
+    // present-but-corrupt file would have read `cacheAvailable === true`
+    // even though `readAnalysisCache` already swallowed the parse failure
+    // to `null` — an empty `cacheNameIndex` built from that `null` then
+    // looked "confirmed unambiguous" to the cross-source ambiguity veto
+    // instead of "unknown". Deliberately writes genuinely truncated JSON
+    // (an unterminated object), not merely empty content, to prove this is
+    // a real parse-failure path, not a vacuous check.
+    withTempCacheDir((dir) => {
+      const p = path.join(dir, 'corrupt-book.json');
+      fs.writeFileSync(p, '{ "stage1": { "characters": [ { "id": "mayrin", "name": "Мэйрин"');
+      // The file DOES exist on disk...
+      assert.equal(fs.existsSync(p), true);
+      // ...but the pass must refuse to trust it.
+      assert.equal(readAnalysisCache(dir, 'corrupt-book'), null);
+      assert.equal(isCacheAvailable(dir, 'corrupt-book'), false);
+    });
+  });
+});
+
+describe('probePortRangeRefused (#2090)', () => {
+  function listenOnEphemeralPort() {
+    return new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve(server));
+    });
+  }
+
+  test('every port in the range gives a clean ECONNREFUSED when nothing is listening', async () => {
+    // A high, unusual base port to minimise the chance anything on a CI/dev
+    // box happens to be listening in this 20-port window.
+    const notRefused = await probePortRangeRefused(48213, '127.0.0.1');
+    assert.deepEqual(notRefused, []);
+  });
+
+  test('CRITICAL (#2090): refuses when a server occupies a port INSIDE the auto-rebind range but NOT the exact configured port', async () => {
+    // Simulates the exact #2090 scenario: a listenWithAutoRebind server
+    // rebound off the configured port onto configuredPort+N after an
+    // EADDRINUSE. A probe that only checked the exact configured port would
+    // see ECONNREFUSED there and wrongly conclude "safe" — the widened
+    // range probe must still catch the live server sitting inside the
+    // rebind window.
+    const server = await listenOnEphemeralPort();
+    try {
+      const boundPort = server.address().port;
+      const configuredPort = boundPort - 5; // pretend this was the configured port
+      const notRefused = await probePortRangeRefused(configuredPort, '127.0.0.1');
+      assert.ok(notRefused.includes(boundPort), `expected ${boundPort} to be in ${JSON.stringify(notRefused)}`);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
+describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-reconciled map)', () => {
+  const seg = (chapterId, chapterTitle, segments, characterSnapshots) => ({ chapterId, chapterTitle, segments, characterSnapshots });
+
+  test('an id the resolver misses entirely becomes an orphan carrying segment count, per-chapter breakdown, duration, and snapshots', () => {
+    const resolver = { resolve: () => undefined };
+    const segs = [
+      seg(
+        1,
+        'One',
+        [
+          { characterId: 'ghost', startSec: 0, endSec: 2 },
+          { characterId: 'ghost', startSec: 2, endSec: 5 },
+        ],
+        { ghost: { gender: 'male' } },
+      ),
+    ];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(autoReconciled.size, 0);
+    const entry = orphans.get('ghost');
+    assert.equal(entry.segments, 2);
+    assert.equal(entry.chapters.length, 1);
+    assert.equal(entry.chapters[0].segments, 2);
+    assert.ok(Math.abs(entry.chapters[0].durationSec - 5) < 1e-9);
+    assert.deepEqual(entry.snapshots, [{ gender: 'male' }]);
+  });
+
+  test("an id resolving via 'normalised-id' is counted in autoReconciled, never reaches orphans", () => {
+    const resolver = { resolve: (id) => (id === 'drifted' ? { character: { id: 'live' }, via: 'normalised-id' } : undefined) };
+    const segs = [seg(1, 'One', [{ characterId: 'drifted' }, { characterId: 'drifted' }])];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.size, 0);
+    assert.deepEqual(autoReconciled.get('drifted'), { segments: 2, resolvedTo: 'live' });
+  });
+
+  test("RESIDUAL 5 (#2093): an id resolving via 'normalised-history' is ALSO counted in autoReconciled — used to be dropped as a phantom orphan", () => {
+    // Before this fix, only 'normalised-id' was counted here — an id that
+    // resolves purely through a RECORDED alias's own normalised spelling
+    // (cast-resolve.ts's 'normalised-history' tier) fell through to
+    // planBookRepairs's `orphans.get(id) ?? { segments: 0, ... }` and got
+    // the misleading "zero rendered segments — no damage to repair" reason
+    // instead of "already auto-reconciles" — the same
+    // contradicts-the-Cast-banner shape round-2 review already fixed once
+    // for the id-shape tier, reopened here for the alias tier.
+    const resolver = { resolve: (id) => (id === 'old-alias' ? { character: { id: 'live' }, via: 'normalised-history' } : undefined) };
+    const segs = [seg(1, 'One', [{ characterId: 'old-alias' }, { characterId: 'old-alias' }, { characterId: 'old-alias' }])];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.size, 0);
+    assert.deepEqual(autoReconciled.get('old-alias'), { segments: 3, resolvedTo: 'live' });
+  });
+
+  test("an id resolving via 'exact' or 'history' is neither an orphan nor counted in autoReconciled (already live, nothing to reconcile)", () => {
+    const resolver = {
+      resolve(id) {
+        if (id === 'live-id') return { character: { id: 'live-id' }, via: 'exact' };
+        if (id === 'aliased') return { character: { id: 'live-id' }, via: 'history' };
+        return undefined;
+      },
+    };
+    const segs = [seg(1, 'One', [{ characterId: 'live-id' }, { characterId: 'aliased' }])];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.size, 0);
+    assert.equal(autoReconciled.size, 0);
+  });
+
+  test('non-string characterIds are ignored', () => {
+    const resolver = { resolve: () => undefined };
+    const segs = [seg(1, 'One', [{ characterId: 42 }, { characterId: null }, { characterId: undefined }])];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.size, 0);
+    assert.equal(autoReconciled.size, 0);
   });
 });
