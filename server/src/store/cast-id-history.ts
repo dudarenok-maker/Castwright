@@ -65,12 +65,24 @@ export function castIdHistoryPath(bookDir: string): string {
  *  Task 17) is validated the same way — absent entirely on a file written
  *  before this change, and required to be an array when present, so a
  *  malformed value falls back to the whole-file empty-history default
- *  instead of reaching a caller as a bad shape. */
+ *  instead of reaching a caller as a bad shape.
+ *
+ *  A missing file is the common, expected case (most books never retire an
+ *  id) and returns the empty default silently. A file that EXISTS but is
+ *  unreadable or the wrong shape is different — every caller (including
+ *  `buildCastResolver` at render time, srv-86) silently loses history-based
+ *  protection when this happens, which must not read as "no protection
+ *  needed". That case logs one `console.warn` naming the path and cause, so
+ *  the degraded-protection state is operator-visible instead of silent. */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
+  const path = castIdHistoryPath(bookDir);
   try {
-    const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir));
+    const raw = await readJson<CastIdHistory>(path);
+    if (raw === null) {
+      // No file on disk — nothing has ever been retired for this book.
+      return { schema: 1, supersededBy: {} };
+    }
     if (
-      raw &&
       typeof raw === 'object' &&
       !Array.isArray(raw) &&
       raw.schema === 1 &&
@@ -85,8 +97,13 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
     ) {
       return raw;
     }
-  } catch {
-    // Malformed JSON or other read error — return empty
+    console.warn(
+      `[cast-id-history] ${path} exists but has an unexpected shape — id-history protection disabled until it is fixed or removed.`,
+    );
+  } catch (err) {
+    console.warn(
+      `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — id-history protection disabled until it is fixed or removed.`,
+    );
   }
   return { schema: 1, supersededBy: {} };
 }

@@ -5,7 +5,7 @@
 
    No auth/CSRF middleware in the test harness — mirrors cast-add-from-roster.test.ts. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -69,8 +69,9 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castCreateRouter }, { makeBookId }] = await Promise.all([
+  const [{ castCreateRouter }, { castMergeRouter }, { makeBookId }] = await Promise.all([
     import('./cast-create.js'),
+    import('./cast-merge.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK_WITH_CAST);
@@ -79,6 +80,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', castCreateRouter);
+  app.use('/api/books', castMergeRouter);
 });
 
 beforeEach(() => {
@@ -160,5 +162,94 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     const res = await callCreate(bookIdNoCast, { name: 'Ferra' });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no cast/i);
+  });
+});
+
+describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 / #2085)', () => {
+  const historyPath = () =>
+    join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST, '.audiobook', 'cast-id-history.json');
+  const bookDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
+
+  it('does not re-mint an id a merge retired — the merge-then-recreate repro', async () => {
+    // Seed a cast with the two characters the issue's repro merges.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'anton', name: 'Anton', role: 'character', color: 'unset' },
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+
+    // 1. Merge "anton" into "антон" — the real route, so cast-id-history.json
+    //    gets its "anton" -> "антон" entry the same way a user's merge would.
+    const mergeRes = await request(app)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'anton', targetId: 'антон' });
+    expect(mergeRes.status).toBe(200);
+    const historyAfterMerge = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(historyAfterMerge.supersededBy).toEqual({ anton: 'антон' });
+
+    // 2. Create a brand-new character named "Anton" — the exact name whose
+    //    naive mint is the retired id.
+    const createRes = await callCreate(bookId, { name: 'Anton' });
+    expect(createRes.status).toBe(200);
+
+    // The new character must NOT have re-minted "anton" — that id is still
+    // protecting every segment the original Anton rendered (they now
+    // resolve, via history, onto "антон"). Reusing it here would hijack that
+    // protection onto this brand-new, empty character (spec §4.3/§4.4).
+    expect(createRes.body.character.id).not.toBe('anton');
+    expect(createRes.body.character.name).toBe('Anton');
+
+    // The history entry itself must survive untouched — this route avoids
+    // the id rather than dropping the entry (unlike the analyzer paths,
+    // this route controls its own mint and doesn't need to).
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(historyAfterCreate.supersededBy).toEqual({ anton: 'антон' });
+  });
+
+  it('is reported, not silent, when a history-protected id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { anton: 'антон' } }));
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Anton' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('anton');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('avoided re-minting "anton"'))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('mints normally when no cast-id-history.json exists yet (the common case)', async () => {
+    // beforeEach already seeds a book with no history file. Confirm create
+    // proceeds without the history-check crashing or blocking anything.
+    const res = await callCreate(bookId, { name: 'Nobody Retired This' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).toBe('nobody-retired-this');
+  });
+
+  it('does not crash and does not block minting when cast-id-history.json is malformed', async () => {
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), '{not valid json');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Ferra' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).toBe('ferra');
+      // Absent/unreadable history must not silently disable the protection
+      // without a trace — one warning naming the path.
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('cast-id-history.json') && m.includes('unreadable'))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

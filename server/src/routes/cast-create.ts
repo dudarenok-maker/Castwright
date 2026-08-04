@@ -25,6 +25,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId } from '../util/safe-id.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 
 export const castCreateRouter = Router();
 
@@ -59,16 +60,55 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
   }
 
   const existingIds = new Set(cast.characters.map((c) => c.id));
+
+  /* srv-86 (#2040 follow-up) — an id retired by a merge (cast-id-history.json's
+     `supersededBy`) is still actively protecting every segment the retired
+     character rendered: resolution is exact-id-first (spec §4.3), so a LIVE
+     row minted with that exact id always wins over the history redirect,
+     silently, with no tie and no warning. This route mints ids from
+     user-supplied names, so a merge followed by an ordinary re-create (the
+     issue's repro: merge "anton" into "антон", then create a new "Anton")
+     would otherwise re-mint the retired id for a brand-new, unrelated
+     character and hijack the original's recorded audio.
+     Unlike the analyzer paths (`dropSupersededIdsReclaimedByLiveCast`),
+     which don't control the mint — the LLM produces the id, and a fresh
+     roster has legitimately reclaimed it — THIS route does control the
+     mint, and already has a collision-suffix path (below) for live-id
+     collisions. So the fix here is to never mint a history-protected id in
+     the first place, rather than drop the history entry that is actively
+     guarding real rendered segments to hand the id to an empty new
+     character. Treat history keys as additional "taken" ids for exactly
+     that reason. */
+  const history = await loadCastIdHistory(located.bookDir);
+  const historyKeys = new Set(Object.keys(history.supersededBy));
+  const takenIds = new Set([...existingIds, ...historyKeys]);
+
   // safeId's own collision suffix is a hash of the NAME, checked once — a
   // second character sharing a name gets a distinct id, but a third
   // collides with the second (same name -> same hash, and safeId never
   // re-checks its own output). Guarantee uniqueness here regardless of how
-  // many characters share a name.
-  let newId = safeId(name, { taken: existingIds });
-  if (existingIds.has(newId)) {
+  // many characters share a name (or how many retired ids share a name).
+  let newId = safeId(name, { taken: takenIds });
+  if (takenIds.has(newId)) {
     let n = 2;
-    while (existingIds.has(`${newId}-${n}`)) n += 1;
+    while (takenIds.has(`${newId}-${n}`)) n += 1;
     newId = `${newId}-${n}`;
+  }
+
+  /* Report, not silent (issue acceptance) — mirrors the operator-visible
+     log line Wave 2 added around `dropSupersededIdsReclaimedByLiveCast`,
+     though nothing is dropped here: the history entry survives untouched
+     and keeps protecting the retired id's segments. Only the id this NEW
+     character receives differs from what an unprotected mint would have
+     picked. Computed against `existingIds` alone (not `takenIds`) so this
+     reports exactly the case the bug describes: the id a pre-fix mint would
+     have produced collided with a history entry. */
+  const unprotectedId = safeId(name, { taken: existingIds });
+  if (historyKeys.has(unprotectedId) && unprotectedId !== newId) {
+    console.log(
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — cast-id-history ` +
+        `still redirects it to "${history.supersededBy[unprotectedId]}"; minted "${newId}" instead.`,
+    );
   }
 
   const newCharacter: PersistedCharacter = {

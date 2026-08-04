@@ -9,8 +9,8 @@ owner: null
 > Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A32, B3, A33)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
-> `server/src/routes/cast-reject-orphan.ts`, `src/views/cast.tsx`, `src/store/cast-slice.ts`,
-> `scripts/repair-cast-id-drift.mjs`
+> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-create.ts`,
+> `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
 > `POST /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
@@ -105,6 +105,17 @@ owner: null
    (`rankSnapshotCandidates`). Two independent rankers is the exact
    duplicate-matching-logic defect class Task 16's CRITICAL finding came from
    (see "Deviations from the spec").
+8. **`cast-create`'s mint checks `cast-id-history.json` too, not just the live
+   roster** (srv-86, #2085) — `server/src/routes/cast-create.ts` treats every key
+   in `supersededBy` as an additional "taken" id alongside the live cast, so a
+   name whose naive mint collides with a retired id gets the existing collision-
+   suffix path instead. This is the mirror image of invariant 5/the analyzer's
+   `dropSupersededIdsReclaimedByLiveCast`: those paths don't control the mint (an
+   LLM produced the id, and a fresh roster legitimately reclaimed it) so they
+   drop the stale history entry; `cast-create` DOES control the mint, so it avoids
+   the collision instead of sacrificing a history entry that is still protecting
+   real rendered segments. Reported via a `console.log` line when the avoidance
+   fires — no `displaced` entry is written, because nothing is dropped.
 
 ## Deviations from the spec
 
@@ -207,6 +218,12 @@ down, each a deliberate controller ruling made during implementation:
   from a real hydrate-shaped payload; the reject flow round-trips through the
   redux store in a real browser; the reject button stays disabled until a
   candidate is picked.
+- `server/src/routes/cast-create.test.ts` (srv-86, #2085) — the merge-then-
+  recreate repro driven through the real merge and create routes: a re-created
+  character never re-mints an id `cast-id-history.json` still protects, the
+  avoidance is logged, the history entry survives untouched, and the route
+  neither crashes nor silently disables the check when
+  `cast-id-history.json` is absent or malformed (the latter also logs).
 
 ### Manual acceptance walkthrough
 
@@ -266,10 +283,11 @@ redux → rendered DOM, not the server-side aggregation (which has its own
   [#2089](https://github.com/dudarenok-maker/Castwright/issues/2089) (fs-78) —
   rejecting is durable and irreversible today, with no confirm step.
 - **`cast-create` re-minting a merged-away character id** — filed as
-  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) — and
-  **auto-repairing the interim cast.json write path** — filed as
-  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) — both
-  during Wave 2.
+  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) during
+  Wave 2, **now fixed** (invariant 8 above) — kept here only as the historical
+  filing note. **Auto-repairing the interim cast.json write path** — filed as
+  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) —
+  remains out of scope/open.
 - **The repair script's `--apply` liveness probe missing an auto-rebound port** —
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS
