@@ -148,27 +148,56 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   /* Name-fallback for analyzer id drift. The analyzer is non-deterministic about
      a character's id across runs (it relabelled the dragon `coalfall` →
      `coalfall-dragon` between two analyses of the same book). The id-keyed
-     overlay then misses, the fresh row comes up voiceless, AND the dropped
-     voiced row is re-added below as a 0-line orphan — a visible duplicate.
-     Match a voiced existing character whose id the fresh roster DROPPED to a
-     same-name fresh character so its designed voice rides onto the freshly-
-     detected row (which carries the lines + the more descriptive, library-
-     unique id). Guard against ambiguity: a normalised name shared by more than
-     one dropped-voiced existing OR more than one fresh row is left to the
-     id-only path (too risky to guess). */
+     overlay then misses: a voiced dropped row would come back voiceless AND
+     be re-added below as a 0-line orphan — a visible duplicate — while an
+     UNVOICED dropped row would simply vanish with no retirement recorded, so
+     a re-analysis could never resolve its history back to the live row
+     (#2040 Task 12, RC1 — spec §9/§4.4, "the riskiest single change in the
+     design"). Match a dropped existing character to a same-name fresh
+     character so any voice fields it carries ride onto the freshly-detected
+     row (which carries the lines + the more descriptive, library-unique id)
+     and the id is retired either way.
+
+     The precondition that the dropped row be voiced/reused is gone — every
+     dropped row is a candidate now, not just voiced ones — so a selection
+     rule decides which dropped row wins a shared name, PER normalised name,
+     among the rows the fresh roster dropped:
+       - exactly one voiced/reused -> that one is the candidate (today's
+         behaviour, unchanged even when unvoiced siblings share the name —
+         this is what stops the widening from stranding a designed voice as
+         a 0-line duplicate, spec §9's named hazard);
+       - else exactly one row total -> that one is the candidate (the
+         widening's actual benefit: an unvoiced character can now be matched
+         too);
+       - otherwise -> ambiguous, no match, left to the id-only path (too
+         risky to guess).
+     A normalised name shared by more than one fresh row is, separately,
+     always left to the id-only path regardless of the above. */
   const freshNameCounts = new Map<string, number>();
   for (const f of fresh) {
     const key = nameOf(f as T & Record<string, unknown>);
     if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
   }
-  const droppedVoicedByName = new Map<string, CastRecord>();
-  const ambiguousNames = new Set<string>();
+  const droppedByName = new Map<string, CastRecord[]>();
   for (const old of existing) {
-    if (freshIds.has(old.id) || !isVoicedOrReused(old)) continue;
+    if (freshIds.has(old.id)) continue;
     const key = nameOf(old);
     if (!key) continue;
-    if (droppedVoicedByName.has(key)) ambiguousNames.add(key);
-    else droppedVoicedByName.set(key, old);
+    const list = droppedByName.get(key);
+    if (list) list.push(old);
+    else droppedByName.set(key, [old]);
+  }
+  const dropMatchCandidateByName = new Map<string, CastRecord>();
+  const ambiguousNames = new Set<string>();
+  for (const [key, rows] of droppedByName) {
+    const voiced = rows.filter(isVoicedOrReused);
+    if (voiced.length === 1) {
+      dropMatchCandidateByName.set(key, voiced[0]);
+    } else if (voiced.length === 0 && rows.length === 1) {
+      dropMatchCandidateByName.set(key, rows[0]);
+    } else {
+      ambiguousNames.add(key);
+    }
   }
   const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
 
@@ -177,7 +206,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     if (!old) {
       const key = nameOf(f as T & Record<string, unknown>);
       if (key && !ambiguousNames.has(key) && freshNameCounts.get(key) === 1) {
-        const cand = droppedVoicedByName.get(key);
+        const cand = dropMatchCandidateByName.get(key);
         if (cand) {
           old = cand;
           claimedByName.add(cand.id);

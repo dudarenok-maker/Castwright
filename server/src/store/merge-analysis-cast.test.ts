@@ -200,6 +200,65 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     });
     expect(merged.find((c) => c.id === 'coalfall-dragon')!.overrideTtsVoices).toBeUndefined();
   });
+
+  it('id drift: an UNVOICED prior character whose analyzer id drifted is matched by name (RC1, #2040 Task 12)', () => {
+    // Alden carries no voice/reuse field at all. Before Task 12,
+    // isVoicedOrReused(old) excluded it from the candidate set entirely, so a
+    // drifted analyzer id silently orphaned it — no retirement recorded, no
+    // alias carried, nothing to distinguish it from a genuinely-new fresh row.
+    const existing: C[] = [{ id: 'alden-old', name: 'Alden', aliases: ['Al'] }];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']); // no orphan re-added (unvoiced)
+    expect(merged[0].aliases).toEqual(['Al']); // only rides over if the name-fallback matched
+    expect(retirements).toEqual([{ from: 'alden-old', to: 'alden-new' }]);
+  });
+
+  it('id drift: two unvoiced prior rows sharing a name still refuse to match, neither welded (guard, #2040 Task 12)', () => {
+    const existing: C[] = [
+      { id: 'alden-old-1', name: 'Alden', aliases: ['Al'] },
+      { id: 'alden-old-2', name: 'Alden', aliases: ['Aldo'] },
+    ];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']); // neither re-added (both unvoiced)
+    expect(merged[0].aliases).toBeUndefined(); // neither row's aliases rode onto it — no weld
+    expect(retirements).toEqual([]);
+  });
+
+  it('id drift: a voiced prior row wins the match over a same-name unvoiced sibling — no regression (#2040 Task 12)', () => {
+    // Two dropped prior rows share the name "Alden": one carries a designed
+    // voice, one carries none. Widening the candidate set past
+    // isVoicedOrReused must NOT turn this into an ambiguous case — spec §9's
+    // named hazard is exactly this stranding a designed voice as a 0-line
+    // duplicate. The voiced row must still be the candidate, exactly as
+    // before the widening.
+    const existing: C[] = [
+      {
+        id: 'alden-voiced',
+        name: 'Alden',
+        voiceState: 'tuned',
+        voiceUuid: 'U-alden',
+        overrideTtsVoices: { qwen: { name: 'qwen-alden' } },
+      },
+      { id: 'alden-plain', name: 'Alden' },
+    ];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']);
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-alden' } });
+    expect(merged[0].voiceState).toBe('tuned');
+    expect(retirements).toEqual([{ from: 'alden-voiced', to: 'alden-new' }]);
+  });
 });
 
 describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
