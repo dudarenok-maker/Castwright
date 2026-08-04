@@ -114,7 +114,7 @@ import {
   dedupePriorCastByName,
   type Retirement,
 } from '../store/merge-analysis-cast.js';
-import { retireCharacterId } from '../store/cast-id-history.js';
+import { retireCharacterId, dropSupersededIdsReclaimedByLiveCast } from '../store/cast-id-history.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -4860,6 +4860,23 @@ export async function runMainAnalyzerJob(
               ([from, to]) => ({ from, to }),
             );
             await recordRetirements(record.bookDir, remapRetirements);
+            /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
+               exact-id-first, so a history entry keyed to an id this write
+               just reintroduced as live would silently lose to it (no tie,
+               no warning). Drop it here, last, so it can't survive past the
+               same write cycle that reintroduced the live row — whether the
+               entry predates this run or one of the three recordRetirements
+               calls above just (re)wrote it. `mergedFinal.characters` is the
+               exact roster this write just persisted, not an intermediate
+               (fresh `characters` or `remapped.priorCast`), so "live" here
+               means "actually on disk after this write". The dropped
+               entries are reported so a future banner can flag their
+               segments as needs-your-decision (§4.6, Wave 3) — this call
+               only drops and returns, it does not surface anything itself. */
+            await dropSupersededIdsReclaimedByLiveCast(
+              record.bookDir,
+              mergedFinal.characters.map((c) => c.id),
+            );
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
@@ -6082,6 +6099,16 @@ export async function runSubsetAnalyzerJob(
               ([from, to]) => ({ from, to }),
             );
             await recordRetirements(record.bookDir, remapRetirements);
+            /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
+               path's same-named block above; see its comment for the
+               ordering (last, so a same-run retirement that happened to
+               (re)write an entry whose key is live still gets cleaned up)
+               and the live-id binding (`mergedFinal.characters`, the exact
+               roster this write just persisted). */
+            await dropSupersededIdsReclaimedByLiveCast(
+              record.bookDir,
+              mergedFinal.characters.map((c) => c.id),
+            );
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
           }

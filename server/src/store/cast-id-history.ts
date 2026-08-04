@@ -113,3 +113,47 @@ export async function retireCharacterId(
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }
+
+/** A history entry dropped because a fresh roster reintroduced its key as a
+ *  live cast id. `id` is the (formerly-superseded) history key; `supersededBy`
+ *  is what it used to resolve to before the live row reclaimed it. */
+export interface DisplacedHistoryEntry {
+  id: string;
+  supersededBy: string;
+}
+
+/** §4.4's closing paragraph: resolution is exact-id-first, so a fresh
+ *  roster's live row always wins over a history entry keyed to the same id —
+ *  silently, with no tie and no warning. Once that happens the entry no
+ *  longer protects anything (a segment still carrying the old id resolves
+ *  straight to the live row, never through history), so it must be dropped
+ *  rather than left to rot and mislead the next read. Called once per
+ *  analysis write, after the roster that will be persisted is final.
+ *
+ *  Returns the dropped entries so the caller can surface what needs review
+ *  (§4.6 — the banner split ships in Wave 3); this function only drops and
+ *  reports, it does not decide what happens next.
+ *
+ *  Never throws on read (loadCastIdHistory's own guarantee); a throw can
+ *  still come from the write when there is something to drop — same as
+ *  retireCharacterId, callers must guard it. */
+export async function dropSupersededIdsReclaimedByLiveCast(
+  bookDir: string,
+  liveIds: ReadonlyArray<string>,
+): Promise<DisplacedHistoryEntry[]> {
+  const live = new Set(liveIds);
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    const dropped: DisplacedHistoryEntry[] = [];
+    for (const [key, target] of Object.entries(history.supersededBy)) {
+      if (live.has(key)) {
+        dropped.push({ id: key, supersededBy: target });
+        delete history.supersededBy[key];
+      }
+    }
+    if (dropped.length) {
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    }
+    return dropped;
+  });
+}

@@ -4096,6 +4096,240 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
   );
 });
 
+describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2040 Task 14, spec §4.4 closing paragraph)', () => {
+  /* The real case §4.4 describes: cast-id-history.json carries a legacy
+     entry 'unknown-male' -> 'timkin' from an earlier run/repair (the analyzer
+     once folded Timkin's lines into the generic background bucket, then a
+     later pass figured out who it actually was and retired the bucket id in
+     Timkin's favour). Resolution is exact-id-first (§4.3), so any segment
+     still carrying characterId 'unknown-male' would silently reroute to
+     whatever THIS run's fresh roster mints under that same id — UNLESS the
+     stale entry is dropped, which is what dropSupersededIdsReclaimedByLiveCast
+     (cast-id-history.ts) exists to do.
+
+     This test drives the REAL route (runMainAnalyzerJob) with a fresh roster
+     that mints a live 'unknown-male' row (no fold needed — foldMinorCast
+     skips its own fold logic entirely for a character whose id is ALREADY
+     one of its two bucket ids, so a directly-authored stage-1 row of that id
+     survives to the merge unchanged). A second, unrelated legacy entry
+     ('old-eliza' -> 'eliza') proves the drop is scoped to the reclaimed key,
+     not a wholesale history wipe.
+
+     Dialogue-tag shape: same proven-not-to-escalate prose as the Task 8/
+     Task 10 fixtures above ("Anton asked") — a pronoun tag ("he muttered")
+     was tried first and triggered the dialogue-structure engine's escalation
+     path (no named speaker to cross-examine against), which this fixture's
+     mocked analyzer doesn't implement. The character is a live 'unknown-male'
+     row named "Anton" at Stage 1; foldMinorCast's bucket-id invariant then
+     canonicalises the NAME to "Unknown male" while leaving the id untouched
+     (see the "Invariant (plan 122)" comment in fold-minor-cast.ts) — this
+     test only asserts on the id, so that's inert here. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'unknown-male',
+        name: 'Anton',
+        role: 'background',
+        color: 'narrator',
+        gender: 'male',
+        evidence: [{ quote: 'Anton asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'unknown-male',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-reclaimed-id-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_reclaimed_id_e2e_test',
+        manuscriptId,
+        title: 'Reclaimed Id E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Reclaimed Id E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'a fresh roster reintroducing a live "unknown-male" row drops the stale entry keyed to it, and an unrelated entry survives',
+    async () => {
+      const manuscriptId = `test-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      // Legacy entry this run's fresh 'unknown-male' row must displace —
+      // written by a real retireCharacterId call (an earlier run/repair
+      // once folded these lines into the generic bucket, then figured out
+      // they belonged to 'timkin' and retired the bucket id in his favour).
+      await retireCharacterId(bookDir, 'unknown-male', 'timkin');
+      // Unrelated legacy entry from a different repair — must survive
+      // untouched; nothing in this run's roster reclaims 'old-eliza'.
+      await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+
+      // No prior cast.json — readPriorCastForMerge returns [] for a missing
+      // file, keeping this fixture isolated to the reclaim scenario (no
+      // dedup/remap machinery needs to fire for a single fresh row with no
+      // same-name prior).
+      expect(existsSync(castJsonPath(bookDir))).toBe(false);
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // Sanity check on the fixture: 'unknown-male' actually landed in
+        // cast.json as a LIVE row (if this fails, the scenario never fired
+        // and the assertions below would be vacuous).
+        const castAfter = JSON.parse(
+          readFileSync(castJsonPath(bookDir), 'utf8'),
+        ) as { characters: Array<{ id: string }> };
+        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male');
+
+        const history = await loadCastIdHistory(bookDir);
+        // The reclaimed entry is gone — it no longer protects anything now
+        // that 'unknown-male' resolves straight to the live row (tier 1,
+        // §4.3), so leaving it in place would just be misleading.
+        expect(history.supersededBy).not.toHaveProperty('unknown-male');
+        // The unrelated entry is untouched — this is a scoped drop, not a
+        // wholesale history wipe.
+        expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
 describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)', () => {
   /* Mirrors "runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)"
      above, driving runSubsetAnalyzerJob instead — the SAME helper wired into

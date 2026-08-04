@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from './cast-id-history.js';
+import {
+  loadCastIdHistory,
+  retireCharacterId,
+  castIdHistoryPath,
+  dropSupersededIdsReclaimedByLiveCast,
+} from './cast-id-history.js';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cih-')); });
@@ -149,6 +154,46 @@ describe('cast id history', () => {
       writeTestHistoryFile('null');
       const result = await loadCastIdHistory(dir);
       expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('dropSupersededIdsReclaimedByLiveCast (#2040 Task 14, spec §4.4 closing paragraph)', () => {
+    it('drops a history entry whose key is now a live cast id, and reports it', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male', 'narrator']);
+      expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+    });
+
+    it('leaves an entry whose key is NOT live untouched', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['eliza', 'narrator']);
+      // 'eliza' is the entry's VALUE, not its key — a live target is exactly
+      // what tier-2 resolution is supposed to do, and is not what this
+      // function drops. Only 'old-eliza' (the key) reclaiming liveness would
+      // qualify, and it hasn't here.
+      expect(dropped).toEqual([]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+    });
+
+    it('drops the reclaimed entry while an unrelated entry survives untouched, in the same call', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+    });
+
+    it('is a no-op — returns [] and does not write — when nothing needs dropping', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['some-other-live-id']);
+      expect(dropped).toEqual([]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+    });
+
+    it('returns [] against an empty/missing history rather than throwing', async () => {
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      expect(dropped).toEqual([]);
     });
   });
 });
