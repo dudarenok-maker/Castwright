@@ -22,6 +22,19 @@ const BOOK_TWO = 'Book Two';
    series (plan 108). */
 const OTHER_SERIES = 'The Undertow';
 const OTHER_BOOK = 'Other Book';
+/* Alpha/Beta's book identity and deliberately-seeded qwen override names
+   (beforeAll at `:787-854` below). Shared here — rather than declared inside
+   that describe — so the fs-61 describe's cleanup (`:1719`) and the
+   position-independence check after it (fs-2077) restore/read exactly these
+   literals instead of a second, independent copy that can drift out of sync
+   with them (e.g. a future rename of the title moving the seed but not the
+   restore). */
+const ALPHA_AUTHOR = 'Alpha Author';
+const ALPHA_TITLE = 'Alpha Book';
+const BETA_AUTHOR = 'Beta Author';
+const BETA_TITLE = 'Beta Book';
+const ALPHA_QWEN_OVERRIDE_NAME = 'qwen-ALPHAUUID1';
+const BETA_QWEN_OVERRIDE_NAME = 'qwen-BETAUUID1';
 
 let workspaceRoot: string;
 let app: Express;
@@ -87,6 +100,24 @@ function clearOverridesOnDisk(workspace: string, author: string, series: string,
     characters: Array<Record<string, unknown>>;
   };
   delete cast.characters[0].overrideTtsVoices;
+  writeFileSync(path, JSON.stringify(cast));
+}
+
+/* Restores (rather than clears) a cast's first character's override — used
+   to put back a deliberately-seeded fixture value after a workspace-wide
+   write legitimately swept over it (fs-2077). */
+function setOverrideOnDisk(
+  workspace: string,
+  author: string,
+  series: string,
+  title: string,
+  override: Record<string, unknown>,
+) {
+  const path = join(workspace, 'books', author, series, title, '.audiobook', 'cast.json');
+  const cast = JSON.parse(readFileSync(path, 'utf8')) as {
+    characters: Array<Record<string, unknown>>;
+  };
+  cast.characters[0].overrideTtsVoices = override;
   writeFileSync(path, JSON.stringify(cast));
 }
 
@@ -766,10 +797,6 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
      Querying with each book as currentBookId must return THAT book's own
      narrator (own languageCode, own voiceUuid, own generated status,
      usedIn:1) — never the other book's. */
-  const ALPHA_AUTHOR = 'Alpha Author';
-  const ALPHA_TITLE = 'Alpha Book';
-  const BETA_AUTHOR = 'Beta Author';
-  const BETA_TITLE = 'Beta Book';
   let alphaBookId: string;
   let betaBookId: string;
 
@@ -796,7 +823,7 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
           name: 'Narrator',
           voiceUuid: 'ALPHAUUID1',
           ttsEngine: 'qwen',
-          overrideTtsVoices: { qwen: { name: 'qwen-ALPHAUUID1' } },
+          overrideTtsVoices: { qwen: { name: ALPHA_QWEN_OVERRIDE_NAME } },
           attributes: [],
           lines: 100,
           scenes: 1,
@@ -821,11 +848,11 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
         synthesizedAt: new Date().toISOString(),
         segments: [],
         characterSnapshots: {
-          narrator: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-ALPHAUUID1' },
+          narrator: { voiceEngine: 'qwen', resolvedVoiceName: ALPHA_QWEN_OVERRIDE_NAME },
         },
       }),
     );
-    alphaManifestPath = qwenVoiceSidecarPath('qwen-ALPHAUUID1');
+    alphaManifestPath = qwenVoiceSidecarPath(ALPHA_QWEN_OVERRIDE_NAME);
     mkdirSync(dirname(alphaManifestPath), { recursive: true });
     writeFileSync(alphaManifestPath, JSON.stringify({ language: 'English' }));
 
@@ -841,7 +868,7 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
           name: 'Рассказчик',
           voiceUuid: 'BETAUUID1',
           ttsEngine: 'qwen',
-          overrideTtsVoices: { qwen: { name: 'qwen-BETAUUID1' } },
+          overrideTtsVoices: { qwen: { name: BETA_QWEN_OVERRIDE_NAME } },
           attributes: [],
           lines: 200,
           scenes: 1,
@@ -849,7 +876,7 @@ describe('GET /api/voices — cross-book identity collision on a shared, no-voic
       ],
       true,
     );
-    betaManifestPath = qwenVoiceSidecarPath('qwen-BETAUUID1');
+    betaManifestPath = qwenVoiceSidecarPath(BETA_QWEN_OVERRIDE_NAME);
     mkdirSync(dirname(betaManifestPath), { recursive: true });
     writeFileSync(betaManifestPath, JSON.stringify({ language: 'Russian' }));
   });
@@ -1589,7 +1616,13 @@ describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => 
        this file could otherwise leak a dirty cross-series fixture into the
        first test here (afterEach alone only cleans up after this suite's
        own writes). */
-    await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    const res = await request(app).put('/api/voices/v_brann/override').send({ override: null });
+    /* The Task-4 cloned-slot guard 409s a workspace-wide clear atomically,
+       which would make this reset a silent no-op — assert it actually took.
+       Every cloned-slot-seeding describe in this file deletes
+       overrideTtsVoices in its own afterEach, so nothing cloned should ever
+       survive into this reset (fs-2077). */
+    expect(res.status).toBe(204);
     clearOverridesOnDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
   }
 
@@ -1720,6 +1753,22 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
     /* Reset both standalones' narrator override between cases. */
     await applyOverrideToCastFiles('narrator', null, undefined, standaloneA.bookDir);
     await applyOverrideToCastFiles('narrator', null, undefined, standaloneB.bookDir);
+
+    /* The second test below (no seriesFilter, no onlyBookDir) is a genuine
+       workspace-wide sweep that also reaches Alpha/Beta's own 'narrator'
+       characters (same shared bare id, seeded in the "cross-book identity
+       collision" describe's beforeAll at ":787-854") — those two books stay
+       on disk for the rest of the file, so clearing (rather than restoring)
+       their override here would just be a different way of destroying that
+       describe's fixture. Put back the deliberately-seeded values instead of
+       clearing them, so this describe leaves the shared fixture exactly as
+       it found it rather than merely as it happens to be last (fs-2077). */
+    setOverrideOnDisk(workspaceRoot, ALPHA_AUTHOR, 'Standalones', ALPHA_TITLE, {
+      qwen: { name: ALPHA_QWEN_OVERRIDE_NAME },
+    });
+    setOverrideOnDisk(workspaceRoot, BETA_AUTHOR, 'Standalones', BETA_TITLE, {
+      qwen: { name: BETA_QWEN_OVERRIDE_NAME },
+    });
   });
 
   it('with no seriesFilter but an onlyBookDir, touches only that book', async () => {
@@ -1763,5 +1812,26 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
     expect(
       (b.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen?.name,
     ).toBe('qwen-workspace-wide');
+  });
+});
+
+/* fs-2077 regression: position-independence for the fs-61 describe's cleanup
+   above. A green file proves nothing here — the leak this guards against
+   ("clears 2 of the 4 books its workspace-wide write actually touches") is
+   invisible while fs-61 happens to be last in the file, exactly as it is
+   today. This describe occupies the position a future describe would, and
+   observes the fixture rather than trusting the file merely stayed green. */
+describe('fixture cleanliness after applyOverrideToCastFiles — standalone book-scoping (fs-61) (fs-2077)', () => {
+  it("Alpha and Beta's own narrator overrides still read their seeded values, not fs-61's workspace-wide write", () => {
+    const alpha = readCastFromDisk(workspaceRoot, ALPHA_AUTHOR, 'Standalones', ALPHA_TITLE);
+    const beta = readCastFromDisk(workspaceRoot, BETA_AUTHOR, 'Standalones', BETA_TITLE);
+    expect(
+      (alpha.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen
+        ?.name,
+    ).toBe(ALPHA_QWEN_OVERRIDE_NAME);
+    expect(
+      (beta.characters[0].overrideTtsVoices as { qwen?: { name?: string } } | undefined)?.qwen
+        ?.name,
+    ).toBe(BETA_QWEN_OVERRIDE_NAME);
   });
 });
