@@ -202,7 +202,21 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   }
   const droppedByName = new Map<string, CastRecord[]>();
   for (const old of existing) {
-    if (freshIds.has(old.id)) continue;
+    // Never a name-fallback candidate: the reserved narrator id has its own
+    // identity mechanism (applyNarratorIdentity), not the generic name match.
+    // dedupePriorCastByName's isNarrator exclusion (this file, :534) is the
+    // same call for the same reason. Narrator rows were excluded here only
+    // incidentally before this task's widening — applyNarratorIdentity seeds
+    // voiceStyle/persona but never voiceUuid/voiceState, and isVoicedOrReused
+    // doesn't test voiceStyle, so the old isVoicedOrReused precondition kept
+    // them out as a side effect. Widening past that precondition newly
+    // admits them (via the lone-unvoiced-row branch below), so this explicit
+    // exclusion is now load-bearing (#2040 Task 12 follow-up, L1): without
+    // it, a fresh roster with no narrator row this run but a REAL character
+    // whose name collides with the prior narrator's localized default name
+    // would weld the narrator's voice fields onto that character and
+    // durably retire the reserved 'narrator' id onto it.
+    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
     const key = nameOf(old);
     if (!key) continue;
     const list = droppedByName.get(key);

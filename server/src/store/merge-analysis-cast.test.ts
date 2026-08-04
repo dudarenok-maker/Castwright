@@ -304,6 +304,28 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged[0].aliases).toBeUndefined();
     expect(retirements).toEqual([]);
   });
+
+  it('id drift: a dropped narrator row never becomes a name-fallback candidate (#2040 Task 12 follow-up, L1)', () => {
+    // The prior narrator (id 'narrator') carries only voiceStyle — which
+    // isVoicedOrReused does NOT test, so before this task's widening the
+    // narrator was never voiced/reused enough to be a candidate at all. The
+    // widening newly admits it via the lone-unvoiced-row branch. If the fresh
+    // roster has no narrator row this run but happens to contain a REAL
+    // character whose normalised name collides with the prior narrator's
+    // localized default name (an English book's character actually named
+    // "Narrator"), the dropped narrator row would otherwise be the sole
+    // candidate for that name and weld its voiceStyle onto the real
+    // character while durably retiring the reserved 'narrator' id onto it.
+    const existing: C[] = [{ id: 'narrator', name: 'Narrator', voiceStyle: 'crisp herald' }];
+    const fresh: C[] = [{ id: 'sasha', name: 'Narrator' } as C];
+    const { characters: merged, retirements } = mergeAnalysisResultWithExistingCast(
+      existing,
+      fresh,
+    );
+    expect(merged.map((c) => c.id)).toEqual(['sasha']);
+    expect(merged[0].voiceStyle).toBeUndefined(); // the narrator's voiceStyle must not weld on
+    expect(retirements).toEqual([]); // the reserved 'narrator' id must not be retired away
+  });
 });
 
 describe('mergeAnalysisResultWithExistingCast — narrator name', () => {
