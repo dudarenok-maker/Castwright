@@ -105,7 +105,20 @@
  *                        this at the checkout that actually ran the book's
  *                        analysis (commonly the primary checkout) when
  *                        repairing from a worktree, or cache-orphan
- *                        detection silently sees nothing.
+ *                        detection silently sees nothing FOR THAT BOOK — and,
+ *                        worse, the cross-source ambiguity veto (guard 2
+ *                        below) degrades with it: an empty cache index reads
+ *                        as "confirmed unambiguous", not "unknown", so a
+ *                        book with no cache evidence can auto-record on
+ *                        bak-only evidence alone even if the (unseen) cache
+ *                        would have vetoed it. Round-2 review made this
+ *                        fail-closed: the script now counts every scanned
+ *                        book whose cache file is missing, prints the count
+ *                        in the summary every run, and refuses `--apply`
+ *                        outright whenever that count is nonzero (dry run
+ *                        still runs and reports it) — see `main()`'s
+ *                        `booksMissingCache` and `planBookRepairs`'s
+ *                        `cacheAvailable` gate.
  *   PORT                 loopback port the --apply liveness probe checks (default
  *                        8080, matches server/src/index.ts's own default).
  *   LAN_HTTPS_PORT       LAN HTTPS port the --apply liveness probe ALSO checks
@@ -393,8 +406,8 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  real, now-dead character's segments onto a shared slot instead of a
  *  specific person). */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans } = input;
-  const { normaliseForMatch, buildCastResolver, reservedIds } = deps;
+  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = true, autoReconciled } = input;
+  const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
   const rejectedSet = new Set(history.rejected ?? []);
@@ -402,6 +415,15 @@ export function planBookRepairs(input, deps) {
   // Tier B's own resolver — id-shape only, empty history on purpose (see
   // resolveTierBId's doc comment). Built once per book, not once per id.
   const idOnlyResolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+  // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
+  // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
+  // `Unknown-Male` — precisely the drift class #2040 exists to catch, and the
+  // raw string comparison this used to be would miss it. Normalised once per
+  // book, not once per id, using the same `normaliseIdKey` the server's own
+  // `buildCastResolver` id-shape tier uses — NOT a second, hand-rolled
+  // comparator (that would reintroduce the exact "two independent matchers"
+  // hazard `resolveTierBId`'s own doc comment already fixed once).
+  const normalisedReservedIds = new Set([...reservedIds].map((r) => normaliseIdKey(r)));
 
   const allIds = new Set([...cacheNameIndex.keys(), ...bakNameIndex.keys(), ...orphans.keys()]);
 
@@ -437,7 +459,7 @@ export function planBookRepairs(input, deps) {
     // occurrence "Timkin", but the cache separately shows the SAME id
     // also rendered as Rex and an unnamed third chapter — auto-recording
     // would have silently routed Rex's lines onto Timkin's voice.)
-    if (reservedIds.has(id)) {
+    if (normalisedReservedIds.has(normaliseIdKey(id))) {
       const evidence = [];
       if (bak?.name) evidence.push(`cast.json.bak.* names one occurrence "${bak.name}"`);
       if (cache?.name) evidence.push(`analysis cache names one occurrence "${cache.name}"`);
@@ -509,6 +531,30 @@ export function planBookRepairs(input, deps) {
     }
 
     if (matchedId) {
+      // --- round-2 review, Important 1: fail-closed cache-availability
+      // gate. Guard 2 (the cross-source ambiguity veto, above) can only see
+      // an id as ambiguous through `cacheNameIndex` — if this book's
+      // analysis-cache file was never found (missing `CACHE_DIR`, a fresh
+      // worktree with no cache of its own), `cacheNameIndex` is silently
+      // EMPTY, not "confirmed unambiguous". That is exactly the gap that
+      // would have re-opened the bak-unambiguous x cache-ambiguous cell the
+      // Critical fix closed — so a match is never auto-recorded for a book
+      // whose cache evidence is missing, no matter how clean the bak-only
+      // evidence looks. `cacheAvailable` is computed once per book from the
+      // actual file's presence on disk (main()), not from whether this
+      // PARTICULAR id happens to appear in it.
+      if (!cacheAvailable) {
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this book's analysis-cache file was not ` +
+            `found — the cross-source ambiguity veto (guard 2) cannot rule out cache ambiguity without it, so ` +
+            `auto-record is withheld until CACHE_DIR points at the checkout that ran this book's analysis`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
+        continue;
+      }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
       // own doc comment for its narrowed scope post round-1).
       if (!snapshotsConsistent(orphan.snapshots)) {
@@ -530,14 +576,40 @@ export function planBookRepairs(input, deps) {
       // justify it and no reviewer in the loop (spec §4.7 scopes this
       // pass to REPAIR, not pre-emptive cache-only aliasing).
       if (orphan.segments === 0) {
-        reportOnly.push({
-          id,
-          segments: 0,
-          chapters: [],
-          reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
-            `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
-          candidates: [],
-        });
+        // --- round-2 review, MINOR finding 4: `orphan.segments === 0` also
+        // covers an id that DOES have real rendered segments but was never
+        // added to `orphans` because it already auto-reconciles through the
+        // resolver's own normalised-id tier (the Cast banner already shows
+        // it under "auto-reconciled", not "needs your decision"). Reporting
+        // that case with the same "zero rendered segments / no damage to
+        // repair" wording is FALSE — it contradicts the banner and inflates
+        // the reported segment total with a phantom zero. `autoReconciled`
+        // (built alongside `orphans` in `collectSegmentOrphans`) carries the
+        // real count and target for exactly this case; only ids genuinely
+        // absent from BOTH maps (truly never rendered) get the original
+        // reason.
+        const reconciled = autoReconciled?.get(id);
+        if (reconciled) {
+          reportOnly.push({
+            id,
+            segments: reconciled.segments,
+            chapters: [],
+            reason: `name/id-matched "${matchedId}" (${evidence}) but this id already auto-reconciles to ` +
+              `"${reconciled.resolvedTo}" via the normalised-id tier at render time (${reconciled.segments} real ` +
+              `rendered segment(s) already carry the reconciled voice, per the Cast banner's auto-reconciled ` +
+              `section) — already fixed, no separate alias needed`,
+            candidates: [],
+          });
+        } else {
+          reportOnly.push({
+            id,
+            segments: 0,
+            chapters: [],
+            reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
+              `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
+            candidates: [],
+          });
+        }
         continue;
       }
       autoRecord.push({ id, to: matchedId, tier, evidence, segments: orphan.segments, chapters: orphan.chapters });
@@ -673,6 +745,18 @@ function readAnalysisCache(cacheDir, manuscriptId) {
   return readJsonSync(p);
 }
 
+/** Round-2 review, Important 1: does this book's analysis-cache file actually
+ *  exist on disk? Deliberately independent of `readAnalysisCache`'s return
+ *  value — that function also returns `null` on a present-but-corrupt file,
+ *  which is a different failure (and already visible as an empty
+ *  `cacheNameIndex`, same as today); this check is specifically the
+ *  "was there ever any evidence to consult" fact the fail-closed guard in
+ *  `planBookRepairs` needs. */
+function analysisCacheFileExists(cacheDir, manuscriptId) {
+  if (typeof manuscriptId !== 'string' || !manuscriptId) return false;
+  return fs.existsSync(path.join(cacheDir, `${manuscriptId}.json`));
+}
+
 function cacheEntriesOf(cache) {
   const entries = [];
   for (const c of cache?.stage1?.characters ?? []) {
@@ -729,6 +813,7 @@ async function loadServerModules() {
     'server/dist/store/cast-resolve.js',
     'server/dist/store/cast-id-history.js',
     'server/dist/util/text-match.js',
+    'server/dist/util/character-id.js',
     'server/dist/audio/segments-io.js',
     'server/dist/analyzer/narrator-identity.js',
     'server/dist/analyzer/fold-minor-cast.js',
@@ -744,15 +829,20 @@ async function loadServerModules() {
       );
     }
   }
-  // NOTE: no `util/character-id.js` (normaliseIdKey) import — review round
-  // 1 removed the last direct caller (`resolveTierBId` used to re-derive
-  // its own id-shape tie rule; it now delegates to `buildCastResolver`
-  // instead, see that function's doc comment for why the old version was
-  // a second matcher with a divergent tie rule).
-  const [castResolve, castIdHistory, textMatch, segmentsIo, narratorIdentity, foldMinorCast] = await Promise.all([
+  // NOTE: `util/character-id.js` (normaliseIdKey) is imported ONLY for
+  // planBookRepairs's guard 1 (reserved-id membership test, round-2 review) —
+  // review round 1 removed the last direct caller because `resolveTierBId`
+  // used to re-derive its own id-shape TIE rule from it; it still delegates
+  // tier-B matching to `buildCastResolver` rather than a hand-rolled
+  // comparator (see that function's doc comment for why the old version was
+  // a second matcher with a divergent tie rule). Reusing the same normaliser
+  // for a plain Set-membership check is not that hazard — there is no tie
+  // rule to diverge on.
+  const [castResolve, castIdHistory, textMatch, characterId, segmentsIo, narratorIdentity, foldMinorCast] = await Promise.all([
     import('../server/dist/store/cast-resolve.js'),
     import('../server/dist/store/cast-id-history.js'),
     import('../server/dist/util/text-match.js'),
+    import('../server/dist/util/character-id.js'),
     import('../server/dist/audio/segments-io.js'),
     import('../server/dist/analyzer/narrator-identity.js'),
     import('../server/dist/analyzer/fold-minor-cast.js'),
@@ -763,6 +853,7 @@ async function loadServerModules() {
     retireCharacterId: castIdHistory.retireCharacterId,
     castIdHistoryPath: castIdHistory.castIdHistoryPath,
     normaliseForMatch: textMatch.normaliseForMatch,
+    normaliseIdKey: characterId.normaliseIdKey,
     loadSegmentsFiles: segmentsIo.loadSegmentsFiles,
     reservedIds: new Set([...narratorIdentity.NARRATOR_CHARACTER_IDS, foldMinorCast.MALE_BUCKET_ID, foldMinorCast.FEMALE_BUCKET_ID]),
   };
@@ -773,7 +864,17 @@ async function loadServerModules() {
    count / per-chapter breakdown (with an approximate affected duration
    summed from each segment's own startSec/endSec) / every non-empty
    characterSnapshot seen. Uses the REAL resolver — never re-derives "does
-   this id resolve" locally. */
+   this id resolve" locally.
+
+   Also returns `autoReconciled` (round-2 review, MINOR finding 4): a raw
+   characterId can reach `allIds` in `planBookRepairs` (via a cache/bak name
+   entry) WITHOUT ever landing in `orphans`, because it already resolves
+   through the resolver's own normalised-id tier — the exact id the Cast
+   banner already shows as "auto-reconciled", with real rendered segments
+   behind it. Without this map, `planBookRepairs` can only see `orphans.get(id)
+   ?? { segments: 0, ... }` for such an id and wrongly reports it as
+   never-rendered. `resolver.resolve()` is deterministic per id per book, so
+   an id can never appear in both `orphans` and `autoReconciled`. */
 async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
   const resolver = mods.buildCastResolver(cast.characters, {
     supersededBy: history.supersededBy ?? {},
@@ -781,6 +882,7 @@ async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
   });
   const segs = await mods.loadSegmentsFiles(bookDir, chapters);
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
+  const autoReconciled = new Map(); // id -> { segments, resolvedTo }
   for (const seg of segs) {
     const perChapterCount = new Map(); // id -> count
     const perChapterDuration = new Map(); // id -> seconds
@@ -788,7 +890,14 @@ async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
       const id = s.characterId;
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
-      if (resolution) continue; // resolves (exact/history/normalised) — not an orphan
+      if (resolution) {
+        if (resolution.via === 'normalised-id') {
+          const entry = autoReconciled.get(id) ?? { segments: 0, resolvedTo: resolution.character.id };
+          entry.segments += 1;
+          autoReconciled.set(id, entry);
+        }
+        continue; // resolves (exact/history/normalised) — not an orphan
+      }
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
         perChapterDuration.set(id, (perChapterDuration.get(id) ?? 0) + Math.max(0, s.endSec - s.startSec));
@@ -808,7 +917,7 @@ async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
       if (snapshot) entry.snapshots.push(snapshot);
     }
   }
-  return orphans;
+  return { orphans, autoReconciled };
 }
 
 function backupCastIdHistory(historyPath) {
@@ -861,6 +970,7 @@ async function main() {
   let totalReport = 0;
   let totalReportSegments = 0;
   let totalSkipped = 0;
+  let booksMissingCache = 0;
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -868,7 +978,7 @@ async function main() {
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const segmentOrphans = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans, autoReconciled } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -878,6 +988,14 @@ async function main() {
       }
     }
 
+    // Round-2 review, Important 1: the cross-source ambiguity veto (guard 2
+    // in planBookRepairs) can only see cache ambiguity through this file —
+    // a MISSING cache file must never silently read as "confirmed
+    // unambiguous". `cacheAvailable` is a per-book fact (does the file
+    // exist at all), computed independently of whether THIS book's cache
+    // happens to name any of its orphaned ids.
+    const cacheAvailable = analysisCacheFileExists(cacheDir, book.state.manuscriptId);
+    if (!cacheAvailable) booksMissingCache += 1;
     const cache = readAnalysisCache(cacheDir, book.state.manuscriptId);
     const cacheNameIndex = buildNameIndex(cacheEntriesOf(cache), mods.normaliseForMatch);
     const bakNameIndex = buildNameIndex(collectBakNameEntries(book.audiobookDir), mods.normaliseForMatch);
@@ -889,8 +1007,15 @@ async function main() {
         cacheNameIndex,
         bakNameIndex,
         orphans: segmentOrphans,
+        cacheAvailable,
+        autoReconciled,
       },
-      { normaliseForMatch: mods.normaliseForMatch, buildCastResolver: mods.buildCastResolver, reservedIds: mods.reservedIds },
+      {
+        normaliseForMatch: mods.normaliseForMatch,
+        buildCastResolver: mods.buildCastResolver,
+        reservedIds: mods.reservedIds,
+        normaliseIdKey: mods.normaliseIdKey,
+      },
     );
 
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
@@ -899,6 +1024,14 @@ async function main() {
     if (plan.autoRecord.length === 0 && plan.reportOnly.length === 0 && plan.skipped.length === 0) continue;
 
     console.log(`--- ${book.label} ---`);
+    if (!cacheAvailable) {
+      console.log(
+        `  (! no analysis-cache file found for this book — ` +
+          `${path.join(cacheDir, `${book.state.manuscriptId ?? '<no manuscriptId>'}.json`)} does not exist. ` +
+          `The cross-source ambiguity veto cannot see cache evidence for this book, so auto-record is withheld ` +
+          `for every matched id below until CACHE_DIR points at the checkout that ran this book's analysis.)`,
+      );
+    }
     if (plan.autoRecord.length) {
       console.log('  AUTO-RECORD (Tier A/B):');
       for (const a of plan.autoRecord) {
@@ -954,6 +1087,34 @@ async function main() {
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);
   console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s)`);
+  console.log(
+    `books missing analysis-cache evidence: ${booksMissingCache}` +
+      (booksMissingCache
+        ? ' — the cross-source ambiguity veto cannot see cache evidence for these books; auto-record was withheld for every matched id in them (see CACHE_DIR)'
+        : ''),
+  );
+
+  // Round-2 review, Important 1: refuse --apply outright when ANY scanned
+  // book had no analysis-cache file. planBookRepairs already withholds
+  // auto-record per-book for exactly this reason (see its cacheAvailable
+  // gate), so nothing unsafe would be written even without this check — but
+  // the refusal must be explicit and visible, not merely a smaller number
+  // silently produced by the algorithm, per the review finding. A single
+  // missing-cache book blocks the WHOLE apply run, matching the same
+  // conservative "ambiguous means refuse" posture as the liveness probe
+  // above (spec §10) rather than writing a partial, cache-blind result.
+  if (apply && booksMissingCache > 0) {
+    console.error(
+      `\nRefusing --apply: ${booksMissingCache} scanned book(s) had no analysis-cache file at CACHE_DIR (${cacheDir}). ` +
+        `The cross-source ambiguity veto (guard 2) can only see an id as ambiguous through the cache — a missing ` +
+        `cache file makes every id in that book look unambiguous whether or not it actually is, silently re-opening ` +
+        `the exact bak-unambiguous x cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. ` +
+        `Point CACHE_DIR at the checkout that actually ran these books' analysis (see the module doc comment) and ` +
+        `re-run — the dry run above must report "books missing analysis-cache evidence: 0" before --apply is safe.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   if (apply && pendingWrites.length) {
     console.log('\nWriting cast-id-history.json aliases...');

@@ -366,7 +366,12 @@ describe('rankSnapshotCandidates', () => {
 
 describe('planBookRepairs', () => {
   const buildResolver = makeFakeResolver(idKey);
-  const deps = { normaliseForMatch: lc, buildCastResolver: buildResolver, reservedIds: new Set(['narrator', 'unknown-male', 'unknown-female']) };
+  const deps = {
+    normaliseForMatch: lc,
+    buildCastResolver: buildResolver,
+    reservedIds: new Set(['narrator', 'unknown-male', 'unknown-female']),
+    normaliseIdKey: idKey,
+  };
   const liveCast = [
     { id: 'narrator', name: 'Narrator' },
     { id: 'mairin', name: 'Мэйрин' },
@@ -516,6 +521,23 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /names one occurrence "Timkin"/);
   });
 
+  test('MINOR (round 2): a case/separator-drifted spelling of a reserved bucket id is still refused (guard 1 normalises the membership test)', () => {
+    // 'Unknown_Male' is exactly the drift class #2040 exists to catch — a
+    // raw `reservedIds.has(id)` string check would miss it (the constant is
+    // the canonical 'unknown-male'), letting a clean Tier A bak-name match
+    // auto-record the bucket alias guard 1 exists to forbid. This is a
+    // SINGLE, unambiguous occurrence (unlike the multi-chapter Exile shape
+    // above) specifically so only guard 1 — not guard 2's ambiguity veto —
+    // can be responsible for catching it.
+    const bakNameIndex = buildNameIndex([{ id: 'Unknown_Male', name: 'Timkin' }], lc);
+    const orphans = new Map([['Unknown_Male', renderedOrphan(6)]]);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans }, deps);
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'Unknown_Male');
+    assert.match(plan.reportOnly[0].reason, /reserved fold-bucket\/narrator id/);
+  });
+
   test('a Tier A match onto a reserved TARGET id is refused (falls through, not auto-recorded)', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'weird-alias', name: 'Narrator' }], lc);
     const orphans = new Map([['weird-alias', renderedOrphan(2)]]);
@@ -546,6 +568,69 @@ describe('planBookRepairs', () => {
     assert.equal(plan.reportOnly.length, 1);
     assert.equal(plan.reportOnly[0].id, 'never-rendered-guy');
     assert.match(plan.reportOnly[0].reason, /zero rendered segments/);
+  });
+
+  test('MINOR (round 2, finding 4): a name match on an id that already auto-reconciles via the normalised-id tier gets an accurate reason, not the misleading "zero rendered segments" one', () => {
+    // 'The_Torment' is never added to `orphans` (collectSegmentOrphans only
+    // records ids the resolver FAILS on) because it already resolves live
+    // through the normalised-id tier — exactly what the Cast banner shows
+    // under "auto-reconciled", with real rendered segments behind it. The
+    // OLD code fell back to `orphans.get(id) ?? { segments: 0, ... }` here
+    // and reported "zero rendered segments — no damage to repair", which is
+    // FALSE (it has 9) and contradicts the banner. `autoReconciled` (built
+    // alongside `orphans` in the real collectSegmentOrphans) carries the
+    // true count and target for this case.
+    const cacheNameIndex = buildNameIndex([{ id: 'The_Torment', name: 'Timkin' }], lc);
+    const autoReconciled = new Map([['The_Torment', { segments: 9, resolvedTo: 'timkin' }]]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'The_Torment');
+    assert.equal(plan.reportOnly[0].segments, 9);
+    assert.match(plan.reportOnly[0].reason, /already auto-reconciles to "timkin"/);
+    assert.doesNotMatch(plan.reportOnly[0].reason, /zero rendered segments/);
+  });
+
+  test('MINOR (round 2, finding 4): a genuinely never-rendered id (absent from BOTH orphans and autoReconciled) still gets the original "zero rendered segments" reason', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'never-rendered-guy', name: 'Timkin' }], lc);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled: new Map() },
+      deps,
+    );
+    assert.equal(plan.reportOnly[0].segments, 0);
+    assert.match(plan.reportOnly[0].reason, /zero rendered segments/);
+  });
+
+  test('IMPORTANT (round 2, finding 1): cacheAvailable=false withholds an otherwise-clean Tier A auto-record, since the cross-source ambiguity veto cannot see cache evidence for this book', () => {
+    // Realistic shape: bakNameIndex has a clean, unambiguous match (as it
+    // would from a real cast.json.bak.*); cacheNameIndex is empty, exactly
+    // as it would be from a missing cache FILE (not "cache present but this
+    // id absent from it", which also produces an empty entry but is a
+    // different, safe case — this test isolates the `cacheAvailable` flag
+    // itself, which main() sets from whether the file exists at all).
+    const bakNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'mayrin');
+    assert.equal(plan.reportOnly[0].segments, 8);
+    assert.match(plan.reportOnly[0].reason, /analysis-cache file was not found/);
+  });
+
+  test('IMPORTANT (round 2, finding 1): cacheAvailable defaults to true when omitted, so every pre-existing auto-record test above is unaffected', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    // `input` deliberately omits `cacheAvailable` entirely.
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans }, deps);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'mayrin');
   });
 
   test('no name and no id-shape match -> reported with ranked snapshot candidates', () => {
