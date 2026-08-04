@@ -5909,7 +5909,7 @@ export async function runSubsetAnalyzerJob(
        route's same-named block (currently :4678-4701) — the subset path's
        second (and last) call site from spec §4.4's five-entry list. Runs AFTER
        the reuse-link block above (§11 — keeps the two paths symmetric: the main
-       route's own reuse-link pass, seedReuseGuardsFromPriorCast at :3702, also
+       route's own reuse-link pass, seedReuseGuardsFromPriorCast at :3737, also
        runs long before its remap). Roster and sentences move together:
        subsetValidIds (below) is built from the roster, and
        reconcileSentenceCharacterIds would otherwise demote every renamed
