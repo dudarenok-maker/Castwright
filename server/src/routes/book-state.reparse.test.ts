@@ -716,8 +716,12 @@ describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concur
         .send({ characterId: 'nova', aliasName: 'Supernova' });
       aliasPromise.catch(() => {}); // supertest is lazy — force real dispatch now
       // Let add-alias acquire the cast lock and reach (and get stuck behind)
-      // its intercepted in-lock read.
-      await new Promise((r) => setTimeout(r, 30));
+      // its intercepted in-lock read. Poll rather than a fixed sleep — same
+      // precedent as voices.test.ts's #1981 Task 9 races.
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
       expect(intercepted).toBe(true);
 
       const reparsePromise = request(app).post(`/api/books/${raceBookId}/reparse`);

@@ -2849,7 +2849,10 @@ export async function runMainAnalyzerJob(
            otherwise recreate cast.json from its own stale read, resurrecting
            the roster this delete exists to remove (design §4 rule 1 — this
            is the innermost, one-level lock around the whole read-through-
-           delete span; there is no read to pull in here, only the delete). */
+           delete span; the delete itself has no read of its own to pull
+           inside it). This file's five merge-base writes plus
+           readPriorCastForMerge are deliberately out of scope here — tracked
+           on #2015, not folded into this lock. */
         const freshBookDir = recordRef.bookDir;
         await withCastLock(freshBookDir, () => rm(castJsonPath(freshBookDir), { force: true }));
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
