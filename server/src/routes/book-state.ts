@@ -456,6 +456,19 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
+       with its own `.catch`, not inline in the call below's argument list.
+       An expression sitting in argument position is evaluated before the
+       call it's an argument OF even happens, so a throw there would bypass
+       that call's trailing `.catch(() => ({}))` entirely and escape to the
+       route's outer try/catch as a whole-request 500 — it would have been
+       inert only because `loadCastIdHistory` itself is documented to never
+       throw, and this collector must not depend on that other module's
+       invariant to stay graceful. */
+    const orphanedCharacterFallbackHistory = await loadCastIdHistory(bookDir)
+      .then((h) => h.supersededBy)
+      .catch(() => ({}));
+
     /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
        render-time substitution, aggregated the same way as
        renderedFallbackByCharacter just above but keyed by the ORPHANED id (a
@@ -471,7 +484,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       bookDir,
       state.chapters,
       (cast?.characters ?? []) as Array<{ id: string }>,
-      (await loadCastIdHistory(bookDir)).supersededBy,
+      orphanedCharacterFallbackHistory,
     ).catch(() => ({}));
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend

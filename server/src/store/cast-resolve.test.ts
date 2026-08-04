@@ -10,24 +10,44 @@ const history = { mayrin: 'mairin' };
 
 describe('buildCastResolver', () => {
   it('tier 1: exact id', () => {
-    expect(buildCastResolver(cast, history).resolve('mairin')?.character.id).toBe('mairin');
+    const r = buildCastResolver(cast, history).resolve('mairin');
+    expect(r?.character.id).toBe('mairin');
+    // #2040 Wave 3 review round 1 — `via` pairs with `viaAlias` being unset.
+    expect(r?.via).toBe('exact');
+    expect(r?.viaAlias).toBeUndefined();
   });
 
   it('tier 2: history hit, and reports viaAlias', () => {
     const r = buildCastResolver(cast, history).resolve('mayrin');
     expect(r?.character.id).toBe('mairin');
     expect(r?.viaAlias).toBe('mayrin');
+    expect(r?.via).toBe('history');
   });
 
   it('tier 3: normalised id — the wave-1 recovery, with an EMPTY history', () => {
     const r = buildCastResolver(cast).resolve('the-torment');
     expect(r?.character.id).toBe('the_torment');
     expect(r?.viaAlias).toBe('the-torment');
+    expect(r?.via).toBe('normalised-id');
   });
 
   it('tier 4: normalised history key', () => {
     const r = buildCastResolver([{ id: 'x', name: 'X' }], { foo_bar: 'x' }).resolve('foo-bar');
     expect(r?.character.id).toBe('x');
+    expect(r?.via).toBe('normalised-history');
+  });
+
+  it('tier 3 beats tier 4 — a live normalised id wins over an unrelated normalised history entry', () => {
+    // #2040 Wave 3 review round 1 CRITICAL repro: 'the-mairin' is a live cast
+    // id (tier 3, normalised). A DIFFERENT, unrelated history entry
+    // ('the_Mairin' -> 'wren') also normalises to the same key (tier 4).
+    // Precedence must pick tier 3 — the live id — not the coincidentally
+    // normalised-matching history entry.
+    const c = [{ id: 'wren', name: 'Wren' }, { id: 'the-mairin', name: 'Mairin' }];
+    const h = { the_Mairin: 'wren' };
+    const r = buildCastResolver(c, h).resolve('the-Mairin');
+    expect(r?.character.id).toBe('the-mairin');
+    expect(r?.via).toBe('normalised-id');
   });
 
   it('a history entry whose target is NOT a live cast id does not resolve', () => {

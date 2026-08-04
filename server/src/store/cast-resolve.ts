@@ -14,6 +14,17 @@ export interface CastResolution<T extends CastRecord = CastRecord> {
   /** Set when the id matched through the history or a normalised key rather
       than an exact live id — callers may want to report the reconciliation. */
   viaAlias?: string;
+  /** Which tier actually matched, in the same precedence order `resolve()`
+      checks them (#2040 Wave 3 review round 1 — additive, Wave-1 behaviour
+      unchanged). `'exact'` pairs with `viaAlias` being unset; the other three
+      always carry a `viaAlias`. Exists so a caller that needs to know WHY an
+      id resolved (e.g. the orphan collector's alias-vs-normalised UI tag)
+      reads it off the resolver instead of recomputing tier precedence in a
+      second place — a second computation can disagree with this one on a
+      normalised collision between a live id (tier 3) and an unrelated
+      history entry (tier 4), since a normalised KEY match alone doesn't say
+      which tier actually won. */
+  via: 'exact' | 'history' | 'normalised-id' | 'normalised-history';
 }
 
 /** Resolve a `characterId` coming from manuscript attribution or a frozen
@@ -69,10 +80,10 @@ export function buildCastResolver<T extends CastRecord>(
       if (typeof characterId !== 'string') return undefined;
 
       const exact = byId.get(characterId);
-      if (exact) return { character: exact };
+      if (exact) return { character: exact, via: 'exact' };
 
       const hist = byHistory.get(characterId);
-      if (hist) return { character: hist, viaAlias: characterId };
+      if (hist) return { character: hist, viaAlias: characterId, via: 'history' };
 
       /* `null` in either map means "ambiguous — stop": a tier-3 or tier-4 tie
          must return undefined without consulting the next tier, so `.has()`
@@ -81,12 +92,16 @@ export function buildCastResolver<T extends CastRecord>(
       const key = normaliseIdKey(characterId);
       if (byNormId.has(key)) {
         const normId = byNormId.get(key);
-        return normId ? { character: normId, viaAlias: characterId } : undefined;
+        return normId
+          ? { character: normId, viaAlias: characterId, via: 'normalised-id' }
+          : undefined;
       }
 
       if (byNormHistory.has(key)) {
         const normHist = byNormHistory.get(key);
-        return normHist ? { character: normHist, viaAlias: characterId } : undefined;
+        return normHist
+          ? { character: normHist, viaAlias: characterId, via: 'normalised-history' }
+          : undefined;
       }
 
       return undefined;

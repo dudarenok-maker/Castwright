@@ -157,7 +157,7 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
     ).resolves.toEqual({});
   });
 
-  it("does not collide with collectRenderedFallbackEngines's cast-id keyspace", async () => {
+  it('does not collide with collectRenderedFallbackEngines\'s cast-id keyspace', async () => {
     // Same chapter renders BOTH a real cast character's Qwen→Kokoro engine
     // fallback (keyed by its own cast id, in characterSnapshots) and an
     // orphaned-id substitution (keyed by the orphaned id, in segments[]) —
@@ -244,6 +244,29 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
     });
   });
 
+  it('tier 3 (live normalised id) beats tier 4 (unrelated normalised history entry) — CRITICAL repro', async () => {
+    // #2040 Wave 3 review round 1 CRITICAL. 'the-mairin' is a live cast id
+    // (tier 3, normalised). A DIFFERENT, unrelated history entry
+    // ('the_Mairin' -> 'wren') also normalises to the same key (tier 4). The
+    // resolver's own precedence must pick tier 3 — the collector must tag
+    // this 'normalised' resolving onto 'the-mairin', NOT 'alias' resolving
+    // onto 'wren' via the coincidentally-matching history entry.
+    const cast = [{ id: 'wren' }, { id: 'the-mairin' }];
+    const history = { the_Mairin: 'wren' };
+    writeSegmentsArray('01-one', [{ characterId: 'the-Mairin', sentenceIds: [1] }]);
+    await expect(
+      collectOrphanedCharacterFallbacks(bookDir, chapters, cast, history),
+    ).resolves.toEqual({
+      'the-Mairin': {
+        characterId: undefined,
+        voiceName: undefined,
+        resolution: 'normalised',
+        resolvedCharacterId: 'the-mairin',
+        segments: 1,
+      },
+    });
+  });
+
   it('never reports a segment whose characterId is an exact live cast id', async () => {
     writeSegmentsArray('01-one', [{ characterId: 'mairin', sentenceIds: [1] }]);
     await expect(
@@ -282,6 +305,30 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
       timkin: {
         characterId: 'narrator',
         voiceName: undefined,
+        resolution: 'unresolved',
+        resolvedCharacterId: undefined,
+        segments: 2,
+      },
+    });
+  });
+
+  it('forward-fills voiceName from an earlier chapter when a later occurrence carries none', async () => {
+    // #2040 Wave 3 review round 1 IMPORTANT — the same forward-fill pattern
+    // as characterId above (line ~370's `?? existing?.characterId`), but for
+    // `voiceName` (`?? existing?.voiceName`). The characterId case was
+    // already covered by the accumulation test above; this pins voiceName's
+    // sibling branch, which every other multi-occurrence fixture in this
+    // file leaves unexercised (baseVoiceName unset on both segments).
+    writeSegmentsArray('01-one', [
+      { characterId: 'timkin', sentenceIds: [1], baseVoiceName: 'qwen-oduvan' },
+    ]);
+    writeSegmentsArray('02-two', [{ characterId: 'timkin', sentenceIds: [4] }]);
+    await expect(
+      collectOrphanedCharacterFallbacks(bookDir, chapters, liveCast, {}),
+    ).resolves.toEqual({
+      timkin: {
+        characterId: undefined,
+        voiceName: 'qwen-oduvan',
         resolution: 'unresolved',
         resolvedCharacterId: undefined,
         segments: 2,

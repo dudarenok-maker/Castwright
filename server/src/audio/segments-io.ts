@@ -18,7 +18,6 @@ import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { normaliseIdKey } from '../util/character-id.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -324,38 +323,33 @@ export async function collectOrphanedCharacterFallbacks(
   const segs = await loadSegmentsFiles(bookDir, chapters);
   const resolver = buildCastResolver(cast, castIdHistory);
 
-  /* Labels WHY an id already known to resolve (per `resolver.resolve()`
-     below) resolved that way — it never decides resolution itself, the
-     resolver remains the sole authority on whether an id resolves and to
-     what. Filtered to history entries whose target is a live cast id, the
-     same filter `buildCastResolver` applies internally, so this can't
-     disagree with it (e.g. label a dead-target history entry as 'alias' when
-     the resolver actually fell through to some other tier, or to nothing). */
-  const liveIds = new Set(cast.map((c) => c.id));
-  const historyFromIds = new Set(
-    Object.entries(castIdHistory)
-      .filter(([, to]) => liveIds.has(to))
-      .map(([from]) => from),
-  );
-  const normalisedHistoryFromIds = new Set(
-    [...historyFromIds].map((id) => normaliseIdKey(id)),
-  );
-
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {
       if (!s.characterId) continue;
       const resolution = resolver.resolve(s.characterId);
       /* An exact live cast id is not an orphan at all — never reported. */
-      if (resolution && !resolution.viaAlias) continue;
+      if (resolution?.via === 'exact') continue;
 
-      const resolvedViaHistory =
-        historyFromIds.has(s.characterId) ||
-        normalisedHistoryFromIds.has(normaliseIdKey(s.characterId));
+      /* #2040 Wave 3 review round 1 CRITICAL — read WHICH tier matched
+         straight off `resolution.via`, the resolver's own precedence-ordered
+         record, rather than recomputing "does this look like history" here.
+         A recomputation that only checks history-key membership can disagree
+         with the resolver: a normalised id can simultaneously collide with a
+         live cast id (tier 3, `'normalised-id'`) AND an unrelated history
+         entry that happens to normalise to the same key (tier 4,
+         `'normalised-history'`) — only the resolver's own tier order knows
+         tier 3 won. See cast-resolve.ts's `via` field and
+         cast-resolve.test.ts's "tier 3 beats tier 4" regression. `'history'`
+         and `'normalised-history'` both surface as `'alias'` (resolved
+         through the id-history side-table, exact or normalised key);
+         `'normalised-id'` surfaces as `'normalised'` (resolved against a
+         live cast id with no history involved). `'exact'` already `continue`d
+         above, so it can't reach here. */
       const resolutionTag: OrphanedCharacterFallback['resolution'] = !resolution
         ? 'unresolved'
-        : resolvedViaHistory
-          ? 'alias'
-          : 'normalised';
+        : resolution.via === 'normalised-id'
+          ? 'normalised'
+          : 'alias';
 
       const existing = out[s.characterId];
       out[s.characterId] = {
