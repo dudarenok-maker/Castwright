@@ -65,17 +65,18 @@ owner: null
 
 1. **`cast.json` is the identity of record.** The analyzer's `characterId` — and
    the analysis cache's, and a frozen `segments.json`'s — is an *alias* into that
-   identity, never the identity itself. `server/src/store/cast-resolve.ts:63-136`
+   identity, never the identity itself. `server/src/store/cast-resolve.ts:63-140`
    (`buildCastResolver`) is the only place that decides whether an alias names a
    live cast row.
 2. **Any code path that changes a persisted character id calls `retireCharacterId`
-   through the choke point.** `server/src/store/cast-id-history.ts:98-140`
+   through the choke point.** `server/src/store/cast-id-history.ts:98-163`
    (`retireCharacterId`) records the old id before the new one takes over, and
    repoints any existing entry that pointed at the old id so resolution stays a
-   single O(1) lookup. The five original call sites are enumerated in the design
-   spec §4.4; a sixth (`scripts/repair-cast-id-drift.mjs`) writes the same
-   side-table out-of-process, gated on no live server being reachable
-   (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:689`).
+   single O(1) lookup — both on the direct-reversal branch (`:126-136`) and the
+   general case (the repoint loop at `:151-158`). The five original call sites
+   are enumerated in the design spec §4.4; a sixth (`scripts/repair-cast-id-drift.mjs`)
+   writes the same side-table out-of-process, gated on no live server being
+   reachable (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:689`).
 3. **The resolver never matches on display names.** `buildCastResolver` is
    ids-only — four tiers, first hit wins: a live exact id (`via: 'exact'`), a
    non-rejected `rejected`-checked-after-exact history hit (`via: 'history'`), a
@@ -118,11 +119,15 @@ down, each a deliberate controller ruling made during implementation:
   orphaned segment resolves through the *normalised* tiers, where there is no
   history entry to remove. A reject that only deleted history entries would have
   been a button that does nothing on 100% of currently-affected books. The shipped
-  design writes **both**: a `rejected` list in `cast-id-history.json`, honoured by
-  `buildCastResolver` (this is what actually stops read-side resolution), and the
-  one-sided `notLinkedTo` edge on the live character naming the orphaned id (this
-  is what stops the next re-analysis's name matcher from re-recording it — spec
-  §4.6's original durability requirement, which stays correct as written).
+  design (`server/src/routes/cast-reject-orphan.ts`) writes **three** things: a
+  `rejected` list in `cast-id-history.json`, honoured by `buildCastResolver` (this
+  is what actually stops read-side resolution); the one-sided `notLinkedTo` edge on
+  the live character naming the orphaned id (this is what stops the next
+  re-analysis's name matcher from re-recording it — spec §4.6's original durability
+  requirement, which stays correct as written); and, non-fatally
+  (`cast-reject-orphan.ts:148`), a `forgetSupersededId` call that clears any stale
+  `supersededBy` entry for the same id — redundant with `rejected` for resolution
+  purposes, but left in so a rejected id doesn't linger in two places at once.
 - **`rejected` is checked after the `exact` tier, not ahead of all four.** The
   first implementation round followed the brief literally (ahead of all four
   tiers, including `exact`) and it was wrong: a rejected id is, by construction,
@@ -260,11 +265,11 @@ redux → rendered DOM, not the server-side aggregation (which has its own
 - **An in-app undo for a rejected reconciliation.** Filed as
   [#2089](https://github.com/dudarenok-maker/Castwright/issues/2089) (fs-78) —
   rejecting is durable and irreversible today, with no confirm step.
-- **Auto-repairing the interim cast.json write path** and **`cast-create`
-  re-minting a merged-away id** — filed as
-  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) and
-  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086)
-  respectively during Wave 2.
+- **`cast-create` re-minting a merged-away character id** — filed as
+  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) — and
+  **auto-repairing the interim cast.json write path** — filed as
+  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) — both
+  during Wave 2.
 - **The repair script's `--apply` liveness probe missing an auto-rebound port** —
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS
