@@ -23,8 +23,10 @@ const BOOK_TWO = 'Book Two';
 const OTHER_SERIES = 'The Undertow';
 const OTHER_BOOK = 'Other Book';
 /* Alpha/Beta's book identity and deliberately-seeded qwen override names
-   (beforeAll at `:787-854` below). Shared here — rather than declared inside
-   that describe — so the fs-61 describe's cleanup (`:1719`) and the
+   (beforeAll in the "GET /api/voices — cross-book identity collision on a
+   shared, no-voiceId id" describe below). Shared here — rather than
+   declared inside that describe — so the "applyOverrideToCastFiles —
+   standalone book-scoping (fs-61)" describe's cleanup and the
    position-independence check after it (fs-2077) restore/read exactly these
    literals instead of a second, independent copy that can drift out of sync
    with them (e.g. a future rename of the title moving the seed but not the
@@ -1756,13 +1758,14 @@ describe('applyOverrideToCastFiles — standalone book-scoping (fs-61)', () => {
 
     /* The second test below (no seriesFilter, no onlyBookDir) is a genuine
        workspace-wide sweep that also reaches Alpha/Beta's own 'narrator'
-       characters (same shared bare id, seeded in the "cross-book identity
-       collision" describe's beforeAll at ":787-854") — those two books stay
-       on disk for the rest of the file, so clearing (rather than restoring)
-       their override here would just be a different way of destroying that
-       describe's fixture. Put back the deliberately-seeded values instead of
-       clearing them, so this describe leaves the shared fixture exactly as
-       it found it rather than merely as it happens to be last (fs-2077). */
+       characters (same shared bare id, seeded in the "GET /api/voices —
+       cross-book identity collision on a shared, no-voiceId id" describe's
+       beforeAll) — those two books stay on disk for the rest of the file,
+       so clearing (rather than restoring) their override here would just be
+       a different way of destroying that describe's fixture. Put back the
+       deliberately-seeded values instead of clearing them, so this describe
+       leaves the shared fixture exactly as it found it rather than merely
+       as it happens to be last (fs-2077). */
     setOverrideOnDisk(workspaceRoot, ALPHA_AUTHOR, 'Standalones', ALPHA_TITLE, {
       qwen: { name: ALPHA_QWEN_OVERRIDE_NAME },
     });
