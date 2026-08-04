@@ -1108,7 +1108,20 @@ export function CastView({
                   aria-controls={autoReconciledOpen ? 'orphaned-auto-reconciled-list' : undefined}
                   className="w-full min-h-[44px] fine-pointer:min-h-0 flex items-center justify-between gap-2 p-4 text-left"
                 >
-                  <span className="text-sm font-semibold text-ink/80" role="status">
+                  {/* Fix round 3 — NOT role="status". This span is the
+                      button's only text; a live-region role on it excludes
+                      the content from the button's accessible-name-from-
+                      content computation, leaving the button with NO
+                      accessible name at all (verified: it broke
+                      getByRole('button', {name: ...}) in both Playwright and
+                      real screen readers alike — a worse defect than the
+                      over-announcement finding 8 was fixing). role="status"
+                      belongs on a non-interactive element only; the
+                      needs-your-decision advisory text above still carries
+                      it. This toggle relies on its own aria-expanded state
+                      change (announced on activation) instead of a nested
+                      live region. */}
+                  <span className="text-sm font-semibold text-ink/80">
                     {autoReconciledOrphans.length} character id
                     {autoReconciledOrphans.length === 1 ? '' : 's'} auto-reconciled
                   </span>
