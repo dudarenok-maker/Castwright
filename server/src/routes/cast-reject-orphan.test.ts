@@ -89,6 +89,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   writeBookOnDisk(initialCast);
+  // #2040 Wave 3 round-2 review, MINOR finding 5: writeBookOnDisk rewrites
+  // cast.json but never touched cast-id-history.json, so every case after
+  // the first successful reject started with `rejected: ['mayrin']` already
+  // on disk — order-coupled state a future "no rejection was recorded" case
+  // could pass vacuously against.
+  const historyPath = join(bookDir, '.audiobook', 'cast-id-history.json');
+  if (existsSync(historyPath)) rmSync(historyPath, { force: true });
 });
 
 afterAll(() => {
