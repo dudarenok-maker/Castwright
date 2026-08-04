@@ -1388,9 +1388,9 @@ live against dummy listeners (see `task-18-report.md`) — but nothing has ever
 exercised the actual `--apply` write path against the real
 `C:\AudiobookWorkspace\books` tree.
 
-**Dry-run result (round-2 review fixes applied, re-measured 2026-08-05 with
-`CACHE_DIR` correctly pointed at the checkout that ran this workspace's
-analysis — confirmed no drift since):**
+**Dry-run result (independent-review Critical C1 fix applied, re-measured
+2026-08-05 with `CACHE_DIR` correctly pointed at the checkout that ran this
+workspace's analysis):**
 
 - **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
   and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
@@ -1423,29 +1423,40 @@ analysis — confirmed no drift since):**
   disk. This, not the report-only total above, is the actual damage figure.
 - **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
   a workspace-wide file search before and after every dry run.
-- **0 books missing analysis-cache evidence** — the round-2 review's
-  fail-closed fix (see the precondition bullet below): a dry run from a
-  worktree whose own `server/handoff/cache` doesn't hold these 20 real books
-  reports **20** books missing cache evidence and **0** auto-recordable
-  aliases instead, since the cross-source ambiguity veto can't see cache
-  ambiguity without the file. Confirm this line reads `0` before trusting any
-  of the numbers above, and before `--apply`. As of #2093 (residual 1), "0"
-  here is a stronger guarantee than it was: the gate is now the cache file
-  existing **and parsing**, not merely being present at that path — a
-  present-but-corrupt/truncated cache file used to count as "available" and
-  read this line as `0` even though the cross-source ambiguity veto couldn't
-  actually see anything in it; it now counts as missing too, verified against
-  a deliberately corrupt fixture in `scripts/tests/repair-cast-id-drift.test.mjs`.
+- **1 book missing analysis-cache evidence** (up from a previously-reported
+  `0` — see below) — *Unlocked*'s cache file
+  (`server/handoff/cache/mns_dLurz4I544.json`) exists and parses as valid
+  JSON, but names **zero** characters (neither `stage1.characters` nor any
+  `chapterCast` entry — both are optional per the schema, and this file
+  happens to have neither populated). Found by independent review (Critical
+  C1) after the #2093 residual-1 fix first shipped gating only on "exists and
+  parses": the cross-source ambiguity veto doesn't consume "did it parse", it
+  consumes the cache's actual name/id entries, so a validly-parsing,
+  evidence-free file was exactly as blind to the veto as a missing one, while
+  reading this summary line as `0`. `isCacheAvailable` now also requires at
+  least one name/id entry; re-measuring the SAME real cache directory (76
+  files parse, 0 unparseable, 10 parse with zero character entries — only
+  *Unlocked*'s currently has an orphaned/reported id behind it) surfaces this
+  one book. **Consequence for this row: `--apply` now refuses outright for
+  the WHOLE workspace run until this is resolved** — either the checkout's
+  analysis cache for *Unlocked* is regenerated with real character data, or
+  a decision is made about how to proceed with it excluded from a run.
+  Confirm this line reads `0` before trusting the auto-record/report-only
+  numbers above or running `--apply`; as of today it reads `1`, so `--apply`
+  is currently refused by design.
 
 - **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
   fresh worktree's own (git-ignored, per-checkout — see the script's module
   doc comment). Run the dry run first and confirm the summary reads `books
   missing analysis-cache evidence: 0` — `--apply` now refuses outright
   otherwise (round-2 review fail-closed fix for the cross-source ambiguity
-  veto's blind spot when cache evidence is absent; #2093 residual 1 tightened
-  this from "the file exists" to "the file exists and parses", so a
-  present-but-corrupt cache file no longer slips past this precondition
-  reading `0`).
+  veto's blind spot when cache evidence is absent; #2093 residual 1,
+  strengthened by independent-review Critical C1, tightened this from "the
+  file exists" to "the file exists, parses, AND names at least one
+  character" — a present-but-corrupt OR present-but-empty cache file no
+  longer slips past this precondition reading `0`). **As measured today this
+  precondition is NOT satisfied** (`1`, not `0` — see the dry-run result
+  above); the acceptance run cannot proceed to `--apply` until it is.
 - Stop any real server bound to the configured probe port(s) (default `8080`
   and the LAN HTTPS `8443`) **or their auto-rebind range** (up to 19 ports
   above each default, matching `listenWithAutoRebind` — #2090) — `--apply`

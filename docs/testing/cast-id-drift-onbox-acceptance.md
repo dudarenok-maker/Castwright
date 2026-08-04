@@ -277,17 +277,26 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
 - **17 re-render rows, 120 segments** (unconditional on auto-record status) —
   the actual damage figure.
 - **0 books modified.**
-- **0 books missing analysis-cache evidence** — confirm this reads `0` before
-  trusting any number above or running `--apply` (see §8.3's `CACHE_DIR`
-  precondition); a dry run from a worktree with no cache of its own for these
-  20 books instead reports 20 books missing cache evidence and 0
-  auto-recordable aliases, since the cross-source ambiguity veto can't see
-  cache ambiguity without the file (round-2 review fail-closed fix). As of
-  #2093 (residual 1), this is a stronger check than "the file is present at
-  that path" — it's "the file exists AND parses"; a present-but-corrupt or
-  truncated cache file now also counts as missing, closing the gap where it
-  used to read `0` while the ambiguity veto still couldn't see anything
-  usable in it.
+- **1 book missing analysis-cache evidence** (up from a previously-reported
+  `0`, re-measured 2026-08-05 after independent-review Critical C1) —
+  confirm this reads `0` before trusting any number above or running
+  `--apply` (see §8.3's `CACHE_DIR` precondition); as measured today it
+  reads `1`, so `--apply` currently refuses. A dry run from a worktree with
+  no cache of its own for these 20 books instead reports 20 books missing
+  cache evidence and 0 auto-recordable aliases, since the cross-source
+  ambiguity veto can't see cache ambiguity without the file (round-2 review
+  fail-closed fix). #2093 residual 1 first strengthened this from "the file
+  is present at that path" to "the file exists AND parses"; independent
+  review then found even that was insufficient — the ambiguity veto doesn't
+  consume "did it parse", it consumes the cache's actual character-name
+  entries, and a validly-parsing cache that names nobody is exactly as blind
+  to it as a missing file. The gate now also requires at least one name/id
+  entry. Against the real cache directory this surfaces exactly one book:
+  *Unlocked*'s cache file (`mns_dLurz4I544.json`) parses fine but names zero
+  characters (no `stage1.characters`, no populated `chapterCast`) — real,
+  not a `CACHE_DIR` misconfiguration. **`--apply` cannot proceed against the
+  whole workspace until this is resolved** (regenerate *Unlocked*'s analysis
+  cache, or decide how to proceed with it excluded).
 
 ### 8.2 Fixture
 
@@ -320,7 +329,13 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
       the cross-source ambiguity veto, since an empty cache index reads as
       "confirmed unambiguous" rather than "unknown"; #2093 residual 1
       strengthened this to ALSO refuse a present-but-corrupt/unparseable
-      cache file, which used to slip past as "available").
+      cache file, and independent-review Critical C1 strengthened it once
+      more to ALSO refuse a validly-parsing cache file that names zero
+      characters — all three used to slip past as "available"). **As
+      measured 2026-08-05, this precondition is NOT currently satisfied** —
+      the summary reads `1`, not `0` (see §8.1) — so `--apply` is refused
+      until *Unlocked*'s analysis cache is regenerated or otherwise
+      resolved.
 - [ ] No Castwright server reachable on the configured probe port(s) — default
       `8080` and the LAN HTTPS `8443` — **or their auto-rebind range** (up to
       19 ports above each, matching `listenWithAutoRebind` — #2090). `--apply`
@@ -351,13 +366,16 @@ Result: _______________________________________________________________
    workspace, with the same `WORKSPACE_DIR`/`CACHE_DIR` as every prior dry
    run.
 
-Expected console output: `mode: APPLY (writing cast-id-history.json)`,
-`auto-recordable aliases: 3 (27 segment(s))`, and
-`books missing analysis-cache evidence: 0` — matching the dry-run numbers in
-§8.1 exactly (a diverging number here means the workspace changed since the
-last dry run — stop and re-measure before trusting anything below; if the
-cache-evidence line is nonzero, `--apply` refuses outright instead — fix
-`CACHE_DIR` per §8.3 and re-run the dry run first).
+Expected console output (once §8.3's precondition is actually satisfied):
+`mode: APPLY (writing cast-id-history.json)`, `auto-recordable aliases: 3
+(27 segment(s))`, and `books missing analysis-cache evidence: 0` — matching
+the dry-run numbers in §8.1 exactly (a diverging number here means the
+workspace changed since the last dry run — stop and re-measure before
+trusting anything below; if the cache-evidence line is nonzero, `--apply`
+refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
+first). **As measured 2026-08-05 this step cannot be run yet** — the
+precondition currently reads `1`, not `0` (§8.1/§8.3), because *Unlocked*'s
+analysis cache parses but names zero characters — resolve that first.
 
 Result (console summary matches §8.1): ______________
 
