@@ -107,6 +107,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import {
   mergeAnalysisResultWithExistingCast,
+  overlayInterimCastForLiveView,
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
@@ -3621,15 +3622,17 @@ export async function runMainAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
-              /* §4.4 / Task 8 fix round 1 (item 4) — this write persists a
-                 PROVISIONAL roster (no sentence counts yet; the authoritative
-                 end-of-run write below clobbers it). Recording retirements
-                 from it can permanently claim a live id is retired, pointing
-                 at an id that never existed, with no un-record path — so
-                 don't. Only §4.4's five listed sites record. */
-              const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
+              /* §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) — this
+                 write persists a PROVISIONAL roster (no sentence counts yet;
+                 the authoritative end-of-run write below clobbers it).
+                 `overlayInterimCastForLiveView` has no id-drift name-fallback
+                 and produces no retirements — a prior id that looks dropped
+                 here may simply not have been reached yet, so it must not be
+                 able to swap a persisted id. Only §4.4's five listed sites
+                 record retirements, and none of them is this one. */
+              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergedInterim.characters,
+                characters: mergedInterim,
               });
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
@@ -3833,13 +3836,15 @@ export async function runMainAnalyzerJob(
               assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
               [],
             );
-            // §4.4 / Task 8 fix round 1 (item 4) — preview-folded roster, no
-            // sentence counts yet; the authoritative write below clobbers it.
-            // Don't record retirements from it (see the interim-write comment
-            // above for the full rationale).
-            const mergedStage1 = mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast);
+            // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
+            // preview-folded roster, no sentence counts yet; the
+            // authoritative write below clobbers it.
+            // `overlayInterimCastForLiveView` has no name-fallback and
+            // produces no retirements — see the interim-write comment above
+            // for the full rationale.
+            const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
             await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergedStage1.characters,
+              characters: mergedStage1,
             });
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
@@ -5600,13 +5605,14 @@ export async function runSubsetAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
-              // §4.4 / Task 8 fix round 1 (item 4) — provisional roster, no
-              // sentence counts yet; the authoritative write below clobbers
-              // it. Don't record retirements from it (see the main route's
-              // interim-write comment for the full rationale).
-              const mergedInterim = mergeAnalysisResultWithExistingCast(priorCastForMerge, interim);
+              // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
+              // provisional roster, no sentence counts yet; the authoritative
+              // write below clobbers it. `overlayInterimCastForLiveView` has
+              // no name-fallback and produces no retirements — see the main
+              // route's interim-write comment for the full rationale.
+              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergedInterim.characters,
+                characters: mergedInterim,
               });
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);

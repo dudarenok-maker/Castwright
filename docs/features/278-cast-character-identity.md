@@ -105,6 +105,27 @@ owner: null
    (`rankSnapshotCandidates`). Two independent rankers is the exact
    duplicate-matching-logic defect class Task 16's CRITICAL finding came from
    (see "Deviations from the spec").
+8. **An interim `cast.json` write never removes an id from the persisted
+   roster** (srv-87, #2086). The three interim ("Cast so far") writes
+   (`analysis.ts:3630`, `:3840`, `:5607`) go through
+   `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
+   which has no id-drift name-fallback and produces no `retirements` — there is
+   nothing in its return type for a caller to discard. Only the two
+   authoritative end-of-run writes (`:4880`, `:6142`) apply identity merges and
+   call `retireCharacterId`. Before this fix, a mid-run death — **or a
+   completed run whose `phase1DriftExceeded` gate skipped the authoritative
+   write** (`analysis.ts:4863`; `attributionDriftExceeded` is a normal, logged,
+   non-crash outcome, not only a process kill) — could leave a character's id
+   durably swapped in `cast.json` with no history record, orphaning that
+   character's frozen `<slug>.segments.json` entries to the narrator. Residual
+   risk this closes is **not** self-repairing: the prior belief that a damaged
+   `cast.json` "self-repairs on the next completed analysis" is false for the
+   old→new *mapping* — the next run reads the already-swapped file as its
+   prior, the analysis cache already holds the drifted id, so the fallback
+   never re-fires for that pair and no retirement is ever recorded for it. Only
+   the *file* becomes authoritative again; the mapping itself needs
+   `scripts/repair-cast-id-drift.mjs --apply` (owed, A33) or a re-render to
+   recover.
 
 ## Deviations from the spec
 
@@ -266,10 +287,10 @@ redux → rendered DOM, not the server-side aggregation (which has its own
   [#2089](https://github.com/dudarenok-maker/Castwright/issues/2089) (fs-78) —
   rejecting is durable and irreversible today, with no confirm step.
 - **`cast-create` re-minting a merged-away character id** — filed as
-  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) — and
-  **auto-repairing the interim cast.json write path** — filed as
-  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) — both
-  during Wave 2.
+  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) during
+  Wave 2. (Its sibling, auto-repairing the interim cast.json write path, was
+  also filed during Wave 2 as #2086 — that one has since shipped; see
+  invariant 8 above.)
 - **The repair script's `--apply` liveness probe missing an auto-rebound port** —
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS

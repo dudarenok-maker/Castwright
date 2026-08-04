@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   mergeAnalysisResultWithExistingCast,
+  overlayInterimCastForLiveView,
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
@@ -363,6 +364,74 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     expect(merged.find((c) => c.id === 'narrator')!.voiceUuid).toBeUndefined();
     expect(merged.find((c) => c.id === 'erzahler-char')!.voiceUuid).toBe('U-erzahler');
     expect(retirements).toEqual([]); // the real character's id must not be retired onto 'narrator'
+  });
+});
+
+describe('overlayInterimCastForLiveView (srv-87, #2086)', () => {
+  it('keeps BOTH the prior voiced row and the drifted fresh row — no id-drift name-fallback', () => {
+    // Same coalfall/coalfall-dragon shape as the authoritative-merge id-drift
+    // test above, but the interim overlay must NOT weld the two together —
+    // an interim roster is partial by construction, so a "dropped" prior row
+    // may simply not have been reached yet.
+    const existing: C[] = [
+      {
+        id: 'coalfall',
+        name: 'Coalfall',
+        voiceState: 'tuned',
+        voiceId: 'coalfall',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-coalfall' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall', lines: 0 } as C];
+    const merged = overlayInterimCastForLiveView(existing, fresh);
+    expect(merged.map((c) => c.id).sort()).toEqual(['coalfall', 'coalfall-dragon']);
+    // The prior row keeps its own voice under its own id — nothing rode onto
+    // the fresh row.
+    const prior = merged.find((c) => c.id === 'coalfall')!;
+    expect(prior.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-coalfall' } });
+    const drifted = merged.find((c) => c.id === 'coalfall-dragon')!;
+    expect(drifted.overrideTtsVoices).toBeUndefined();
+  });
+
+  it('returns the fresh roster unchanged when existing is empty', () => {
+    const fresh: C[] = [{ id: 'wren', name: 'Wren' }];
+    expect(overlayInterimCastForLiveView([], fresh)).toBe(fresh);
+  });
+
+  it('still drops an UNVOICED prior row the fresh roster omitted — no fallback rescue', () => {
+    // Without the name-fallback, an unvoiced dropped row is simply absent —
+    // same as the authoritative merge's own "does NOT re-add" behaviour for
+    // unvoiced rows, but here even a same-name fresh row must not rescue it.
+    const existing: C[] = [{ id: 'alden-old', name: 'Alden', aliases: ['Al'] }];
+    const fresh: C[] = [{ id: 'alden-new', name: 'Alden' } as C];
+    const merged = overlayInterimCastForLiveView(existing, fresh);
+    expect(merged.map((c) => c.id)).toEqual(['alden-new']);
+    expect(merged[0].aliases).toBeUndefined(); // no name-fallback match => no alias ride-over
+  });
+
+  it('parity: on a no-drift fixture, matches mergeAnalysisResultWithExistingCast(...).characters exactly', () => {
+    // The anti-drift guard for the two code paths not silently diverging
+    // later — with no id drift there is nothing for the name-fallback to
+    // do, so both entry points must produce byte-identical output.
+    const existing: C[] = [
+      {
+        id: 'berrin',
+        name: 'Berrin',
+        voiceState: 'generated',
+        overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
+        lines: 58,
+      },
+      { id: 'wisp', name: 'Wisp', voiceId: 'wisp', voiceState: 'reused' },
+    ];
+    const fresh: C[] = [
+      { id: 'berrin', name: 'Berrin', lines: 61 },
+      { id: 'wisp', name: 'Wisp', lines: 12 },
+      { id: 'new-char', name: 'New Char', lines: 3 },
+    ];
+    const interim = overlayInterimCastForLiveView(existing, fresh);
+    const authoritative = mergeAnalysisResultWithExistingCast(existing, fresh).characters;
+    expect(interim).toEqual(authoritative);
   });
 });
 
