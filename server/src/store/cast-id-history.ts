@@ -284,18 +284,19 @@ export async function forgetSupersededId(bookDir: string, id: string): Promise<v
   });
 }
 
-/** Record that `id` must never again resolve through ANY of
- *  `buildCastResolver`'s four tiers (#2040 Task 17, spec §4.6's "reject a
- *  reconciliation"). `buildCastResolver` checks `rejected` ahead of
- *  exact/history/normalised-id/normalised-history, so this is what actually
- *  stops read-side resolution — including for the normalised tiers, which
- *  have no `supersededBy` entry for `forgetSupersededId` to remove (see the
- *  `rejected` field's own doc comment on `CastIdHistory` for why a
- *  history-only reject would be a no-op on those). Idempotent: rejecting an
- *  id already in the list is a no-op, no re-write. Does not touch
- *  `supersededBy` itself — pair with `forgetSupersededId` when the caller
- *  also wants a stale alias entry gone; kept separate so each primitive
- *  stays single-purpose and independently testable. */
+/** Record that `id` must never again resolve through the history /
+ *  normalised-id / normalised-history tiers (#2040 Task 17, spec §4.6's
+ *  "reject a reconciliation") — NOT the `exact` tier (fix round 1: a live
+ *  cast row with this exact id always wins over a stale rejection; see the
+ *  `rejected` field's own doc comment on `CastIdHistory` for the corrected
+ *  precedence and why). For the three tiers it DOES block, this is what
+ *  actually stops read-side resolution — including for the two normalised
+ *  tiers, which have no `supersededBy` entry for `forgetSupersededId` to
+ *  remove. Idempotent: rejecting an id already in the list is a no-op, no
+ *  re-write. Does not touch `supersededBy` itself — pair with
+ *  `forgetSupersededId` when the caller also wants a stale alias entry gone;
+ *  kept separate so each primitive stays single-purpose and independently
+ *  testable. */
 export async function rejectOrphanedId(bookDir: string, id: string): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     const history = await loadCastIdHistory(bookDir);

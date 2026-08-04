@@ -15,34 +15,57 @@
    rejection durable:
 
      1. `orphanedId` is added to cast-id-history.json's `rejected` list
-        (`rejectOrphanedId`) — checked by `buildCastResolver` ahead of ALL
-        FOUR tiers, so it blocks re-resolution uniformly regardless of which
-        tier would otherwise have matched. Any stale `supersededBy` entry
-        naming `orphanedId` is also forgotten (`forgetSupersededId`) —
-        redundant with `rejected` for resolution purposes, but leaves the
-        history file honest rather than carrying a dead alias entry
-        `rejected` merely shadows.
+        (`rejectOrphanedId`) — checked by `buildCastResolver` ahead of the
+        history / normalised-id / normalised-history tiers (fix round 1: NOT
+        the `exact` tier — a live cast row with this exact id always wins,
+        see `rejected`'s own doc comment on `CastIdHistory`), so it blocks
+        re-resolution for every tier a truly orphaned id could otherwise
+        match through. Any stale `supersededBy` entry naming `orphanedId` is
+        also forgotten (`forgetSupersededId`) — redundant with `rejected` for
+        resolution purposes, but leaves the history file honest rather than
+        carrying a dead alias entry `rejected` merely shadows.
      2. A one-sided `notLinkedTo` edge is written onto the LIVE character
         (`:characterId`), naming `orphanedId`. This is what stops §4.4's
-        NAME matcher (`remap-fresh-to-prior.ts`, `merge-analysis-cast.ts`)
-        from re-recording the same match on the next re-analysis — id
-        rejection alone doesn't touch name-based matching. One-sided is
-        correct here (unlike the symmetric cross-book pair
+        NAME matcher from re-recording the same match on the next
+        re-analysis — id rejection alone doesn't touch name-based matching.
+        One-sided is correct here (unlike the symmetric cross-book pair
         `cast-not-linked-to.ts` writes): the orphaned id has no cast row of
-        its own, so there is no reciprocal side to write. Both of
-        `remap-fresh-to-prior.ts`'s `notLinkedToId` and
-        `merge-analysis-cast.ts`'s `groupHasNotLinkedEdge` match on
-        `characterId` alone, ignoring `bookId`, so a same-book edge (this
-        book's own `bookId`, naming the orphaned id as the "characterId")
-        binds correctly even though `notLinkedTo` was designed for
-        cross-book pairs.
+        its own, so there is no reciprocal side to write.
+
+        Durability holds via ONE of the two §4.4 matchers, not both — they
+        are not equivalent, and this route only needs (and gets) the one
+        that fires early enough to matter. `remap-fresh-to-prior.ts`'s
+        `notLinkedToId` (fix round 2 review finding) matches on
+        `characterId` alone, ignoring `bookId`, so it reads THIS edge
+        directly off the live character's own `notLinkedTo` array the
+        moment a re-analysis mints a fresh row whose id is `orphanedId`
+        again (the common case — the orphaned id is usually the character's
+        own name-derived slug) — that's the by-NAME remap this route exists
+        to block, and it's blocked at the point the fresh row is considered
+        for linking, before any collapse happens. `merge-analysis-cast.ts`'s
+        `groupHasNotLinkedEdge` is a narrower, LATER backstop: it only
+        blocks a same-normalised-name COLLAPSE once a live row carrying
+        `orphanedId` already coexists in the group being deduped — i.e. it
+        can't be what stops the initial re-link, only a secondary guard for
+        the case where an un-remapped fresh row survives into the same cast.
+        Correctness here rests on the first matcher; the second is inert for
+        this route's purposes until that later, narrower scenario arises.
 
    cast.json (the notLinkedTo edge) is written first — it's the authoritative
    record (spec §4.1) and the write cast-merge.ts's own precedent orders
-   first. The id-history writes are wrapped in try/catch, same as
-   cast-merge.ts's `retireCharacterId` call: the side-table is never
-   authoritative for identity, so losing an entry degrades to today's
-   behaviour, while losing the notLinkedTo edge would not. */
+   first. The two id-history writes are NOT treated alike (fix round 2
+   review): `forgetSupersededId` stays non-fatal, mirroring cast-merge.ts's
+   `retireCharacterId` precedent (the side-table is never authoritative for
+   identity, so losing a stale alias entry degrades to today's behaviour).
+   `rejectOrphanedId` does NOT — for the two normalised tiers, where all 188
+   currently-real orphaned segments live, `rejected` is the ONLY thing that
+   enforces the reject (see point 1 above); a swallowed write failure there
+   would report success to the user while the reject stayed purely cosmetic
+   at render time, the exact silent-wrong-outcome shape #2040 exists to
+   eliminate. Its failure is surfaced as a 500 instead. The route is safe to
+   retry on that 500: the notLinkedTo write already happened (or was already
+   idempotent), and `appendNotLinked`/`rejectOrphanedId` are both no-ops on
+   a repeat call once they've actually landed. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -84,6 +107,16 @@ castRejectOrphanRouter.post(
         error: 'bookId (path), characterId (path), and orphanedId are required.',
       });
     }
+    /* Fix round 2 review finding 4 — mirrors cast-not-linked-to.ts's self-pair
+       400. Without this, characterId === orphanedId would write a self
+       notLinkedTo edge that remapFreshToPriorIds' notLinkedToId would later
+       honour and use to refuse a legitimate future by-name remap of this
+       character onto itself (a no-op that can never fire correctly, since a
+       row is never remapped onto its own id) — a dead, misleading edge with
+       no benefit. */
+    if (characterId === orphanedId) {
+      return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });
+    }
 
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
@@ -105,15 +138,37 @@ castRejectOrphanRouter.post(
       await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
     }
 
-    /* Non-fatal, mirroring cast-merge.ts's retireCharacterId precedent — the
-       side-table is never authoritative for identity (spec §4.1), so a
-       write failure here degrades to today's behaviour rather than failing
-       the whole reject. */
+    /* Non-fatal (fix round 2 review — see the module doc's closing
+       paragraph for why this one stays swallowed while rejectOrphanedId
+       below does not): a stale `supersededBy` entry left behind here is
+       redundant-but-harmless, since `rejected` (written next) independently
+       blocks resolution through every tier that entry could have mattered
+       for. */
     try {
       await forgetSupersededId(bookDir, orphanedId);
+    } catch (forgetErr) {
+      console.warn(
+        '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
+        forgetErr,
+      );
+    }
+
+    /* FATAL, unlike the above (fix round 2 review, upgraded from non-fatal):
+       for the two normalised tiers — where all 188 currently-real orphaned
+       segments live — `rejected` is the ONLY mechanism that enforces this
+       reject. A swallowed failure here would report 200/success to the user
+       while the reject stayed purely cosmetic at render time. */
+    try {
       await rejectOrphanedId(bookDir, orphanedId);
-    } catch (historyErr) {
-      console.warn('[cast-reject-orphan] failed to record rejection in cast-id-history', historyErr);
+    } catch (rejectErr) {
+      console.error(
+        '[cast-reject-orphan] failed to record the rejection in cast-id-history.json — surfacing as a failure',
+        rejectErr,
+      );
+      return res.status(500).json({
+        error:
+          'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
+      });
     }
 
     console.log(

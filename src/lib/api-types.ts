@@ -2401,13 +2401,16 @@ export interface paths {
          *     side-table or a normalised-key match) or didn't resolve at all. This
          *     route records "orphanedId is NOT the same character as characterId":
          *     it adds `orphanedId` to `cast-id-history.json`'s `rejected` list
-         *     (checked by the server's id resolver ahead of every resolution tier,
-         *     so re-resolution is blocked regardless of which tier would otherwise
-         *     have matched) and writes a one-sided `notLinkedTo` edge onto
-         *     `characterId` naming `orphanedId`, so the next re-analysis's name
-         *     matcher does not simply re-record the same match. Idempotent — a
-         *     repeat call for the same pair is a no-op on cast.json, though the
-         *     rejection is still (re-)recorded.
+         *     (checked by the server's id resolver AFTER the exact-id tier but
+         *     ahead of the history / normalised-id / normalised-history tiers — a
+         *     live cast row with this exact id always wins over a stale rejection)
+         *     and writes a one-sided `notLinkedTo` edge onto `characterId` naming
+         *     `orphanedId`, so the next re-analysis's name matcher does not simply
+         *     re-record the same match. Idempotent — a repeat call for the same
+         *     pair is a no-op on cast.json, though the rejection is still
+         *     (re-)recorded. `rejected`-list write failures surface as a 500 (it is
+         *     the only mechanism enforcing the reject for a normalised-tier match);
+         *     a stale `supersededBy`-entry cleanup failure does not.
          */
         post: operations["rejectOrphanMatch"];
         delete?: never;
@@ -5434,7 +5437,7 @@ export interface components {
             orphanedId: string;
         };
         RejectOrphanMatchResponse: {
-            /** @description The live character (path param */
+            /** @description The live character (path param, echoed back). */
             characterId: string;
             orphanedId: string;
             /** @description True when the notLinkedTo edge already existed (idempotent re-reject). */
@@ -9842,7 +9845,7 @@ export interface operations {
                     "application/json": components["schemas"]["RejectOrphanMatchResponse"];
                 };
             };
-            /** @description Missing fields */
+            /** @description Missing fields, or characterId/orphanedId self-pair */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -9858,6 +9861,13 @@ export interface operations {
             };
             /** @description Book has no cast on disk yet */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Failed to durably record the rejection in cast-id-history.json — retry */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

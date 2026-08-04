@@ -51,7 +51,7 @@ import {
 import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
-import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -464,23 +464,25 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        route's outer try/catch as a whole-request 500 — it would have been
        inert only because `loadCastIdHistory` itself is documented to never
        throw, and this collector must not depend on that other module's
-       invariant to stay graceful. */
-    const orphanedCharacterFallbackHistory = await loadCastIdHistory(bookDir)
-      .then((h) => h.supersededBy)
-      .catch(() => ({}));
+       invariant to stay graceful.
 
-    /* #2040 Task 17 — same own-statement-with-own-.catch discipline as
-       `orphanedCharacterFallbackHistory` just above, and for the identical
-       reason: an argument-position expression's throw would bypass the
-       collector call's trailing `.catch()` entirely. `rejected` is the list
-       of orphaned ids the user has explicitly said are NOT the same
-       character as whatever they'd otherwise resolve onto (the banner's
-       "not the same character" action) — threaded into the collector so a
-       just-rejected reconciliation reports as unresolved on this very
-       hydrate, not the next one. */
-    const orphanedCharacterFallbackRejected = await loadCastIdHistory(bookDir)
-      .then((h) => h.rejected ?? [])
-      .catch(() => [] as string[]);
+       #2040 Task 17 fix round 2 review — a SINGLE load, not two. This used
+       to be two independent `loadCastIdHistory(bookDir)` calls (one
+       `.then`ing `.supersededBy`, one `.then`ing `.rejected`), which can
+       observe two different file states if a write lands between them (the
+       exact split-object footgun fix round 1 closed for `buildCastResolver`
+       itself, re-opened here one level up). `supersededBy`/`rejected` are
+       both derived from the one awaited object below. */
+    const orphanedCharacterFallbackHistoryFile: CastIdHistory = await loadCastIdHistory(
+      bookDir,
+    ).catch(() => ({ schema: 1 as const, supersededBy: {} }));
+    const orphanedCharacterFallbackHistory = orphanedCharacterFallbackHistoryFile.supersededBy;
+    /* `rejected` is the list of orphaned ids the user has explicitly said
+       are NOT the same character as whatever they'd otherwise resolve onto
+       (the banner's "not the same character" action) — threaded into the
+       collector so a just-rejected reconciliation reports as unresolved on
+       this very hydrate, not the next one. */
+    const orphanedCharacterFallbackRejected = orphanedCharacterFallbackHistoryFile.rejected ?? [];
 
     /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
        render-time substitution, aggregated the same way as

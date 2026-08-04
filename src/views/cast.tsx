@@ -40,6 +40,7 @@ import type {
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { castActions, selectCastTierByCharacterId } from '../store/cast-slice';
+import type { OrphanedCharacterFallback } from '../store/cast-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
@@ -107,25 +108,13 @@ interface Props {
    preloaded test stores), keeping the selector cheap. */
 const EMPTY_FALLBACK_MAP: Record<string, string> = {};
 
-/* #2023, widened #2040 Wave 3 — the orphaned-characterId fallback map's
-   value shape, mirroring CastState['orphanedCharacterFallbacks'] in
-   cast-slice.ts exactly (that slice has no exported type for it to import).
-   Task 16 left this shape stale at the OLD two-field form because the
-   banner only ever read the map's KEYS at the time — now that the Task 17
-   split reads `resolution`/`resolvedCharacterId`/`segments` too, the stale
-   annotation would make the `?? EMPTY_ORPHANED_FALLBACK_MAP` fallback a
-   union with a variant missing those fields. */
-interface OrphanedFallbackEntry {
-  characterId?: string;
-  voiceName?: string;
-  resolution: 'alias' | 'normalised' | 'unresolved';
-  resolvedCharacterId?: string;
-  segments: number;
-}
-
 /* Same stable-reference trick as EMPTY_FALLBACK_MAP above, for the
-   orphaned-characterId fallback map. */
-const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedFallbackEntry> = {};
+   orphaned-characterId fallback map. Value type imported from cast-slice.ts
+   (fix round 2 review finding 6) rather than re-declared here — a local
+   re-declaration is exactly the drift Task 16 left (a stale, unexported
+   two-field shape) that Task 17 had to repair once this view started
+   reading values instead of just keys. */
+const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {};
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -249,10 +238,6 @@ export function CastView({
      row of its own to attach one to). */
   const orphanedCharacterFallbacks = useAppSelector(
     (s) => s.cast.orphanedCharacterFallbacks ?? EMPTY_ORPHANED_FALLBACK_MAP,
-  );
-  const orphanedFallbackIds = useMemo(
-    () => Object.keys(orphanedCharacterFallbacks).sort(),
-    [orphanedCharacterFallbacks],
   );
   /* #2040 Task 17 — split the orphan map into the banner's two sections.
      Auto-reconciled (resolution 'alias' | 'normalised') already carries a
@@ -1035,9 +1020,8 @@ export function CastView({
             substitution visible and lets the user correct a wrong
             reconciliation (previously logged once per orphan id per render
             and surfaced nowhere else). */}
-        {orphanedFallbackIds.length > 0 && (
+        {orphanedEntries.length > 0 && (
           <div
-            role="status"
             data-testid="orphaned-character-fallback-banner"
             className="w-full mb-4 rounded-3xl border border-amber-200 bg-amber-50/60 text-left overflow-hidden"
           >
@@ -1048,7 +1032,13 @@ export function CastView({
                     <IconAlertTri className="w-5 h-5" />
                   </span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-ink">
+                    {/* Fix round 2 review finding 8 — `role="status"` scoped to
+                        just this advisory summary text, not the whole
+                        interactive container (select + buttons + disclosure)
+                        it used to wrap: a select change or a row's reject
+                        action would otherwise re-announce the entire region
+                        on every mutation. */}
+                    <p className="text-sm font-bold text-ink" role="status">
                       {needsDecisionOrphans.length === 1
                         ? '1 character id needs your decision'
                         : `${needsDecisionOrphans.length} character ids need your decision`}
@@ -1109,9 +1099,16 @@ export function CastView({
                   type="button"
                   onClick={() => setAutoReconciledOpen((o) => !o)}
                   aria-expanded={autoReconciledOpen}
+                  /* Fix round 2 review finding 8 — points at the disclosure's
+                     own <ul> (below) by id. Only set while expanded: the <ul>
+                     doesn't exist in the DOM at all while collapsed (it's
+                     conditionally mounted, not just hidden), so an
+                     unconditional aria-controls would reference a
+                     currently-absent id in the common (collapsed) state. */
+                  aria-controls={autoReconciledOpen ? 'orphaned-auto-reconciled-list' : undefined}
                   className="w-full min-h-[44px] fine-pointer:min-h-0 flex items-center justify-between gap-2 p-4 text-left"
                 >
-                  <span className="text-sm font-semibold text-ink/80">
+                  <span className="text-sm font-semibold text-ink/80" role="status">
                     {autoReconciledOrphans.length} character id
                     {autoReconciledOrphans.length === 1 ? '' : 's'} auto-reconciled
                   </span>
@@ -1120,7 +1117,11 @@ export function CastView({
                   />
                 </button>
                 {autoReconciledOpen && (
-                  <ul data-testid="orphaned-auto-reconciled" className="flex flex-col gap-2 px-4 pb-4">
+                  <ul
+                    id="orphaned-auto-reconciled-list"
+                    data-testid="orphaned-auto-reconciled"
+                    className="flex flex-col gap-2 px-4 pb-4"
+                  >
                     {autoReconciledOrphans.map(([orphanedId, info]) => {
                       const resolvedName =
                         characters.find((c) => c.id === info.resolvedCharacterId)?.name ??

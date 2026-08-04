@@ -127,6 +127,19 @@ describe('POST /api/books/:bookId/cast/:characterId/reject-orphan-match', () => 
     expect(res.status).toBe(409);
   });
 
+  it('#2040 Task 17 fix round 2 finding 4 — rejects a self-pair (characterId === orphanedId)', async () => {
+    // Without this guard, a self notLinkedTo edge would later be honoured by
+    // remapFreshToPriorIds' notLinkedToId and refuse a legitimate future
+    // by-name remap of this character onto itself — a dead, misleading edge.
+    const res = await callReject(bookId, 'mairin', { orphanedId: 'mairin' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/self-pair/i);
+
+    const cast = readCast();
+    const mairin = cast.characters.find((c) => c.id === 'mairin');
+    expect(mairin?.notLinkedTo).toBeUndefined();
+  });
+
   it('writes a one-sided notLinkedTo edge naming the orphaned id, and echoes the pair', async () => {
     const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);

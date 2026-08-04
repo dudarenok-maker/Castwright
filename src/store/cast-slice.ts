@@ -52,6 +52,20 @@ function overlaySnapshotEntry(existing: Character | undefined, inc: Character): 
   };
 }
 
+/** #2023, widened #2040 Wave 3 (Task 16) — one orphaned-characterId map
+    entry's resolution info. Exported (fix round 2 review finding 6) so
+    consumers — `src/views/cast.tsx`'s banner split, in particular — import
+    this instead of re-declaring the same shape by hand, which is exactly
+    the drift Task 16 left for Task 17 to repair (`EMPTY_ORPHANED_FALLBACK_MAP`
+    had gone stale at the OLD two-field shape). */
+export interface OrphanedCharacterFallback {
+  characterId?: string;
+  voiceName?: string;
+  resolution: 'alias' | 'normalised' | 'unresolved';
+  resolvedCharacterId?: string;
+  segments: number;
+}
+
 export interface CastState {
   characters: Character[];
   /** fe-16 — characterId → engine the character actually rendered in when it
@@ -65,17 +79,8 @@ export interface CastState {
       above, but keyed by a manuscript id that does NOT exactly match a live
       cast id rather than a real cast id whose engine changed. Optional for
       the same reason as its sibling — selectors read it through a `?? {}`
-      guard (`src/views/cast.tsx` reads only the map's KEYS today). */
-  orphanedCharacterFallbacks?: Record<
-    string,
-    {
-      characterId?: string;
-      voiceName?: string;
-      resolution: 'alias' | 'normalised' | 'unresolved';
-      resolvedCharacterId?: string;
-      segments: number;
-    }
-  >;
+      guard. */
+  orphanedCharacterFallbacks?: Record<string, OrphanedCharacterFallback>;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -108,18 +113,7 @@ export const castSlice = createSlice({
        above. */
     setOrphanedCharacterFallbacks: (
       s,
-      a: PayloadAction<
-        Record<
-          string,
-          {
-            characterId?: string;
-            voiceName?: string;
-            resolution: 'alias' | 'normalised' | 'unresolved';
-            resolvedCharacterId?: string;
-            segments: number;
-          }
-        >
-      >,
+      a: PayloadAction<Record<string, OrphanedCharacterFallback>>,
     ) => {
       s.orphanedCharacterFallbacks = a.payload ?? {};
     },
@@ -599,8 +593,9 @@ export const castSlice = createSlice({
        same character as the one it resolved onto (or was compared
        against)" via the orphaned-character-fallback banner's "not the same
        character" action. The server has recorded the rejection durably
-       (cast-id-history.json's `rejected` list, honoured ahead of every
-       resolution tier) — this mirrors that into the local orphan-fallback
+       (cast-id-history.json's `rejected` list, honoured after the exact-id
+       tier but ahead of the history / normalised-id / normalised-history
+       tiers — fix round 1) — this mirrors that into the local orphan-fallback
        map so the banner immediately reflects it as unresolved, matching
        what the next book-state hydrate would report, rather than
        continuing to show the auto-match the user just rejected. No-op for
