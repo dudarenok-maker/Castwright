@@ -282,7 +282,12 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
   precondition); a dry run from a worktree with no cache of its own for these
   20 books instead reports 20 books missing cache evidence and 0
   auto-recordable aliases, since the cross-source ambiguity veto can't see
-  cache ambiguity without the file (round-2 review fail-closed fix).
+  cache ambiguity without the file (round-2 review fail-closed fix). As of
+  #2093 (residual 1), this is a stronger check than "the file is present at
+  that path" — it's "the file exists AND parses"; a present-but-corrupt or
+  truncated cache file now also counts as missing, closing the gap where it
+  used to read `0` while the ambiguity veto still couldn't see anything
+  usable in it.
 
 ### 8.2 Fixture
 
@@ -313,10 +318,14 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
       before doing anything else — `--apply` now refuses outright otherwise
       (round-2 review fail-closed fix: a missing cache file silently defeats
       the cross-source ambiguity veto, since an empty cache index reads as
-      "confirmed unambiguous" rather than "unknown").
+      "confirmed unambiguous" rather than "unknown"; #2093 residual 1
+      strengthened this to ALSO refuse a present-but-corrupt/unparseable
+      cache file, which used to slip past as "available").
 - [ ] No Castwright server reachable on the configured probe port(s) — default
-      `8080` and the LAN HTTPS `8443`. `--apply` refuses outright otherwise
-      (it writes out-of-process; no in-process lock covers the write).
+      `8080` and the LAN HTTPS `8443` — **or their auto-rebind range** (up to
+      19 ports above each, matching `listenWithAutoRebind` — #2090). `--apply`
+      refuses outright otherwise (it writes out-of-process; no in-process lock
+      covers the write).
 - [ ] The real workspace is present and untouched since the last dry run.
 - [ ] SHA and a clean tree recorded below.
 

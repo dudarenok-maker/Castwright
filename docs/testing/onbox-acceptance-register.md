@@ -1429,17 +1429,28 @@ analysis — confirmed no drift since):**
   reports **20** books missing cache evidence and **0** auto-recordable
   aliases instead, since the cross-source ambiguity veto can't see cache
   ambiguity without the file. Confirm this line reads `0` before trusting any
-  of the numbers above, and before `--apply`.
+  of the numbers above, and before `--apply`. As of #2093 (residual 1), "0"
+  here is a stronger guarantee than it was: the gate is now the cache file
+  existing **and parsing**, not merely being present at that path — a
+  present-but-corrupt/truncated cache file used to count as "available" and
+  read this line as `0` even though the cross-source ambiguity veto couldn't
+  actually see anything in it; it now counts as missing too, verified against
+  a deliberately corrupt fixture in `scripts/tests/repair-cast-id-drift.test.mjs`.
 
 - **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
   fresh worktree's own (git-ignored, per-checkout — see the script's module
   doc comment). Run the dry run first and confirm the summary reads `books
   missing analysis-cache evidence: 0` — `--apply` now refuses outright
   otherwise (round-2 review fail-closed fix for the cross-source ambiguity
-  veto's blind spot when cache evidence is absent).
+  veto's blind spot when cache evidence is absent; #2093 residual 1 tightened
+  this from "the file exists" to "the file exists and parses", so a
+  present-but-corrupt cache file no longer slips past this precondition
+  reading `0`).
 - Stop any real server bound to the configured probe port(s) (default `8080`
-  and the LAN HTTPS `8443`) — `--apply` refuses outright while either answers,
-  since the write is out-of-process and no in-process lock covers it. Confirm
+  and the LAN HTTPS `8443`) **or their auto-rebind range** (up to 19 ports
+  above each default, matching `listenWithAutoRebind` — #2090) — `--apply`
+  refuses outright while any of them answers, since the write is
+  out-of-process and no in-process lock covers it. Confirm
   the refusal fires first, against the *real* dev server (not only a dummy
   listener): start `cd server && npm run dev`, run `--apply`, confirm it exits
   1 naming the reachable port and writes nothing, then stop the server.

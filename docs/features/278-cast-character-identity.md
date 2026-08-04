@@ -76,7 +76,10 @@ owner: null
    general case (the repoint loop at `:151-158`). The five original call sites
    are enumerated in the design spec §4.4; a sixth (`scripts/repair-cast-id-drift.mjs`)
    writes the same side-table out-of-process, gated on no live server being
-   reachable (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:689`).
+   reachable (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:888`). The
+   liveness probe covers not just the configured port but its whole
+   `listenWithAutoRebind` auto-rebind range (`probePortRangeRefused`,
+   `AUTO_REBIND_RANGE`) — #2090, closed by the same PR as #2093 below.
 3. **The resolver never matches on display names.** `buildCastResolver` is
    ids-only — four tiers, first hit wins: a live exact id (`via: 'exact'`), a
    non-rejected `rejected`-checked-after-exact history hit (`via: 'history'`), a
@@ -198,11 +201,18 @@ down, each a deliberate controller ruling made during implementation:
   (auto-reconciled collapsed by default, needs-your-decision always expanded),
   `applyOrphanRejection`, error-toast and busy-disable paths on the reject action.
 - `scripts/tests/repair-cast-id-drift.test.mjs` — every pure helper: name-index
-  building, Tier A/B candidate resolution, `snapshotsConsistent`, the reserved-
-  source guard, the cross-source ambiguity veto, the zero-segment guard,
-  `rankSnapshotCandidates`'s scoring, the re-render list shape, and
-  `probePortRefused`'s fail-closed behaviour (verified live against three real
-  listener shapes, not only unit-tested).
+  building, Tier A/B candidate resolution (both normalised against a reserved
+  fold-bucket id on the source AND the target side — #2093 residual 4),
+  `snapshotsConsistent`, the reserved-source guard, the cross-source ambiguity
+  veto, the zero-segment guard, `rankSnapshotCandidates`'s scoring, the
+  re-render list shape, `buildOrphansFromSegments` (the auto-reconciled map's
+  producer half, including the `'normalised-history'` tier — #2093 residual
+  5/6), `isCacheAvailable`/`readAnalysisCache` against a real corrupt-JSON
+  fixture (#2093 residual 1 — the pass must refuse `--apply` against it, not
+  merely against a missing file), `shouldRefuseApplyForMissingCache` (#2093
+  residual 2), and `probePortRangeRefused`'s fail-closed behaviour across the
+  whole `listenWithAutoRebind` auto-rebind range, not only the configured port
+  (#2090) — verified live against real TCP listeners, not only unit-tested.
 - `e2e/orphaned-character-fallback-banner.spec.ts` — both banner sections render
   from a real hydrate-shaped payload; the reject flow round-trips through the
   redux store in a real browser; the reject button stays disabled until a
