@@ -172,6 +172,46 @@ function readDisk<T>(rel: string): T {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', rel), 'utf8')) as T;
 }
 
+/* Self-sufficient merge helper (#2040 Task 8 fix round 1, item 6) — appends a
+   FRESH, uniquely-named source/target pair (with their own sentences) onto
+   whatever cast.json/manuscript-edits.json state the test suite is currently
+   in, then merges them. A test built on this never depends on an earlier
+   `it` having already run a merge — it seeds and drives its own. Returns the
+   merge's response plus the ids/sentence-ids the caller can assert against. */
+async function mergeFreshPair(): Promise<{
+  res: request.Response;
+  sourceId: string;
+  targetId: string;
+  sentenceIds: number[];
+}> {
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sourceId = `echo-src-${unique}`;
+  const targetId = `echo-tgt-${unique}`;
+
+  const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+  cast.characters.push(
+    { id: sourceId, name: 'Echo Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    { id: targetId, name: 'Echo Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+  );
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+  const edits = readDisk<{ sentences: Array<Record<string, unknown>> }>('manuscript-edits.json');
+  const baseId = Date.now();
+  const sentenceIds = [baseId, baseId + 1];
+  edits.sentences.push(
+    { id: sentenceIds[0], chapterId: 1, characterId: sourceId, text: 'Echo one.' },
+    { id: sentenceIds[1], chapterId: 2, characterId: sourceId, text: 'Echo two.' },
+  );
+  writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+
+  const res = await request(app)
+    .post(`/api/books/${bookId}/cast/merge`)
+    .set('Content-Type', 'application/json')
+    .send({ sourceId, targetId });
+
+  return { res, sourceId, targetId, sentenceIds };
+}
+
 describe('cast-merge router', () => {
   it('folds source into target, builds aliases, remaps sentences, updates cache', async () => {
     const res = await request(app)
@@ -180,8 +220,11 @@ describe('cast-merge router', () => {
       .send({ sourceId: 'wren', targetId: 'wren-sparrow' });
 
     expect(res.status).toBe(200);
-    const body = res.body as { characters: Array<{ id: string }> };
+    const body = res.body as { characters: Array<{ id: string }>; sourceId: string };
     expect(body.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
+    // §4.4 call site 5 (#2040 Task 8) — performCastMerge reports the folded-away
+    // id so the route can record its retirement.
+    expect(body.sourceId).toBe('wren');
 
     /* cast.json on disk has the merged target. */
     const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
@@ -243,10 +286,13 @@ describe('cast-merge router', () => {
     }
   });
 
-  it('records a manual journal entry with chapter-qualified affected sentences', async () => {
-    /* The first test merged wren → wren-sparrow. wren spoke sentences
-       id1/id2 (chapter 1) and id3 (chapter 2). The journal must record those
-       three as chapter-qualified pairs under a single manual entry. */
+  it('records a manual journal entry with chapter-qualified affected sentences (#2040 Task 8 fix round 1, item 6 — self-sufficient)', async () => {
+    // Self-contained: seeds and merges its OWN pair (mergeFreshPair) rather
+    // than relying on the earlier "folds source into target" test having
+    // already run — this used to only pass because of execution order.
+    const { res, sourceId, targetId, sentenceIds } = await mergeFreshPair();
+    expect(res.status).toBe(200);
+
     const journal = readDisk<{
       entries: Array<{
         kind: string;
@@ -257,19 +303,126 @@ describe('cast-merge router', () => {
       }>;
     }>('cast-merges.json');
 
-    expect(journal.entries).toHaveLength(1);
-    const entry = journal.entries[0];
+    const entry = journal.entries.find((e) => e.sourceId === sourceId && e.targetId === targetId);
+    expect(entry).toBeDefined();
     expect(entry).toMatchObject({
       kind: 'manual',
-      sourceId: 'wren',
-      sourceName: 'Wren',
-      targetId: 'wren-sparrow',
+      sourceId,
+      sourceName: 'Echo Source',
+      targetId,
     });
-    expect(entry.affected).toEqual([
-      { chapterId: 1, sentenceId: 1 },
-      { chapterId: 1, sentenceId: 2 },
-      { chapterId: 2, sentenceId: 3 },
+    expect(entry!.affected).toEqual([
+      { chapterId: 1, sentenceId: sentenceIds[0] },
+      { chapterId: 2, sentenceId: sentenceIds[1] },
     ]);
+  });
+
+  it('records the merge as a retirement in cast-id-history.json (#2040 Task 8; fix round 1 item 6 — self-sufficient)', async () => {
+    // §4.4 call site 5: performCastMerge must retire the source id through
+    // the SAME choke point every other id-losing path uses, so a segment
+    // still tagged with the source id resolves at render time instead of
+    // orphaning. Self-contained (mergeFreshPair) rather than relying on an
+    // earlier test's merge — see the item-6 note on the sibling test above.
+    const { sourceId, targetId } = await mergeFreshPair();
+    const { loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const history = await loadCastIdHistory(bookDir);
+    expect(history.supersededBy).toHaveProperty(sourceId, targetId);
+  });
+
+  it('a throwing history write never fails the merge or leaves cast.json and the analysis cache disagreeing (#2040 Wave 2 final review, finding 4)', async () => {
+    /* `performCastMerge`'s retirement call sat between the cast.json write
+       and the analysis-cache reconciliation with no try/catch — unlike all
+       six analysis-path sites, which have been wrapped since Task 8 fix round
+       1. An EPERM/ENOSPC/AV-lock on cast-id-history.json therefore rejected
+       the whole call with cast.json ALREADY missing the source id while the
+       cache still held it — exactly the state the code's own comment below
+       that call says must not happen ("leaving the source in here would
+       reintroduce the duplicate as soon as the user clicks resume") — plus a
+       500 on a half-applied merge.
+
+       The history is a lookup side-table and is never authoritative for
+       identity (spec §4.1: "losing the file degrades to today's behaviour…
+       at worst it stops helping"), so a failure to write it must cost the
+       entry, not the merge.
+
+       No mocking: cast-id-history.json's PATH is occupied by a directory, so
+       writeJsonAtomic's rename onto it throws for real. Same technique as
+       analysis.test.ts's sibling "a throwing history write never blocks the
+       authoritative cast.json persist". */
+    const { castIdHistoryPath } = await import('../store/cast-id-history.js');
+    const historyPath = castIdHistoryPath(bookDir);
+
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `eperm-src-${unique}`;
+    const targetId = `eperm-tgt-${unique}`;
+    const sentenceId = Date.now();
+
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Eperm Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      { id: targetId, name: 'Eperm Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+
+    const edits = readDisk<{ sentences: Array<Record<string, unknown>> }>('manuscript-edits.json');
+    edits.sentences.push({
+      id: sentenceId,
+      chapterId: 1,
+      characterId: sourceId,
+      text: 'Eperm line.',
+    });
+    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+
+    /* Seed the cache too, so the "cache still holds the source" half of the
+       inconsistency is actually observable rather than vacuously true. */
+    const cacheBefore = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      stage1: { characters: Array<Record<string, unknown>> };
+      chapters: Record<string, Array<Record<string, unknown>>>;
+    };
+    cacheBefore.stage1.characters.push(
+      { id: sourceId, name: 'Eperm Source' },
+      { id: targetId, name: 'Eperm Target' },
+    );
+    cacheBefore.chapters['1'] = [
+      ...cacheBefore.chapters['1'],
+      { id: sentenceId, chapterId: 1, characterId: sourceId, text: 'Eperm line.' },
+    ];
+    writeFileSync(cachePath, JSON.stringify(cacheBefore));
+
+    rmSync(historyPath, { recursive: true, force: true });
+    mkdirSync(historyPath, { recursive: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId, targetId });
+
+      // Not a 500 on a half-applied merge.
+      expect(res.status).toBe(200);
+
+      const castAfter = readDisk<{ characters: Array<{ id: string }> }>('cast.json');
+      expect(castAfter.characters.map((c) => c.id)).not.toContain(sourceId);
+
+      /* The specific invariant the unwrapped call could break: everything
+         AFTER the retirement still ran, so the cache agrees with cast.json.
+         An id-only check on cast.json would pass even with the throw
+         propagating (that write precedes the retirement), which is why the
+         assertions that matter are these. */
+      const cacheAfter = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+        stage1: { characters: Array<{ id: string }> };
+        chapters: Record<string, Array<{ characterId: string }>>;
+      };
+      expect(cacheAfter.stage1.characters.map((c) => c.id)).not.toContain(sourceId);
+      for (const arr of Object.values(cacheAfter.chapters)) {
+        for (const s of arr) expect(s.characterId).not.toBe(sourceId);
+      }
+
+      // The journal write, last of all, ran too.
+      const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
+      expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
+    } finally {
+      rmSync(historyPath, { recursive: true, force: true });
+    }
   });
 
   it('400s when sourceId equals targetId', async () => {

@@ -130,10 +130,30 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     expect(res.body.error).toMatch(/name/i);
   });
 
-  it('slugifies leading/trailing punctuation runs without leaving stray underscores', async () => {
+  it('slugifies leading/trailing punctuation runs without leaving stray hyphens', async () => {
     const res = await callCreate(bookId, { name: '__Weird--Name!!__' });
     expect(res.status).toBe(200);
-    expect(res.body.character.id).toBe('weird_name');
+    expect(res.body.character.id).toBe('weird-name');
+  });
+
+  it('mints hyphen ids, matching the analyzer (RC2, #2040)', async () => {
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).toBe('the-torment');
+  });
+
+  it('preserves Cyrillic (and other non-Latin) letters instead of collapsing to "character" (#2040)', async () => {
+    const res = await callCreate(bookId, { name: 'Мэйрин' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).toBe('мэйрин');
+  });
+
+  it('mints three distinct ids for three characters sharing a name', async () => {
+    const res1 = await callCreate(bookId, { name: 'Alden' });
+    const res2 = await callCreate(bookId, { name: 'Alden' });
+    const res3 = await callCreate(bookId, { name: 'Alden' });
+    const ids = [res1.body.character.id, res2.body.character.id, res3.body.character.id];
+    expect(new Set(ids).size).toBe(3);
   });
 
   it('409s when the book has no cast.json yet', async () => {

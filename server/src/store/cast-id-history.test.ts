@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from './cast-id-history.js';
+import {
+  loadCastIdHistory,
+  retireCharacterId,
+  castIdHistoryPath,
+  dropSupersededIdsReclaimedByLiveCast,
+  refuseRetirementsOfLiveIds,
+} from './cast-id-history.js';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cih-')); });
@@ -52,6 +58,38 @@ describe('cast id history', () => {
     expect((await loadCastIdHistory(dir)).supersededBy).toEqual({
       a: 'b',
       c: 'b',
+    });
+  });
+
+  describe('direct reversal (#2040 Task 8 fix round 1, item 3)', () => {
+    it('inverts a same-run reversal instead of collapsing into a dead self-loop — order A (dedupe then remap)', async () => {
+      // Reviewer's repro: a dedupe pass records "антон"->"anton", then a
+      // later remap in the SAME run records the reverse "anton"->"антон"
+      // (the roster ended up live on "антон"). The old code produced
+      // {"антон":"anton","anton":"anton"} — a dead self-loop that orphans
+      // BOTH ids, since neither target is live.
+      await retireCharacterId(dir, 'антон', 'anton');
+      await retireCharacterId(dir, 'anton', 'антон');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ anton: 'антон' });
+    });
+
+    it('inverts a same-run reversal — order B (the calls in the opposite order)', async () => {
+      await retireCharacterId(dir, 'anton', 'антон');
+      await retireCharacterId(dir, 'антон', 'anton');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ антон: 'anton' });
+    });
+
+    it('repoints a THIRD entry that targeted the now-dead id onto the new live id', async () => {
+      // 'anton-typo' was retired in favour of 'anton' before the reversal.
+      // Once 'anton' itself dies in favour of 'антон', 'anton-typo' must
+      // follow it there rather than being left pointing at a dead target.
+      await retireCharacterId(dir, 'anton-typo', 'anton');
+      await retireCharacterId(dir, 'антон', 'anton');
+      await retireCharacterId(dir, 'anton', 'антон');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({
+        'anton-typo': 'антон',
+        anton: 'антон',
+      });
     });
   });
 
@@ -117,6 +155,136 @@ describe('cast id history', () => {
       writeTestHistoryFile('null');
       const result = await loadCastIdHistory(dir);
       expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('dropSupersededIdsReclaimedByLiveCast (#2040 Task 14, spec §4.4 closing paragraph)', () => {
+    it('drops a history entry whose key is now a live cast id, and reports it', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male', 'narrator']);
+      expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      // Review item 2b — the dropped pair is not discarded, it moves to
+      // `displaced`. Losing it here would be the same loss the review
+      // flagged: the pair would be unrecoverable, not just unreported.
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
+    });
+
+    it('leaves an entry whose key is NOT live untouched', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['eliza', 'narrator']);
+      // 'eliza' is the entry's VALUE, not its key — a live target is exactly
+      // what tier-2 resolution is supposed to do, and is not what this
+      // function drops. Only 'old-eliza' (the key) reclaiming liveness would
+      // qualify, and it hasn't here.
+      expect(dropped).toEqual([]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      // Nothing dropped, so nothing displaced.
+      expect(history.displaced).toBeUndefined();
+    });
+
+    it('drops the reclaimed entry while an unrelated entry survives untouched, in the same call', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      expect(dropped).toEqual([{ id: 'unknown-male', supersededBy: 'timkin' }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
+    });
+
+    it('accumulates displaced entries across multiple drop calls rather than overwriting', async () => {
+      await retireCharacterId(dir, 'unknown-male', 'timkin');
+      await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      await retireCharacterId(dir, 'unknown-female', 'sela');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-female']);
+      expect(dropped).toEqual([{ id: 'unknown-female', supersededBy: 'sela' }]);
+      const history = await loadCastIdHistory(dir);
+      // Both drops survive — the second call's write must not clobber the
+      // first call's entry.
+      expect(history.displaced).toEqual({ 'unknown-male': 'timkin', 'unknown-female': 'sela' });
+    });
+
+    it('returns [] and still writes when nothing needs dropping (#2040 Task 14 review item 3)', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['some-other-live-id']);
+      expect(dropped).toEqual([]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+    });
+
+    it('writes a history file (empty supersededBy, no displaced) for a book that never had one, even though nothing is dropped', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      const dropped = await dropSupersededIdsReclaimedByLiveCast(dir, ['unknown-male']);
+      expect(dropped).toEqual([]);
+      // The guard that skipped this write when nothing was dropped is gone
+      // (review item 3) — prove it by checking the file actually landed,
+      // not just that loadCastIdHistory's content looks the same either way.
+      expect(existsSync(castIdHistoryPath(dir))).toBe(true);
+      const history = await loadCastIdHistory(dir);
+      expect(history).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('displaced backwards-compatibility (#2040 Task 14 review item 2b)', () => {
+    it('loads a pre-Task-14 file with no `displaced` key at all', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.displaced).toBeUndefined();
+    });
+
+    it('returns empty history rather than throwing when `displaced` is malformed', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, displaced: 'not-an-object' }));
+      const result = await loadCastIdHistory(dir);
+      expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  /* Wave 2 final-review finding 1(b) — the recording-boundary half of the
+     live-id guard. `retireCharacterId`'s repoint loop is only sound when
+     `from` is dead, so a retirement naming a LIVE cast id is bogus by
+     definition and must never reach it. */
+  describe('refuseRetirementsOfLiveIds', () => {
+    it('refuses a retirement whose `from` is still a live cast id', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [{ from: 'brann', to: 'brann-weir' }],
+        ['brann', 'brann-weir'],
+      );
+      expect(r.keep).toEqual([]);
+      expect(r.refused).toEqual([{ from: 'brann', to: 'brann-weir' }]);
+    });
+
+    it('keeps a retirement whose `from` is genuinely dead', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [{ from: 'mayrin', to: 'mairin' }],
+        ['mairin', 'narrator'],
+      );
+      expect(r.keep).toEqual([{ from: 'mayrin', to: 'mairin' }]);
+      expect(r.refused).toEqual([]);
+    });
+
+    it('partitions a mixed batch, preserving order within each side', () => {
+      const r = refuseRetirementsOfLiveIds(
+        [
+          { from: 'dead-1', to: 'x' },
+          { from: 'live-1', to: 'x' },
+          { from: 'dead-2', to: 'x' },
+          { from: 'live-2', to: 'x' },
+        ],
+        ['live-1', 'live-2', 'x'],
+      );
+      expect(r.keep.map((e) => e.from)).toEqual(['dead-1', 'dead-2']);
+      expect(r.refused.map((e) => e.from)).toEqual(['live-1', 'live-2']);
+    });
+
+    it('never judges on `to` — retiring INTO a live id is the normal case', () => {
+      // The whole point of a retirement is that `to` is live. A guard that
+      // tested `to` instead of `from` would refuse every legitimate entry
+      // while letting the dangerous one through.
+      const r = refuseRetirementsOfLiveIds([{ from: 'mayrin', to: 'mairin' }], ['mairin']);
+      expect(r.refused).toEqual([]);
     });
   });
 });

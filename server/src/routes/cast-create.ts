@@ -9,8 +9,9 @@
    Response:     { character: <full new record> }
 
    The new character gets:
-   - id: a slug derived from the name, suffixed with 6 random hex chars
-     if the slug already exists in the cast.
+   - id: minted via safeId (server/src/util/safe-id.ts) — the same
+     Unicode-preserving-kebab minter every other id-minting path uses
+     (#2040 RC2), disambiguated against the existing cast ids.
    - voiceState: 'generated'
    - color: 'unset'
    - no matchedFrom (this is a net-new entry, not a reuse)
@@ -19,11 +20,11 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { randomBytes } from 'node:crypto';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { safeId } from '../util/safe-id.js';
 
 export const castCreateRouter = Router();
 
@@ -35,16 +36,6 @@ type PersistedCharacter = CharacterOutput & {
 
 interface CastFile {
   characters: PersistedCharacter[];
-}
-
-function slugify(name: string): string {
-  return (
-    name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|(?<!_)_+$/g, '') || 'character'
-  );
 }
 
 castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response) => {
@@ -68,9 +59,16 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
   }
 
   const existingIds = new Set(cast.characters.map((c) => c.id));
-  let newId = slugify(name);
+  // safeId's own collision suffix is a hash of the NAME, checked once — a
+  // second character sharing a name gets a distinct id, but a third
+  // collides with the second (same name -> same hash, and safeId never
+  // re-checks its own output). Guarantee uniqueness here regardless of how
+  // many characters share a name.
+  let newId = safeId(name, { taken: existingIds });
   if (existingIds.has(newId)) {
-    newId = `${newId}_${randomBytes(3).toString('hex')}`;
+    let n = 2;
+    while (existingIds.has(`${newId}-${n}`)) n += 1;
+    newId = `${newId}-${n}`;
   }
 
   const newCharacter: PersistedCharacter = {

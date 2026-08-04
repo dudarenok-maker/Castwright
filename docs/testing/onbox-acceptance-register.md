@@ -101,7 +101,7 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**50 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1377,9 +1377,7 @@ already-analysed book.
 
 ## Group B — local Ollama analyzer only
 
-A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. Both
-rows have a **CPU-only sub-case** — the only checks here that want the analyzer
-*off* the GPU. Run those two together, and consider folding in E4.
+A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a **CPU-only sub-case** — the only checks here that want the analyzer *off* the GPU. Run those two together, and consider folding in E4. B3 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
 
@@ -1404,6 +1402,20 @@ rather than appearing to do nothing. `-1` keeps it resident indefinitely; the re
 model and no override keeps persona keep-alive at `300`, unregressed by the per-model
 resolver. **CPU-only:** a `RAM_HEAVY_MODELS` clamp overrides a configured positive
 keep-alive back to `0`.
+
+### B3 · Cast/analysis `characterId` drift — Wave 2 stops new drift ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
+
+Wave 1 (A32 above, in Group A) resolves drift that already exists, at render time. Wave 2 stops a re-analysis from **creating** new drift in the first place — the row above proves nothing about it, since Wave 1's own gate scan found the whole session left `cast.json` and `cast-id-history.json` untouched (no book was modified, no history file written). Six changes ship together: every id-retiring code path now funnels through a single `retireCharacterId` choke point, so `.audiobook/cast-id-history.json` is actually populated in production for the first time (it was always empty before Wave 2); a new early remap pass on both analyzer paths makes a fresh roster **adopt** the existing cast's id for a character it already holds under a different id, before anything is persisted; the merge's name-fallback now also matches an unvoiced character whose analyzer id drifted, not only a voiced or reused one; `cast-create.ts` mints ids with the shared `safeId` instead of a private underscore slugifier, closing RC2; and a fresh roster that reclaims an id the history covers drops that entry rather than silently rerouting it. None of it can be proven without a real analyzer minting a genuinely non-deterministic id across two runs of the same manuscript — the exact behaviour `merge-analysis-cast.ts:136-140`'s own comment names (the dragon relabelled `coalfall` → `coalfall-dragon` between two analyses of the same book) and that the design's evidence table (§1.1) reproduces letter-for-letter.
+
+**Real, already-affected fixture:** *Заказ Коалфолла* at `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`. Its `cast.json` holds `mairin` (Мэйрин), `coalfall-dragon` (Коалфолл) and `brann-weir` (Бранн) today (confirmed 2026-08-04, 13 characters total) — while a chapter rendered off an earlier analysis-cache pass already carries the letter-level variants `mayrin` (8 segments) and `coalfall` (13 segments), part of the 188-segment corpus and, per design §6, **not** recoverable by Wave 1's normalised-id tier (`mayrin` vs `mairin` differ by more than separator/case). No `.audiobook/cast-id-history.json` exists for this book yet (confirmed 2026-08-04) — Wave 2 has never run against it.
+
+- Record, before re-analysing: `cast.json`'s id for Мэйрин (`mairin`) and Коалфолл (`coalfall-dragon`), and that `cast-id-history.json` is absent.
+- Re-analyse the book (a full re-analysis, not a subset pass — the early remap ships on both paths, but only the full path is exercised by simply re-running analysis on an unedited manuscript).
+- After: `cast.json`'s ids for Мэйрин and Коалфолл are still `mairin` / `coalfall-dragon` — **unchanged**, even though the analyzer is free to mint a different string this run, exactly as it minted `mayrin` / `coalfall` on the run that produced the already-orphaned segments. That is the proof the id was *kept*, not merely re-minted and left to drift again.
+- If the analyzer's fresh id for either character genuinely differs from the cast's this run (it may not — the model is non-deterministic in both directions), `.audiobook/cast-id-history.json` now exists and its `supersededBy` map records `<fresh id>: "mairin"` (or `"coalfall-dragon"`) — proving the retirement went through `retireCharacterId` rather than being silently dropped, the exact failure mode design §4.1's table catalogues five instances of.
+- Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.
+
+*Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
 
 ---
 
