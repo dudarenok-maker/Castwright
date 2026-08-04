@@ -594,6 +594,26 @@ export const castSlice = createSlice({
         (p) => !(p.bookId === otherBookId && p.characterId === otherCharacterId),
       );
     },
+    /* From POST /api/books/:bookId/cast/:characterId/reject-orphan-match
+       (#2040 Task 17). The user has just declared "orphanedId is NOT the
+       same character as the one it resolved onto (or was compared
+       against)" via the orphaned-character-fallback banner's "not the same
+       character" action. The server has recorded the rejection durably
+       (cast-id-history.json's `rejected` list, honoured ahead of every
+       resolution tier) — this mirrors that into the local orphan-fallback
+       map so the banner immediately reflects it as unresolved, matching
+       what the next book-state hydrate would report, rather than
+       continuing to show the auto-match the user just rejected. No-op for
+       an id no longer in the map (double-dispatch under network retry, or
+       already updated). The `notLinkedTo` mirror onto the live character
+       is a separate dispatch (`applyNotLinked`, same as the cross-book
+       "different variant" flow) — this reducer only owns the orphan map. */
+    applyOrphanRejection: (s, a: PayloadAction<{ orphanedId: string }>) => {
+      const entry = s.orphanedCharacterFallbacks?.[a.payload.orphanedId];
+      if (!entry) return;
+      entry.resolution = 'unresolved';
+      entry.resolvedCharacterId = undefined;
+    },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
        stable handle on the library record (POST /api/library-cast/override). */

@@ -36,10 +36,20 @@ export interface CastResolution<T extends CastRecord = CastRecord> {
     `cast`) — `synthesise-chapter.ts`'s `CastCharacter`, `revisions.ts`'s cast
     type, etc. each carry different typed fields beyond `id`; a fixed
     `CastRecord` return type would erase them back to `unknown` at every call
-    site and force a cast. */
+    site and force a cast.
+
+    `rejected` (#2040 Task 17, spec §4.6) is checked BEFORE all four tiers —
+    including `exact` — because a rejected id is, by construction, never a
+    live cast id at the time it's rejected (that's what made it orphaned in
+    the first place); the only way it could later collide with `exact` is a
+    fresh roster reclaiming the same id string, the same "reclaimed by live
+    cast" shape `dropSupersededIdsReclaimedByLiveCast` exists to police for
+    `supersededBy` — not addressed here, and left for a follow-up (noted in
+    the Task 17 report) rather than silently reinvented in a second place. */
 export function buildCastResolver<T extends CastRecord>(
   cast: readonly T[],
   history: Readonly<Record<string, string>> = {},
+  rejected: ReadonlyArray<string> = [],
 ): { resolve(characterId: string): CastResolution<T> | undefined } {
   const byId = new Map<string, T>();
   /* Normalised maps carry `null` on collision so a tie falls through to the
@@ -69,6 +79,8 @@ export function buildCastResolver<T extends CastRecord>(
     put(byNormHistory, normaliseIdKey(from), target);
   }
 
+  const rejectedSet = new Set(rejected);
+
   return {
     resolve(characterId: string): CastResolution<T> | undefined {
       /* `characterId` can originate from untrusted on-disk JSON (a segment
@@ -78,6 +90,10 @@ export function buildCastResolver<T extends CastRecord>(
          orphan/narrator path exactly like a genuine miss instead of throwing
          inside `normaliseIdKey`. */
       if (typeof characterId !== 'string') return undefined;
+
+      /* #2040 Task 17 — a rejected id never resolves, full stop. Checked
+         before `exact` on purpose (see the doc comment above). */
+      if (rejectedSet.has(characterId)) return undefined;
 
       const exact = byId.get(characterId);
       if (exact) return { character: exact, via: 'exact' };

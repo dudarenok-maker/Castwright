@@ -26,6 +26,13 @@ vi.mock('../lib/api', () => ({
     loadSidecar: vi.fn().mockResolvedValue({}),
     pauseCastDesign: vi.fn().mockResolvedValue(undefined),
     setCastTier: vi.fn().mockResolvedValue({ updated: 0 }),
+    /* #2040 Task 17 — orphaned-character-fallback banner's "not the same
+       character" action. */
+    rejectOrphanMatch: vi.fn().mockResolvedValue({
+      characterId: 'marrow',
+      orphanedId: 'mayrin',
+      alreadyPresent: false,
+    }),
   },
 }));
 
@@ -691,6 +698,127 @@ describe('CastView Qwen status pill (plan 117)', () => {
       </Provider>,
     );
     expect(screen.queryByTestId('orphaned-character-fallback-banner')).toBeNull();
+  });
+
+  describe('orphaned-characterId banner split — auto-reconciled vs needs-your-decision (#2040 Task 17)', () => {
+    function makeSplitStore() {
+      return configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+              },
+              coalfall: {
+                resolution: 'unresolved' as const,
+                segments: 67,
+              },
+            },
+          },
+        },
+      });
+    }
+
+    function renderSplitBanner(store: ReturnType<typeof makeSplitStore>) {
+      return render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+    }
+
+    it('needs-your-decision is visible immediately, showing the segment count', () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      const section = screen.getByTestId('orphaned-needs-decision');
+      expect(within(section).getByText(/coalfall/)).toBeInTheDocument();
+      expect(within(section).getByText(/67 segments/)).toBeInTheDocument();
+    });
+
+    it('auto-reconciled is collapsed by default, and expands on click to show the segment count + resolved name', () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      expect(screen.queryByTestId('orphaned-auto-reconciled')).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+
+      const section = screen.getByTestId('orphaned-auto-reconciled');
+      expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(section).getByText(/6 segments/)).toBeInTheDocument();
+      expect(within(section).getByText('Mr. Marrow')).toBeInTheDocument();
+    });
+
+    it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      await waitFor(() => {
+        expect(api.rejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'mayrin',
+        });
+      });
+      await waitFor(() => {
+        expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
+          resolution: 'unresolved',
+          resolvedCharacterId: undefined,
+          segments: 6,
+        });
+      });
+      // Mirrored onto the live character's own notLinkedTo array.
+      await waitFor(() => {
+        const marrowState = store.getState().cast.characters.find((c) => c.id === 'marrow');
+        expect(marrowState?.notLinkedTo).toEqual([{ bookId: 'b_current', characterId: 'mayrin' }]);
+      });
+    });
+
+    it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      const section = screen.getByTestId('orphaned-needs-decision');
+      const row = within(section).getByText(/coalfall/).closest('li')!;
+      const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+      expect(rejectButton).toBeDisabled();
+
+      fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'narrator' } });
+      expect(rejectButton).not.toBeDisabled();
+
+      fireEvent.click(rejectButton);
+      await waitFor(() => {
+        expect(api.rejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'narrator',
+          orphanedId: 'coalfall',
+        });
+      });
+    });
   });
 
   it('clears the fallback pill once a voice is designed + regenerated (no fallback in the map)', () => {

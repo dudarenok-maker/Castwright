@@ -1109,6 +1109,69 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
   });
 });
 
+describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
+  it('flips an auto-reconciled entry to unresolved and clears resolvedCharacterId', () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          resolution: 'alias' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 6,
+        },
+      },
+    };
+    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    expect(next.orphanedCharacterFallbacks).toEqual({
+      mayrin: { resolution: 'unresolved', resolvedCharacterId: undefined, segments: 6 },
+    });
+  });
+
+  it('preserves the other fields on the entry (characterId, voiceName, segments)', () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          characterId: 'narrator',
+          voiceName: 'qwen-oduvan',
+          resolution: 'normalised' as const,
+          resolvedCharacterId: 'mairin',
+          segments: 3,
+        },
+      },
+    };
+    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    expect(next.orphanedCharacterFallbacks?.mayrin).toEqual({
+      characterId: 'narrator',
+      voiceName: 'qwen-oduvan',
+      resolution: 'unresolved',
+      resolvedCharacterId: undefined,
+      segments: 3,
+    });
+  });
+
+  it('leaves an unrelated orphaned entry untouched', () => {
+    const start = {
+      characters: [],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 1 },
+        'the-torment': { resolution: 'unresolved' as const, segments: 67 },
+      },
+    };
+    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    expect(next.orphanedCharacterFallbacks?.['the-torment']).toEqual({
+      resolution: 'unresolved',
+      segments: 67,
+    });
+  });
+
+  it('is a no-op for an orphaned id no longer in the map', () => {
+    const start = { characters: [], orphanedCharacterFallbacks: {} };
+    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'ghost' }));
+    expect(next).toEqual(start);
+  });
+});
+
 describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, plan 101 + fs-11)', () => {
   it('applyNotLinked appends the symmetric entry; dedups on repeat', () => {
     const start = baseState([makeChar('eliza')]);

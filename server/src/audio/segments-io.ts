@@ -312,16 +312,23 @@ export async function collectRenderedFallbackEngines(
    `characterId` fail to match a live cast id EXACTLY", using the same
    resolver the render path and the drift detector already use
    (`buildCastResolver`) — not a second matcher — so a segment is reported
-   whether or not it happens to carry the #2023 stamp. */
+   whether or not it happens to carry the #2023 stamp.
+
+   `rejectedIds` (#2040 Task 17) is threaded straight into `buildCastResolver`
+   so a user-rejected reconciliation reports as `'unresolved'` here on the very
+   next hydrate, rather than continuing to show the auto-match the user just
+   said was wrong — the banner's own idempotence depends on this collector
+   seeing the same rejection the resolver enforces everywhere else. */
 export async function collectOrphanedCharacterFallbacks(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
   cast: ReadonlyArray<{ id: string }>,
   castIdHistory: Readonly<Record<string, string>>,
+  rejectedIds: ReadonlyArray<string> = [],
 ): Promise<Record<string, OrphanedCharacterFallback>> {
   const out: Record<string, OrphanedCharacterFallback> = {};
   const segs = await loadSegmentsFiles(bookDir, chapters);
-  const resolver = buildCastResolver(cast, castIdHistory);
+  const resolver = buildCastResolver(cast, castIdHistory, rejectedIds);
 
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {

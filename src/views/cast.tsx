@@ -107,9 +107,25 @@ interface Props {
    preloaded test stores), keeping the selector cheap. */
 const EMPTY_FALLBACK_MAP: Record<string, string> = {};
 
-/* #2023 — same stable-reference trick as EMPTY_FALLBACK_MAP above, for the
+/* #2023, widened #2040 Wave 3 — the orphaned-characterId fallback map's
+   value shape, mirroring CastState['orphanedCharacterFallbacks'] in
+   cast-slice.ts exactly (that slice has no exported type for it to import).
+   Task 16 left this shape stale at the OLD two-field form because the
+   banner only ever read the map's KEYS at the time — now that the Task 17
+   split reads `resolution`/`resolvedCharacterId`/`segments` too, the stale
+   annotation would make the `?? EMPTY_ORPHANED_FALLBACK_MAP` fallback a
+   union with a variant missing those fields. */
+interface OrphanedFallbackEntry {
+  characterId?: string;
+  voiceName?: string;
+  resolution: 'alias' | 'normalised' | 'unresolved';
+  resolvedCharacterId?: string;
+  segments: number;
+}
+
+/* Same stable-reference trick as EMPTY_FALLBACK_MAP above, for the
    orphaned-characterId fallback map. */
-const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, { characterId: string; voiceName?: string }> = {};
+const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedFallbackEntry> = {};
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -238,11 +254,83 @@ export function CastView({
     () => Object.keys(orphanedCharacterFallbacks).sort(),
     [orphanedCharacterFallbacks],
   );
+  /* #2040 Task 17 — split the orphan map into the banner's two sections.
+     Auto-reconciled (resolution 'alias' | 'normalised') already carries a
+     resolvedCharacterId; needs-decision ('unresolved') has none — the user
+     picks a live candidate to compare against instead (spec §4.6's "closest
+     candidate" is deliberately NOT computed here, see Task 17's report —
+     Task 18 owns candidate ranking for the repair script, and a second
+     ranker here would duplicate logic that must agree with it). */
+  const orphanedEntries = useMemo(
+    () =>
+      Object.entries(orphanedCharacterFallbacks).sort(([a], [b]) => a.localeCompare(b)),
+    [orphanedCharacterFallbacks],
+  );
+  const autoReconciledOrphans = useMemo(
+    () => orphanedEntries.filter(([, v]) => v.resolution !== 'unresolved'),
+    [orphanedEntries],
+  );
+  const needsDecisionOrphans = useMemo(
+    () => orphanedEntries.filter(([, v]) => v.resolution === 'unresolved'),
+    [orphanedEntries],
+  );
+  const [autoReconciledOpen, setAutoReconciledOpen] = useState(false);
+  /* Per-row candidate picked from the live cast, for a needs-decision row's
+     "Not the same character" action — keyed by orphaned id. Controlled
+     useState toggle for the auto-reconciled disclosure rather than native
+     <details>/<summary>, matching settings-accordion.tsx's precedent: a
+     <summary> click is unreliable to stopPropagation against for the
+     buttons nested inside it. */
+  const [orphanRejectCandidate, setOrphanRejectCandidate] = useState<Record<string, string>>({});
+  const [orphanRejectBusyId, setOrphanRejectBusyId] = useState<string | null>(null);
   /* PR4 — read pinned tiers from the store so the roster badge updates live
      after dispatch(castActions.updateCharacter). The store is the single
      source of truth for ttsModelKey after a bulk pin or reset. */
   const storedTiers = useAppSelector(selectCastTierByCharacterId);
   const dispatch = useAppDispatch();
+  /* #2040 Task 17 — "not the same character" for either banner section.
+     targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
+     or the user-picked live candidate for a needs-decision row. Writes the
+     rejection to the server (durable: cast-id-history.json `rejected` list +
+     a one-sided notLinkedTo edge), then mirrors it into redux via TWO
+     dispatches: applyOrphanRejection (flips the orphan-map entry to
+     unresolved) and applyNotLinked (the notLinkedTo mirror onto the live
+     character — reused as-is; the matcher it feeds ignores bookId, so a
+     same-book edge binds correctly even though the action was designed for
+     cross-book pairs). */
+  async function handleRejectOrphanMatch(orphanedId: string, targetCharacterId: string) {
+    if (!bookId || !targetCharacterId) return;
+    setOrphanRejectBusyId(orphanedId);
+    try {
+      await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
+      dispatch(castActions.applyOrphanRejection({ orphanedId }));
+      dispatch(
+        castActions.applyNotLinked({
+          characterId: targetCharacterId,
+          otherBookId: bookId,
+          otherCharacterId: orphanedId,
+        }),
+      );
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-reject-${orphanedId}`,
+          kind: 'info',
+          message: `Marked "${orphanedId}" as a different character.`,
+        }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-reject-error-${orphanedId}`,
+          kind: 'error',
+          message: msg,
+        }),
+      );
+    } finally {
+      setOrphanRejectBusyId(null);
+    }
+  }
   const playback = useSamplePlayback();
   /* Tier-2b diminutive merge-suggestions — fetched once when the book is ready,
      maintained in local state so accept/dismiss updates remove the card immediately
@@ -936,34 +1024,139 @@ export function CastView({
           </button>
         )}
 
-        {/* #2023 — orphaned-characterId advisory. A rendered chapter attributed
-            one or more lines to an id with no entry in this book's cast at all
-            (a cast/analysis id drift); the render silently fell back to the
-            narrator for those lines rather than failing. Purely informational —
-            falling back may well be the right behaviour — so this never blocks
-            anything; it just makes the substitution visible, which is the bug
-            this closes (previously logged once per orphan id per render and
-            surfaced nowhere else). */}
+        {/* #2023, split #2040 Task 17 — orphaned-characterId advisory. A
+            rendered chapter attributed one or more lines to an id with no
+            entry in this book's cast at all (a cast/analysis id drift); the
+            render silently fell back to the narrator for those lines rather
+            than failing. Two sub-sections: NEEDS YOUR DECISION (a genuine
+            miss — actionable, always expanded) and AUTO-RECONCILED (resolved
+            through an alias or normalised key — informational, collapsed by
+            default). Neither blocks anything; this just makes the
+            substitution visible and lets the user correct a wrong
+            reconciliation (previously logged once per orphan id per render
+            and surfaced nowhere else). */}
         {orphanedFallbackIds.length > 0 && (
           <div
             role="status"
             data-testid="orphaned-character-fallback-banner"
-            className="w-full mb-4 p-4 rounded-3xl border border-amber-200 bg-amber-50/60 flex items-center gap-4 text-left"
+            className="w-full mb-4 rounded-3xl border border-amber-200 bg-amber-50/60 text-left overflow-hidden"
           >
-            <span className="w-10 h-10 rounded-full bg-amber-100 grid place-items-center text-amber-700 shrink-0">
-              <IconAlertTri className="w-5 h-5" />
-            </span>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-ink">
-                {orphanedFallbackIds.length} character id{orphanedFallbackIds.length === 1 ? '' : 's'}{' '}
-                not found in this book's cast
-              </p>
-              <p className="text-xs text-ink/65 mt-0.5">
-                "{orphanedFallbackIds.join('", "')}" — rendered in the narrator's voice instead of
-                the intended character. Usually a mismatch between the analysis and the cast; check
-                the manuscript's attributions for these ids.
-              </p>
-            </div>
+            {needsDecisionOrphans.length > 0 && (
+              <div data-testid="orphaned-needs-decision" className="p-4">
+                <div className="flex items-start gap-4">
+                  <span className="w-10 h-10 rounded-full bg-amber-100 grid place-items-center text-amber-700 shrink-0">
+                    <IconAlertTri className="w-5 h-5" />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-ink">
+                      {needsDecisionOrphans.length === 1
+                        ? '1 character id needs your decision'
+                        : `${needsDecisionOrphans.length} character ids need your decision`}
+                    </p>
+                    <p className="text-xs text-ink/65 mt-0.5">
+                      Not found in this book's cast — rendered in the narrator's voice instead.
+                      Compare against a cast member below, or leave it if the substitution is fine.
+                    </p>
+                  </div>
+                </div>
+                <ul className="flex flex-col gap-2 mt-3">
+                  {needsDecisionOrphans.map(([orphanedId, info]) => (
+                    <li
+                      key={orphanedId}
+                      data-testid={`orphaned-row-${orphanedId}`}
+                      className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
+                    >
+                      <span className="font-mono text-xs text-ink/80">&quot;{orphanedId}&quot;</span>
+                      <span className="text-xs text-ink/60">
+                        {info.segments} segment{info.segments === 1 ? '' : 's'}
+                      </span>
+                      <select
+                        aria-label={`Compare "${orphanedId}" against`}
+                        className="min-h-[44px] fine-pointer:min-h-0 text-xs rounded-full border border-amber-200 bg-white px-2 py-1"
+                        value={orphanRejectCandidate[orphanedId] ?? ''}
+                        onChange={(e) =>
+                          setOrphanRejectCandidate((prev) => ({
+                            ...prev,
+                            [orphanedId]: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Compare against…</option>
+                        {characters.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!orphanRejectCandidate[orphanedId] || orphanRejectBusyId === orphanedId}
+                        onClick={() =>
+                          handleRejectOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
+                        }
+                        className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                      >
+                        Not the same character
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {autoReconciledOrphans.length > 0 && (
+              <div className={needsDecisionOrphans.length > 0 ? 'border-t border-amber-200/60' : ''}>
+                <button
+                  type="button"
+                  onClick={() => setAutoReconciledOpen((o) => !o)}
+                  aria-expanded={autoReconciledOpen}
+                  className="w-full min-h-[44px] fine-pointer:min-h-0 flex items-center justify-between gap-2 p-4 text-left"
+                >
+                  <span className="text-sm font-semibold text-ink/80">
+                    {autoReconciledOrphans.length} character id
+                    {autoReconciledOrphans.length === 1 ? '' : 's'} auto-reconciled
+                  </span>
+                  <IconChevR
+                    className={`w-3.5 h-3.5 text-ink/50 shrink-0 transition-transform ${autoReconciledOpen ? 'rotate-90' : ''}`}
+                  />
+                </button>
+                {autoReconciledOpen && (
+                  <ul data-testid="orphaned-auto-reconciled" className="flex flex-col gap-2 px-4 pb-4">
+                    {autoReconciledOrphans.map(([orphanedId, info]) => {
+                      const resolvedName =
+                        characters.find((c) => c.id === info.resolvedCharacterId)?.name ??
+                        info.resolvedCharacterId;
+                      return (
+                        <li
+                          key={orphanedId}
+                          data-testid={`orphaned-row-${orphanedId}`}
+                          className="flex flex-wrap items-center gap-2 rounded-2xl bg-white/60 px-3 py-2"
+                        >
+                          <span className="font-mono text-xs text-ink/80">
+                            &quot;{orphanedId}&quot;
+                          </span>
+                          <IconChevR className="w-3 h-3 text-ink/40" />
+                          <span className="text-xs text-ink/80">{resolvedName}</span>
+                          <span className="text-xs text-ink/60">
+                            {info.segments} segment{info.segments === 1 ? '' : 's'}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}
+                            onClick={() =>
+                              info.resolvedCharacterId &&
+                              handleRejectOrphanMatch(orphanedId, info.resolvedCharacterId)
+                            }
+                            className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                          >
+                            Not the same character
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         )}
 

@@ -2385,6 +2385,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/{characterId}/reject-orphan-match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject an orphaned-id reconciliation ("not the same character") —
+         * @description The orphaned-character-fallback banner shows an id that either
+         *     auto-reconciled onto a live character (through the id-history
+         *     side-table or a normalised-key match) or didn't resolve at all. This
+         *     route records "orphanedId is NOT the same character as characterId":
+         *     it adds `orphanedId` to `cast-id-history.json`'s `rejected` list
+         *     (checked by the server's id resolver ahead of every resolution tier,
+         *     so re-resolution is blocked regardless of which tier would otherwise
+         *     have matched) and writes a one-sided `notLinkedTo` edge onto
+         *     `characterId` naming `orphanedId`, so the next re-analysis's name
+         *     matcher does not simply re-record the same match. Idempotent — a
+         *     repeat call for the same pair is a no-op on cast.json, though the
+         *     rejection is still (re-)recorded.
+         */
+        post: operations["rejectOrphanMatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/annotate-emotion": {
         parameters: {
             query?: never;
@@ -5397,6 +5428,17 @@ export interface components {
                 a: components["schemas"]["CastCharacterRef"];
                 b: components["schemas"]["CastCharacterRef"];
             };
+        };
+        RejectOrphanMatchRequest: {
+            /** @description The orphaned character id that is NOT the same character as `characterId` (path). */
+            orphanedId: string;
+        };
+        RejectOrphanMatchResponse: {
+            /** @description The live character (path param */
+            characterId: string;
+            orphanedId: string;
+            /** @description True when the notLinkedTo edge already existed (idempotent re-reject). */
+            alreadyPresent: boolean;
         };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
@@ -9767,6 +9809,54 @@ export interface operations {
                 content?: never;
             };
             /** @description Source or other book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rejectOrphanMatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectOrphanMatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The rejected pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RejectOrphanMatchResponse"];
+                };
+            };
+            /** @description Missing fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has no cast on disk yet */
             409: {
                 headers: {
                     [name: string]: unknown;

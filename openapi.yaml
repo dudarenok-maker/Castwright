@@ -3394,6 +3394,44 @@ paths:
         '409':
           description: Source or other book has no cast on disk yet
 
+  /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
+    post:
+      summary: Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
+      operationId: rejectOrphanMatch
+      description: |
+        The orphaned-character-fallback banner shows an id that either
+        auto-reconciled onto a live character (through the id-history
+        side-table or a normalised-key match) or didn't resolve at all. This
+        route records "orphanedId is NOT the same character as characterId":
+        it adds `orphanedId` to `cast-id-history.json`'s `rejected` list
+        (checked by the server's id resolver ahead of every resolution tier,
+        so re-resolution is blocked regardless of which tier would otherwise
+        have matched) and writes a one-sided `notLinkedTo` edge onto
+        `characterId` naming `orphanedId`, so the next re-analysis's name
+        matcher does not simply re-record the same match. Idempotent — a
+        repeat call for the same pair is a no-op on cast.json, though the
+        rejection is still (re-)recorded.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectOrphanMatchRequest' }
+      responses:
+        '200':
+          description: The rejected pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RejectOrphanMatchResponse' }
+        '400':
+          description: Missing fields
+        '404':
+          description: Book or character not found
+        '409':
+          description: Book has no cast on disk yet
+
   /api/books/{bookId}/annotate-emotion:
     post:
       summary: Emotion-only backfill pass (fs-33)
@@ -7270,6 +7308,24 @@ components:
           properties:
             a: { $ref: '#/components/schemas/CastCharacterRef' }
             b: { $ref: '#/components/schemas/CastCharacterRef' }
+
+    # --- Orphaned-id reject ("not the same character") — #2040 Task 17 --
+    RejectOrphanMatchRequest:
+      type: object
+      required: [orphanedId]
+      properties:
+        orphanedId:
+          type: string
+          description: The orphaned character id that is NOT the same character as `characterId` (path).
+    RejectOrphanMatchResponse:
+      type: object
+      required: [characterId, orphanedId, alreadyPresent]
+      properties:
+        characterId: { type: string, description: The live character (path param, echoed back). }
+        orphanedId: { type: string }
+        alreadyPresent:
+          type: boolean
+          description: True when the notLinkedTo edge already existed (idempotent re-reject).
 
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
     BookStateResponse:

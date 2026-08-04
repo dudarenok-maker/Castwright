@@ -82,4 +82,36 @@ describe('buildCastResolver', () => {
   it('resolving a non-string characterId returns undefined rather than throwing', () => {
     expect(buildCastResolver(cast, history).resolve(undefined as unknown as string)).toBeUndefined();
   });
+
+  describe('rejected (#2040 Task 17 — "not the same character")', () => {
+    it('blocks a history-tier match', () => {
+      expect(buildCastResolver(cast, history, ['mayrin']).resolve('mayrin')).toBeUndefined();
+    });
+
+    it('blocks a normalised-id-tier match', () => {
+      expect(
+        buildCastResolver(cast, {}, ['the-torment']).resolve('the-torment'),
+      ).toBeUndefined();
+    });
+
+    it('blocks a normalised-history-tier match', () => {
+      const c = [{ id: 'x', name: 'X' }];
+      const h = { foo_bar: 'x' };
+      expect(buildCastResolver(c, h, ['foo-bar']).resolve('foo-bar')).toBeUndefined();
+    });
+
+    it('blocks an exact live id (the reclaimed-id edge case, deliberately not addressed — see the doc comment)', () => {
+      expect(buildCastResolver(cast, history, ['mairin']).resolve('mairin')).toBeUndefined();
+    });
+
+    it('does not affect an id that is not in the rejected list', () => {
+      const r = buildCastResolver(cast, history, ['some-other-id']).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('defaults to no rejections when the argument is omitted', () => {
+      const r = buildCastResolver(cast, history).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+  });
 });

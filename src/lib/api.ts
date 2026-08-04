@@ -4491,6 +4491,57 @@ async function mockRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedTo
   };
 }
 
+/* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task
+   17) — the orphaned-character-fallback banner's "not the same character"
+   action. `characterId` is the LIVE character the orphaned id resolved onto
+   (or the candidate the user picked, for an unresolved row); `orphanedId` is
+   the map key. Mirror to redux via BOTH castActions.applyOrphanRejection
+   (flips the orphan-map entry to unresolved) and castActions.applyNotLinked
+   (the notLinkedTo edge onto the live character — same reducer the
+   cross-book "different variant" flow uses, since the matcher it feeds
+   ignores bookId, so a same-book edge binds correctly). */
+export interface RejectOrphanMatchArgs {
+  bookId: string;
+  characterId: string;
+  orphanedId: string;
+}
+export interface RejectOrphanMatchResponse {
+  characterId: string;
+  orphanedId: string;
+  alreadyPresent: boolean;
+}
+
+async function realRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<RejectOrphanMatchResponse> {
+  const { bookId, characterId, orphanedId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/reject-orphan-match`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orphanedId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Reject match failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<RejectOrphanMatchResponse> {
+  await wait(80);
+  return { characterId: args.characterId, orphanedId: args.orphanedId, alreadyPresent: false };
+}
+
 async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
@@ -10472,6 +10523,7 @@ const real = {
   linkPriorCharacter: realLinkPriorCharacter,
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
+  rejectOrphanMatch: realRejectOrphanMatch,
   addFromSeriesRoster: realAddFromSeriesRoster,
   createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
@@ -10778,6 +10830,7 @@ const mock = {
   linkPriorCharacter: mockLinkPriorCharacter,
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
+  rejectOrphanMatch: mockRejectOrphanMatch,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,

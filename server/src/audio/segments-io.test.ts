@@ -294,6 +294,53 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
     });
   });
 
+  it('reports a rejected id as unresolved even though its history entry would otherwise resolve it (#2040 Task 17)', async () => {
+    // 'mayrin' is retired to the live 'mairin' row (would tag 'alias' per the
+    // dedicated test above) — but the user has rejected this exact
+    // reconciliation, so the collector must report it unresolved on the very
+    // next hydrate rather than continuing to show the match the user said was
+    // wrong.
+    writeSegmentsArray('01-one', [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    await expect(
+      collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        liveCast,
+        { mayrin: 'mairin' },
+        ['mayrin'],
+      ),
+    ).resolves.toEqual({
+      mayrin: {
+        characterId: undefined,
+        voiceName: undefined,
+        resolution: 'unresolved',
+        resolvedCharacterId: undefined,
+        segments: 1,
+      },
+    });
+  });
+
+  it('does not reject an id absent from rejectedIds, even when other ids are rejected', async () => {
+    writeSegmentsArray('01-one', [{ characterId: 'mayrin', sentenceIds: [1] }]);
+    await expect(
+      collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        liveCast,
+        { mayrin: 'mairin' },
+        ['some-other-id'],
+      ),
+    ).resolves.toEqual({
+      mayrin: {
+        characterId: undefined,
+        voiceName: undefined,
+        resolution: 'alias',
+        resolvedCharacterId: 'mairin',
+        segments: 1,
+      },
+    });
+  });
+
   it('accumulates the segment count across multiple rendered chapters for the same orphaned id', async () => {
     writeSegmentsArray('01-one', [
       { characterId: 'timkin', sentenceIds: [1], renderedFallbackCharacterId: 'narrator' },

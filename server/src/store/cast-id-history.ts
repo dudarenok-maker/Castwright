@@ -27,6 +27,20 @@ export interface CastIdHistory {
    *  simply has no `displaced` key; `loadCastIdHistory` tolerates its
    *  absence. */
   displaced?: Record<string, string>;
+  /** #2040 Task 17 — orphaned character ids the user has explicitly said are
+   *  NOT the same character as whatever they'd otherwise resolve onto (the
+   *  banner's "not the same character" action, spec §4.6). Checked by
+   *  `buildCastResolver` ahead of all four resolution tiers: a plain reject
+   *  that only deleted a `supersededBy` entry would be a no-op for the two
+   *  normalised tiers, which have no history entry to remove at all (see the
+   *  controller ruling in
+   *  `.superpowers/sdd/2026-08-01-cast-character-identity/progress.md`), so
+   *  `rejected` is the only mechanism that stops read-side resolution
+   *  uniformly across every tier. Additive and backwards-compatible, same
+   *  shape/strictness as `displaced`: optional, never bumps `schema`. An old
+   *  reader that doesn't know this key still works — it only ever reads
+   *  `supersededBy`/`displaced`, which are unaffected. */
+  rejected?: string[];
 }
 
 export function castIdHistoryPath(bookDir: string): string {
@@ -38,7 +52,11 @@ export function castIdHistoryPath(bookDir: string): string {
  *  `displaced` is optional (#2040 Task 14 review item 2b) — absent entirely
  *  on a file written before that change, and validated the same way as
  *  `supersededBy` when present so a malformed `displaced` can't sneak a
- *  throw past a caller that only reads `supersededBy`. */
+ *  throw past a caller that only reads `supersededBy`. `rejected` (#2040
+ *  Task 17) is validated the same way — absent entirely on a file written
+ *  before this change, and required to be an array when present, so a
+ *  malformed value falls back to the whole-file empty-history default
+ *  instead of reaching a caller as a bad shape. */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
   try {
     const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir));
@@ -53,7 +71,8 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       (raw.displaced === undefined ||
         (typeof raw.displaced === 'object' &&
           !Array.isArray(raw.displaced) &&
-          raw.displaced !== null))
+          raw.displaced !== null)) &&
+      (raw.rejected === undefined || Array.isArray(raw.rejected))
     ) {
       return raw;
     }
@@ -229,5 +248,51 @@ export async function dropSupersededIdsReclaimedByLiveCast(
     }
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return dropped;
+  });
+}
+
+/** Remove a single named entry from `supersededBy` — the "forget one alias"
+ *  primitive #2040 Task 17 needs for the banner's "not the same character"
+ *  action. Unlike `retireCharacterId`, this does NOT repoint every entry
+ *  whose VALUE is `id` onto anything — that repoint is only sound when `id`
+ *  is genuinely dead (`retireCharacterId`'s own documented hazard, above),
+ *  and this primitive has no basis for that claim: it only knows the
+ *  caller wants this one entry gone, not that `id` itself is retired. It
+ *  forgets exactly the key it's asked to and leaves every other entry
+ *  (including ones that point AT `id`) untouched.
+ *
+ *  No-op (and no write) when the key isn't present, mirroring the rest of
+ *  this module's idempotent-write discipline. Pair with `rejectOrphanedId`
+ *  when the caller also wants to stop the id resolving through the
+ *  normalised tiers, which don't have a `supersededBy` entry to remove in
+ *  the first place — this primitive alone is not durable against those. */
+export async function forgetSupersededId(bookDir: string, id: string): Promise<void> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    if (!(id in history.supersededBy)) return;
+    delete history.supersededBy[id];
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+  });
+}
+
+/** Record that `id` must never again resolve through ANY of
+ *  `buildCastResolver`'s four tiers (#2040 Task 17, spec §4.6's "reject a
+ *  reconciliation"). `buildCastResolver` checks `rejected` ahead of
+ *  exact/history/normalised-id/normalised-history, so this is what actually
+ *  stops read-side resolution — including for the normalised tiers, which
+ *  have no `supersededBy` entry for `forgetSupersededId` to remove (see the
+ *  `rejected` field's own doc comment on `CastIdHistory` for why a
+ *  history-only reject would be a no-op on those). Idempotent: rejecting an
+ *  id already in the list is a no-op, no re-write. Does not touch
+ *  `supersededBy` itself — pair with `forgetSupersededId` when the caller
+ *  also wants a stale alias entry gone; kept separate so each primitive
+ *  stays single-purpose and independently testable. */
+export async function rejectOrphanedId(bookDir: string, id: string): Promise<void> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    const rejected = history.rejected ?? [];
+    if (rejected.includes(id)) return;
+    history.rejected = [...rejected, id];
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }

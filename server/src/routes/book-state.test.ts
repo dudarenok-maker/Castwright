@@ -368,6 +368,43 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
     rmSync(castJsonFile, { force: true });
   });
+
+  it('reports a rejected reconciliation as unresolved (#2040 Task 17)', async () => {
+    // 'mayrin' has a history entry pointing at the live 'mairin' — would tag
+    // 'alias' — but the user has rejected this exact reconciliation via
+    // cast-id-history.json's `rejected` list, so the GET must report it
+    // unresolved on this very hydrate.
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'mayrin', sentenceIds: [1] }],
+      }),
+    );
+    const castJsonFile = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castJsonFile,
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin' }] }),
+    );
+    const historyFile = join(bookDir, '.audiobook', 'cast-id-history.json');
+    writeFileSync(
+      historyFile,
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' }, rejected: ['mayrin'] }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.orphanedCharacterFallbacks).toEqual({
+      mayrin: {
+        resolution: 'unresolved',
+        segments: 1,
+      },
+    });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+    rmSync(castJsonFile, { force: true });
+    rmSync(historyFile, { force: true });
+  });
 });
 
 describe('book-state router — renderedTextByChapter (#1105)', () => {

@@ -469,6 +469,19 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       .then((h) => h.supersededBy)
       .catch(() => ({}));
 
+    /* #2040 Task 17 — same own-statement-with-own-.catch discipline as
+       `orphanedCharacterFallbackHistory` just above, and for the identical
+       reason: an argument-position expression's throw would bypass the
+       collector call's trailing `.catch()` entirely. `rejected` is the list
+       of orphaned ids the user has explicitly said are NOT the same
+       character as whatever they'd otherwise resolve onto (the banner's
+       "not the same character" action) — threaded into the collector so a
+       just-rejected reconciliation reports as unresolved on this very
+       hydrate, not the next one. */
+    const orphanedCharacterFallbackRejected = await loadCastIdHistory(bookDir)
+      .then((h) => h.rejected ?? [])
+      .catch(() => [] as string[]);
+
     /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
        render-time substitution, aggregated the same way as
        renderedFallbackByCharacter just above but keyed by the ORPHANED id (a
@@ -485,6 +498,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
       (cast?.characters ?? []) as Array<{ id: string }>,
       orphanedCharacterFallbackHistory,
+      orphanedCharacterFallbackRejected,
     ).catch(() => ({}));
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend
