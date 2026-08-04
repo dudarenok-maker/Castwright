@@ -20,6 +20,7 @@ import { normaliseForTts, stripAudioTags } from './text-normalize.js';
 import { normaliseBookLanguage } from './language.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
@@ -561,16 +562,21 @@ export async function collectGroupEmbeddings(
 export interface SynthesiseChapterOpts {
   sentences: SentenceOutput[];
   cast: CastCharacter[];
-  /** #2040 — the book's `supersededBy` map (cast-id-history.json's own field,
-      `{ [supersededId]: currentId }`), used to resolve a sentence group's
-      characterId through a retired/aliased id before treating it as
-      orphaned. `synthesiseChapter` has no book-directory parameter, so it
-      cannot load `cast-id-history.json` itself — the caller loads it once
-      (via `loadCastIdHistory(bookDir)`, `store/cast-id-history.ts`) and
-      passes `.supersededBy` through here. Absent → `{}`, which still
+  /** #2040 — the book's `cast-id-history.json` content (`{ supersededBy,
+      rejected, ... }`), used to resolve a sentence group's characterId
+      through a retired/aliased id before treating it as orphaned, and to
+      honour a user's "not the same character" rejection (#2040 Task 17).
+      `synthesiseChapter` has no book-directory parameter, so it cannot load
+      `cast-id-history.json` itself — the caller loads it once (via
+      `loadCastIdHistory(bookDir)`, `store/cast-id-history.ts`) and passes
+      the WHOLE returned object through here (fix round 1: this used to be
+      `.supersededBy` alone with `rejected` threaded separately into
+      `buildCastResolver`, which let this exact call site — the real render
+      path — resolve a rejected id anyway; passing one object makes that
+      unrepresentable). Absent → `{ supersededBy: {} }`, which still
       recovers the normalised-id tier (case/separator drift) but not a true
-      cross-letter alias. */
-  castIdHistory?: Readonly<Record<string, string>>;
+      cross-letter alias or a rejection. */
+  castIdHistory?: Pick<CastIdHistory, 'supersededBy' | 'rejected'>;
   provider: TtsProvider;
   modelKey: TtsModelKey;
   /** The run's DEFAULT engine — used for any character that doesn't carry its
@@ -1280,7 +1286,7 @@ export async function synthesiseChapter(
   const {
     sentences,
     cast,
-    castIdHistory = {},
+    castIdHistory = { supersededBy: {} },
     provider,
     modelKey,
     engine,
@@ -1490,9 +1496,12 @@ export async function synthesiseChapter(
      legitimately want strict identity. synthesiseChapter has no book-dir
      parameter, so it cannot load cast-id-history.json itself — callers that
      have a bookDir (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
-     load it once and pass `.supersededBy` through as `castIdHistory`; absent,
-     it defaults to {}, which still recovers the normalised-id tier
-     (case/separator drift) but not a true cross-letter alias. */
+     load it once and pass the WHOLE object through as `castIdHistory`
+     (#2040 Task 17 fix round 1 — passing only `.supersededBy` here, the
+     real render path, is what let a "not the same character" rejection go
+     unenforced at synth time); absent, it defaults to `{ supersededBy: {} }`,
+     which still recovers the normalised-id tier (case/separator drift) but
+     not a true cross-letter alias or a rejection. */
   const castResolver = buildCastResolver(cast, castIdHistory);
 
   /* fs-38 Wave 3c, Task 23 — resolve the narrator's REAL cast row when one

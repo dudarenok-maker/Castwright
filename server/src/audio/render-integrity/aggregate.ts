@@ -481,7 +481,9 @@ export async function scoreBook(
      quote (`hint`) and cloned-provenance check below instead of silently
      falling back to an undefined hint / `cloned: false` for a character that
      really does have both, just under its OLD id. */
-  const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
+     `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability

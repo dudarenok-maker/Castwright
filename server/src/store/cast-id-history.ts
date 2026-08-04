@@ -30,13 +30,22 @@ export interface CastIdHistory {
   /** #2040 Task 17 — orphaned character ids the user has explicitly said are
    *  NOT the same character as whatever they'd otherwise resolve onto (the
    *  banner's "not the same character" action, spec §4.6). Checked by
-   *  `buildCastResolver` ahead of all four resolution tiers: a plain reject
-   *  that only deleted a `supersededBy` entry would be a no-op for the two
-   *  normalised tiers, which have no history entry to remove at all (see the
-   *  controller ruling in
+   *  `buildCastResolver` AFTER the `exact` tier but ahead of the other
+   *  three (history / normalised-id / normalised-history) — fix round 1: an
+   *  earlier version of this checked `rejected` before `exact` too, which
+   *  reintroduced #2040's original bug for any rejected id a LATER analysis
+   *  reclaims as a genuine live cast row (a real risk — an orphaned id is
+   *  very often the character's own name, so a re-analysis minting that
+   *  exact id again is the expected case, not an edge case). A live exact
+   *  match always wins over a stale rejection, mirroring the same principle
+   *  `dropSupersededIdsReclaimedByLiveCast` established for `supersededBy`:
+   *  liveness beats history. The alias/normalised tiers stay suppressed by
+   *  rejection because a plain reject that only deleted a `supersededBy`
+   *  entry would be a no-op for the two normalised tiers, which have no
+   *  history entry to remove at all (see the controller ruling in
    *  `.superpowers/sdd/2026-08-01-cast-character-identity/progress.md`), so
    *  `rejected` is the only mechanism that stops read-side resolution
-   *  uniformly across every tier. Additive and backwards-compatible, same
+   *  through those three. Additive and backwards-compatible, same
    *  shape/strictness as `displaced`: optional, never bumps `schema`. An old
    *  reader that doesn't know this key still works — it only ever reads
    *  `supersededBy`/`displaced`, which are unaffected. */

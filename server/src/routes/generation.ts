@@ -1621,9 +1621,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       };
       /* #2040 — resolve a sentence group's characterId through the book's
          retired-id history (cast-id-history.json) before treating it as
-         orphaned. Loaded once per chapter render, not per group — never
-         throws (see loadCastIdHistory's own doc comment). */
-      const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+         orphaned, and honour a "not the same character" rejection (#2040
+         Task 17). Loaded once per chapter render, not per group — never
+         throws (see loadCastIdHistory's own doc comment). Passed through
+         WHOLE (fix round 1), not just `.supersededBy` — this is the real
+         render path, so it's the one call site where a dropped `rejected`
+         mattered most. */
+      const castIdHistory = await loadCastIdHistory(bookDir);
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,

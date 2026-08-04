@@ -328,7 +328,13 @@ export async function collectOrphanedCharacterFallbacks(
 ): Promise<Record<string, OrphanedCharacterFallback>> {
   const out: Record<string, OrphanedCharacterFallback> = {};
   const segs = await loadSegmentsFiles(bookDir, chapters);
-  const resolver = buildCastResolver(cast, castIdHistory, rejectedIds);
+  /* #2040 Task 17 fix round 1 — buildCastResolver now takes ONE history
+     object (`{ supersededBy, rejected }`) rather than two independent
+     parameters, so a caller can't pass one without the other. This
+     collector still keeps its own two params (`castIdHistory`/`rejectedIds`)
+     since book-state.ts loads them separately — bundled here at the single
+     internal call site instead. */
+  const resolver = buildCastResolver(cast, { supersededBy: castIdHistory, rejected: [...rejectedIds] });
 
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {

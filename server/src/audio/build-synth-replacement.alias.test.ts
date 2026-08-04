@@ -26,7 +26,7 @@ function seg(i: number, characterId: string, sentenceIds: number[]): ChapterSegm
 
 describe('#2040 findDivergentSentences tolerates alias-only differences', () => {
   const cast = [{ id: 'mairin', name: 'Мэйрин' }];
-  const history = { mayrin: 'mairin' };
+  const history = { supersededBy: { mayrin: 'mairin' } };
 
   it('does NOT report divergence when the two ids are the same character', () => {
     // segFile segment: characterId 'mayrin' (the retired id); current
@@ -67,5 +67,20 @@ describe('#2040 findDivergentSentences tolerates alias-only differences', () => 
     const segments = [seg(0, 'ghost-a', [1])];
     const current = [{ id: 1, characterId: 'ghost-a', text: 'Line.' }];
     expect(findDivergentSentences(segments, [0], current, cast, history)).toEqual([]);
+  });
+
+  it('#2040 Task 17 fix round 1 — a rejected alias no longer counts as "the same person", so the pair reports as diverged', () => {
+    // Same fixture as the first test ('mayrin' -> 'mairin' via history), but
+    // the user has rejected that exact reconciliation. Before fix round 1,
+    // `castIdHistory` reaching this call site was `.supersededBy` alone —
+    // `rejected` never got here, so this test would have stayed green
+    // (still resolving 'mayrin' -> 'mairin') even after a reject, silently
+    // protecting the wrong id from ever being flagged as diverged/re-recorded.
+    const rejectingHistory = { supersededBy: { mayrin: 'mairin' }, rejected: ['mayrin'] };
+    const segments = [seg(0, 'mayrin', [1])];
+    const current = [{ id: 1, characterId: 'mairin', text: 'Line.' }];
+    expect(findDivergentSentences(segments, [0], current, cast, rejectingHistory)).toEqual([
+      { segmentIndex: 0, sentenceId: 1, newOwner: 'mairin' },
+    ]);
   });
 });

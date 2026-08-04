@@ -1,12 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { buildCastResolver } from './cast-resolve.js';
+import type { CastIdHistory } from './cast-id-history.js';
 
 const cast = [
   { id: 'narrator', name: 'Narrator' },
   { id: 'mairin', name: 'Мэйрин' },
   { id: 'the_torment', name: 'Torment' },
 ];
-const history = { mayrin: 'mairin' };
+
+/* Small helper so every call site doesn't have to spell out
+   `{ supersededBy: ..., rejected: ... }` by hand — buildCastResolver takes
+   the whole loaded `CastIdHistory` shape (#2040 Task 17 fix round 1), not a
+   bare supersededBy map plus a separate rejected array. */
+function h(
+  supersededBy: Record<string, string> = {},
+  rejected?: string[],
+): Pick<CastIdHistory, 'supersededBy' | 'rejected'> {
+  return rejected === undefined ? { supersededBy } : { supersededBy, rejected };
+}
+
+const history = h({ mayrin: 'mairin' });
 
 describe('buildCastResolver', () => {
   it('tier 1: exact id', () => {
@@ -32,7 +45,7 @@ describe('buildCastResolver', () => {
   });
 
   it('tier 4: normalised history key', () => {
-    const r = buildCastResolver([{ id: 'x', name: 'X' }], { foo_bar: 'x' }).resolve('foo-bar');
+    const r = buildCastResolver([{ id: 'x', name: 'X' }], h({ foo_bar: 'x' })).resolve('foo-bar');
     expect(r?.character.id).toBe('x');
     expect(r?.via).toBe('normalised-history');
   });
@@ -44,19 +57,20 @@ describe('buildCastResolver', () => {
     // Precedence must pick tier 3 — the live id — not the coincidentally
     // normalised-matching history entry.
     const c = [{ id: 'wren', name: 'Wren' }, { id: 'the-mairin', name: 'Mairin' }];
-    const h = { the_Mairin: 'wren' };
-    const r = buildCastResolver(c, h).resolve('the-Mairin');
+    const r = buildCastResolver(c, h({ the_Mairin: 'wren' })).resolve('the-Mairin');
     expect(r?.character.id).toBe('the-mairin');
     expect(r?.via).toBe('normalised-id');
   });
 
   it('a history entry whose target is NOT a live cast id does not resolve', () => {
-    expect(buildCastResolver(cast, { ghost: 'deleted-character' }).resolve('ghost')).toBeUndefined();
+    expect(
+      buildCastResolver(cast, h({ ghost: 'deleted-character' })).resolve('ghost'),
+    ).toBeUndefined();
   });
 
   it('an exact live id BEATS a history entry claiming it', () => {
     const c = [{ id: 'unknown-male', name: 'Unknown Male' }, { id: 'timkin', name: 'Timkin' }];
-    const r = buildCastResolver(c, { 'unknown-male': 'timkin' }).resolve('unknown-male');
+    const r = buildCastResolver(c, h({ 'unknown-male': 'timkin' })).resolve('unknown-male');
     expect(r?.character.id).toBe('unknown-male');
   });
 
@@ -75,8 +89,8 @@ describe('buildCastResolver', () => {
     // normalises to that same key and would resolve cleanly at tier 4 if the
     // tier-3 tie were mistaken for a miss (`null` is falsy) — it must not be.
     const c = [{ id: 'pool_player_2', name: 'A' }, { id: 'pool-player-2', name: 'B' }];
-    const h = { 'Pool-Player-2': 'pool-player-2' };
-    expect(buildCastResolver(c, h).resolve('pool player 2')).toBeUndefined();
+    const r = buildCastResolver(c, h({ 'Pool-Player-2': 'pool-player-2' })).resolve('pool player 2');
+    expect(r).toBeUndefined();
   });
 
   it('resolving a non-string characterId returns undefined rather than throwing', () => {
@@ -85,33 +99,50 @@ describe('buildCastResolver', () => {
 
   describe('rejected (#2040 Task 17 — "not the same character")', () => {
     it('blocks a history-tier match', () => {
-      expect(buildCastResolver(cast, history, ['mayrin']).resolve('mayrin')).toBeUndefined();
+      expect(
+        buildCastResolver(cast, h({ mayrin: 'mairin' }, ['mayrin'])).resolve('mayrin'),
+      ).toBeUndefined();
     });
 
     it('blocks a normalised-id-tier match', () => {
       expect(
-        buildCastResolver(cast, {}, ['the-torment']).resolve('the-torment'),
+        buildCastResolver(cast, h({}, ['the-torment'])).resolve('the-torment'),
       ).toBeUndefined();
     });
 
     it('blocks a normalised-history-tier match', () => {
       const c = [{ id: 'x', name: 'X' }];
-      const h = { foo_bar: 'x' };
-      expect(buildCastResolver(c, h, ['foo-bar']).resolve('foo-bar')).toBeUndefined();
+      expect(
+        buildCastResolver(c, h({ foo_bar: 'x' }, ['foo-bar'])).resolve('foo-bar'),
+      ).toBeUndefined();
     });
 
-    it('blocks an exact live id (the reclaimed-id edge case, deliberately not addressed — see the doc comment)', () => {
-      expect(buildCastResolver(cast, history, ['mairin']).resolve('mairin')).toBeUndefined();
+    it('fix round 1 — an exact live id BEATS a rejection: a reclaimed id must still resolve', () => {
+      // #2040 Task 17 fix round 1 CRITICAL repro: 'mairin' was rejected as
+      // the answer for some now-irrelevant orphaned id, but 'mairin' is
+      // ALSO, independently, a genuine live cast row (tier 1). Checking
+      // `rejected` before `exact` would strand those segments — the exact
+      // bug #2040 exists to fix, reintroduced by the fix itself. Liveness
+      // must always win, mirroring dropSupersededIdsReclaimedByLiveCast's
+      // principle for `supersededBy`.
+      const r = buildCastResolver(cast, h({}, ['mairin'])).resolve('mairin');
+      expect(r?.character.id).toBe('mairin');
+      expect(r?.via).toBe('exact');
     });
 
     it('does not affect an id that is not in the rejected list', () => {
-      const r = buildCastResolver(cast, history, ['some-other-id']).resolve('mayrin');
+      const r = buildCastResolver(cast, h({ mayrin: 'mairin' }, ['some-other-id'])).resolve('mayrin');
       expect(r?.character.id).toBe('mairin');
     });
 
-    it('defaults to no rejections when the argument is omitted', () => {
-      const r = buildCastResolver(cast, history).resolve('mayrin');
+    it('defaults to no rejections when the history object omits `rejected`', () => {
+      const r = buildCastResolver(cast, h({ mayrin: 'mairin' })).resolve('mayrin');
       expect(r?.character.id).toBe('mairin');
+    });
+
+    it('defaults to no rejections when the second argument is omitted entirely', () => {
+      const r = buildCastResolver(cast).resolve('the_torment');
+      expect(r?.character.id).toBe('the_torment');
     });
   });
 });

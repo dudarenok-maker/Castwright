@@ -14,6 +14,7 @@ import { resamplePcm16 } from '../tts/resample-pcm16.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { normaliseForTts } from '../tts/text-normalize.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 
 /** A segment can be re-recorded only if it's backed by manuscript sentences.
     The synthetic chapter-title beat (`kind:'title'`, empty `sentenceIds`) has
@@ -186,18 +187,25 @@ export interface DivergentSentence {
     the false-positive this wave exists to fix (spec §4.3): QA repair would
     quarantine every one of that character's segments into `stillSuspect`,
     and a splice would refuse outright. `cast` + `castIdHistory` (the same
-    `.supersededBy` map `synthesise-chapter.ts` threads through, see
-    `loadCastIdHistory`) resolve both sides through `buildCastResolver`
+    loaded `CastIdHistory` object `synthesise-chapter.ts` threads through,
+    see `loadCastIdHistory`) resolve both sides through `buildCastResolver`
     before comparing. The fallback is deliberately asymmetric: two ids only
     count as the same person when BOTH resolve AND resolve to the same cast
     id — two unresolvable ids that merely look alike are still a divergence.
-    Guessing here can destroy correct audio (#1972's lesson). */
+    Guessing here can destroy correct audio (#1972's lesson).
+
+    #2040 Task 17 fix round 1 — `castIdHistory` takes the whole
+    `{ supersededBy, rejected }` shape (not just `supersededBy`) so a
+    user-rejected reconciliation is honoured here too: without this, a
+    rejected match still counted as "the same person" for divergence
+    purposes, silently protecting a wrong id from ever being flagged as
+    diverged/re-recorded. */
 export function findDivergentSentences(
   segments: ChapterSegment[],
   targetIndices: number[],
   currentSentences: Pick<SentenceOutput, 'id' | 'characterId' | 'text' | 'excludeFromSynthesis'>[],
   cast: readonly { id: string }[],
-  castIdHistory: Readonly<Record<string, string>> = {},
+  castIdHistory: Pick<CastIdHistory, 'supersededBy' | 'rejected'> = { supersededBy: {} },
 ): DivergentSentence[] {
   const byId = new Map(currentSentences.map((s) => [s.id, s]));
   const resolver = buildCastResolver(cast, castIdHistory);
