@@ -26,8 +26,35 @@
    fails without this composition. */
 
 import { normaliseForMatch } from '../util/text-match.js';
+import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 
 type PriorCastRow = { id: string } & Record<string, unknown>;
+
+/** Ids this remap must never mint, adopt or retire. Two families, both
+    code-reserved rather than analyzer-minted:
+
+    - the narrator (`NARRATOR_CHARACTER_IDS`) — it has its own identity
+      mechanism (`applyNarratorIdentity`), and `mergeAnalysisResultWithExistingCast`
+      excludes it from the sibling name-fallback on BOTH sides for the same
+      reason (`merge-analysis-cast.ts:219` / `:260`, #2040 Task 12), as does
+      `dedupePriorCastByName` (`:501`);
+    - the two `foldMinorCast` buckets (`unknown-male` / `unknown-female`) —
+      shared background-speaker slots, not people. Spec §1.4 records that
+      _Exile_'s prior cast really holds `{id:'unknown-male', name:'Timkin'}`,
+      so a correctly-slugged fresh `timkin` row genuinely name-matches one; the
+      remap runs AFTER `foldMinorCast`, so a rewrite onto the bucket is never
+      re-separated by anything downstream.
+
+    Excluded in both directions. Adopting a reserved id (`target`) moves a real
+    character's sentences onto a shared slot; retiring one (`freshRow.id`)
+    hands every line the reserved row owns to a single character. The prior
+    row's RAW id is checked too, not just its post-rewrite destination — a
+    reserved id is rewritable (`roster-dedup.ts` exempts only the narrator), so
+    a bucket heading elsewhere would otherwise slip through. */
+function isReservedId(id: string): boolean {
+  return NARRATOR_CHARACTER_IDS.includes(id) || id === MALE_BUCKET_ID || id === FEMALE_BUCKET_ID;
+}
 
 /* `Record<string, unknown>` rather than `{ name?: unknown }` deliberately —
    an all-optional object-literal target triggers TS's weak-type check
@@ -126,6 +153,26 @@ export function remapFreshToPriorIds<
     // Never remap onto an id a DIFFERENT fresh character already holds this
     // run — that would silently collapse two distinct people onto one row.
     if (freshIds.has(target)) continue;
+    /* Wave 2 final-review finding 1(a) — the mirror of the guard above, and
+       the reason it is needed: this rewrite is recorded as a retirement
+       (§4.4 call site 4), and `retireCharacterId` unconditionally repoints
+       every history entry whose VALUE is `from` (`cast-id-history.ts:123-127`).
+       That is only sound when `from` is genuinely dead. Five of the six
+       producers guarantee it; this one does not, so check here: if a
+       DIFFERENT prior row still holds `freshRow.id` after this run's own
+       dedup→fold table is applied to the prior cast (i.e. it survives into
+       the cast.json this run writes, either overlaid or carried forward),
+       retiring that id would drag unrelated frozen segments onto the wrong
+       character — durably, and invisibly, since the end-of-run
+       `dropSupersededIdsReclaimedByLiveCast` removes the reclaimed KEY but
+       never the collateral repoint. Compared in POST-rewrite id space, the
+       same space `target` is already in: a prior row that holds the id but is
+       itself collapsing elsewhere this run will not hold it after the persist,
+       and must not block a legitimate remap. */
+    if (priorCast.some((p) => p !== priorRow && priorIdAfter(p.id) === freshRow.id)) continue;
+    // Wave 2 final-review finding 2 — see `isReservedId`. Both directions,
+    // and the prior row's raw id as well as its destination.
+    if (isReservedId(freshRow.id) || isReservedId(priorRow.id) || isReservedId(target)) continue;
     if (
       notLinkedToId(priorRow, freshRow.id) ||
       notLinkedToId(freshRow as unknown as Record<string, unknown>, priorRow.id)

@@ -5625,3 +5625,259 @@ describe('chunk-variant attribution rules (#1758)', () => {
     expect(leadIn(STAGE2_ATTRIBUTION_RULES_CHUNK)).toBe(leadIn(STAGE2_ATTRIBUTION_RULES));
   });
 });
+
+describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 Wave 2 final review, finding 1)', () => {
+  /* End-to-end proof for the Critical the whole-branch review found, driven
+     through the REAL route with real file I/O and no mocked history.
+
+     The shape (verified by the reviewer against the running algorithm):
+       history  {"brann-w": "brann"}          — correct; those frozen segments
+                                                are Brann's
+       prior    {id:'brann', name:'Brann'}    voiced V1
+                {id:'brann-weir', name:'Brann Weir'}  voiced V2
+       fresh    {id:'brann', name:'Brann Weir'}  — the analyzer flips the id
+                                                   onto the OTHER character's
+                                                   name (spec §1.2's rename)
+
+     `dedupePriorCastByName` does not collapse the prior pair (normaliseNameKey
+     gives `brann` / `brannweir`), so both rows are live going in and both are
+     live in the cast.json this run writes. `remapFreshToPriorIds` name-matches
+     the fresh row to prior 'brann-weir' and — before the fix — emitted
+     `brann -> brann-weir`, a retirement of an id a different, live character
+     still holds. `retireCharacterId` then repointed EVERY entry whose value
+     was 'brann', so 'brann-w' followed, and Brann's frozen segments would
+     render in Brann Weir's V2 from then on. The end-of-run
+     `dropSupersededIdsReclaimedByLiveCast` removes the reclaimed 'brann' KEY
+     and never the collateral repoint, so the damage is silent and permanent.
+
+     Paths that could otherwise satisfy these assertions (checked, so this is
+     not another green-but-inert pin):
+       - Site 1 (applyRewriteToPriorCast) needs 'brann' to be a key in
+         composeRewrites(dd.rewrites, folded.rewrites). The fresh roster has a
+         single "Brann Weir" row (no same-name collision to dedupe) with 3
+         attributed lines (>= MIN_LINES_DEFAULT, so no fold) — both tables are
+         empty for it.
+       - Site 2 (dedupePriorCastByName) cannot fire: the two prior name keys
+         differ, as above.
+       - Site 3 (mergeAnalysisResultWithExistingCast's name-fallback) only runs
+         under `if (!old)`; the fresh 'brann' row matches prior 'brann' by
+         EXACT id, so the fallback branch is never entered.
+     Site 4 — this remap — is therefore the only producer of a 'brann'
+     retirement in this fixture. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Brann asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'brann',
+        name: 'Brann Weir',
+        role: 'lead',
+        color: '#111111',
+        gender: 'male',
+        evidence: [{ quote: 'Brann asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'brann',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-live-id-retire-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_live_id_retire_e2e_test',
+        manuscriptId,
+        title: 'Live Id Retire E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+          { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): void {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+      { id: 3, title: 'Chapter Three', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Live Id Retire E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+  }
+
+  it(
+    "an analyzer id flip onto another live character's name leaves the unrelated history chain pointing where it did",
+    async () => {
+      const manuscriptId = `test-live-id-retire-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      // Correct, working history from an earlier run: 'brann-w' is Brann.
+      await retireCharacterId(bookDir, 'brann-w', 'brann');
+
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { id: 'brann', name: 'Brann', voiceState: 'locked', voiceUuid: 'U-brann-1' },
+            {
+              id: 'brann-weir',
+              name: 'Brann Weir',
+              voiceState: 'locked',
+              voiceUuid: 'U-brann-weir-2',
+            },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // Fixture sanity: BOTH prior rows are still live in the cast.json this
+        // run wrote, which is exactly what makes retiring either of them
+        // illegitimate. If this fails the fixture has drifted, not the fix.
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+        expect(idsAfter).toContain('brann');
+        expect(idsAfter).toContain('brann-weir');
+
+        const history = await loadCastIdHistory(bookDir);
+        // THE property: Brann's frozen segments still resolve to Brann.
+        expect(history.supersededBy).toHaveProperty('brann-w', 'brann');
+        // And no retirement of the live 'brann' id was recorded at all —
+        // neither as a surviving entry nor as one the end-of-run drop had to
+        // clean up (which would have left the repoint behind).
+        expect(history.supersededBy).not.toHaveProperty('brann');
+        expect(history.displaced ?? {}).not.toHaveProperty('brann');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
