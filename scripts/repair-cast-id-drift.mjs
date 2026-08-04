@@ -697,9 +697,12 @@ function cacheEntriesOf(cache) {
  *  the same way with no TLS/self-signed-cert handling needed — this is a
  *  "is anything listening" check, not a health check.
  *
- *  Resolves `true` (refused — safe) ONLY on a same-tick `ECONNREFUSED`.
- *  Every other outcome — a completed connect, a timeout, `ECONNRESET`,
- *  `EACCES`, `EHOSTUNREACH`, anything else — resolves `false` (NOT
+ *  Resolves `true` (refused — safe) ONLY when the socket's own `'error'`
+ *  event fires with `code === 'ECONNREFUSED'` — whether that lands
+ *  immediately or takes a while, there is no elapsed-time check on it, only
+ *  a race against the 4s `timeout` below. Every other outcome — a completed
+ *  `'connect'`, the `'timeout'` event winning that race, `ECONNRESET`,
+ *  `EACCES`, `EHOSTUNREACH`, any other error code — resolves `false` (NOT
  *  refused, i.e. "possibly live, refuse the write"). A server that is
  *  running but unresponsive within the timeout window (mid-generation, a
  *  blocked event loop, a model load) must not read as absent just because
