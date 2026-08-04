@@ -18,6 +18,7 @@ import { castTierRouter } from './routes/cast-tier.js';
 import { castAliasesRouter } from './routes/cast-aliases.js';
 import { castLinkPriorRouter } from './routes/cast-link-prior.js';
 import { castNotLinkedToRouter } from './routes/cast-not-linked-to.js';
+import { castRejectOrphanRouter } from './routes/cast-reject-orphan.js';
 import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
 import { castAddFromRosterRouter } from './routes/cast-add-from-roster.js';
 import { castCreateRouter } from './routes/cast-create.js';
@@ -157,6 +158,7 @@ app.use('/api/books', castTierRouter); // mounts /:bookId/cast/tier (series-scop
 app.use('/api/books', castAliasesRouter); // mounts /:bookId/cast/{unlink-alias,add-alias} (editable alias chips on the profile drawer)
 app.use('/api/books', castLinkPriorRouter); // mounts /:bookId/cast/link-prior (manual continuity link to a prior series book)
 app.use('/api/books', castNotLinkedToRouter); // mounts /:bookId/cast/:characterId/not-linked-to (plan 101 — mark cross-book duplicate as intentional variant)
+app.use('/api/books', castRejectOrphanRouter); // mounts /:bookId/cast/:characterId/reject-orphan-match (#2040 Task 17 — orphaned-id banner "not the same character" action)
 app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:characterId/series-patch (cross-book Compare save propagation, BACKLOG #7)
 app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from-roster (new local character pulled from a prior series-mate)
 app.use('/api/books', castCreateRouter); // mounts /:bookId/cast/create (fs-58 Unit B — mint a net-new cast member)

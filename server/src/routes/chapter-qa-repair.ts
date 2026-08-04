@@ -275,13 +275,15 @@ chapterQaRepairRouter.post(
       cast.characters = await hydrateCastReusedVoices(cast.characters);
 
       /* #2040 — resolve a characterId through the book's retired-id history
-         before treating it as orphaned. Loaded once for this repair pass —
-         reused below both by `findDivergentSentences` and by the resolver
-         lookup that replaces the acoustic pre-filter's raw cast `.find` —
-         and by every `synthesiseChapter` call inside the synth loop
-         further down. Never throws (see loadCastIdHistory's own doc
-         comment). */
-      const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+         before treating it as orphaned, and honour a "not the same
+         character" rejection (#2040 Task 17). Loaded once for this repair
+         pass — reused below both by `findDivergentSentences` and by the
+         resolver lookup that replaces the acoustic pre-filter's raw cast
+         `.find` — and by every `synthesiseChapter` call inside the synth
+         loop further down. Never throws (see loadCastIdHistory's own doc
+         comment). Passed through WHOLE (fix round 1), not just
+         `.supersededBy`. */
+      const castIdHistory = await loadCastIdHistory(bookDir);
       const castResolver = buildCastResolver(cast.characters, castIdHistory);
 
       /* Displace any in-flight regen of this chapter, and register so a later

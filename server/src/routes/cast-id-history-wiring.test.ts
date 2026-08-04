@@ -9,19 +9,30 @@
    straight into `synthesiseChapter`'s options, so it proves the RESOLVER
    works but never proves any of the three route call sites actually LOAD and
    PASS it. If a refactor silently dropped
-   `const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;`
-   — or dropped the `castIdHistory,` line from a `synthesiseChapter({...})`
-   call — every existing test in the repo would stay green while the feature
-   regressed to narrator substitution for any retired id.
+   `const castIdHistory = await loadCastIdHistory(bookDir);` — or dropped the
+   `castIdHistory,` line from a `synthesiseChapter({...})` call — every
+   existing test in the repo would stay green while the feature regressed to
+   narrator substitution for any retired id.
+
+   #2040 Task 17 fix round 1 — each route now passes the WHOLE loaded
+   `CastIdHistory` object (`{ schema, supersededBy, rejected? }`), not just
+   `.supersededBy`, so `buildCastResolver` also honours a "not the same
+   character" rejection at synth/splice/repair time (previously it only
+   reached the orphan-collector's own resolver call — the banner and the
+   analyzer's future matching, never the actual render). The assertions below
+   were updated accordingly; the generation.ts block additionally seeds a
+   `rejected` entry to prove that field specifically survives the route →
+   synthesiseChapter hop, not just `supersededBy`.
 
    Each describe block below drives ONE of the three call sites through its
    existing supertest harness against a REAL cast-id-history.json written by
-   the real `retireCharacterId` writer (server/src/store/cast-id-history.ts —
-   not a hand-written fixture), intercepts the mocked `synthesiseChapter`
-   call, and asserts it actually received the seeded history map. The seeded
-   `from` id (`ghost-<route>`) never otherwise appears in the book's cast or
-   segments, so it is inert for resolution/divergence checks — its sole job
-   is to prove the map reaches `synthesiseChapter`'s options unchanged. */
+   the real `retireCharacterId`/`rejectOrphanedId` writers
+   (server/src/store/cast-id-history.ts — not a hand-written fixture),
+   intercepts the mocked `synthesiseChapter` call, and asserts it actually
+   received the seeded history object. The seeded `from` id
+   (`ghost-<route>`) never otherwise appears in the book's cast or segments,
+   so it is inert for resolution/divergence checks — its sole job is to
+   prove the object reaches `synthesiseChapter`'s options unchanged. */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -29,16 +40,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 
 /* Captures every options object synthesiseChapter is called with, across all
    three routers mounted below on the shared `app`. Cleared at the top of each
    `it()` so an assertion only sees calls from its own request. */
-let synthesiseCalls: Array<{ castIdHistory?: Record<string, string> }> = [];
+let synthesiseCalls: Array<{ castIdHistory?: CastIdHistory }> = [];
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
   return {
     ...actual,
-    synthesiseChapter: vi.fn(async (args: { castIdHistory?: Record<string, string> }) => {
+    synthesiseChapter: vi.fn(async (args: { castIdHistory?: CastIdHistory }) => {
       synthesiseCalls.push(args);
       return {
         pcm: Buffer.alloc(4800, 0),
@@ -101,6 +113,7 @@ let saveAnalysisCache: (
 ) => Promise<void>;
 let clearAnalysisCache: (manuscriptId: string) => Promise<void>;
 let retireCharacterId: (bookDir: string, from: string, to: string) => Promise<void>;
+let rejectOrphanedId: (bookDir: string, id: string) => Promise<void>;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-castid-wiring-test-'));
@@ -129,6 +142,7 @@ beforeAll(async () => {
   saveAnalysisCache = cacheModule.saveAnalysisCache;
   clearAnalysisCache = cacheModule.clearAnalysisCache;
   retireCharacterId = historyModule.retireCharacterId;
+  rejectOrphanedId = historyModule.rejectOrphanedId;
 
   app = express();
   app.use(express.json());
@@ -189,8 +203,11 @@ describe('#2040 castIdHistory route wiring — generation.ts', () => {
     });
     // A real writer call, not a hand-written history file. 'ghost-generation'
     // never appears in this book's cast or sentences — inert for resolution,
-    // pure wiring probe.
+    // pure wiring probe. Also seeds a `rejected` entry (fix round 1) so the
+    // assertion below proves THAT field survives the route → synthesiseChapter
+    // hop too, not just `supersededBy`.
     await retireCharacterId(bookDir, 'ghost-generation', 'narrator');
+    await rejectOrphanedId(bookDir, 'rejected-generation');
   });
 
   afterAll(async () => {
@@ -207,7 +224,11 @@ describe('#2040 castIdHistory route wiring — generation.ts', () => {
     expect(events.some((e) => e.type === 'chapter_complete'), `got: ${res.text}`).toBe(true);
 
     expect(synthesiseCalls.length).toBeGreaterThan(0);
-    expect(synthesiseCalls[0].castIdHistory).toEqual({ 'ghost-generation': 'narrator' });
+    expect(synthesiseCalls[0].castIdHistory).toEqual({
+      schema: 1,
+      supersededBy: { 'ghost-generation': 'narrator' },
+      rejected: ['rejected-generation'],
+    });
   });
 });
 
@@ -288,7 +309,10 @@ describe('#2040 castIdHistory route wiring — chapter-splice.ts', () => {
     expect(events.some((e) => e.type === 'splice_complete'), `got: ${res.text}`).toBe(true);
 
     expect(synthesiseCalls.length).toBeGreaterThan(0);
-    expect(synthesiseCalls[0].castIdHistory).toEqual({ 'ghost-splice': 'amy' });
+    expect(synthesiseCalls[0].castIdHistory).toEqual({
+      schema: 1,
+      supersededBy: { 'ghost-splice': 'amy' },
+    });
   });
 });
 
@@ -387,6 +411,9 @@ describe('#2040 castIdHistory route wiring — chapter-qa-repair.ts', () => {
     expect(events.some((e) => e.type === 'qa_repair_complete'), `got: ${res.text}`).toBe(true);
 
     expect(synthesiseCalls.length).toBeGreaterThan(0);
-    expect(synthesiseCalls[0].castIdHistory).toEqual({ 'ghost-qa-repair': 'castor' });
+    expect(synthesiseCalls[0].castIdHistory).toEqual({
+      schema: 1,
+      supersededBy: { 'ghost-qa-repair': 'castor' },
+    });
   });
 });

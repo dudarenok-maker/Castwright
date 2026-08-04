@@ -85,7 +85,7 @@ describe('#2040 orphaned characterId resolves through the cast resolver', () => 
     const result = await synthesiseChapter({
       sentences: [sentence(1, 'mayrin')],
       cast,
-      castIdHistory: { mayrin: 'mairin' },
+      castIdHistory: { supersededBy: { mayrin: 'mairin' } },
       provider,
       modelKey: 'kokoro-v1',
       engine: 'kokoro',
@@ -157,6 +157,44 @@ describe('#2040 orphaned characterId resolves through the cast resolver', () => 
     expect(body?.renderedFallbackCharacterId).toBe('narrator');
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0][0]).toContain('nobody-at-all');
+  });
+
+  it('#2040 Task 17 fix round 1 — a rejected alias renders as an orphan (narrator fallback), not the aliased voice', async () => {
+    // Identical fixture to the first test above ('mayrin' -> 'mairin' via
+    // history), except the user has rejected this exact reconciliation.
+    // Before fix round 1, `synthesiseChapter` — the actual render path —
+    // only ever received `.supersededBy`, never `rejected`, so a rejected
+    // match still rendered in the aliased character's voice: the ONE
+    // outcome the reject button exists to prevent. This is the headline
+    // regression the coordinator's fix-round-1 brief called out.
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', gender: 'female' },
+      {
+        id: 'mairin',
+        name: 'Мэйрин',
+        gender: 'female',
+        overrideTtsVoices: { kokoro: { name: 'kokoro-mairin' } },
+      },
+    ];
+    const provider = makeProvider();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'mayrin')],
+      cast,
+      castIdHistory: { supersededBy: { mayrin: 'mairin' }, rejected: ['mayrin'] },
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    // NOT the aliased character's voice — it fell back to the narrator.
+    expect(provider.calls[0].voiceName).not.toBe('kokoro-mairin');
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.characterId).toBe('mayrin');
+    expect(body?.renderedFallbackCharacterId).toBe('narrator');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   it('puts the RESOLVED character into the cloned-voice pre-pass set (:1519 regression guard)', async () => {

@@ -1,13 +1,21 @@
-/* #2023 Piece 1 — the orphaned-characterId advisory banner on the Cast view.
+/* #2023 Piece 1, split #2040 Task 17 — the orphaned-characterId advisory
+ * banner on the Cast view.
  *
  * When a rendered sentence group carries a characterId with no entry in the
  * book's cast at all (a cast/analysis id drift — e.g. a romanisation
  * mismatch), the server falls back to the narrator's voice for that line and
- * now records the substitution (server/src/tts/synthesise-chapter.ts's
+ * records the substitution (server/src/tts/synthesise-chapter.ts's
  * `renderedFallbackCharacterId`, aggregated by
  * `collectOrphanedCharacterFallbacks` into the book-state GET's
  * `orphanedCharacterFallbacks` map). Before this fix nothing on the wire ever
  * named the substitution — the render only logged it once per orphan id.
+ *
+ * Task 17 split the banner into two sections: AUTO-RECONCILED (the orphaned
+ * id resolved through the id-history side-table or a normalised-key match —
+ * informational, collapsed by default) and NEEDS-YOUR-DECISION (a genuine
+ * miss — actionable, always expanded). Either section's "not the same
+ * character" button rejects the match durably (server writes a `rejected`
+ * entry in cast-id-history.json + a one-sided notLinkedTo edge).
  *
  * Mirrors `e2e/generation/coqui-fallback-non-english.spec.ts`'s established
  * pattern for this exact class of render-time fact: mock-mode generation has
@@ -27,7 +35,13 @@
  * it through Layout's own getBookState hydrate effect, so it cannot catch a
  * regression in THAT wiring (see `src/components/layout.test.tsx`'s
  * "orphaned-characterId fallback banner (#2023)" describe block for the test
- * that pins layout.tsx's dispatch itself). */
+ * that pins layout.tsx's dispatch itself).
+ *
+ * The reject flow goes through mock mode's `api.rejectOrphanMatch`
+ * (`mockRejectOrphanMatch` in src/lib/api.ts) — a canned success response
+ * with no real cast.json/cast-id-history.json to inspect, so this spec
+ * asserts only the resulting DOM/redux state, not server-side persistence
+ * (server/src/routes/cast-reject-orphan.test.ts owns that). */
 
 import { test, expect, type Page } from '@playwright/test';
 import { goToConfirm, waitForRouteReady } from './helpers';
@@ -45,20 +59,33 @@ async function reachCastView(page: Page): Promise<void> {
 /* Directly dispatches the real `cast/setOrphanedCharacterFallbacks` reducer —
    the same render-time fact the server's `collectOrphanedCharacterFallbacks`
    (server/src/audio/segments-io.ts) aggregates for real, which mock-mode
-   generation has no way to reproduce (see header). Mirrors
-   coqui-fallback-non-english.spec.ts's `seedRenderedCoquiFallback`. */
+   generation has no way to reproduce (see header). Carries the real
+   post-Task-17 shape (`resolution`/`resolvedCharacterId`/`segments`),
+   mirroring coqui-fallback-non-english.spec.ts's `seedRenderedCoquiFallback`.
+   One auto-reconciled entry ('mayrin' → 'narrator') and one needs-your-
+   decision entry ('coalfall', unresolved) — both banner sections at once. */
 async function seedOrphanedFallback(page: Page): Promise<void> {
   await page.evaluate(() => {
     const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
     store.dispatch({
       type: 'cast/setOrphanedCharacterFallbacks',
-      payload: { mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' } },
+      payload: {
+        mayrin: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 6,
+        },
+        coalfall: {
+          resolution: 'unresolved',
+          segments: 13,
+        },
+      },
     });
   });
 }
 
-test.describe('cast view — orphaned-characterId advisory banner (#2023)', () => {
-  test('shows the banner once the book-state hydrate carries an orphaned-id substitution', async ({
+test.describe('cast view — orphaned-characterId advisory banner (#2023, split #2040 Task 17)', () => {
+  test('shows both sections once the book-state hydrate carries orphaned-id substitutions', async ({
     page,
   }) => {
     await reachCastView(page);
@@ -68,9 +95,53 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023)', () =
 
     await seedOrphanedFallback(page);
 
-    /* The advisory banner renders, naming the orphaned id. */
     const banner = page.getByTestId('orphaned-character-fallback-banner');
     await expect(banner).toBeVisible({ timeout: 5_000 });
-    await expect(banner).toContainText('mayrin');
+
+    /* needs-your-decision is expanded by default, naming the unresolved id
+       and its segment count. */
+    const needsDecision = page.getByTestId('orphaned-needs-decision');
+    await expect(needsDecision).toContainText('coalfall');
+    await expect(needsDecision).toContainText('13 segment');
+
+    /* auto-reconciled is collapsed by default — the list is absent until
+       the toggle is clicked. */
+    await expect(page.getByTestId('orphaned-auto-reconciled')).toHaveCount(0);
+    await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
+    await expect(autoReconciled).toBeVisible();
+    await expect(autoReconciled).toContainText('mayrin');
+    await expect(autoReconciled).toContainText('6 segment');
+  });
+
+  test('rejecting an auto-reconciled match moves it into needs-your-decision', async ({ page }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
+    const row = page.getByTestId('orphaned-row-mayrin');
+    await expect(row).toBeVisible();
+
+    await row.getByRole('button', { name: /not the same character/i }).click();
+
+    /* The rejected row drops out of auto-reconciled and reappears, unresolved,
+       under needs-your-decision (now showing 2 entries). */
+    await expect(page.getByTestId('orphaned-needs-decision')).toContainText('mayrin', {
+      timeout: 5_000,
+    });
+  });
+
+  test('needs-your-decision: the reject button stays disabled until a candidate is picked', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    const row = page.getByTestId('orphaned-row-coalfall');
+    const rejectButton = row.getByRole('button', { name: /not the same character/i });
+    await expect(rejectButton).toBeDisabled();
+
+    await row.getByRole('combobox').selectOption({ label: 'Narrator' });
+    await expect(rejectButton).toBeEnabled();
   });
 });

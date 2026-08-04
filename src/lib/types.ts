@@ -442,15 +442,26 @@ export interface BookStateResponse {
       the cast Status pill reads "Fallback (Kokoro)". Empty / undefined when no
       audio has rendered or nothing fell back. */
   renderedFallbackByCharacter?: Record<string, string>;
-  /** #2023 — orphaned characterId → who actually rendered it. Keyed by a
-      manuscript `characterId` with NO entry in this book's cast at all (a
-      cast/analysis id drift, e.g. a romanisation mismatch) that was
-      substituted with the narrator, aggregated across any rendered chapter.
-      Distinct from `renderedFallbackByCharacter` above, which is keyed by a
-      REAL cast id whose configured ENGINE changed — this is a wrong-CHARACTER
-      substitution, not an engine one. Empty / undefined when nothing has
-      substituted. */
-  orphanedCharacterFallbacks?: Record<string, { characterId: string; voiceName?: string }>;
+  /** #2023, widened #2040 Wave 3 — orphaned characterId → resolution info.
+      Keyed by a manuscript `characterId` that does NOT exactly match a live
+      cast id (a cast/analysis id drift, e.g. a romanisation mismatch, or a
+      since-superseded id), aggregated across any rendered chapter. Distinct
+      from `renderedFallbackByCharacter` above, which is keyed by a REAL cast
+      id whose configured ENGINE changed — this is a wrong-CHARACTER
+      substitution, not an engine one. `characterId` (who actually rendered
+      the line) is present only when the render stamped it; `resolution` /
+      `resolvedCharacterId` / `segments` are always present. Empty / undefined
+      when nothing is orphaned. */
+  orphanedCharacterFallbacks?: Record<
+    string,
+    {
+      characterId?: string;
+      voiceName?: string;
+      resolution: 'alias' | 'normalised' | 'unresolved';
+      resolvedCharacterId?: string;
+      segments: number;
+    }
+  >;
   /** #650 — render-time sentence→speaker map per rendered chapter
       (`{ [chapterId]: { [sentenceId]: characterId } }`), recovered from each
       chapter's `<slug>.segments.json`. The Generate view diffs it against the

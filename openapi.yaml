@@ -3394,6 +3394,49 @@ paths:
         '409':
           description: Source or other book has no cast on disk yet
 
+  /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
+    post:
+      summary: Reject an orphaned-id reconciliation ("not the same character") — #2040 Task 17
+      operationId: rejectOrphanMatch
+      description: |
+        The orphaned-character-fallback banner shows an id that either
+        auto-reconciled onto a live character (through the id-history
+        side-table or a normalised-key match) or didn't resolve at all. This
+        route records "orphanedId is NOT the same character as characterId":
+        it adds `orphanedId` to `cast-id-history.json`'s `rejected` list
+        (checked by the server's id resolver AFTER the exact-id tier but
+        ahead of the history / normalised-id / normalised-history tiers — a
+        live cast row with this exact id always wins over a stale rejection)
+        and writes a one-sided `notLinkedTo` edge onto `characterId` naming
+        `orphanedId`, so the next re-analysis's name matcher does not simply
+        re-record the same match. Idempotent — a repeat call for the same
+        pair is a no-op on cast.json, though the rejection is still
+        (re-)recorded. `rejected`-list write failures surface as a 500 (it is
+        the only mechanism enforcing the reject for a normalised-tier match);
+        a stale `supersededBy`-entry cleanup failure does not.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectOrphanMatchRequest' }
+      responses:
+        '200':
+          description: The rejected pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RejectOrphanMatchResponse' }
+        '400':
+          description: Missing fields, or characterId/orphanedId self-pair
+        '404':
+          description: Book or character not found
+        '500':
+          description: Failed to durably record the rejection in cast-id-history.json — retry
+        '409':
+          description: Book has no cast on disk yet
+
   /api/books/{bookId}/annotate-emotion:
     post:
       summary: Emotion-only backfill pass (fs-33)
@@ -7271,6 +7314,24 @@ components:
             a: { $ref: '#/components/schemas/CastCharacterRef' }
             b: { $ref: '#/components/schemas/CastCharacterRef' }
 
+    # --- Orphaned-id reject ("not the same character") — #2040 Task 17 --
+    RejectOrphanMatchRequest:
+      type: object
+      required: [orphanedId]
+      properties:
+        orphanedId:
+          type: string
+          description: The orphaned character id that is NOT the same character as `characterId` (path).
+    RejectOrphanMatchResponse:
+      type: object
+      required: [characterId, orphanedId, alreadyPresent]
+      properties:
+        characterId: { type: string, description: 'The live character (path param, echoed back).' }
+        orphanedId: { type: string }
+        alreadyPresent:
+          type: boolean
+          description: True when the notLinkedTo edge already existed (idempotent re-reject).
+
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
     BookStateResponse:
       type: object
@@ -7358,24 +7419,45 @@ components:
         orphanedCharacterFallbacks:
           type: object
           description: |
-            #2023 — orphaned characterId → who actually rendered it. Keyed by
-            a manuscript `characterId` that has NO entry in this book's cast at
-            all (e.g. a cast/analysis id-romanisation drift) and so was
-            substituted with the narrator, aggregated across any rendered
+            #2023, widened #2040 Wave 3 — orphaned characterId → resolution
+            info. Keyed by a manuscript `characterId` that does NOT exactly
+            match a live cast id (e.g. a cast/analysis id-romanisation drift,
+            or a since-superseded id), aggregated across any rendered
             chapter. Distinct from `renderedFallbackByCharacter` above (which
             is keyed by a REAL cast id whose configured ENGINE changed) — this
-            is a wrong-CHARACTER substitution, not an engine one. Empty/absent
-            when nothing has substituted.
+            is a wrong-CHARACTER substitution, not an engine one. Reported for
+            every such segment, not only ones whose render stamped who
+            actually spoke it. Empty/absent when nothing is orphaned.
           additionalProperties:
             type: object
-            required: [characterId]
+            required: [resolution, segments]
             properties:
               characterId:
                 type: string
-                description: The cast character id that actually spoke the line (usually the narrator).
+                description: |
+                  The cast character id that actually rendered the line
+                  (usually the narrator), when the render stamped it. Absent
+                  on a render that predates that stamp.
               voiceName:
                 type: string
                 description: The voice name actually sent to the provider, when recorded.
+              resolution:
+                type: string
+                enum: [alias, normalised, unresolved]
+                description: |
+                  How this orphaned id resolves against the live cast + id
+                  history: `alias` via the id-history side-table, `normalised`
+                  via separator/case normalisation of a live cast id,
+                  `unresolved` when neither applies.
+              resolvedCharacterId:
+                type: string
+                description: |
+                  The live cast id this orphaned id resolves onto, when
+                  `resolution` is `alias` or `normalised`. Absent when
+                  `unresolved`.
+              segments:
+                type: integer
+                description: How many rendered segments (across every rendered chapter) carry this orphaned id.
         changeLog:
           type: array
           nullable: true

@@ -138,7 +138,11 @@ export async function computeRevisionsForBook(
      still gets compared against its (renamed) live cast row instead of
      reading as "character removed from cast" — which would silently drop
      any real drift for that character rather than surfacing it. */
-  const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
+     `.supersededBy`) so `buildCastResolver` also honours `rejected`;
+     splitting the two apart is what let a rejection go unenforced at every
+     call site but the banner's own collector. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(cast, castIdHistory);
 
   const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));

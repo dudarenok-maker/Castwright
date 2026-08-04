@@ -8,6 +8,8 @@ import {
   castIdHistoryPath,
   dropSupersededIdsReclaimedByLiveCast,
   refuseRetirementsOfLiveIds,
+  forgetSupersededId,
+  rejectOrphanedId,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -239,6 +241,91 @@ describe('cast id history', () => {
       writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, displaced: 'not-an-object' }));
       const result = await loadCastIdHistory(dir);
       expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('rejected backwards-compatibility (#2040 Task 17)', () => {
+    it('loads a pre-Task-17 file with no `rejected` key at all', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.rejected).toBeUndefined();
+    });
+
+    it('returns empty history rather than throwing when `rejected` is not an array', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, rejected: 'not-an-array' }));
+      const result = await loadCastIdHistory(dir);
+      expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+
+    it('loads a well-formed `rejected` array', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: {}, rejected: ['the-torment'] }));
+      const result = await loadCastIdHistory(dir);
+      expect(result.rejected).toEqual(['the-torment']);
+    });
+  });
+
+  describe('forgetSupersededId (#2040 Task 17)', () => {
+    it('removes a single named entry from supersededBy', async () => {
+      await retireCharacterId(dir, 'mayrin', 'mairin');
+      await forgetSupersededId(dir, 'mayrin');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+    });
+
+    it('leaves an unrelated entry untouched', async () => {
+      await retireCharacterId(dir, 'mayrin', 'mairin');
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      await forgetSupersededId(dir, 'mayrin');
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
+    });
+
+    it('does NOT repoint entries whose VALUE is the forgotten id — unlike retireCharacterId', async () => {
+      // Hand-write a history that retireCharacterId's own chain-maintaining
+      // invariant would never leave lying around (it always repoints stale
+      // VALUES eagerly), so this pins forgetSupersededId's own contract in
+      // isolation: 'a' -> 'mayrin' is a chain THROUGH mayrin, not naming it
+      // as a key. forgetSupersededId must not touch it — it only forgets the
+      // one key it's told to, never chases values (that repoint is
+      // retireCharacterId's job, and only sound when the id is genuinely dead).
+      writeTestHistoryFile(
+        JSON.stringify({ schema: 1, supersededBy: { a: 'mayrin', mayrin: 'mairin' } }),
+      );
+      await forgetSupersededId(dir, 'mayrin');
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ a: 'mayrin' });
+    });
+
+    it('is a no-op (and does not write a file) when the key is absent', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      await forgetSupersededId(dir, 'nobody');
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+  });
+
+  describe('rejectOrphanedId (#2040 Task 17)', () => {
+    it('adds an id to the rejected list', async () => {
+      await rejectOrphanedId(dir, 'mayrin');
+      expect((await loadCastIdHistory(dir)).rejected).toEqual(['mayrin']);
+    });
+
+    it('is idempotent — rejecting the same id twice does not duplicate it', async () => {
+      await rejectOrphanedId(dir, 'mayrin');
+      await rejectOrphanedId(dir, 'mayrin');
+      expect((await loadCastIdHistory(dir)).rejected).toEqual(['mayrin']);
+    });
+
+    it('accumulates multiple distinct rejected ids', async () => {
+      await rejectOrphanedId(dir, 'mayrin');
+      await rejectOrphanedId(dir, 'the-torment');
+      expect((await loadCastIdHistory(dir)).rejected).toEqual(['mayrin', 'the-torment']);
+    });
+
+    it('does not touch supersededBy', async () => {
+      await retireCharacterId(dir, 'mayrin', 'mairin');
+      await rejectOrphanedId(dir, 'mayrin');
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(history.rejected).toEqual(['mayrin']);
     });
   });
 

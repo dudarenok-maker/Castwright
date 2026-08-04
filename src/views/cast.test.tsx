@@ -15,6 +15,7 @@ import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { CastView } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
@@ -26,6 +27,13 @@ vi.mock('../lib/api', () => ({
     loadSidecar: vi.fn().mockResolvedValue({}),
     pauseCastDesign: vi.fn().mockResolvedValue(undefined),
     setCastTier: vi.fn().mockResolvedValue({ updated: 0 }),
+    /* #2040 Task 17 — orphaned-character-fallback banner's "not the same
+       character" action. */
+    rejectOrphanMatch: vi.fn().mockResolvedValue({
+      characterId: 'marrow',
+      orphanedId: 'mayrin',
+      alreadyPresent: false,
+    }),
   },
 }));
 
@@ -634,7 +642,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
-          orphanedCharacterFallbacks: { mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' } },
+          orphanedCharacterFallbacks: {
+            mayrin: {
+              characterId: 'narrator',
+              voiceName: 'qwen-oduvan',
+              resolution: 'unresolved' as const,
+              segments: 1,
+            },
+          },
         },
       },
     });
@@ -684,6 +699,202 @@ describe('CastView Qwen status pill (plan 117)', () => {
       </Provider>,
     );
     expect(screen.queryByTestId('orphaned-character-fallback-banner')).toBeNull();
+  });
+
+  describe('orphaned-characterId banner split — auto-reconciled vs needs-your-decision (#2040 Task 17)', () => {
+    function makeSplitStore() {
+      return configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'alias' as const,
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+              },
+              coalfall: {
+                resolution: 'unresolved' as const,
+                segments: 67,
+              },
+            },
+          },
+        },
+      });
+    }
+
+    function renderSplitBanner(store: ReturnType<typeof makeSplitStore>) {
+      return render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+    }
+
+    it('needs-your-decision is visible immediately, showing the segment count', () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      const section = screen.getByTestId('orphaned-needs-decision');
+      expect(within(section).getByText(/coalfall/)).toBeInTheDocument();
+      expect(within(section).getByText(/67 segments/)).toBeInTheDocument();
+    });
+
+    it('auto-reconciled is collapsed by default, and expands on click to show the segment count + resolved name', () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      expect(screen.queryByTestId('orphaned-auto-reconciled')).toBeNull();
+      const toggle = screen.getByRole('button', { name: /1 character id auto-reconciled/i });
+      // #2040 Task 17 fix round 2 finding 8 — no aria-controls while
+      // collapsed (the <ul> it would reference doesn't exist in the DOM yet).
+      expect(toggle).not.toHaveAttribute('aria-controls');
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+      fireEvent.click(toggle);
+
+      const section = screen.getByTestId('orphaned-auto-reconciled');
+      expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(section).getByText(/6 segments/)).toBeInTheDocument();
+      expect(within(section).getByText('Mr. Marrow')).toBeInTheDocument();
+      // Now pointing at the expanded list's own id.
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(toggle).toHaveAttribute('aria-controls', section.id);
+      expect(section.id).toBe('orphaned-auto-reconciled-list');
+    });
+
+    it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      await waitFor(() => {
+        expect(api.rejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'mayrin',
+        });
+      });
+      await waitFor(() => {
+        expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
+          resolution: 'unresolved',
+          resolvedCharacterId: undefined,
+          segments: 6,
+        });
+      });
+      // Mirrored onto the live character's own notLinkedTo array.
+      await waitFor(() => {
+        const marrowState = store.getState().cast.characters.find((c) => c.id === 'marrow');
+        expect(marrowState?.notLinkedTo).toEqual([{ bookId: 'b_current', characterId: 'mayrin' }]);
+      });
+    });
+
+    it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      const section = screen.getByTestId('orphaned-needs-decision');
+      const row = within(section).getByText(/coalfall/).closest('li')!;
+      const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+      expect(rejectButton).toBeDisabled();
+
+      fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'narrator' } });
+      expect(rejectButton).not.toBeDisabled();
+
+      fireEvent.click(rejectButton);
+      await waitFor(() => {
+        expect(api.rejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'narrator',
+          orphanedId: 'coalfall',
+        });
+      });
+    });
+
+    it('#2040 Task 17 fix round 2 — shows an error toast and resets the busy state when the reject call fails', async () => {
+      vi.mocked(api.rejectOrphanMatch).mockRejectedValueOnce(new Error('Reject match failed (500).'));
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+
+      fireEvent.click(rejectButton);
+
+      await waitFor(() => {
+        expect(store.getState().notifications.toasts).toHaveLength(1);
+      });
+      expect(store.getState().notifications.toasts[0]).toMatchObject({
+        kind: 'error',
+        message: 'Reject match failed (500).',
+      });
+      // The failed call never landed locally — the entry is untouched.
+      expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
+        resolution: 'alias',
+        resolvedCharacterId: 'marrow',
+        segments: 6,
+      });
+      // Busy state resets after the failure — the button isn't stuck disabled.
+      await waitFor(() => {
+        expect(rejectButton).not.toBeDisabled();
+      });
+    });
+
+    it('#2040 Task 17 fix round 2 — disables the reject button while the request is in flight', async () => {
+      // The shared module-level mock isn't reset between tests in this file
+      // (no global afterEach clears it) — clear it here so the call-count
+      // assertion below reflects only this test's own action.
+      vi.mocked(api.rejectOrphanMatch).mockClear();
+      let resolveReject: (() => void) | undefined;
+      vi.mocked(api.rejectOrphanMatch).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReject = () =>
+              resolve({ characterId: 'marrow', orphanedId: 'mayrin', alreadyPresent: false });
+          }),
+      );
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+      expect(rejectButton).not.toBeDisabled();
+
+      fireEvent.click(rejectButton);
+      // Still awaiting the mocked promise — busy, so disabled.
+      await waitFor(() => {
+        expect(rejectButton).toBeDisabled();
+      });
+
+      await act(async () => {
+        resolveReject?.();
+        await Promise.resolve();
+      });
+      // Resolved — the row moved out of auto-reconciled (unresolved now), so
+      // the button no longer exists to assert on; confirm the call landed
+      // exactly once instead (no duplicate dispatch from a stuck busy state).
+      expect(api.rejectOrphanMatch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('clears the fallback pill once a voice is designed + regenerated (no fallback in the map)', () => {

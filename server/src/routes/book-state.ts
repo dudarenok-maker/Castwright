@@ -51,6 +51,7 @@ import {
 import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
+import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -455,16 +456,51 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
-    /* #2023 Piece 1 — per-orphaned-characterId render-time substitution,
-       aggregated the same way as renderedFallbackByCharacter just above but
-       keyed by the ORPHANED id (a manuscript attribution with no cast entry
-       at all, e.g. a cast/analysis id-romanisation drift) rather than a real
-       cast id. Silence was the bug: today this fact is logged once per orphan
-       id per render and surfaced nowhere else. Empty `{}` when nothing has
-       substituted. Tolerant of a missing audio dir. */
+    /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
+       with its own `.catch`, not inline in the call below's argument list.
+       An expression sitting in argument position is evaluated before the
+       call it's an argument OF even happens, so a throw there would bypass
+       that call's trailing `.catch(() => ({}))` entirely and escape to the
+       route's outer try/catch as a whole-request 500 — it would have been
+       inert only because `loadCastIdHistory` itself is documented to never
+       throw, and this collector must not depend on that other module's
+       invariant to stay graceful.
+
+       #2040 Task 17 fix round 2 review — a SINGLE load, not two. This used
+       to be two independent `loadCastIdHistory(bookDir)` calls (one
+       `.then`ing `.supersededBy`, one `.then`ing `.rejected`), which can
+       observe two different file states if a write lands between them (the
+       exact split-object footgun fix round 1 closed for `buildCastResolver`
+       itself, re-opened here one level up). `supersededBy`/`rejected` are
+       both derived from the one awaited object below. */
+    const orphanedCharacterFallbackHistoryFile: CastIdHistory = await loadCastIdHistory(
+      bookDir,
+    ).catch(() => ({ schema: 1 as const, supersededBy: {} }));
+    const orphanedCharacterFallbackHistory = orphanedCharacterFallbackHistoryFile.supersededBy;
+    /* `rejected` is the list of orphaned ids the user has explicitly said
+       are NOT the same character as whatever they'd otherwise resolve onto
+       (the banner's "not the same character" action) — threaded into the
+       collector so a just-rejected reconciliation reports as unresolved on
+       this very hydrate, not the next one. */
+    const orphanedCharacterFallbackRejected = orphanedCharacterFallbackHistoryFile.rejected ?? [];
+
+    /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
+       render-time substitution, aggregated the same way as
+       renderedFallbackByCharacter just above but keyed by the ORPHANED id (a
+       manuscript attribution that does not exactly match a live cast id,
+       e.g. a cast/analysis id-romanisation drift) rather than a real cast
+       id. Reported for every such segment now, classified against the live
+       cast + the id-history side-table via the same `buildCastResolver` the
+       drift detector (`revisions.ts`) uses — not gated on the #2023 stamp,
+       which measured 0/188 coverage across all 20 books (spec §4.6). Empty
+       `{}` when nothing is orphaned. Tolerant of a missing audio dir /
+       missing history file. */
     const orphanedCharacterFallbacks = await collectOrphanedCharacterFallbacks(
       bookDir,
       state.chapters,
+      (cast?.characters ?? []) as Array<{ id: string }>,
+      orphanedCharacterFallbackHistory,
+      orphanedCharacterFallbackRejected,
     ).catch(() => ({}));
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend

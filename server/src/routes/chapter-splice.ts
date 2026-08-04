@@ -199,12 +199,14 @@ chapterSpliceRouter.post(
     cast.characters = await hydrateCastReusedVoices(cast.characters);
 
     /* #2040 — resolve a sentence group's characterId through the book's
-       retired-id history before treating it as orphaned. Loaded once for
-       this splice operation (reused below by `findDivergentSentences` AND,
-       for a rerecord, by every `synthesiseChapter` call inside the synth
-       loop further down) — not per segment. Never throws (see
-       loadCastIdHistory's own doc comment). */
-    const castIdHistory = (await loadCastIdHistory(bookDir)).supersededBy;
+       retired-id history before treating it as orphaned, and honour a "not
+       the same character" rejection (#2040 Task 17). Loaded once for this
+       splice operation (reused below by `findDivergentSentences` AND, for a
+       rerecord, by every `synthesiseChapter` call inside the synth loop
+       further down) — not per segment. Never throws (see loadCastIdHistory's
+       own doc comment). Passed through WHOLE (fix round 1), not just
+       `.supersededBy`. */
+    const castIdHistory = await loadCastIdHistory(bookDir);
 
     /* M2 (#1972 follow-up) — resolve + validate a re-record against the
        CURRENT analysis BEFORE any side effect: displacing a concurrent
