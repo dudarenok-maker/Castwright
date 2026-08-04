@@ -10,19 +10,37 @@
         analysis cache and not above its max — i.e. neither a survivor nor a
         likely split offspring) so a previous chapter shape doesn't surface
         zombie sentences in the manuscript view.
+     5. #1981 Task 11 — the reparse handler's cast.json delete (one arm of
+        applyReparse's Promise.all) is serialised behind the cast lock, so a
+        concurrent cast writer can't recreate cast.json from a stale read
+        after the delete.
 
    Mirrors the tempdir + supertest pattern from book-state.test.ts. The
    analysis cache (server/handoff/cache/<manuscriptId>.json) is a server-
    relative module constant — we write directly to it for cases that need
    a populated cache and clean up in afterAll. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #1981 Task 11 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the race
+   describe at the bottom of this file can deterministically intercept
+   cast-aliases.ts's OWN `readJson` call (bound at cast-aliases.ts's own
+   module-load time, before any runtime spy could attach to it) — same
+   rationale as book-state-preserve-voices.test.ts's / qwen-voice.test.ts's
+   own #1981 race tests. Defaults to a plain passthrough, so every other test
+   in this file behaves exactly as if this mock weren't here; only the one
+   race test below overrides `mockImplementation` for the duration of its own
+   `it`, then restores it. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -45,10 +63,13 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-reparse-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
-    import('./book-state.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential, not `Promise.all` — this file now carries a hoisted
+     async-factory `vi.mock` (state-io.js above), which a `Promise.all` of
+     dynamic imports races: the factory can lose and a module binds the
+     real, unmocked export. */
+  const { bookStateRouter } = await import('./book-state.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const { castAliasesRouter } = await import('./cast-aliases.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   cachePath = join(CACHE_DIR, `${MANUSCRIPT_ID}.json`);
 
@@ -59,6 +80,10 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', bookStateRouter);
+  /* Mounted here, at the file's top-level beforeAll, not inside the race
+     describe's own hook below — a router mounted from within a describe's
+     hook permanently mutates this shared `app` for every later describe. */
+  app.use('/api/books', castAliasesRouter);
 });
 
 afterAll(() => {
@@ -592,5 +617,131 @@ describe('GET handler — tolerates state.json without analysisProvenance (srv-5
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(res.body.state.analysisProvenance).toBeUndefined();
+  });
+});
+
+/* #1981 Task 11 — the reparse handler's cast.json delete races a concurrent
+   cast-aliases write on a DIFFERENT (own) book, so it can't disturb the
+   order-dependent describes above that share `bookDir`/`bookId`.
+
+   Named deliberately: cast-aliases' add-alias re-reads cast.json INSIDE its
+   own lock and refuses with 409 when the cast is absent (see
+   cast-aliases.ts) — it is rule-2-compliant, so once serialised against the
+   delete it leaves cast.json deleted in BOTH orderings. book-state.ts's OWN
+   cast-slice PUT handler is deliberately NOT used here: it writes
+   `body.patch` regardless of on-disk state and legitimately recreates
+   cast.json when it acquires the lock second — that's its documented
+   contract, not a bug, so a race built on it would be ordering-dependent
+   rather than lock-dependent (see this task's brief).
+
+   Scripts the interleaving instead of a bare `Promise.all` (a flaky race
+   measured 50% detection on this branch): a hoisted `vi.mock` on
+   `state-io.js` holds add-alias's own in-lock `readJson(cast.json)` call
+   open behind a manually-released gate. The real bytes are read (and so
+   captured, stale) BEFORE the delete ever runs; only the JS-visible
+   resolution is delayed — so add-alias's read genuinely happens-before the
+   delete, matching the resurrection bug's precondition. Reparse is fired
+   only once add-alias is confirmed stuck behind the gate, so the FIRST
+   interception is deterministically add-alias's read, not reparse's own
+   (unlocked, unrelated) `existingCast` read for the reuse-carryover
+   snapshot. */
+describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concurrent cast writer', () => {
+  const RACE_AUTHOR = 'Reparse Race Author';
+  const RACE_SERIES = 'Standalones';
+  const RACE_TITLE = 'Reparse Race Book';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(RACE_AUTHOR, RACE_SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', RACE_AUTHOR, RACE_SERIES, RACE_TITLE);
+  });
+
+  it('an add-alias write does not resurrect cast.json after a concurrent reparse delete', async () => {
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(raceBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: 'm_reparse_race',
+        title: RACE_TITLE,
+        author: RACE_AUTHOR,
+        series: RACE_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const castPath = join(raceBookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+      }),
+    );
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(raceBookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === raceCastPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before the delete
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let resAlias: request.Response;
+    let castExistsAfterRace = true;
+    try {
+      const aliasPromise = request(app)
+        .post(`/api/books/${raceBookId}/cast/add-alias`)
+        .send({ characterId: 'nova', aliasName: 'Supernova' });
+      aliasPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      // Let add-alias acquire the cast lock and reach (and get stuck behind)
+      // its intercepted in-lock read.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(intercepted).toBe(true);
+
+      const reparsePromise = request(app).post(`/api/books/${raceBookId}/reparse`);
+      reparsePromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: the delete either completes immediately
+      // (unlocked — the bug window) or queues behind add-alias's held lock
+      // (locked — the fix). Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 80));
+
+      released();
+      resAlias = await aliasPromise;
+      const resReparse = await reparsePromise;
+      expect(resReparse.status).toBe(200);
+      castExistsAfterRace = existsSync(castPath);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
+
+    expect(resAlias!.status).toBe(200);
+    /* The core assertion: whichever side acquired the lock first, cast.json
+       ends up deleted, never resurrected with add-alias's stale snapshot. */
+    expect(castExistsAfterRace).toBe(false);
   });
 });

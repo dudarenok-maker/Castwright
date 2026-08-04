@@ -942,8 +942,12 @@ async function applyReparse(
   const ad = audioDir(bookDir);
   await Promise.all([
     clearAnalysisCache(state.manuscriptId),
+    /* #1981 Task 11 — this arm (only this arm) takes the cast lock around the
+       delete. A writer that acquired the lock after an unlocked delete would
+       recreate cast.json from its own stale read, resurrecting the roster
+       this reparse deliberately discards. */
     existsSync(castJsonPath(bookDir))
-      ? rm(castJsonPath(bookDir), { force: true })
+      ? withCastLock(bookDir, () => rm(castJsonPath(bookDir), { force: true }))
       : Promise.resolve(),
     existsSync(revisionsJsonPath(bookDir))
       ? rm(revisionsJsonPath(bookDir), { force: true })
