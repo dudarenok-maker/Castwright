@@ -1022,11 +1022,11 @@ a stamp either: the "auto-reconciled" list would be empty by construction
 - [ ] **Step 2: Run, confirm they fail.**
 - [ ] **Step 3: Implement,** with these behaviours, all of which are requirements rather than suggestions:
   - **dry-run by default**; `--apply` to write;
-  - **refuses `--apply` if a server is reachable** on the configured port — it writes `cast.json` out-of-process, which no in-process lock covers (spec §10);
-  - writes `cast.json.bak.id-drift-<date>` before any change;
+  - **refuses `--apply` if a server is reachable** on the configured port — it writes `cast-id-history.json` out-of-process, which no in-process lock covers (spec §10);
+  - writes `cast-id-history.json.bak.id-drift-<date>` before any change (the pass writes `cast-id-history.json`, never `cast.json` — spec §4.7);
   - auto-records only Tier A / Tier B matches; reports everything else;
   - emits the re-render list (book, chapter, id, segment count, approximate duration).
-- [ ] **Step 4: Run `npm run test:scripts` → green.**
+- [ ] **Step 4: Run `npm run test:hooks` → green** (NOT `npm run test:scripts` — that only runs Pester `.Tests.ps1` files and never executes a `.test.mjs`; `test:hooks` is `scripts/run-hooks-tests.mjs`, the actual runner for `scripts/tests/*.test.mjs`, and is wired into `test:fast`/`test:all`/`verify:fast:branch`).
 - [ ] **Step 5: Run the script in DRY-RUN against the real workspace.** Expected: it proposes aliases for the drifted ids and reports the 24 unattributed segments (`silveny` 17, `lady-alina` 6, `sir-harding` 1) as needing a decision. **Do not pass `--apply` without the repo owner's explicit go-ahead** — it mutates real books.
 - [ ] **Step 6: Commit** — `chore(scripts): add the cast id-drift repair pass`
 
