@@ -492,7 +492,8 @@ jobs:
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
-    needs: [detect, lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
+    needs:
+      [detect, lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
     runs-on: ubuntu-latest
     if: always()
     steps:

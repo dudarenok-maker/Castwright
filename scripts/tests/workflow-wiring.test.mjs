@@ -468,12 +468,12 @@ const ACCEPTED_NARROWINGS = [
   [
     'OpenAPI types up to date',
     'tsconfig.json',
-    "openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes tsc or reads tsconfig.json -- same reasoning as Lint/tsconfig.json above",
+    'openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes tsc or reads tsconfig.json -- same reasoning as Lint/tsconfig.json above',
   ],
   [
     'OpenAPI types up to date',
     'eslint.config.mjs',
-    "openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes eslint -- same reasoning as Typecheck/eslint.config.mjs above",
+    'openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes eslint -- same reasoning as Typecheck/eslint.config.mjs above',
   ],
 
   // F3 (2026-08-06 whole-branch review) -- verify-cache.mjs's `test` cache
@@ -592,7 +592,7 @@ const ACCEPTED_NARROWINGS = [
   [
     'Typecheck',
     'server/vitest.config.ts',
-    "server/tsconfig.json's include is [\"src/**/*\"] and the root's is [\"src\",\"vite.config.ts\",\"vitest.config.ts\"] (the root vitest.config.ts, not server's) -- neither tsc invocation compiles this file",
+    'server/tsconfig.json\'s include is ["src/**/*"] and the root\'s is ["src","vite.config.ts","vitest.config.ts"] (the root vitest.config.ts, not server\'s) -- neither tsc invocation compiles this file',
   ],
   [
     'Typecheck',
