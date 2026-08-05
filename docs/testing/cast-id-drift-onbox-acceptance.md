@@ -661,7 +661,21 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
   `Array.isArray` shape check, its `readdirSync` guard, the same shape
   guard in `collectBakNameEntries`, `planApplyRefusal`'s absent-field
   handling, and #2130's relocation into the server test suite).
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace, hardened further at round 2), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
+- [x] Step 9f run — **2026-08-05, round 3**, PASS: round-3 review found
+  #2097's own round-1/round-2 discriminator (`castExists || stateExists`,
+  cleared by round 1's review as "sound") itself misclassified the ordinary
+  mid-import/post-reparse shape — `state.json` present, `cast.json` not yet
+  written — as `'unreadable'`, refusing `--apply` for the whole workspace
+  over one freshly-imported, otherwise-healthy book. Fixed by judging each
+  file independently (a genuinely missing file is never lost evidence; only
+  a present-but-unreadable/wrong-shaped one is), pinned by a fixture using
+  the exact shape `import.ts` writes. **Not live on the real workspace
+  today** — none of the 20 books are mid-import — a fresh dry run reports
+  figures identical to step 9e: re-render **23 rows / 188 segments**,
+  auto-recordable **2 aliases / 68 segments**, report-only **91 ids / 93
+  segments**, skipped **3**, books scanned **20**. See register row A33's
+  round-3 correction for the full writeup.
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace; #2097's own discriminator itself misclassified an ordinary mid-import book and needed a round-3 correction, see step 9f), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

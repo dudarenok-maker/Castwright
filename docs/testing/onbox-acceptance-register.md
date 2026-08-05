@@ -1641,7 +1641,21 @@ to sweep the **whole** 20-book workspace at once.
 >   `cast.json`/`state.json` is readable), **books with unreadable
 >   cast.json.bak.* evidence: 0**, and **books with an auto-record withheld
 >   for missing bak evidence: 0** — matching #2135's own real-workspace scan
->   (41 bak files, 0 unparseable).
+>   (41 bak files, 0 unparseable). **Correction (round 3 review,
+>   2026-08-05): the "confirmed sound" claim above was itself wrong.**
+>   `collectBooks`'s discriminator required BOTH `cast.json` AND
+>   `state.json` to be genuinely missing before granting the legitimate
+>   `'not-yet-analysed'` reason — but `state.json` is written at import
+>   time, before any analysis, and `cast.json` is created only later, during
+>   analysis stage 1 (reparse re-creates the identical shape: it deletes
+>   `cast.json` and keeps `state.json`), so a book between import and first
+>   analysis has `state.json` present and `cast.json` absent — misclassified
+>   as `'unreadable'`, refusing `--apply` for the entire workspace over one
+>   freshly-imported, otherwise-healthy book. Fixed by judging each file
+>   independently: only a file that is PRESENT but unreadable or
+>   wrong-shaped counts as lost evidence; a file that is genuinely missing
+>   never does, whichever file it is. **Not live on the real workspace
+>   today** — none of the 20 books are mid-import — so no figure moves.
 > - **#2130 (a resolver tier rename would go undetected) — relocated after
 >   round 2 review found the original fix couldn't fire in CI at all, for
 >   two independent reasons: the job that runs it never builds the server,
