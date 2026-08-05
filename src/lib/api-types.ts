@@ -2399,21 +2399,39 @@ export interface paths {
          * @description The orphaned-character-fallback banner shows an id that either
          *     auto-reconciled onto a live character (through the id-history
          *     side-table or a normalised-key match) or didn't resolve at all. This
-         *     route records "orphanedId is NOT the same character as characterId":
-         *     it adds `orphanedId` to `cast-id-history.json`'s `rejected` list
-         *     (checked by the server's id resolver AFTER the exact-id tier but
-         *     ahead of the history / normalised-id / normalised-history tiers — a
-         *     live cast row with this exact id always wins over a stale rejection)
-         *     and writes a one-sided `notLinkedTo` edge onto `characterId` naming
-         *     `orphanedId`, so the next re-analysis's name matcher does not simply
-         *     re-record the same match. Idempotent — a repeat call for the same
+         *     route records "orphanedId is NOT the same character as characterId" —
+         *     PAIR-SCOPED (#2092/#2089, design settled 2026-08-05, superseding the
+         *     original id-wide `rejected` list): it adds `(orphanedId,
+         *     characterId)` to `cast-id-history.json`'s `rejectedPairs` (checked by
+         *     the resolver AFTER the exact-id tier but ahead of the history /
+         *     normalised-id / normalised-history tiers — a live cast row with this
+         *     exact id always wins, and a rejected pair blocks only THIS specific
+         *     reconciliation, not every future target for `orphanedId`) and writes
+         *     a one-sided `notLinkedTo` edge onto `characterId` naming `orphanedId`,
+         *     so the next re-analysis's name matcher does not simply re-record the
+         *     same match. The response reports `orphanedId`'s resolution
+         *     recomputed AFTER these writes land (`null` on the ordinary "still
+         *     doesn't resolve" outcome). Idempotent — a repeat call for the same
          *     pair is a no-op on cast.json, though the rejection is still
-         *     (re-)recorded. `rejected`-list write failures surface as a 500 (it is
-         *     the only mechanism enforcing the reject for a normalised-tier match);
-         *     a stale `supersededBy`-entry cleanup failure does not.
+         *     (re-)recorded. The `rejectedPairs` write failing surfaces as a 500
+         *     (it is the only mechanism enforcing the reject for a normalised-tier
+         *     match); a stale `supersededBy`-entry cleanup failure does not. Use
+         *     the DELETE on this same path to undo.
          */
         post: operations["rejectOrphanMatch"];
-        delete?: never;
+        /**
+         * Undo a rejected orphaned-id reconciliation (#2092/#2089)
+         * @description Undoes the POST above. Same path and body shape (`{ orphanedId }`)
+         *     deliberately. Removes `(orphanedId, characterId)` from
+         *     `cast-id-history.json`'s `rejectedPairs`, removes the same-book
+         *     `notLinkedTo` entry keyed on THIS book's id (a cross-book edge for the
+         *     same character id, written by
+         *     `/api/books/{bookId}/cast/{characterId}/not-linked-to`, is never
+         *     touched), and restores any `supersededBy` alias entry the original
+         *     reject forgot — making the undo lossless. Idempotent: a DELETE for a
+         *     pair that was never rejected 200s with `wasRejected: false`.
+         */
+        delete: operations["undoRejectOrphanMatch"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5442,6 +5460,36 @@ export interface components {
             orphanedId: string;
             /** @description True when the notLinkedTo edge already existed (idempotent re-reject). */
             alreadyPresent: boolean;
+            /**
+             * @description How `orphanedId` resolves against the live cast + id history,
+             *     recomputed AFTER this call's writes land. `null` when it doesn't
+             *     resolve at all — the ordinary outcome of a reject (the
+             *     pair-scoped block this call just wrote applies). Non-null would
+             *     mean some OTHER, unblocked tier still resolves `orphanedId` onto
+             *     a different live character — not a bug, just informative.
+             * @enum {string|null}
+             */
+            resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
+            /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
+            resolvedCharacterId?: string;
+        };
+        UndoRejectOrphanMatchResponse: {
+            /** @description The live character (path param, echoed back). */
+            characterId: string;
+            orphanedId: string;
+            /** @description True when the (orphanedId, characterId) pair was present before this call. */
+            wasRejected: boolean;
+            /**
+             * @description How `orphanedId` resolves against the live cast + id history,
+             *     recomputed AFTER the undo's writes land. Restoring a rejected
+             *     pair's forgotten `supersededBy` alias (when present) makes this
+             *     the SAME value the resolver returned before the original reject
+             *     — the lossless-undo contract.
+             * @enum {string|null}
+             */
+            resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
+            /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
+            resolvedCharacterId?: string;
         };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
@@ -5540,6 +5588,15 @@ export interface components {
                     resolvedCharacterId?: string;
                     /** @description How many rendered segments (across every rendered chapter) carry this orphaned id. */
                     segments: number;
+                    /**
+                     * @description #2092/#2089 D4 — every live cast id this orphaned id has
+                     *     been rejected AGAINST (`cast-id-history.json`'s
+                     *     `rejectedPairs`, keyed on this orphaned id as the pair's
+                     *     `from`). Absent when never rejected. Populated regardless
+                     *     of `resolution` — a rejected id is not filtered out of
+                     *     this map.
+                     */
+                    rejectedAgainst?: string[];
                 };
             };
             /** @description Editorial activity trail; null when no change-log.json exists yet. */
@@ -9867,6 +9924,61 @@ export interface operations {
                 content?: never;
             };
             /** @description Failed to durably record the rejection in cast-id-history.json — retry */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    undoRejectOrphanMatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectOrphanMatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The undo result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UndoRejectOrphanMatchResponse"];
+                };
+            };
+            /** @description Missing fields, or characterId/orphanedId self-pair */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Failed to restore the forgotten alias entry, or to durably remove the rejection — retry */
             500: {
                 headers: {
                     [name: string]: unknown;

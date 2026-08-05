@@ -4505,10 +4505,22 @@ export interface RejectOrphanMatchArgs {
   characterId: string;
   orphanedId: string;
 }
+/** How `orphanedId` resolves against the live cast + id history, mirrors the
+    server's `ResolutionTier` (server/src/routes/cast-reject-orphan.ts) — kept
+    as a local literal union rather than importing the server type. `null`
+    when it doesn't resolve at all. */
+export type RejectOrphanResolutionTier =
+  | 'exact'
+  | 'history'
+  | 'normalised-id'
+  | 'normalised-history'
+  | null;
 export interface RejectOrphanMatchResponse {
   characterId: string;
   orphanedId: string;
   alreadyPresent: boolean;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
 }
 
 async function realRejectOrphanMatch(
@@ -4539,7 +4551,68 @@ async function mockRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<RejectOrphanMatchResponse> {
   await wait(80);
-  return { characterId: args.characterId, orphanedId: args.orphanedId, alreadyPresent: false };
+  /* D2 — a reject always leaves `orphanedId` unresolved (null) in the mock:
+     the pair-scoped block the (fake) write just recorded applies, and mock
+     mode has no real resolver to consult for some other, unblocked tier. */
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    alreadyPresent: false,
+    resolution: null,
+    resolvedCharacterId: undefined,
+  };
+}
+
+/* DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (#2092/
+   #2089 D5) — undo a prior reject. Same path + body shape as the POST
+   (`RejectOrphanMatchArgs`) deliberately. */
+export interface UndoRejectOrphanMatchResponse {
+  characterId: string;
+  orphanedId: string;
+  wasRejected: boolean;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
+}
+
+async function realUndoRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<UndoRejectOrphanMatchResponse> {
+  const { bookId, characterId, orphanedId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/reject-orphan-match`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orphanedId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Undo reject match failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockUndoRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<UndoRejectOrphanMatchResponse> {
+  await wait(80);
+  /* Mock mode has no real resolver either, so it assumes the common/lossless
+     case: undo restores resolution onto the same `characterId` the reject
+     had blocked (a 'history' match — collapses to 'alias' in the frontend's
+     own banner taxonomy, same as the real server's typical case). */
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    wasRejected: true,
+    resolution: 'history',
+    resolvedCharacterId: args.characterId,
+  };
 }
 
 async function realAddFromSeriesRoster(
@@ -10524,6 +10597,7 @@ const real = {
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
   rejectOrphanMatch: realRejectOrphanMatch,
+  undoRejectOrphanMatch: realUndoRejectOrphanMatch,
   addFromSeriesRoster: realAddFromSeriesRoster,
   createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
@@ -10831,6 +10905,7 @@ const mock = {
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   rejectOrphanMatch: mockRejectOrphanMatch,
+  undoRejectOrphanMatch: mockUndoRejectOrphanMatch,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,
