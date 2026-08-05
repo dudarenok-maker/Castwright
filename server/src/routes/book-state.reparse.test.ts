@@ -14,6 +14,11 @@
         applyReparse's Promise.all) is serialised behind the cast lock, so a
         concurrent cast writer can't recreate cast.json from a stale read
         after the delete.
+     6. #2099 gap A — reparse's own existingCast read is now inside that
+        same cast-lock hold (not just the delete), so a concurrent cast
+        writer that starts after reparse begins reading queues behind it
+        instead of racing a stale snapshot and having its write silently
+        erased.
 
    Mirrors the tempdir + supertest pattern from book-state.test.ts. The
    analysis cache (server/handoff/cache/<manuscriptId>.json) is a server-
@@ -643,8 +648,9 @@ describe('GET handler — tolerates state.json without analysisProvenance (srv-5
    delete, matching the resurrection bug's precondition. Reparse is fired
    only once add-alias is confirmed stuck behind the gate, so the FIRST
    interception is deterministically add-alias's read, not reparse's own
-   (unlocked, unrelated) `existingCast` read for the reuse-carryover
-   snapshot. */
+   `existingCast` read for the reuse-carryover snapshot — which is, since
+   #2099, itself in-lock and directly related (it's the read half of the
+   same locked block whose delete half this describe exercises). */
 describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concurrent cast writer', () => {
   const RACE_AUTHOR = 'Reparse Race Author';
   const RACE_SERIES = 'Standalones';
@@ -744,8 +750,312 @@ describe('reparse handler — #1981 Task 11: "Start fresh" delete races a concur
     }
 
     expect(resAlias!.status).toBe(200);
-    /* The core assertion: whichever side acquired the lock first, cast.json
-       ends up deleted, never resurrected with add-alias's stale snapshot. */
+    /* The core assertion: cast.json ends up deleted, never resurrected with
+       add-alias's stale snapshot. Since #2099 there is only one possible
+       ordering here (not "whichever side acquired the lock first" — that
+       framing predates the fix): this test's own construction guarantees
+       add-alias acquires the cast lock first (the poll above only proceeds
+       once add-alias's in-lock read is intercepted), and reparse's entire
+       read+snapshot+delete block is now itself inside that same lock, so it
+       can only run after add-alias releases. */
     expect(castExistsAfterRace).toBe(false);
+  });
+});
+
+/* #2099 gap A — reparse's own `existingCast` read used to run OUTSIDE the
+   cast lock (see `applyReparse` in book-state.ts): a concurrent cast-aliases
+   write could land between that read and the later-locked delete, get
+   reported to its caller as a 200, and then be silently erased — reparse's
+   stale-read carryover snapshot never included it, and the unconditional
+   delete removed cast.json (with the racer's write inside it) entirely. Post
+   #2099, the read is inside the SAME `withCastLock` hold as the delete, so
+   the racer queues behind it and, once reparse has deleted cast.json and
+   released the lock, re-reads an absent cast and refuses with 409 instead of
+   being told it succeeded.
+
+   Mirror image of the #1981 Task 11 describe above: there, add-alias's own
+   in-lock read is gated and fired FIRST, so reparse is deterministically
+   second. Here, REPARSE is fired first and its own (now in-lock)
+   `existingCast` read is what's gated, so add-alias is deterministically
+   second. Own fresh bookDir — the describes in this file are order-
+   dependent and share `bookDir`. */
+describe("reparse handler — #2099 gap A: concurrent cast-aliases write during reparse's own cast read", () => {
+  const GAPA_AUTHOR = 'Reparse GapA Author';
+  const GAPA_SERIES = 'Standalones';
+  const GAPA_TITLE = 'Reparse GapA Book';
+  let gapaBookId: string;
+  let gapaBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    gapaBookId = makeBookId(GAPA_AUTHOR, GAPA_SERIES, GAPA_TITLE);
+    gapaBookDir = join(workspaceRoot, 'books', GAPA_AUTHOR, GAPA_SERIES, GAPA_TITLE);
+  });
+
+  it("an add-alias write is serialised behind reparse's own (now locked) cast read, not silently vaporised", async () => {
+    mkdirSync(join(gapaBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(gapaBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(gapaBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: gapaBookId,
+        manuscriptId: 'm_reparse_gapa',
+        title: GAPA_TITLE,
+        author: GAPA_AUTHOR,
+        series: GAPA_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const castPath = join(gapaBookDir, '.audiobook', 'cast.json');
+    const carryoverPath = join(gapaBookDir, '.audiobook', 'cast-reuse-carryover.json');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+      }),
+    );
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const gapaCastPath = castJsonPath(gapaBookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === gapaCastPath) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before the racer
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let resRacer: request.Response;
+    try {
+      const reparsePromise = request(app).post(`/api/books/${gapaBookId}/reparse`);
+      reparsePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+      // Let reparse reach (and get stuck behind) its intercepted cast read.
+      // Poll rather than a fixed sleep — same precedent as the describe above.
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      const racerPromise = request(app)
+        .post(`/api/books/${gapaBookId}/cast/add-alias`)
+        .send({ characterId: 'nova', aliasName: 'Supernova' });
+      racerPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: the racer either completes freely (unlocked —
+      // the bug window, gap A) or queues behind reparse's held lock (locked
+      // — the fix). Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 80));
+
+      released();
+      const resReparse = await reparsePromise;
+      resRacer = await racerPromise;
+      expect(resReparse.status).toBe(200);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
+
+    // Partition (outcome), computed unconditionally: if the racer reported
+    // success, its mutation must be observable somewhere. Under the bug this
+    // is 200-and-nowhere — add-alias's write lands, but reparse's stale-read
+    // carryover snapshot never included it and the unconditional delete then
+    // removes cast.json (with the write inside it) entirely, so the racer's
+    // own alias vanishes without a trace. This must be computed and asserted
+    // BEFORE the mechanism assertion below, not inside an
+    // `if (status === 200)` guarded on it — a guard placed after that
+    // assertion can never run, because under the bug `resRacer!.status` is
+    // 200 and `expect(...).toBe(409)` throws first, making the guarded block
+    // unreachable in exactly the scenario it exists to catch.
+    const survivedInCarryover =
+      existsSync(carryoverPath) &&
+      (
+        (JSON.parse(readFileSync(carryoverPath, 'utf8')).characters ?? []) as Array<{
+          aliases?: string[];
+        }>
+      ).some((c) => (c.aliases ?? []).includes('Supernova'));
+    const survivedInCast =
+      existsSync(castPath) &&
+      (
+        (JSON.parse(readFileSync(castPath, 'utf8')).characters ?? []) as Array<{
+          aliases?: string[];
+        }>
+      ).some((c) => (c.aliases ?? []).includes('Supernova'));
+    const survived = survivedInCarryover || survivedInCast;
+    expect(resRacer!.status === 200 && !survived).toBe(false);
+
+    // Mechanism: the racer was actually serialised behind the lock, not
+    // merely lucky — post-fix it re-reads cast.json inside its own lock
+    // acquisition, finds the cast reparse just deleted, and refuses with
+    // 409 instead of reporting a success it can't back up.
+    expect(resRacer!.status).toBe(409);
+  });
+});
+
+/* #2099 code-review finding 1 — a corrupt (not missing) cast.json used to
+   abort the whole reparse. `readJson`'s bare `JSON.parse` returns `null` for
+   a missing file but THROWS for a corrupt one; before #2099 that throw ran
+   before the `Promise.all` below was constructed, so it aborted the whole
+   reparse before the sibling arms (revisions/audio/analysis-cache) ever
+   started. Since #2099 the read lives inside one arm of that `Promise.all`,
+   so by the time it throws the other three arms are already in flight and
+   can't be stopped by a rejection here — leaving revisions.json deleted (a
+   sibling arm completed) while cast.json survives (this arm never reached
+   its own delete). Fixed with `.catch(() => null)` on the in-lock
+   `readJson(castJsonPath(bookDir))` call, degrading a corrupt cast to the
+   same path as a missing one.
+
+   Own fresh bookDir, same rationale as the gap A/B describes above — the
+   earlier describes in this file are order-dependent and share `bookDir`. */
+describe('reparse handler — #2099 code-review finding 1: a corrupt cast.json no longer aborts the reparse', () => {
+  const CORRUPT_AUTHOR = 'Reparse Corrupt Author';
+  const CORRUPT_SERIES = 'Standalones';
+  const CORRUPT_TITLE = 'Reparse Corrupt Cast Book';
+  let corruptBookId: string;
+  let corruptBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    corruptBookId = makeBookId(CORRUPT_AUTHOR, CORRUPT_SERIES, CORRUPT_TITLE);
+    corruptBookDir = join(workspaceRoot, 'books', CORRUPT_AUTHOR, CORRUPT_SERIES, CORRUPT_TITLE);
+
+    mkdirSync(join(corruptBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(corruptBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(corruptBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: corruptBookId,
+        manuscriptId: 'm_reparse_corrupt',
+        title: CORRUPT_TITLE,
+        author: CORRUPT_AUTHOR,
+        series: CORRUPT_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('completes the reparse and deletes both cast.json and revisions.json when cast.json is corrupt', async () => {
+    const castPath = join(corruptBookDir, '.audiobook', 'cast.json');
+    const revisionsPath = join(corruptBookDir, '.audiobook', 'revisions.json');
+    // Truncated JSON — parses fine as a *file that exists* (existsSync true)
+    // but JSON.parse throws on read, which is the case readJson's `null`
+    // return for a MISSING file does not cover.
+    writeFileSync(castPath, '{"characters":');
+    writeFileSync(revisionsPath, JSON.stringify({ revisions: [{ id: 1 }] }));
+
+    const res = await request(app).post(`/api/books/${corruptBookId}/reparse`);
+
+    expect(res.status).toBe(200);
+    // cast.json degraded to the missing-file path: deleted, not left corrupt.
+    expect(existsSync(castPath)).toBe(false);
+    // Cleanup-completeness check, not evidence about the cast arm: the
+    // revisions arm's rm() is invoked synchronously while the Promise.all
+    // array literal is built, before the cast arm's first await, so
+    // revisions.json is gone either way — this passes whether or not the
+    // corrupt-read handling above is correct. It would catch a future
+    // Promise.allSettled reshape that stopped sibling arms from running to
+    // completion.
+    expect(existsSync(revisionsPath)).toBe(false);
+  });
+});
+
+describe('reparse handler — #2099 round-2 finding 1: a non-parse cast.json read failure refuses to discard the cast', () => {
+  const BUSY_AUTHOR = 'Reparse Busy Author';
+  const BUSY_SERIES = 'Standalones';
+  const BUSY_TITLE = 'Reparse Busy Cast Book';
+  let busyBookId: string;
+  let busyBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    busyBookId = makeBookId(BUSY_AUTHOR, BUSY_SERIES, BUSY_TITLE);
+    busyBookDir = join(workspaceRoot, 'books', BUSY_AUTHOR, BUSY_SERIES, BUSY_TITLE);
+
+    mkdirSync(join(busyBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(busyBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(busyBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: busyBookId,
+        manuscriptId: 'm_reparse_busy',
+        title: BUSY_TITLE,
+        author: BUSY_AUTHOR,
+        series: BUSY_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('500s and leaves an intact cast.json on disk when the in-lock read hits a transient error', async () => {
+    const castPath = join(busyBookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+      }),
+    );
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const busyCastPath = castJsonPath(busyBookDir);
+    let rejectedOnce = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!rejectedOnce && path === busyCastPath) {
+        rejectedOnce = true;
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      return actual.readJson(path);
+    });
+
+    try {
+      const res = await request(app).post(`/api/books/${busyBookId}/reparse`);
+      expect(res.status).toBe(500);
+      // The intact cast was NOT discarded — this is the round-2 defect: a
+      // blanket `.catch(() => null)` would have treated this transient
+      // EBUSY identically to "no cast" and deleted it anyway, on a 200.
+      expect(existsSync(castPath)).toBe(true);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
   });
 });

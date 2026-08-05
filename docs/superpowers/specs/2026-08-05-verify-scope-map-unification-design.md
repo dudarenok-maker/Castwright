@@ -387,11 +387,17 @@ leg's.
 own npm script, its own `STEPS[]` entry (globs `server/src/**/*.test.ts`,
 extraFiles the script), and its own CI step.
 
-Verified real: `verify:fast:scoped` runs `--steps test:hooks,test,test:server
+Verified real: `verify:fast:scoped` ran `--steps test:hooks,test,test:server
 --scope-staged`, and `test:hooks`' globs (`verify-cache.mjs:56`) exclude
 `server/src/**`. So on a server-only staged diff the guardrail that exists to
-reject budgeted-poll loops never runs on the commit introducing one. The
-split fixes that at ~1s instead of busting the ~25s hooks cache.
+reject budgeted-poll loops never ran on the commit introducing one. Giving the
+check its own `STEPS[]` entry does **not**, by itself, fix that: `verify:fast`
+/ `verify:fast:scoped` / `verify:fast:branch` hard-code their own `--steps`
+CSV in `package.json` — the "fourth list" called out in §Residual risk below —
+and a new `STEPS[]` entry is invisible to it until named there explicitly.
+That gap shipped alongside this very section (caught in review as #2154's
+C1) and was closed by adding `check:budget-poll` to all three CSVs, at ~1s of
+added local cost instead of busting the ~25s hooks cache.
 
 ### Sidecar leg (defect C) — built properly
 

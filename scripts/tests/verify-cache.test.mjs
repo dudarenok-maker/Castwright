@@ -5,12 +5,20 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+import { walk } from '../lib/module-graph.mjs';
 import {
   composeInputHash,
   decide,
@@ -25,6 +33,7 @@ import {
   parseNvidiaSmiUtil,
   isVitestPoolCrash,
   branchDiffFiles,
+  sidecarFingerprint,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
@@ -460,9 +469,84 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
+// PR ran zero legs — in cloud AND locally. This suite's own stepTouchedByDiff
+// assertions against real workflow paths are what must stay in scope when
+// verify.yml changes, or the guard cannot run on the PR that breaks it.
+test('stepTouchedByDiff: a verify.yml diff matches test:hooks via globs', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/cross-os.yml']),
+    true,
+  );
+});
+
+// I1 (#2146 review): .github/actions/** is defect D's other half — the
+// composite setup action is consumed by every verify.yml job but matched no
+// scope at all, so an actions-only diff ran zero legs and printed [cached].
+test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/actions/setup/action.yml']),
+    true,
+  );
+});
+
+// .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
+// (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
+// stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
+// defect D again for .husky, on the very PR that fixes it for .github, and
+// none of the four wiring assertions can see it (they check key existence
+// and job membership, not whether a derived condition still covers what the
+// legacy one did). release-manifest.test.mjs:95 includes .husky/pre-commit
+// as a literal string in an array of sample paths fed to a pure classifier —
+// it does not read the file from disk — but it is still a real edge worth
+// pinning, not a theoretical one (M1, #2146 review: corrects the previous
+// "reads at runtime" claim, which was false).
+test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
+  for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
+    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);
+  }
+});
+
+// The hole this closes: verify:fast:scoped runs --steps test:hooks,test,
+// test:server --scope-staged, and test:hooks' globs exclude server/src/**.
+// So on a server-only staged diff the budgeted-poll guardrail never ran on
+// the very commit introducing the pattern (#2120b).
+test('stepTouchedByDiff: a server test diff is in scope for check:budget-poll', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['server/src/tts/foo.test.ts']), true);
+});
+
+test('stepTouchedByDiff: a server test diff still does NOT bust test:hooks', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/src/tts/foo.test.ts']), false);
+});
+
+test('stepTouchedByDiff: editing the budget-poll script is in scope for its own step', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']), true);
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
-  const diff = ['tailwind.config.ts'];
+  const diff = ['vite.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
+});
+
+// index.html carries the self-hosted webfonts <link>, the body's Tailwind
+// classes, and the #root mount div — all three determine what Playwright
+// mounts and what the visual baselines screenshot. Without this extraFiles
+// entry, an index.html-only diff ran zero e2e shards and zero visual
+// baselines (workflow-wiring review Finding 1). Reverting either extraFiles
+// entry reddens its own assertion.
+test('stepTouchedByDiff: index.html is in scope for test:e2e', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e'], ['index.html']), true);
+});
+
+test('stepTouchedByDiff: index.html is in scope for test:e2e:visual', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e:visual'], ['index.html']), true);
 });
 
 test('stepTouchedByDiff: editing the prebuild doc-sync script invalidates the build cache (issue #1223)', () => {
@@ -480,92 +564,266 @@ test('stepTouchedByDiff: an empty diff touches nothing', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], []), false);
 });
 
-// --- test:hooks completeness guard (ops-18, #2115) -------------------------
+// M3 (#2146 review): 'server/tts-sidecar/requirements*.txt' compiles to
+// `requirements[^/]*\.txt$` (the single-segment `*` cannot cross a `/`), so
+// it never matched a file under the requirements/ SUBDIRECTORY —
+// requirements/base.txt became load-bearing in this PR (the CI bootstrap
+// installs from it directly) but editing it prints [cached] locally. Same
+// gap for pytest.ini: it sits at server/tts-sidecar/pytest.ini, not matched
+// by '**/*.py'. Cloud is unaffected (verify.yml's `^server/tts-sidecar/`
+// match already covers both) — this is a LOCAL-cache-only hole, same shape
+// as M3's sibling findings across this PR.
+test('stepTouchedByDiff: server/tts-sidecar/requirements/base.txt is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/requirements/base.txt']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: server/tts-sidecar/pytest.ini is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/pytest.ini']),
+    true,
+  );
+});
+
+// --- server/package.json widening (verify-scope fix round 1) ---------------
+// A bare server/package.json edit (not yet reflected in server/package-lock.json)
+// invalidated NOTHING before this fix — stepTouchedByDiff's includeLockfiles
+// branch only special-cases the literal server/package-lock.json path.
+// Reverting any one of these five extraFiles entries reddens its own test.
+test('stepTouchedByDiff: server/package.json is in scope for typecheck', () => {
+  assert.equal(stepTouchedByDiff(stepByName['typecheck'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for config:check', () => {
+  assert.equal(stepTouchedByDiff(stepByName['config:check'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for test:server', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for test:server-slow', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server-slow'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for build', () => {
+  assert.equal(stepTouchedByDiff(stepByName['build'], ['server/package.json']), true);
+});
+
+// lint deliberately does NOT get server/package.json: eslint.config.mjs has no
+// JSON target (verified: no `files`/plugin entry for *.json anywhere in it),
+// so a package.json content change cannot change lint's output.
+test('stepTouchedByDiff: server/package.json stays OUT of scope for lint (no JSON lint target)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['lint'], ['server/package.json']), false);
+});
+
+// --- test:sidecar widened to the whole tree (verify-scope fix round 1, G6) -
+// Legacy CI regex was `^server/tts-sidecar/` (anything in the tree); A2's
+// derivation narrowed this to .py/requirements/pytest.ini only, missing docs,
+// installer scripts under scripts/, and anything else non-.py. Reverting the
+// globs line back to the three narrower globs reddens this test.
+test('stepTouchedByDiff: a non-.py file anywhere under server/tts-sidecar/ is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/README.md']),
+    true,
+  );
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/scripts/install-qwen3.mjs']),
+    true,
+  );
+});
+
+// --- test:scripts (Pester) fixtures widening (verify-scope fix round 1, G7) -
+// scripts/tests/run-golden-tests.Tests.ps1's BeforeAll block shadows
+// qwen_tts/torch/TTS onto PYTHONPATH via these stub .py files at RUNTIME (see
+// that test file's own comment) — a real dependency, not a hypothetical one.
+// Reverting the 'scripts/tests/fixtures/**' glob entry reddens this test.
+test('stepTouchedByDiff: a run-golden-tests stub module is in scope for test:scripts', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:scripts'], [
+      'scripts/tests/fixtures/run-golden-tests-stub-modules/qwen_tts.py',
+    ]),
+    true,
+  );
+});
+
+// --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c
+// follow-up #2120a) -----------------------------------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
 // file a hooks test depends on". This test checks that approximation against
-// reality: statically scan every scripts/tests/*.test.mjs for the producer
-// files it actually imports (relative specifiers only — bare specifiers like
-// `node:fs` or `archiver` aren't producers under test), and assert each one
-// is stepTouchedByDiff-visible to test:hooks. Without this, a producer that a
-// test imports but the cache step doesn't declare sits in the exact #1847
-// trap the extraFiles comments above describe: a producer-only diff prints
-// [cached] and the test that covers it never runs locally.
+// reality: walk the full TRANSITIVE import closure of every
+// scripts/tests/*.test.mjs entry point (not just its direct imports — a
+// producer reached two hops away is just as real a dependency) and assert
+// every file in that closure is stepTouchedByDiff-visible to test:hooks.
+// Without this, a producer that a test depends on but the cache step doesn't
+// declare sits in the exact #1847 trap the extraFiles comments above
+// describe: a producer-only diff prints [cached] and the test that covers it
+// never runs locally — including when the producer is only reached
+// transitively (#2120a: editing pinokio-scripts/lib/menu.js left test:hooks
+// [cached] locally because the old guard only looked at test files' DIRECT
+// imports, one hop short of the real edge through pinokio.js).
 const testsDir = resolve(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = resolve(testsDir, '..', '..');
 
-// Pull relative-specifier producer imports out of a test file's source: the
-// static ESM `from` form, the dynamic `import()` form, and the CJS
-// `require()` form (pinokio-entry.test.mjs uses createRequire + require()
-// deliberately, to reproduce Pinokio's own CJS kernel loader — that is a
-// genuine direct import edge the guard must see; ops-17c review, #2115).
-// Only a dot- or dot-dot-prefixed relative specifier counts as a producer
-// import — bare specifiers like `node:fs` are not producers under test. (Do
-// not spell out a literal example specifier in this comment: the patterns
-// below would extract it too, and it would then be silently discarded by
-// the on-disk existsSync check in the test below rather than caught.)
-function extractRelativeImportSpecifiers(source) {
-  const specifiers = new Set();
-  const patterns = [
-    /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
-    /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-    /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      specifiers.add(match[1]);
-    }
-  }
-  return [...specifiers];
-}
-
-// Pins the require() pattern directly. Without this, a regression that drops
-// that pattern is invisible to the completeness guard below whenever the
-// require()d producer (pinokio.js) already happens to be a declared
-// extraFiles entry — the guard would just stop scanning that edge and stay
-// silently green rather than catching the regex regression (ops-17c review,
-// #2115: verified by mutation — removing the require() pattern alone left
-// every test in this file green until this pinning test was added).
-test('extractRelativeImportSpecifiers: extracts a require() edge (pinokio-entry.test.mjs shape)', () => {
-  const source = "const config = require('../../pinokio.js');";
-  assert.deepEqual(extractRelativeImportSpecifiers(source), ['../../pinokio.js']);
-});
-
-test('test:hooks completeness guard: every producer a hooks test imports is a cache input', () => {
+test('test:hooks completeness guard: every producer a hooks test depends on is a cache input', () => {
   const hooksStep = stepByName['test:hooks'];
-  const testFiles = readdirSync(testsDir).filter((f) => f.endsWith('.test.mjs'));
-  const missing = [];
-  let producersScanned = 0;
+  const entryFiles = readdirSync(testsDir)
+    .filter((f) => f.endsWith('.test.mjs'))
+    .map((f) => join(testsDir, f));
 
-  for (const testFile of testFiles) {
-    const source = readFileSync(join(testsDir, testFile), 'utf8');
-    for (const specifier of extractRelativeImportSpecifiers(source)) {
-      const absProducer = resolve(testsDir, specifier);
-      if (!existsSync(absProducer)) continue; // not a file on disk — nothing to require as an input
-      producersScanned += 1;
-      // path.relative (not a fixed-length slice off repoRoot) so a specifier
-      // that happens to resolve outside the repo root doesn't yield garbage.
-      const repoRelative = _internals.toPosix(relative(repoRoot, absProducer));
-      if (!stepTouchedByDiff(hooksStep, [repoRelative])) {
-        missing.push(`${repoRelative} (imported by scripts/tests/${testFile})`);
-      }
-    }
-  }
+  const { files, unresolvable, unparseable } = walk({ entryFiles, repoRoot });
 
-  // Anti-vacuity: if the regex above ever silently matched nothing, this
-  // guard would pass forever while proving nothing (ops-18 brief mutation
-  // (c) — the exact "absent reads as clean" failure mode). A count this low
-  // means either the extraction regex broke, or a legitimate batch of hooks
-  // tests (and their imports) was deleted — both are worth a human look
-  // before lowering this floor.
-  assert.ok(
-    producersScanned >= 30,
-    `expected to scan at least 30 relative producer imports across scripts/tests/*.test.mjs, found ${producersScanned} — either the extraction regex broke, or hooks tests/imports were legitimately removed`,
+  // Fail closed on a specifier that resolves to nothing (defect A). The old
+  // guard's existsSync-then-continue silently dropped these.
+  assert.deepEqual(
+    unresolvable,
+    [],
+    `specifier(s) that resolve to nothing:\n${unresolvable.map((u) => `${u.specifier} <- ${u.from}`).join('\n')}`,
   );
 
+  // I3 (#2154 review): `unparseable` was computed and then discarded here —
+  // the module comment at module-graph.mjs's top documents it as the
+  // visibility mechanism for a truncated subtree ("never hidden... named in
+  // `unparseable`"), but nothing actually read the list, so that visibility
+  // was theoretical. Pinning the exact, known entry turns a NEW unparseable
+  // file (up to 13 possible before the floor above goes red) into a
+  // deliberate, reviewed decision instead of a silent one.
+  assert.deepEqual(
+    unparseable,
+    ['server/src/handoff/schemas.ts'],
+    `unparseable file(s) changed — a new entry here silently shrinks the ` +
+      `walked closure by everything past it; confirm this is intended:\n${unparseable.join('\n')}`,
+  );
+
+  // Anti-vacuity on METRIC B (unique tracked closure files), NOT on the old
+  // occurrence counter (METRIC A) — different units, and conflating them is
+  // how the old floor came to be 30 against a real 60: that 60 counted
+  // per-test-file direct-import OCCURRENCES (duplicates across files each
+  // counted separately), not unique files. Re-measured on this branch (task
+  // 13, transitive walk over all 63 scripts/tests/*.test.mjs entries):
+  // Metric B (files.length, unique files in the closure) = 63; the
+  // equivalent direct-imports-only occurrence count (Metric A's unit) = 66.
+  // Floor 50 is set against Metric B and gives ~20% headroom below 63: a
+  // legitimate one- or two-file removal must not go red, while a collapse
+  // toward zero (broken regex or resolver) must.
+  assert.ok(
+    files.length >= 50,
+    `expected >= 50 unique files in the hooks-test closure, found ${files.length} — either extraction/resolution broke, or hooks tests were legitimately removed`,
+  );
+
+  const missing = files.filter((f) => !stepTouchedByDiff(hooksStep, [f]));
   assert.deepEqual(
     missing,
     [],
-    `producer(s) imported by a hooks test but not an input to test:hooks:\n${missing.join('\n')}`,
+    `producer(s) a hooks test depends on but not an input to test:hooks:\n${missing.join('\n')}`,
+  );
+});
+
+// --- Acceptance through the real cached/run decision (#2120) -------------
+// #2120 explicitly rejects stepTouchedByDiff as sufficient proof: PR #2117
+// showed it and the real [cached]/[run] decision are different code paths.
+// These two tests drive selectStepFiles -> composeInputHash -> decide — the
+// actual decision runPipeline makes — rather than modeling it against the
+// unit seam.
+
+// Shared harness: builds a real input hash for a step from a file list,
+// letting the caller perturb one file's content hash.
+function hashFor(step, fileList, bump = () => 'h0') {
+  const entries = selectStepFiles({ fileList, step }).map((rel) => [rel, bump(rel)]);
+  return composeInputHash({
+    stepName: step.name,
+    sortedFileEntries: entries,
+    lockHashes: {},
+    nodeVer: 'v20.0.0',
+    schemaVer: 1,
+    toolFingerprint: 'test',
+  });
+}
+
+test('acceptance #2120a: editing menu.js makes test:hooks RUN, not [cached]', () => {
+  const step = stepByName['test:hooks'];
+  const fileList = ['scripts/tests/pinokio-entry.test.mjs', 'pinokio-scripts/lib/menu.js'];
+
+  assert.ok(
+    selectStepFiles({ fileList, step }).includes('pinokio-scripts/lib/menu.js'),
+    'menu.js must be among the files whose content feeds the hash',
+  );
+
+  const base = hashFor(step, fileList);
+  const edited = hashFor(step, fileList, (rel) => (rel.endsWith('menu.js') ? 'h1' : 'h0'));
+  assert.notEqual(base, edited, 'a menu.js edit must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: edited, cache }), 'run');
+  assert.equal(decide({ stepName: step.name, currentHash: base, cache }), 'skip');
+});
+
+test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () => {
+  const step = stepByName['check:budget-poll'];
+  const withoutTest = ['scripts/check-no-budget-poll.mjs'];
+  const withTest = ['scripts/check-no-budget-poll.mjs', 'server/src/tts/new.test.ts'];
+
+  assert.ok(selectStepFiles({ fileList: withTest, step }).includes('server/src/tts/new.test.ts'));
+
+  const base = hashFor(step, withoutTest);
+  const added = hashFor(step, withTest);
+  assert.notEqual(base, added, 'adding a server test must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: added, cache }), 'run');
+});
+
+// C1 (#2154 review): `check:budget-poll` had a real STEPS[] entry with correct
+// inputs, but NONE of the three local `--steps` CSVs in package.json
+// (`verify:fast`, `verify:fast:scoped`, `verify:fast:branch`) named it —
+// `runPipeline` filters STEPS down to exactly the names it's given, so the
+// step was silently dropped from every local entry point and only ever ran
+// under bare `npm run verify` or in cloud CI. This guard closes that class of
+// bug generally: a STEPS[] entry that isn't in ANY local CSV, and isn't
+// explicitly named below as cloud/full-verify-only by design, goes red.
+//
+// The allowlist mirrors CLAUDE.md's own Commands section, which documents
+// each of these as deliberately absent from the fast local paths:
+//   - test:e2e / test:e2e:visual — cloud verify.yml only (Playwright).
+//   - test:server-slow — cloud verify.yml + full `npm run verify`, not the
+//     fast paths (docs/features/archive/45-vitest-pool-tuning.md).
+//   - test:scripts / test:pinokio — not in any of the three fast aliases
+//     today (`npm run test:all` / `verify` cover them instead).
+// Reading package.json's real scripts (rather than hardcoding the CSVs here)
+// means an edit to any of the three that drops a step name is what this test
+// actually watches for.
+const CLOUD_OR_FULL_VERIFY_ONLY_STEPS = new Set([
+  'test:e2e',
+  'test:e2e:visual',
+  'test:server-slow',
+  'test:scripts',
+  'test:pinokio',
+]);
+
+test('every STEPS[] entry is covered by a local --steps CSV or explicitly allowlisted as cloud/full-verify-only', () => {
+  const pkgPath = resolve(repoRoot, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const LOCAL_ENTRY_POINTS = ['verify:fast', 'verify:fast:scoped', 'verify:fast:branch'];
+
+  const covered = new Set();
+  for (const scriptName of LOCAL_ENTRY_POINTS) {
+    const cmd = pkg.scripts[scriptName];
+    assert.ok(cmd, `package.json is missing its "${scriptName}" script`);
+    const m = cmd.match(/--steps[ =]([^\s]+)/);
+    assert.ok(m, `"${scriptName}" must pass --steps`);
+    for (const name of m[1].split(',')) covered.add(name);
+  }
+
+  const missing = STEPS.map((s) => s.name).filter(
+    (name) => !covered.has(name) && !CLOUD_OR_FULL_VERIFY_ONLY_STEPS.has(name),
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `STEPS[] entr(y/ies) absent from every local --steps CSV and not allowlisted ` +
+      `as cloud/full-verify-only: ${missing.join(', ')}`,
   );
 });
 
@@ -674,4 +932,30 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
   }
+});
+
+// I2 (#2146 review): sidecarFingerprint used to hardcode
+// `.venv/Scripts/python.exe` (Windows-only). On a POSIX box that meant the
+// fingerprint was the literal string 'unavailable' BEFORE bootstrap and
+// STAYED 'unavailable' after bootstrapping the venv (since the hardcoded
+// Windows path never exists there) — so the tool fingerprint never moved and
+// test:sidecar would report [cached] forever locally, with nothing under
+// **/*.py changed. Pins the POSIX branch specifically (a Windows-only
+// assertion would leave the exact bug in place): a POSIX-layout venv
+// (.venv/bin/python, no Windows layout present) must resolve to something
+// other than 'unavailable' even when forced via the `platform` param — this
+// does not depend on the host OS actually running the test.
+test('sidecarFingerprint resolves the POSIX venv layout (not just Windows)', () => {
+  const dir = mkTmp();
+  const pyPath = join(dir, '.venv', 'bin', 'python');
+  mkdirSync(dirname(pyPath), { recursive: true });
+  writeFileSync(pyPath, '', 'utf8'); // existence is all resolveVenvPython checks
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.notEqual(result, 'unavailable');
+});
+
+test('sidecarFingerprint still returns unavailable when no venv exists on POSIX', () => {
+  const dir = mkTmp();
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.equal(result, 'unavailable');
 });

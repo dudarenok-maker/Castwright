@@ -19,6 +19,8 @@ Round-1 review (#1894) added two further pins:
 """
 import importlib, os, sys, threading, time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 main = importlib.import_module("main")
 
@@ -194,6 +196,9 @@ def test_asr_maybe_free_idle_reevaluates_the_counter_under_the_lock(monkeypatch)
 
 
 def test_spk_unload_waits_for_an_in_flight_embed(monkeypatch):
+    # SpeakerEngine.embed() does an unconditional `import torch` (main.py) —
+    # not something a mock can route around — so this needs the real package.
+    pytest.importorskip("torch")
     entered, release = threading.Event(), threading.Event()
     observed: dict[str, bool] = {}
 
@@ -265,6 +270,9 @@ def test_spk_embed_restamps_last_used_before_the_in_flight_drop(monkeypatch):
     `_last_used` on the way in, so a sentinel set before the call is gone
     before `encode_batch` runs and the assertion would hold under either
     ordering. `stamps == [entry-time, exit-time]`."""
+    # SpeakerEngine.embed() does an unconditional `import torch` (main.py) —
+    # not something a mock can route around — so this needs the real package.
+    pytest.importorskip("torch")
     import numpy as np
 
     class _FakeOut:

@@ -18,16 +18,9 @@ if (result.error) {
   process.exit(1);
 }
 if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
-
-// Heuristic guardrail: scan server test files for budgeted-poll loops and
-// oversized inline timeouts (plan flaky-release-hardening Task 5.2).
-const check = spawnSync(
-  process.execPath,
-  ['scripts/check-no-budget-poll.mjs'],
-  { stdio: 'inherit' },
-);
-if (check.error) {
-  process.stderr.write(`run-hooks-tests: failed to spawn check-no-budget-poll: ${check.error.message}\n`);
-  process.exit(1);
-}
-process.exit(check.status ?? 1);
+// check-no-budget-poll.mjs used to run here. It now has its own verify step
+// (`check:budget-poll`, scripts/verify-cache.mjs) with server/src/**/*.test.ts
+// as its inputs, wired into every local --steps CSV in package.json
+// (verify:fast, verify:fast:scoped, verify:fast:branch) as well as CI — so a
+// server-only diff actually runs it, which this coupling prevented.
+process.exit(0);

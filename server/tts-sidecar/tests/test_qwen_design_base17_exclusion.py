@@ -24,6 +24,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
@@ -46,6 +47,10 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
     half of the bulk-design OOM: the previous variant mint left `_base17`
     resident, and the next character's base design would stack VoiceDesign on
     top of it."""
+    # design_voice() -> _ensure_device_resolved() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     qeng = main.QwenEngine()
     _quiet_kokoro()
 
@@ -93,6 +98,10 @@ def test_mint_variant_evicts_resident_design(monkeypatch):
     — mirrors the synth path's unload_design(). Reproduces the first half of the
     bulk-design OOM: the base design left `_design` resident, and the very next
     variant mint would stack the 1.7B-Base on top of it."""
+    # mint_variant() -> _ensure_base17_for_mint() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     qeng = main.QwenEngine()
     _quiet_kokoro()
 

@@ -11,6 +11,7 @@ import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
+import { resolveVenvPython } from './run-sidecar-tests.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -30,7 +31,23 @@ export const STEPS = [
     name: 'typecheck',
     inputs: {
       globs: ['src/**', 'server/src/**'],
-      extraFiles: ['tsconfig.json', 'server/tsconfig.json', 'vite.config.ts', 'vitest.config.ts'],
+      /* server/package.json (bare, NOT the lockfile): stepTouchedByDiff's
+         includeLockfiles branch below only special-cases the literal
+         server/package-lock.json path, so a manual server dependency/types
+         edit that hasn't been `npm install`-ed into the lockfile yet
+         invalidated NOTHING here (verified against the live module: it
+         touched zero steps) — a real local-cache + CI-scope hole, since a
+         new/removed server dependency's types can change `tsc`'s output.
+         Added as an explicit extraFiles entry (not a stepTouchedByDiff
+         lockfile-branch extension) to avoid also making this step hash the
+         FULL server lockfile the way `includeLockfiles: ['server']` would. */
+      extraFiles: [
+        'tsconfig.json',
+        'server/tsconfig.json',
+        'vite.config.ts',
+        'vitest.config.ts',
+        'server/package.json',
+      ],
       includeLockfiles: ['root', 'server'],
     },
   },
@@ -41,7 +58,15 @@ export const STEPS = [
     name: 'config:check',
     inputs: {
       globs: ['server/src/config/*.ts'],
-      extraFiles: ['server/.env.example', 'server/scripts/sync-env-example.ts'],
+      // server/package.json: same gap/fix as `typecheck` above — see that
+      // step's comment. Least certain of the five: config:check's own
+      // pass/fail doesn't read package.json content, but it's a
+      // server-tagged step per the branch owner's explicit ruling.
+      extraFiles: [
+        'server/.env.example',
+        'server/scripts/sync-env-example.ts',
+        'server/package.json',
+      ],
       includeLockfiles: [],
     },
   },
@@ -53,7 +78,35 @@ export const STEPS = [
          — no module-graph edge, so without this a fixture-only diff (the
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
-      globs: ['scripts/**/*.{mjs,cjs}', 'scripts/tests/fixtures/**'],
+      globs: [
+        'scripts/**/*.{mjs,cjs}',
+        'scripts/tests/fixtures/**',
+        /* .github/workflows/** is an input because this step's own tests
+           (verify-cache.test.mjs) assert stepTouchedByDiff against real
+           workflow paths, so a workflow-only diff must stay in scope for the
+           step that exercises those assertions. Without this, a
+           workflow-only diff — precisely the edit that breaks the wiring —
+           prints [cached] and the assertion sits stale-green. Same #1847
+           trap as fixtures/** above (defect D, #2119 review). */
+        '.github/workflows/**',
+        /* .github/actions/** is defect D's other half (I1, #2146 review):
+           the composite setup action is consumed by all seven verify.yml
+           jobs (`uses: ./.github/actions/setup`) but matched no scope at
+           all, so an actions-only diff ran zero legs and printed [cached] —
+           the exact defect this PR exists to close, just for a different
+           path prefix. Whether this should instead live in the broader
+           `shared` scope is an open question left for the follow-up PR;
+           mirroring `.github/workflows/**` here is the minimal fix now. */
+        '.github/actions/**',
+        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
+           matcher, which A2 deletes — and it is an input to no step, so
+           without this a .husky-only PR would run zero legs after A2.
+           release-manifest.test.mjs's sample-path array includes
+           .husky/pre-commit as a literal string fed to a pure classifier —
+           it does not read the file from disk (plan review round 2 named
+           the wrong file/mechanism; M1, #2146 review). */
+        '.husky/**',
+      ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
          RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs
@@ -118,8 +171,30 @@ export const STEPS = [
         // which proves nothing about the guardrail test itself
         // (ops-17c review, #2115).
         'eslint.config.mjs',
+        // menu.js is a TRANSITIVE dep: pinokio-entry.test.mjs asserts on the
+        // menu() item list, which is implemented here and reached via
+        // pinokio.js. Editing it used to leave test:hooks [cached] locally,
+        // while in cloud it set pinokio=true — running test:pinokio, a
+        // DIFFERENT suite from the test that asserts on it (#2120a).
+        'pinokio-scripts/lib/menu.js',
+        // schemas.ts is reached from diff-analysis-ab.mjs, which imports it
+        // with a .js specifier per the TypeScript convention.
+        'server/src/handoff/schemas.ts',
       ],
       includeLockfiles: ['root'],
+    },
+  },
+  {
+    name: 'check:budget-poll',
+    inputs: {
+      /* Its own step rather than widening test:hooks' inputs: this scans
+         server/src/**\/*.test.ts at RUNTIME, and server tests are the hottest
+         surface in the repo. Folding them into test:hooks would bust a ~25s
+         cache on every server test edit; as its own ~1s step it costs almost
+         nothing AND it runs on a server-only staged diff, which is exactly
+         the case verify:fast:scoped used to skip. */
+      globs: ['server/src/**/*.test.ts'],
+      extraFiles: ['scripts/check-no-budget-poll.mjs'],
     },
   },
   {
@@ -146,8 +221,6 @@ export const STEPS = [
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',
-        'tailwind.config.ts',
-        'postcss.config.js',
         'index.html',
         /* api.clone-voice.test.ts pins the clone-transcript cap against the
            contract, so an openapi-only edit must bust this step's cache —
@@ -170,13 +243,18 @@ export const STEPS = [
          repair-cast-id-drift.mjs: cast-resolve.repair-pass-contract.test.ts
          imports it directly (#2130) — it lives outside server/src/**, so
          without this line an edit there reports [cached] and the contract
-         test never re-runs against it. */
+         test never re-runs against it.
+         server/package.json: same lockfile-vs-manifest gap as `typecheck`
+         above — includeLockfiles below only special-cases the literal
+         server/package-lock.json path, so a manifest-only server dependency
+         edit invalidated nothing (verified against the live module). */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
         'openapi.yaml',
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
         'scripts/repair-cast-id-drift.mjs',
+        'server/package.json',
       ],
       includeLockfiles: ['server'],
     },
@@ -190,10 +268,12 @@ export const STEPS = [
     name: 'test:server-slow',
     inputs: {
       globs: ['server/src/**'],
+      // server/package.json: same gap/fix as `test:server` above.
       extraFiles: [
         'server/vitest.config.slow.ts',
         'server/vitest.config.ts',
         'server/tsconfig.json',
+        'server/package.json',
       ],
       includeLockfiles: ['server'],
     },
@@ -201,7 +281,19 @@ export const STEPS = [
   {
     name: 'test:scripts',
     inputs: {
-      globs: ['scripts/lib/**', 'scripts/tests/**/*.Tests.ps1', 'scripts/tests/**/*.ps1'],
+      globs: [
+        'scripts/lib/**',
+        'scripts/tests/**/*.Tests.ps1',
+        'scripts/tests/**/*.ps1',
+        // run-golden-tests.Tests.ps1 shadows qwen_tts/torch/TTS onto
+        // PYTHONPATH via these stub .py files at RUNTIME (see that test's own
+        // BeforeAll block) — no module-graph edge, so without this glob a
+        // stub-only diff (exactly the shape that would need re-verifying)
+        // printed [cached] here. Same #1847 runtime-read trap `test:hooks`'s
+        // fixtures/** entry documents; verified by reading the test file
+        // before adding this, not assumed.
+        'scripts/tests/fixtures/**',
+      ],
       extraFiles: ['scripts/tests/run.ps1'],
       includeLockfiles: ['root'],
     },
@@ -210,8 +302,30 @@ export const STEPS = [
   {
     name: 'test:sidecar',
     inputs: {
-      globs: ['server/tts-sidecar/**/*.py', 'server/tts-sidecar/requirements*.txt'],
-      extraFiles: ['server/tts-sidecar/run-tests.ps1'],
+      /* Widened to the WHOLE sidecar tree (matching the legacy CI regex
+         `^server/tts-sidecar/`, restored after A2's derivation narrowed it to
+         .py/requirements/pytest.ini only — an under-declaration: any file in
+         this tree, including non-.py sources, docs, and install scripts, can
+         affect the pytest suite or its bootstrap). Safe without an explicit
+         exclusion for .venv/**, models/, .coqui/, voices/, or sample.* —
+         verified those are the exact paths .gitignore excludes under
+         server/tts-sidecar/ (root .gitignore lines 108-113), and every
+         diffFiles/fileList this glob is tested against already comes from
+         `git diff`/`git ls-files --exclude-standard`, which never surfaces a
+         gitignored path in the first place — so there's no churn risk to
+         guard against, and globToRegex has no exclusion syntax to express one
+         with regardless. */
+      globs: ['server/tts-sidecar/**'],
+      extraFiles: [
+        'server/tts-sidecar/run-tests.ps1',
+        // The npm script now invokes this instead; run-tests.ps1 is retained
+        // for direct local/PowerShell use, so BOTH are inputs.
+        'scripts/run-sidecar-tests.mjs',
+        // M3 (#2146 review): '**/*.py' misses this — it has no .py extension
+        // — so a pytest.ini-only diff (e.g. changing markers or addopts)
+        // printed [cached] locally with nothing to invalidate the step.
+        'server/tts-sidecar/pytest.ini',
+      ],
       includeLockfiles: [],
     },
     toolFingerprint: sidecarFingerprint,
@@ -220,7 +334,13 @@ export const STEPS = [
     name: 'test:e2e',
     inputs: {
       globs: ['src/**', 'e2e/**'],
-      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e'],
+      /* index.html: same gap/fix as `build`'s extraFiles entry below — it
+         carries the self-hosted webfonts <link>, the body's Tailwind
+         classes, and the #root mount div, all three of which determine what
+         Playwright mounts and what the visual baselines render. Without this,
+         an index.html-only diff ran zero e2e shards (workflow-wiring review
+         Finding 1). */
+      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e', 'index.html'],
       includeLockfiles: ['root'],
     },
   },
@@ -232,7 +352,9 @@ export const STEPS = [
     name: 'test:e2e:visual',
     inputs: {
       globs: ['src/**', 'e2e/**'],
-      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e'],
+      // index.html: same reasoning as test:e2e's extraFiles entry above —
+      // it directly determines what the visual baselines screenshot.
+      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e', 'index.html'],
       includeLockfiles: ['root'],
     },
   },
@@ -240,12 +362,14 @@ export const STEPS = [
     name: 'build',
     inputs: {
       globs: ['src/**', 'server/src/**'],
+      // server/package.json: same gap/fix as `typecheck`/`test:server` above.
       extraFiles: [
         'vite.config.ts',
         'tsconfig.json',
         'server/tsconfig.json',
         'index.html',
         'scripts/sync-docs-to-public.mjs',
+        'server/package.json',
       ],
       includeLockfiles: ['root', 'server'],
     },
@@ -610,9 +734,21 @@ function pesterFingerprint() {
   return (r.stdout ?? '').trim() || 'unavailable';
 }
 
-function sidecarFingerprint() {
-  const py = 'server/tts-sidecar/.venv/Scripts/python.exe';
-  if (!existsSync(py)) return 'unavailable';
+// I2 (#2146 review): this used to hardcode the Windows venv layout
+// (server/tts-sidecar/.venv/Scripts/python.exe), so on a POSIX box the
+// fingerprint was the literal string 'unavailable' forever — bootstrapping
+// the venv there never changed the fingerprint, so this step would report
+// [cached] and never actually run post-bootstrap. Reuses
+// run-sidecar-tests.mjs's own platform branch (resolveVenvPython) instead of
+// duplicating the win32/posix ternary here. sidecarDir/platform are
+// parameters (not read from process.cwd()/process.platform inline) purely so
+// the test suite can pin the POSIX path without needing to run on POSIX.
+export function sidecarFingerprint(
+  sidecarDir = join(process.cwd(), 'server', 'tts-sidecar'),
+  platform = process.platform,
+) {
+  const py = resolveVenvPython(sidecarDir, platform);
+  if (!py) return 'unavailable';
   let mtime = '';
   try {
     mtime = String(statSync(py).mtimeMs);

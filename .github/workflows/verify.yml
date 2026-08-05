@@ -84,23 +84,25 @@ concurrency:
 
 jobs:
   # Detect which scopes the PR touched by diffing the merge base against the
-  # PR head. Each output is a literal 'true'/'false' string consumed by the
-  # `if:` on every leg job/step below. Pure bash + git — no third-party
-  # action, matching this repo's all-first-party (actions/*) convention.
+  # PR head, then derive per-step scope via scripts/ci-scope.mjs (the same
+  # STEPS[] map npm run verify's local caching uses) — bash + git for the
+  # diff, no third-party action, matching this repo's all-first-party
+  # (actions/*) convention. Output is a single scopes JSON blob consumed via
+  # fromJSON() on every leg job/step below.
   detect:
     name: Detect changed scopes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      frontend: ${{ steps.changes.outputs.frontend }}
-      server: ${{ steps.changes.outputs.server }}
-      sidecar: ${{ steps.changes.outputs.sidecar }}
-      e2e: ${{ steps.changes.outputs.e2e }}
-      scripts: ${{ steps.changes.outputs.scripts }}
-      hooks: ${{ steps.changes.outputs.hooks }}
-      pinokio: ${{ steps.changes.outputs.pinokio }}
-      shared: ${{ steps.changes.outputs.shared }}
-      openapi: ${{ steps.changes.outputs.openapi }}
+      # ONE json blob rather than one output per step: GitHub has no wildcard
+      # for this map, so per-step outputs would be a third artifact that can
+      # silently drift from the emitted keys. Consumed via fromJSON below.
+      scopes: ${{ steps.changes.outputs.scopes }}
+      # Sentinel: proves ci-scope.mjs actually ran and wrote. The aggregator
+      # asserts this, catching the case where detect SUCCEEDS having written
+      # nothing — every `if:` false, every job green, required check green
+      # having run nothing.
+      ok: ${{ steps.changes.outputs.ok }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -109,81 +111,31 @@ jobs:
           # its base commit. A shallow clone wouldn't have the base reachable.
           fetch-depth: 0
 
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
       - name: Detect changed scopes
         id: changes
         run: |
-          # A manual dispatch has no PR base/head to diff against — run the
-          # FULL battery (every scope true) and skip the diff logic.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
-              echo "$k=true" >> "$GITHUB_OUTPUT"
-              echo "scope $k=true (workflow_dispatch → full run)"
-            done
-            exit 0
+          # A manual dispatch has no PR base/head to diff against. Leave FILES
+          # empty and let ci-scope.mjs branch on GITHUB_EVENT_NAME — it emits
+          # all-true for a dispatch, matching the old bash early-exit.
+          FILES=""
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            # Merge-base, not BASE itself: a PR branch created from a stale
+            # main would otherwise treat every file main moved past the fork
+            # point as "changed in this PR".
+            MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+            FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
           fi
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.event.pull_request.head.sha }}"
-          # Merge-base, not BASE itself: a PR branch created from a stale
-          # local `origin/<default-branch>` (e.g. right after a `gh pr merge`
-          # that doesn't update local refs) can be a strict ancestor of BASE
-          # rather than a descendant. A literal `git diff BASE HEAD` in that
-          # case treats every file BASE moved past HEAD's fork point as
-          # "changed in this PR", spuriously widening scope (a docs-only PR
-          # tripping the full frontend battery). Diffing from the actual
-          # merge-base is what the diff is meant to mean regardless of how
-          # stale the branch's fork point drifted. Falls back to BASE itself
-          # if the merge-base can't be resolved (shouldn't happen — Checkout
-          # above pulls full history — but conservative on any surprise).
-          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
-          FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
           echo "Changed files in this PR:"
           echo "$FILES"
           echo "---"
-          match() { echo "$FILES" | grep -qE "$1"; }
-          frontend=false; server=false; sidecar=false
-          e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
-          openapi=false
-          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
-          # scripts/tests/fixtures/: server/src/diagnostics/ffmpeg.test.ts reads
-          # ffmpeg-version-cases.json at runtime, sharing that corpus with the CJS
-          # preflight parser so the two cannot drift (ops-35). Without it here, a
-          # fixture-only diff fires the `scripts` leg (CJS side) but not `server`,
-          # so the TS parser is never re-checked against the case just added.
-          # scripts/repair-cast-id-drift.mjs: server/src/store/
-          # cast-resolve.repair-pass-contract.test.ts imports this script directly
-          # (#2130) to prove a cast-resolve.ts tier rename can't silently pass with
-          # the script's own suite green. Without it here, a scripts/-only diff to
-          # THIS file sets `scripts=true` alone, never `server=true` — the one test
-          # that guards it never runs in CI on a change to the exact file it covers.
-          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$|scripts/tests/fixtures/|scripts/repair-cast-id-drift\.mjs$)' && server=true
-          match '^server/tts-sidecar/' && sidecar=true
-          match '^(e2e/|playwright\.config\.ts$)' && e2e=true
-          match '^scripts/' && scripts=true
-          # RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs:
-          # release-notes-gate.test.mjs asserts the #1956 mojibake gate against
-          # those real committed files at runtime, so a notes-only diff — the
-          # shape that would reintroduce the corruption — must still run this leg.
-          # The two on-box register files are the same shape again:
-          # check-onbox-register.test.mjs reads both at runtime and asserts the
-          # live view still agrees with the markdown, so a register-only diff —
-          # exactly the shape that drifts them apart — must run this leg too.
-          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
-          match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
-          # openapi.yaml is a frontend input too (it generates
-          # src/lib/api-types.ts, and api.clone-voice.test.ts pins the
-          # clone-transcript cap against it), but its own flag rather than
-          # `frontend=true`: the frontend flag ALSO gates the 4-shard e2e job
-          # and the visual battery, and nothing under e2e/ reads the contract.
-          # Before this, an openapi-only diff matched only the server regex, so
-          # the frontend job was skipped and that pin could never run.
-          match '^openapi\.yaml$' && openapi=true
-          # `shared` = a ROOT dependency manifest changed → treat as global
-          # (a dep/lockfile bump can affect every leg), so run everything.
-          match '^(package\.json|package-lock\.json)$' && shared=true
-          for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
-            echo "$k=${!k}" >> "$GITHUB_OUTPUT"
-            echo "scope $k=${!k}"
-          done
+          node scripts/ci-scope.mjs --files="$FILES" >> "$GITHUB_OUTPUT"
+          echo "--- derived scope ---"
+          node scripts/ci-scope.mjs --files="$FILES"
 
   lint-and-checks:
     name: Lint, typecheck & fast checks
@@ -197,19 +149,25 @@ jobs:
       - name: Setup Node + deps
         uses: ./.github/actions/setup
 
+      # Lint (was: frontend || server || scripts || shared)
+      # leg: lint
       - name: Lint
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.server == 'true' || needs.detect.outputs.scripts == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_lint || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run lint
 
+      # Typecheck (was: frontend || server || shared)
+      # leg: typecheck
       - name: Typecheck
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.server == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_typecheck || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run typecheck
 
       # Drift guard: fails if server/.env.example is out of sync with the
       # config registry. Previously ONLY ran via local `npm run verify` — see
       # docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md §3.
+      # Config check (was: server || shared)
+      # leg: config:check
       - name: Config check
-        if: needs.detect.outputs.server == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_config_check || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run config:check
 
       # Drift guard, sibling to the one above: src/lib/api-types.ts is
@@ -218,10 +176,12 @@ jobs:
       # that skips `npm run openapi:types` ships a generated artifact whose
       # prose contradicts its own source — which is exactly what happened on
       # this PR, undetected, because nothing gated codegen drift. Gated on
-      # `frontend` too, so a hand-edit of the generated file is caught the
-      # same way.
+      # `openapi` explicitly (its dedicated CI_ONLY key) and on `step_test`
+      # too — its glob is src/**, so a hand-edit of the generated file is
+      # caught the same way (was: openapi || frontend || shared).
+      # leg: openapi:types
       - name: OpenAPI types up to date
-        if: needs.detect.outputs.openapi == 'true' || needs.detect.outputs.frontend == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).openapi || fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           npm run openapi:types
           git diff --exit-code -- src/lib/api-types.ts || {
@@ -229,22 +189,38 @@ jobs:
             exit 1
           }
 
+      # Hooks tests (was: hooks || scripts || shared)
+      # leg: test:hooks
       - name: Hooks tests
-        if: needs.detect.outputs.hooks == 'true' || needs.detect.outputs.scripts == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_hooks || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:hooks
 
+      # leg: check:budget-poll
+      - name: Budgeted-poll guardrail
+        if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run check:budget-poll
+
+      # No-ops with a banner on a runner without Pester 5 (the GitHub
+      # ubuntu image ships pwsh but not Pester 5), exactly as the old
+      # `npm run verify` leg did. Kept gated on `test:scripts` so it provides
+      # real coverage if/when Pester 5 is bootstrapped on the runner.
+      # Deliberate coverage WIDENING (was: scripts, with no `shared` disjunct
+      # at all): a root package-lock.json diff touches zero steps via
+      # stepTouchedByDiff, so `shared` is the only thing that would catch a
+      # dependency bump here — added per the branch's Global Constraint that
+      # `shared` stays a disjunct on every derived condition. After this, a
+      # lockfile-only diff also runs Pester, which it did not before.
+      # leg: test:scripts
       - name: PowerShell-helper tests (Pester)
-        # No-ops with a banner on a runner without Pester 5 (the GitHub
-        # ubuntu image ships pwsh but not Pester 5), exactly as the old
-        # `npm run verify` leg did. Kept gated on `scripts` so it provides
-        # real coverage if/when Pester 5 is bootstrapped on the runner.
-        if: needs.detect.outputs.scripts == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_scripts || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:scripts
 
       # Previously ONLY ran via local `npm run verify` — see
       # docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md §3.
+      # Pinokio tests (was: pinokio || shared)
+      # leg: test:pinokio
       - name: Pinokio tests
-        if: needs.detect.outputs.pinokio == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_pinokio || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:pinokio
 
   frontend-tests:
@@ -272,8 +248,15 @@ jobs:
       # dep/config bump (the `shared` scope) forces a full run via vitest's
       # default triggers. test:a11y stays always-on as a cheap core-view gate.
       # See docs/features/118-ci-cost-round-2.md.
+      # test:e2e is a deliberate extra trigger: this step also runs
+      # `npm run test:a11y`, which has no STEP of its own, and an e2e-only
+      # diff should still exercise the a11y battery. Dropping it would be a
+      # silent narrowing of what runs today. openapi.yaml needs no special
+      # handling: it is already in `test`'s extraFiles, so `step_test` covers
+      # it (was: frontend || e2e || shared || openapi).
+      # leg: test
       - name: Frontend tests + a11y
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true' || needs.detect.outputs.openapi == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           # On a manual dispatch BASE is empty (no PR) → run the full suite.
@@ -299,8 +282,9 @@ jobs:
 
       # ffmpeg is needed by the server MP3 encoder (server/src/tts/mp3.ts
       # shells out to it). Install it only when this job's leg will run.
+      # supports: test:server
       - name: Install ffmpeg
-        if: needs.detect.outputs.server == 'true' || needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # `--changed <base>` narrows both server configs to diff-affected tests
@@ -309,8 +293,15 @@ jobs:
       # config loads. A sidecar-only PR touches no server TS graph → 0 tests
       # run here, which is correct (server tests mock the Python sidecar).
       # See docs/features/118-ci-cost-round-2.md.
+      # test:server AND test:server-slow share this one step, so the
+      # condition is the union of both steps' keys. Drops the old `sidecar`
+      # disjunct deliberately: a sidecar-only diff used to run this job for
+      # zero tests (server tests mock the Python sidecar, per the comment
+      # above), so skipping the job entirely for that diff is behaviour-
+      # neutral, not a narrowing (was: server || sidecar || shared).
+      # leg: test:server
       - name: Server tests (fast + slow)
-        if: needs.detect.outputs.server == 'true' || needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           cd server
           BASE="${{ github.event.pull_request.base.sha }}"
@@ -322,6 +313,54 @@ jobs:
             npx vitest run
             npx vitest run --config vitest.config.slow.ts
           fi
+
+  sidecar-tests:
+    name: Sidecar tests (pytest)
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Every other job uses this; without it this job relies on whatever Node
+      # ubuntu-latest happens to ship and pins no version. `npm run
+      # test:sidecar` needs Node but no node_modules, so the composite's
+      # `npm ci` is cheap insurance rather than a requirement.
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      # supports: test:sidecar
+      - name: Setup Python
+        if: fromJSON(needs.detect.outputs.scopes).step_test_sidecar || fromJSON(needs.detect.outputs.scopes).shared
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # The LEAN dependency set only: requirements/base.txt is vendor-neutral
+      # (fastapi/uvicorn/numpy/psutil) and requirements-dev.txt is pytest +
+      # httpx. The heavy ML stack (torch, coqui-tts, speechbrain) lives in the
+      # vendor overlay and speaker-qa.txt and is deliberately NOT installed —
+      # tests needing it use pytest.importorskip and report as skipped.
+      # supports: test:sidecar
+      - name: Bootstrap sidecar venv
+        if: fromJSON(needs.detect.outputs.scopes).step_test_sidecar || fromJSON(needs.detect.outputs.scopes).shared
+        run: |
+          cd server/tts-sidecar
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements/base.txt -r requirements-dev.txt
+
+      # --require-venv turns "no venv" from a SKIP into a hard failure: on CI a
+      # missing venv means the bootstrap above broke. Without it this leg would
+      # be vacuously green, which is worse than the hole it closes (#2119
+      # review, defect C).
+      # Sidecar tests (was: sidecar || shared)
+      # leg: test:sidecar
+      - name: Sidecar tests
+        if: fromJSON(needs.detect.outputs.scopes).step_test_sidecar || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run test:sidecar -- --require-venv
 
   # E2E functional battery (~110 spec files) is the long pole of the whole
   # workflow — CI intentionally pins Playwright to `workers: 1` (playwright.
@@ -348,12 +387,14 @@ jobs:
         uses: ./.github/actions/setup
 
       # ffmpeg is needed by the e2e suite's audio paths.
+      # supports: test:e2e
       - name: Install ffmpeg
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # supports: test:e2e
       - name: Cache Playwright browsers
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         id: playwright-cache
         uses: actions/cache@v5
         with:
@@ -362,12 +403,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      # supports: test:e2e
       - name: Install Playwright chromium
-        if: (needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true') && steps.playwright-cache.outputs.cache-hit != 'true'
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared) && steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
+      # E2E (chromium) (was: frontend || e2e || shared) — no separate
+      # `frontend` disjunct needed: test:e2e's own glob already includes
+      # src/**, so step_test_e2e alone covers a frontend-only diff too.
+      # leg: test:e2e
       - name: E2E (chromium)
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
 
   # Visual snapshots split out from the functional battery above (2026-07-10)
@@ -395,12 +441,14 @@ jobs:
         uses: ./.github/actions/setup
 
       # ffmpeg is needed by the e2e suite's audio paths.
+      # supports: test:e2e:visual
       - name: Install ffmpeg
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # supports: test:e2e:visual
       - name: Cache Playwright browsers
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
         id: playwright-cache
         uses: actions/cache@v5
         with:
@@ -409,12 +457,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
+      # supports: test:e2e:visual
       - name: Install Playwright chromium
-        if: (needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true') && steps.playwright-cache.outputs.cache-hit != 'true'
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared) && steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
+      # E2E visual baselines (chromium) (was: frontend || e2e || shared) — same
+      # reasoning as the functional E2E leg: test:e2e:visual's own glob already
+      # includes src/**, so no separate `frontend` disjunct is needed. Its
+      # STEPS definition is byte-identical to test:e2e's today, so the two
+      # keys are guaranteed to agree for any given diff — kept as its own key
+      # (rather than reusing step_test_e2e) so the two legs can diverge
+      # independently if either step's inputs.globs is ever narrowed on its own.
+      # leg: test:e2e:visual
       - name: E2E visual baselines (chromium)
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:e2e:visual
 
   build:
@@ -429,8 +486,10 @@ jobs:
       - name: Setup Node + deps
         uses: ./.github/actions/setup
 
+      # Build (was: frontend || server || shared)
+      # leg: build
       - name: Build
-        if: needs.detect.outputs.frontend == 'true' || needs.detect.outputs.server == 'true' || needs.detect.outputs.shared == 'true'
+        if: fromJSON(needs.detect.outputs.scopes).step_build || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run build
 
   # Thin aggregator — see the top-of-file comment. Keeps the "npm run verify"
@@ -438,10 +497,30 @@ jobs:
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
-    needs: [lint-and-checks, frontend-tests, server-tests, e2e, e2e-visual, build]
+    needs:
+      [detect, lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
     runs-on: ubuntu-latest
     if: always()
     steps:
+      # Consumer-side check on a DIFFERENT artifact from the one it validates.
+      # The producer-side fail-safe in ci-scope.mjs shares a failure mode with
+      # what it guards: it writes the fallback to the same GITHUB_OUTPUT
+      # handle. If that handle is unwritable, or detect exits 0 having written
+      # nothing, every `if:` is false, every job's STEPS skip, every job
+      # SUCCEEDS, and this aggregator would report green having run nothing.
+      # No job is skipped in that scenario, so the check below cannot catch it.
+      - name: Scope detection ran
+        run: |
+          if [[ "${{ needs.detect.result }}" != "success" ]]; then
+            echo "::error::detect job did not succeed: ${{ needs.detect.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.detect.outputs.ok }}" != "true" ]]; then
+            echo "::error::ci-scope.mjs did not report ok=true (got '${{ needs.detect.outputs.ok }}'). Scope detection produced no output; refusing to report green."
+            exit 1
+          fi
+          echo "Scope detection reported ok."
+
       - name: Check leg results
         # Fails on 'failure' OR 'cancelled' OR 'skipped' — not just the first
         # two — so an upstream `detect` failure (which SKIPS every leg job

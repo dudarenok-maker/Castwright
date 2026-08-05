@@ -625,6 +625,47 @@ job — a behaviour decision, not a locking one. Shipping a lock that reads as
 "cast.json writes are safe now" while they stay open is how the eighth gets
 missed, which is what #2006 exists to keep visible.
 
+### 7.1 `applyReparse`'s gap A — a non-409 variant, doesn't fit the table (#2099)
+
+The table above is `Gate | Reads | Decides (409) | Writes` because all four
+rows *refuse* — the point of re-validating in-lock is to decide whether to
+409. `applyReparse` (`book-state.ts`, reparse route) had a check-then-act of
+the same read-outside/write-elsewhere shape, but with **no 409 to fold**: it
+reads `cast.json` for a reuse/voice carryover snapshot, then unconditionally
+deletes `cast.json` — there is no decision that can refuse, only a decision
+about *what gets snapshotted before the roster is discarded*.
+
+Pre-#2099: the read (and the derived carryover write) ran **outside** the
+lock, before a `Promise.all` in which only the delete took `withCastLock`. A
+concurrent cast writer landing between the unlocked read and the locked
+delete was captured by neither side — its write is not in the stale
+snapshot, and the delete then removes it along with everything else, with no
+trace and no error to its caller.
+
+**Fix:** the read, the derived carryover write/rm, and the delete now all run
+inside one `withCastLock` hold, as one arm of the same `Promise.all` (not
+sequenced before it — see the ordering rationale in
+`docs/features/279-cast-json-write-lock.md`'s open-items entry). A writer
+that starts after reparse begins its in-lock read now queues behind the
+whole hold and, once reparse has deleted `cast.json` and released, re-reads
+an absent cast and reports its own 409 — not this gate's 409, its own. This
+is why it doesn't belong as a table row with an empty "Decides" column: the
+409 the fix produces is a **side effect of the writer's own gate**, not a
+decision this site makes.
+
+A second, narrower check-then-act (gap B) lived in the same arm: an
+`existsSync(castJsonPath(...))` guard, evaluated outside the lock, decided
+*whether to delete at all*. Since `rm(…, { force: true })` is already a
+no-op on a missing file, the guard bought nothing but a skipped lock
+acquisition, sourced from an unlocked read — closed by deleting the guard,
+not by moving it in-lock.
+
+Residuals not closed by this fix: `analysis.ts:186`'s carryover reader stays
+unlocked (a third toucher the widened lock doesn't reach, and it prefers
+`cast.json` over the carryover when both exist), and gap B's motivating
+racer — `analysis.ts`'s five still-unlocked merge-base writes — stays
+unserialised, tracked on #2015. Full detail in `docs/features/279-cast-json-write-lock.md`.
+
 ## 8. `library-cast-override.ts` same-book: folded in
 
 `library-cast-override.ts`'s guard at `:77` rejects same-book *and* same-character

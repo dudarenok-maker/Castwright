@@ -2251,11 +2251,18 @@ Only meaningful here, now that the guard actually consumes `classifyIgnored`.
 literally means *not in the index ⇒ stop*, under which `server/dist/**` is
 untracked whether or not it exists on disk — so renaming the directory
 changes nothing, the mutation stays green, and the implementer reports it as
-a placebo. The predicate that actually reproduces the clone-state divergence
-is *present on disk but untracked*:
+a placebo. That is exactly what the code below is: an **index-only**
+predicate. `git ls-files` reflects the index, not the working tree, so this
+cannot tell "untracked and absent" from "untracked and present on disk"
+apart — both read as untracked regardless of clone state. As written, it
+therefore **cannot reproduce a clone-state divergence** at all; a predicate
+that did would additionally have to probe disk existence (e.g. `existsSync`)
+alongside tracked status, which nothing here does:
 
 ```js
-// MUTATION ONLY — the "untracked" predicate this design rejects.
+// MUTATION ONLY — the "untracked" predicate this design rejects. Index-only:
+// git ls-files reflects the INDEX, not the working tree, so it cannot see
+// whether a path exists on disk, and cannot reproduce the divergence below.
 export function classifyIgnored(absPaths, cwd) {
   const tracked = new Set(
     execFileSync('git', ['ls-files'], { cwd, encoding: 'utf8', maxBuffer: 1e8 })
@@ -2278,16 +2285,19 @@ Rename-Item ../dist-mutation-stash server/dist
 (Windows: this moves ~1,812 files and fails if a server process holds any of
 them — stop `npm start` first. On POSIX, `mv server/dist ../dist-mutation-stash`.)
 
-Expected under "untracked": **7 unresolvable specifiers** from
-`scripts/repair-cast-id-drift.mjs`'s `../server/dist/**` dynamic imports
-(currently `:1379-1385`; **grep rather than trusting the line numbers** —
-they moved once already between commits) —
-red on a fresh clone, green on this box. Under `check-ignore`: identical
-either way. Revert the reimplementation.
+Because the predicate above never inspects the filesystem, **both clone
+states come back identical**: 0 unresolvable specifiers whether
+`server/dist/` (and the 7 stub paths `scripts/repair-cast-id-drift.mjs`
+dynamically imports from it, currently `:1379-1385` — **grep rather than
+trusting the line numbers**, they moved once already between commits) is
+present or absent. Under `check-ignore`: also identical either way, but for
+the correct reason. Revert the reimplementation.
 
-This is the mutation proving the *predicate choice* is load-bearing, as
-distinct from the batching (Task 11 Step 5) and the exit-code contract
-(Task 11 Step 1).
+This mutation is a **placebo for this corpus** — see the M8 ledger row —
+not proof the *predicate choice* is load-bearing. Proving that would need a
+predicate that also varies with disk existence for a genuinely
+tracked-but-ignored file; none is implemented here, and is left as an open
+follow-up rather than invented to force a pass.
 
 - [ ] **Step 5: Run mutation M5**
 
@@ -2549,7 +2559,7 @@ regresses.
 | M5 | a dropped declaration is caught | Task 13 Step 5 | run it |
 | M6 | depth-1 is GREEN against the real repo — so M5 alone cannot prove recursion | Task 12 Step 5 (the inverse: killing recursion reddens the *fixture*) | pinned by test |
 | M7 | comments/strings are not edges, and a keyword-preceded regex literal cannot swallow later imports | Task 10 Step 1 — three tests (comment, string literal, regex-literal) | pinned by test |
-| M8 | the ignored-vs-untracked *predicate* is load-bearing | Task 11 Step 4b | run it |
+| M8 | the ignored-vs-untracked *predicate* is load-bearing | Task 13 Step 4b | **placebo for this corpus — see note** |
 | M9 | unresolvable specifiers fail closed | Task 12 Step 1, `walk reports an unresolvable specifier` | pinned by test |
 | M10 | `ci-scope.mjs` fails safe, not silent | Task 5 Steps 5 + 5b | run it |
 | M11 | Metric B floor catches a dead regex | Task 13 Step 6 | run it |
@@ -2567,6 +2577,32 @@ the floor of 50, and reports `missing = []` — **green**. That is why M17's
 synthetic fixture exists at all. Do not try to make M6 red against the real
 tree; if it ever does go red there, the two declarations from Task 13 have
 been lost and M5 will say so.
+
+**M8 deserves a note.** As specified — swap `classifyIgnored` for a
+`git ls-files`/tracked-status predicate and diff the result across a
+fresh-clone vs. built-box state — it does **not** go red for this
+repo's actual corpus. Verified directly (Task 13 Step 4b), in both clone
+states: with `server/dist/` absent (this worktree's natural state — never
+built here) and with it present as 7 untracked stub files at the exact
+paths `scripts/repair-cast-id-drift.mjs` dynamically imports. Both states
+came back identical — 0 `unresolvable`, `files.length` unchanged. Root
+cause: `git ls-files` reflects the **index**, not the working tree, so a
+gitignored build artifact that has never been `git add`ed reads as
+untracked whether or not it currently exists on disk — the mutated
+predicate agrees with the real `check-ignore` predicate for the one
+gitignore-relevant edge in this corpus (`repair-cast-id-drift.mjs`'s 7
+`server/dist/**` dynamic imports) regardless of clone state, so there is
+no divergence left for this mutation to catch here. This is a defect in
+the mutation's premise, not in the shipped guard: the real `check-ignore`
+predicate's correctness is independently covered by
+`module-graph.test.mjs` (`classifyIgnored marks gitignored paths`,
+`classifyIgnored marks a gitignored path containing non-ASCII
+characters`, `walk stops at gitignored paths`). M8 is recorded here as a
+**placebo for this corpus**, not silently marked done — a different
+predicate mutation (e.g. one that also varies disk existence for a
+genuinely tracked-but-ignored file) would be needed to add coverage on
+this axis, and is left as an open question rather than invented to force
+a pass.
 
 **M12 is only partially dischargeable before merge, and the ledger says so
 rather than overclaiming.** Task 9 Step 3 proves the *bash comparison* —

@@ -32,6 +32,10 @@ def test_explicit_passes_through(explicit):
 def test_design_first_load_resolves_device(monkeypatch):
     """design_voice loads VoiceDesign BEFORE base; the design path must resolve
     'auto' to a concrete device before .to(), else it crashes with .to('auto')."""
+    # `_ensure_design_loaded` -> `_ensure_device_resolved()` does an
+    # unconditional `import torch` (main.py) even though `_load_qwen_model`
+    # is stubbed below — needs the real package.
+    pytest.importorskip("torch")
     from main import QwenEngine
     eng = QwenEngine()
     eng._device = "auto"
