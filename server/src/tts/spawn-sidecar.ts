@@ -52,6 +52,16 @@ export interface SpawnSidecarOpts {
      these so they never touch a real port/process. */
   healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
   findPidFn?: (port: number) => Promise<number | null>;
+  /* D2 (#2037) — the pid of the supervisor's own OWNED child, if any, that
+     just exited immediately before this spawn attempt. Log-only: used
+     solely to tell "our own just-exited child's socket, still in TCP
+     teardown" apart from "a genuinely foreign listener" in the not-ours
+     warning below, via one extra `findPidFn` call. Never gates behaviour —
+     recovery always comes from the caller retrying on backoff
+     (`onSpawnRefused`), regardless of what this comparison finds, and it
+     degrades safely to the generic message when null or when `findPidFn`
+     itself can't tell (returns null). */
+  lastOwnedPid?: number | null;
   /* srv-15 — invoked when the spawned child EXITS on its own (crash, OS
      OOM-kill, or the Python poison self-exit code 42), AFTER the exit is
      logged. The supervisor (createSidecarSupervisor) passes a callback that
@@ -69,6 +79,18 @@ export interface SpawnSidecarOpts {
      fresh-reuse branch calls this; the not-ours / stale / disabled paths don't,
      so the supervisor never respawns over a process we deliberately left alone. */
   onAdoptExisting?: (info: { host: string; port: number }) => void;
+  /* srv-2037 (#2037) — invoked on any of the four NON-benign `return null`
+     paths: a listening process that doesn't answer as our sidecar, a stale
+     sidecar whose PID couldn't be identified, a killed stale PID whose port
+     is still bound, or the OS-level spawn itself failing (threw, or no pid).
+     NOT called for the two benign no-spawn paths (autoStart off, healthy
+     adopt — those call onAdoptExisting or nothing). The supervisor uses this
+     to distinguish "nothing to do" from "a spawn attempt failed", so a
+     refusal feeds the same respawn/backoff budget onExit does instead of
+     silently ending supervision (the #2037 outage: the port was still held
+     by the just-exited child's socket in TCP teardown, and the refusal was
+     misread as "no sidecar needed"). */
+  onSpawnRefused?: (reason: string) => void;
 }
 
 export interface SidecarHandle {
@@ -530,6 +552,8 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     findPidFn = (p) => findListenerPid(p),
     onExit,
     onAdoptExisting,
+    onSpawnRefused,
+    lastOwnedPid = null,
     platform = process.platform,
   } = opts;
 
@@ -581,10 +605,24 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     }
     if (!health.looksLikeSidecar) {
       /* Reachable-but-not-ours, or hung/non-HTTP. Never kill an unknown
-         process — leave it and let the health route surface TTS-down. */
-      warn(
-        `[sidecar] something is listening on :${port} but it does not look like our sidecar — NOT touching it. TTS may be unavailable until the port is freed.`,
-      );
+         process — leave it and let the health route surface TTS-down. This is
+         also the path a just-exited OWNED child's socket takes while it's
+         still in TCP teardown (its /health no longer answers correctly) — the
+         guard is correct to refuse here regardless; refusal is retried on the
+         supervisor's backoff (see onSpawnRefused), not treated as terminal.
+         D2 (#2037): when the caller tells us which pid it just reaped, spend
+         one findPidFn call to see whether THAT pid still owns the port — if
+         so this is our own child's socket in teardown, not a foreign
+         process, and the log should say so. Log-only: the outcome below is
+         identical either way (refuse, don't touch it, let the retry handle
+         it) — only the wording changes. */
+      const listenerPid = lastOwnedPid !== null ? await findPidFn(port) : null;
+      const reason =
+        listenerPid !== null && listenerPid === lastOwnedPid
+          ? `the just-exited child (pid=${listenerPid}) is still tearing down its socket on :${port}`
+          : `something is listening on :${port} but it does not look like our sidecar`;
+      warn(`[sidecar] ${reason} — NOT touching it. TTS may be unavailable until the port is freed.`);
+      onSpawnRefused?.(reason);
       return null;
     }
     /* It IS our sidecar, but unfit to adopt — stale protocol OR leak-saturated /
@@ -599,16 +637,18 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     );
     const stalePid = await findPidFn(port);
     if (stalePid === null) {
+      const reason = `could not identify the PID on :${port} to replace the stale sidecar`;
       warn(
-        `[sidecar] could not identify the PID on :${port} to replace the stale sidecar — leaving it in place. Restart the sidecar manually to pick up the current build.`,
+        `[sidecar] ${reason} — leaving it in place. Restart the sidecar manually to pick up the current build.`,
       );
+      onSpawnRefused?.(reason);
       return null;
     }
     await killTree(stalePid, spawnFn);
     if (!(await waitForPortFree(host, port, probeFn))) {
-      warn(
-        `[sidecar] killed stale pid=${stalePid} but :${port} is still bound — not spawning over it. Restart manually.`,
-      );
+      const reason = `killed stale pid=${stalePid} but :${port} is still bound`;
+      warn(`[sidecar] ${reason} — not spawning over it. Restart manually.`);
+      onSpawnRefused?.(reason);
       return null;
     }
     log(`[sidecar] replaced stale sidecar (killed pid=${stalePid}); spawning current build.`);
@@ -662,6 +702,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
           { env, windowsHide: true, stdio: ['ignore', outFd ?? 'ignore', errFd ?? 'ignore'], detached: true });
   } catch (err) {
     warn('[sidecar] spawn failed:', err);
+    onSpawnRefused?.(`spawn failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   } finally {
     /* The child dup'd the fds into its own process during spawn, so close
@@ -676,6 +717,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const pid = child.pid;
   if (typeof pid !== 'number') {
     warn('[sidecar] spawn returned no pid; child may not have started');
+    onSpawnRefused?.('spawn returned no pid; child may not have started');
     return null;
   }
 

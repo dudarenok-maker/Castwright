@@ -869,6 +869,327 @@ describe('spawnSidecar', () => {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
   });
+
+  /* srv-2037 (#2037) — onSpawnRefused fires on the four NON-benign `return
+     null` paths (a failure) and NOT on the two benign no-spawn paths
+     (nothing to do). The supervisor uses this split to decide whether to
+     retry on backoff. */
+  describe('onSpawnRefused', () => {
+    it('fires when a listening process does not look like our sidecar', async () => {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: false,
+        protocolVersion: null,
+        committedMb: null,
+        recyclePending: false,
+      }));
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('does not look like our sidecar'));
+    });
+
+    /* D2 (#2037) — the not-ours refusal names the just-exited OWNED child's
+       socket, rather than the generic "foreign listener" message, when the
+       caller tells us which pid it just reaped AND that pid still owns the
+       port. Log-only: onSpawnRefused still fires and handle is still null
+       either way (recovery is unaffected — see D1's tests above). */
+    describe('D2 — foreign-listener message names our own just-exited child when it matches', () => {
+      it('names the just-exited child when findPidFn confirms it still owns the port', async () => {
+        probeFn.mockResolvedValueOnce(true);
+        const healthProbeFn = vi.fn(async () => ({
+          reachable: true,
+          looksLikeSidecar: false,
+          protocolVersion: null,
+          committedMb: null,
+          recyclePending: false,
+        }));
+        const findPidFn = vi.fn(async () => 4242); // still bound by our own just-exited pid
+        const onSpawnRefused = vi.fn();
+
+        const handle = await spawnSidecar({
+          autoStart: true,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn,
+          findPidFn,
+          log,
+          warn,
+          onSpawnRefused,
+          lastOwnedPid: 4242,
+        });
+
+        expect(handle).toBeNull();
+        expect(findPidFn).toHaveBeenCalledTimes(1);
+        expect(onSpawnRefused).toHaveBeenCalledWith(
+          expect.stringContaining('just-exited child (pid=4242)'),
+        );
+        expect(onSpawnRefused).not.toHaveBeenCalledWith(
+          expect.stringContaining('does not look like our sidecar'),
+        );
+      });
+
+      it('falls back to the generic message when the port is held by a DIFFERENT pid (genuinely foreign)', async () => {
+        probeFn.mockResolvedValueOnce(true);
+        const healthProbeFn = vi.fn(async () => ({
+          reachable: true,
+          looksLikeSidecar: false,
+          protocolVersion: null,
+          committedMb: null,
+          recyclePending: false,
+        }));
+        const findPidFn = vi.fn(async () => 9999); // NOT our just-exited pid
+        const onSpawnRefused = vi.fn();
+
+        const handle = await spawnSidecar({
+          autoStart: true,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn,
+          findPidFn,
+          log,
+          warn,
+          onSpawnRefused,
+          lastOwnedPid: 4242,
+        });
+
+        expect(handle).toBeNull();
+        expect(findPidFn).toHaveBeenCalledTimes(1);
+        expect(onSpawnRefused).toHaveBeenCalledWith(
+          expect.stringContaining('does not look like our sidecar'),
+        );
+        expect(onSpawnRefused).not.toHaveBeenCalledWith(
+          expect.stringContaining('just-exited child'),
+        );
+      });
+
+      it('does not call findPidFn (and uses the generic message) when no lastOwnedPid is given', async () => {
+        probeFn.mockResolvedValueOnce(true);
+        const healthProbeFn = vi.fn(async () => ({
+          reachable: true,
+          looksLikeSidecar: false,
+          protocolVersion: null,
+          committedMb: null,
+          recyclePending: false,
+        }));
+        const findPidFn = vi.fn(async () => 4242);
+        const onSpawnRefused = vi.fn();
+
+        const handle = await spawnSidecar({
+          autoStart: true,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn,
+          findPidFn,
+          log,
+          warn,
+          onSpawnRefused,
+          // lastOwnedPid omitted — e.g. the very first boot, no prior exit.
+        });
+
+        expect(handle).toBeNull();
+        expect(findPidFn).not.toHaveBeenCalled();
+        expect(onSpawnRefused).toHaveBeenCalledWith(
+          expect.stringContaining('does not look like our sidecar'),
+        );
+      });
+    });
+
+    it('fires when a stale sidecar\'s PID cannot be identified', async () => {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: null, // stale
+        committedMb: null,
+        recyclePending: false,
+      }));
+      const findPidFn = vi.fn(async () => null);
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
+    });
+
+    it('fires when the killed stale PID still leaves the port bound', async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      // waitForPortFree polls on real setTimeout/Date.now for up to 5s with no
+      // injectable clock — fake timers keep this test instant instead of
+      // burning 5 real seconds waiting for a port that never frees.
+      vi.useFakeTimers();
+      try {
+        // Listening at first; killTree runs, but the port NEVER frees.
+        probeFn.mockResolvedValue(true);
+        const healthProbeFn = vi.fn(async () => ({
+          reachable: true,
+          looksLikeSidecar: true,
+          protocolVersion: null, // stale
+          committedMb: null,
+          recyclePending: false,
+        }));
+        const findPidFn = vi.fn(async () => 7777);
+        const trackingSpawn = vi.fn((cmd: string) => {
+          const child = makeFakeChild();
+          if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+          return child;
+        });
+        const onSpawnRefused = vi.fn();
+
+        const pending = spawnSidecar({
+          autoStart: true,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn,
+          findPidFn,
+          log,
+          warn,
+          onSpawnRefused,
+        });
+        await vi.runAllTimersAsync();
+        const handle = await pending;
+
+        expect(handle).toBeNull();
+        expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+        expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('still bound'));
+      } finally {
+        vi.useRealTimers();
+        Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      }
+    });
+
+    it('fires when the OS-level spawn call throws', async () => {
+      const throwingSpawn = vi.fn(() => {
+        throw new Error('ENOENT: powershell.exe not found');
+      });
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: throwingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('spawn failed'));
+    });
+
+    it('fires when the spawned child has no pid', async () => {
+      const noPidChild = () => {
+        const ee = makeFakeChild();
+        // @ts-expect-error — simulating a spawn() result with no pid.
+        ee.pid = undefined;
+        return ee;
+      };
+      const noPidSpawn = vi.fn(() => noPidChild());
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: noPidSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).toHaveBeenCalledTimes(1);
+      expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('no pid'));
+    });
+
+    it('does NOT fire when autoStart is false (benign)', async () => {
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: false,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire on a healthy adopt (benign)', async () => {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000,
+        recyclePending: false,
+      }));
+      const onSpawnRefused = vi.fn();
+      const onAdoptExisting = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        log,
+        warn,
+        onSpawnRefused,
+        onAdoptExisting,
+      });
+
+      expect(handle).toBeNull();
+      expect(onAdoptExisting).toHaveBeenCalledTimes(1);
+      expect(onSpawnRefused).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('sidecarCeilingMismatch — per-card free floor', () => {

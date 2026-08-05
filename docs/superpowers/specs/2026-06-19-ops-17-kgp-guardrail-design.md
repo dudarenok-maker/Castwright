@@ -268,8 +268,21 @@ not-currently-broken build.
   - only a **transitive** dep behind → A1 exit 0 (+ listed in summary).
   - a KGP plugin's `latest` now exceeds its pin, prior state at-pin → A2 banner
     + transition flagged + honest "verify KGP" wording (not "migrated").
-  - same plugin still ahead, prior state already-ahead → A2 banner, **no**
-    repeat transition comment (transition fires once).
+  - same plugin still ahead, prior state already-ahead, `latest` UNCHANGED →
+    A2 banner, **no** repeat transition comment (no cron spam).
+  - > **Correction (ops-17b, [#2104](https://github.com/dudarenok-maker/Castwright/issues/2104), 2026-08-05):**
+    > the line above originally read "same plugin still ahead → no repeat
+    > transition comment (transition fires once)" — i.e. an edge detector on
+    > the `ahead` flag. That is wrong: once a plugin is ahead of its pin, every
+    > *subsequent* release re-fires this same "still ahead" branch, so a
+    > flag-edge detector goes silent forever after the first newer release —
+    > exactly the evaluated-and-rejected-release case the recipe below tells an
+    > operator to leave the pin alone for. `computeTransitions` now edge-detects
+    > on the **observed `latest` changing** (strictly increasing vs. the prior
+    > recorded `latest`), not on the `ahead` flag; a prior `ahead: true` record
+    > with no usable `latest` fails loud (fires) instead of silently trusting
+    > it. See `scripts/deps-watch.mjs`'s `computeTransitions` doc-comment for
+    > the exact rule.
   - a KGP plugin **absent** from the payload (current) → treated as at-pin.
   - the `kind` field present (asserts we filter on `kind`, never on a
     non-existent `isDirect`).
