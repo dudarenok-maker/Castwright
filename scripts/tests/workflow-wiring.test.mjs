@@ -765,12 +765,52 @@ const PROBE_CORPUS = [
 // group inside an individual alternative (e.g. `eslint\.config\.(js|mjs)$`'s
 // inner (js|mjs) stays one alternative; one corpus path covering either
 // branch is enough). A matcher with no top-level group (e.g. `^scripts\/`) is
-// itself a single alternative.
+// itself a single alternative. A `|` inside a `[...]` character class is not
+// a split point -- the splitter tracks bracket-expression nesting (honoring
+// backslash-escapes and the regex rule that a `]` immediately after `[` or
+// `[^` is a literal class member, not the closing bracket), so a class
+// containing a literal `|` decomposes correctly instead of being cut
+// mid-class.
 //
-// Self-verifying: reassembling the split parts must reproduce the original
-// regex source byte-for-byte, or this throws rather than silently returning
-// a partial/wrong split -- a meta-assertion that quietly skipped what it
-// couldn't parse would be the very defect this test exists to prevent.
+// What this does NOT guarantee: splitting a string on `|` and rejoining the
+// parts with `|` always reproduces the original source, no matter where the
+// split landed -- that reassembly is an identity, not a check, so it can
+// never by itself prove the split points were chosen correctly. The real
+// self-checks are: (1) a top-level group that isn't a plain capturing group
+// -- e.g. a non-capturing `(?:...)`, a lookaround, or a named group -- is
+// rejected outright, since the mechanical split can't distinguish such a
+// prefix from an ordinary alternative and would slice through it; and (2)
+// every alternative the split produces must independently compile as its own
+// regex, or this throws naming the matcher and the offending fragment.
+// Either check can genuinely fail on a real input; a matcher whose shape
+// defeats the split surfaces as this function's own named error, not as an
+// incidental `new RegExp()` crash further downstream.
+function maskCharacterClasses(str) {
+  const inClass = new Array(str.length).fill(false);
+  let open = false;
+  let literalCloseIdx = -1;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (!open && c === '[') {
+      open = true;
+      inClass[i] = true;
+      literalCloseIdx = str[i + 1] === '^' ? i + 2 : i + 1;
+      continue;
+    }
+    if (open) {
+      inClass[i] = true;
+      if (c === ']' && i !== literalCloseIdx) {
+        open = false;
+      }
+    }
+  }
+  return inClass;
+}
+
 function topLevelAlternatives(matcherName, re) {
   const src = re.source;
   if (!src.startsWith('^')) {
@@ -780,6 +820,14 @@ function topLevelAlternatives(matcherName, re) {
   if (!body.startsWith('(')) {
     return [`^${body}`];
   }
+  if (body[1] === '?') {
+    throw new Error(
+      `LEGACY_MATCHERS.${matcherName}: top-level group is not a plain capturing group ` +
+        `(starts "(?" -- a non-capturing group, lookaround, or named group), which the ` +
+        `mechanical splitter cannot decompose into top-level alternatives: ${src}`,
+    );
+  }
+  const bodyClassMask = maskCharacterClasses(body);
   let depth = 0;
   let closeIdx = -1;
   for (let i = 0; i < body.length; i++) {
@@ -788,6 +836,7 @@ function topLevelAlternatives(matcherName, re) {
       i++;
       continue;
     }
+    if (bodyClassMask[i]) continue;
     if (c === '(') depth++;
     else if (c === ')') {
       depth--;
@@ -803,6 +852,7 @@ function topLevelAlternatives(matcherName, re) {
   const interior = body.slice(1, closeIdx);
   const suffix = body.slice(closeIdx + 1);
 
+  const interiorClassMask = maskCharacterClasses(interior);
   const parts = [];
   let groupDepth = 0;
   let cur = '';
@@ -811,6 +861,10 @@ function topLevelAlternatives(matcherName, re) {
     if (c === '\\') {
       cur += c + (interior[i + 1] ?? '');
       i++;
+      continue;
+    }
+    if (interiorClassMask[i]) {
+      cur += c;
       continue;
     }
     if (c === '(') groupDepth++;
@@ -824,16 +878,41 @@ function topLevelAlternatives(matcherName, re) {
   }
   parts.push(cur);
 
-  const reassembled = `^(${parts.join('|')})${suffix}`;
-  if (reassembled !== src) {
-    throw new Error(
-      `LEGACY_MATCHERS.${matcherName}: mechanical top-level split did not reproduce the ` +
-        `source (got "${reassembled}", want "${src}") -- this matcher's shape defeats a ` +
-        `mechanical split; restructure LEGACY_MATCHERS to carry its alternatives as data`,
-    );
+  const alternatives = parts.map((p) => `^${p}${suffix}`);
+  for (const alt of alternatives) {
+    try {
+      new RegExp(alt);
+    } catch (err) {
+      throw new Error(
+        `LEGACY_MATCHERS.${matcherName}: split produced "${alt}" (from "${src}"), which does ` +
+          `not compile as its own regex -- this matcher's shape defeats the mechanical ` +
+          `top-level split; restructure LEGACY_MATCHERS to carry its alternatives as data. ` +
+          `(${err.message})`,
+      );
+    }
   }
-  return parts.map((p) => `^${p}${suffix}`);
+  return alternatives;
 }
+
+test('topLevelAlternatives: rejects a non-capturing group with the designed error, not an incidental regex-compile crash', () => {
+  assert.throws(
+    () => topLevelAlternatives('nonCapturingProbe', /^(?:foo|bar)$/),
+    (err) => {
+      assert.match(err.message, /nonCapturingProbe/);
+      assert.match(err.message, /not a plain capturing group/);
+      assert.doesNotMatch(err.message, /Nothing to repeat/);
+      return true;
+    },
+  );
+});
+
+test('topLevelAlternatives: a `|` inside a `[...]` character class is not a split point', () => {
+  const alts = topLevelAlternatives('classProbe', /^(foo[a|b]bar$|baz$)/);
+  assert.deepEqual(alts, ['^foo[a|b]bar$', '^baz$']);
+  for (const alt of alts) {
+    assert.doesNotThrow(() => new RegExp(alt));
+  }
+});
 
 test('meta: every LEGACY_MATCHERS alternative is probed by at least one PROBE_CORPUS path', () => {
   const unprobed = [];
