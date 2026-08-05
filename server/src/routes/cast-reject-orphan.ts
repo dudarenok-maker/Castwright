@@ -72,6 +72,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { forgetSupersededId, rejectOrphanedId } from '../store/cast-id-history.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -122,61 +123,69 @@ castRejectOrphanRouter.post(
     if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
     const { bookDir } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before rejecting a match.',
-      });
-    }
-    const character = cast.characters.find((c) => c.id === characterId);
-    if (!character) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
+    /* #1981 — the read is inside the lock; the 409/404 checks and the
+       notLinkedTo mutation below are all decisions derived from it. The
+       id-history writes (forgetSupersededId / rejectOrphanedId) are a
+       DIFFERENT file — the cast lock doesn't cover them, they're just along
+       for the ride inside this span, mirroring cast-merge.ts's
+       retireCharacterId precedent. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before rejecting a match.',
+        });
+      }
+      const character = cast.characters.find((c) => c.id === characterId);
+      if (!character) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
 
-    const changed = appendNotLinked(character, bookId, orphanedId);
-    if (changed) {
-      await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-    }
+      const changed = appendNotLinked(character, bookId, orphanedId);
+      if (changed) {
+        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+      }
 
-    /* Non-fatal (fix round 2 review — see the module doc's closing
-       paragraph for why this one stays swallowed while rejectOrphanedId
-       below does not): a stale `supersededBy` entry left behind here is
-       redundant-but-harmless, since `rejected` (written next) independently
-       blocks resolution through every tier that entry could have mattered
-       for. */
-    try {
-      await forgetSupersededId(bookDir, orphanedId);
-    } catch (forgetErr) {
-      console.warn(
-        '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
-        forgetErr,
+      /* Non-fatal (fix round 2 review — see the module doc's closing
+         paragraph for why this one stays swallowed while rejectOrphanedId
+         below does not): a stale `supersededBy` entry left behind here is
+         redundant-but-harmless, since `rejected` (written next) independently
+         blocks resolution through every tier that entry could have mattered
+         for. */
+      try {
+        await forgetSupersededId(bookDir, orphanedId);
+      } catch (forgetErr) {
+        console.warn(
+          '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
+          forgetErr,
+        );
+      }
+
+      /* FATAL, unlike the above (fix round 2 review, upgraded from non-fatal):
+         for the two normalised tiers — where all 188 currently-real orphaned
+         segments live — `rejected` is the ONLY mechanism that enforces this
+         reject. A swallowed failure here would report 200/success to the user
+         while the reject stayed purely cosmetic at render time. */
+      try {
+        await rejectOrphanedId(bookDir, orphanedId);
+      } catch (rejectErr) {
+        console.error(
+          '[cast-reject-orphan] failed to record the rejection in cast-id-history.json — surfacing as a failure',
+          rejectErr,
+        );
+        return res.status(500).json({
+          error:
+            'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
+        });
+      }
+
+      console.log(
+        `[cast-reject-orphan] book=${bookId} rejected "${orphanedId}" as ${characterId}` +
+          (changed ? '' : ' (notLinkedTo edge already present)'),
       );
-    }
 
-    /* FATAL, unlike the above (fix round 2 review, upgraded from non-fatal):
-       for the two normalised tiers — where all 188 currently-real orphaned
-       segments live — `rejected` is the ONLY mechanism that enforces this
-       reject. A swallowed failure here would report 200/success to the user
-       while the reject stayed purely cosmetic at render time. */
-    try {
-      await rejectOrphanedId(bookDir, orphanedId);
-    } catch (rejectErr) {
-      console.error(
-        '[cast-reject-orphan] failed to record the rejection in cast-id-history.json — surfacing as a failure',
-        rejectErr,
-      );
-      return res.status(500).json({
-        error:
-          'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
-      });
-    }
-
-    console.log(
-      `[cast-reject-orphan] book=${bookId} rejected "${orphanedId}" as ${characterId}` +
-        (changed ? '' : ' (notLinkedTo edge already present)'),
-    );
-
-    return res.json({ characterId, orphanedId, alreadyPresent: !changed });
+      return res.json({ characterId, orphanedId, alreadyPresent: !changed });
+    });
   },
 );
 

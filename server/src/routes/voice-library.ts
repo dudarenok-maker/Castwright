@@ -65,6 +65,7 @@ import {
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import { ingestCloneSample } from '../tts/clone-ingest.js';
 /* #1951 — the clone's own manifest language, from the reference clip. */
@@ -1527,300 +1528,334 @@ function advisoryMessage(block: CloneAssignBlock, engine: CloneEngine, voiceName
    `overrideTtsVoices` (sibling engine slots + the rest of each merged slot
    survive), and writes back atomically. `character.voiceUuid` is never
    touched — that field is the srv-43 identity key, not something an assign
-   should alias. Task 24 also makes this handler do async I/O it didn't do
-   before (`hasRetainedDesignedClip`'s `stat`), gated to the designed-clip
-   branch only — and (fix round 1, review) that `await` is computed BEFORE
-   the cast.json read-modify-write window (`readJson` -> `nextCharacters` ->
-   `writeJsonAtomic`), which must stay free of any `await` so it stays
-   atomic against a concurrent write to the same cast.json. See the
-   `shouldWriteCoquiSlot` comment below for why. */
+   should alias.
+
+   #1981 — the cast.json read-modify-write window (`readJson` ->
+   `nextCharacters` -> `writeJsonAtomic`) is wrapped in `withCastLock`, and
+   the whole handler from `readEntry` on is wrapped in `withLibraryVoiceLock`
+   OUTSIDE that — THAT nesting is what makes this safe against a concurrent
+   write to the same cast.json (two overlapping assigns for one book, or
+   this route racing a debounced cast-editor save), not any property of the
+   window's own shape — a zero-`await` window was never "effectively
+   atomic" against a second, independently-scheduled request. The
+   library-voice lock opens before `readEntry` because every decision
+   derived from the library entry (the 404, the revoked-consent 409, the
+   #1933 readiness gate) has to be inside it too (rule 2); it must open
+   BEFORE the cast lock, never after, because the DELETE path (Task 5) holds
+   `library-voice:<uuid>` across a helper that itself takes cast locks per
+   book — the other order is an AB/BA deadlock with no timeout and no
+   diagnostic. See cast-lock.ts's header for the four rules, and the
+   `shouldWriteCoquiSlot` comment below for the fuller version of this. */
 voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
-    const entry = await readEntry(voiceUuid);
-    if (!entry) {
-      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
-    }
-    if (entry.consent?.revokedAt) {
-      return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
-    }
 
-    /* fs-38 Wave 3c, Task 24 (fix round 1, review) — write BOTH the qwen and
-       coqui slots when the library voice is actually clone-capable on both
-       engines, so this route closes the reachability gap: it was the only
-       writer of `libraryUuid` at all, and until this both-slots write
-       lands, no character can carry a resolvable coqui-cloned slot end to
-       end. A CLONED entry always qualifies (§2.3 — an ingested clip derives
-       on either engine). A DESIGNED entry qualifies only when it still has
-       its retained reference clip on disk (`hasRetainedDesignedClip`,
-       above) — without that clip a coqui derive has nothing to derive
-       FROM, so writing a coqui slot here would strand the character on a
-       slot the resolver can never back. `entry.master` is NOT the right
-       test — see `hasRetainedDesignedClip`'s own comment. An IMPORTED entry
-       never qualifies. This check is point-in-time only (see that helper's
-       comment) — Task 20a's render-time pre-pass is what actually enforces
-       the invariant over time, not this gate.
-
-       DELIBERATELY computed here, before `findBookByBookId`/`readJson`
-       below, not next to the `nextCharacters` build where it's consumed.
-       It depends only on `entry` and `voiceUuid` — both already in hand —
-       so nothing requires it to sit inside the cast.json read-modify-write
-       window. Before this task that window (`readJson` cast ->
-       `nextCharacters` -> `writeJsonAtomic`) contained zero `await`s
-       (`getResolvedTtsModelKey`/`engineForModelKey`/`resolveCharacterEngine`
-       are all synchronous), so the RMW was effectively atomic — no
-       yield-to-event-loop between reading `characters` and writing them
-       back. `hasRetainedDesignedClip`'s `stat` is real filesystem I/O; if
-       it sat inside that window instead, a concurrent write to the SAME
-       cast.json (a debounced cast-editor save, `voice-override-linked`'s
-       `applyToBook`, or a second `/assign`) could land in the gap and then
-       get silently clobbered when this handler resumes and writes back the
-       `characters` array it captured before yielding — the "cast.json
-       clobbered" defect class this project has hit before. Keep this
-       `await` OUTSIDE the window; do not move it back down next to
-       `nextCharacters`. */
-    const shouldWriteCoquiSlot =
-      entry.provenance === 'cloned' ||
-      (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
-
-    /* #1933 — same placement rationale as `shouldWriteCoquiSlot` immediately
-       above: real filesystem I/O, computed here (depends only on `entry` and
-       `voiceUuid`, both already in hand) so it stays OUTSIDE the cast.json
-       read-modify-write window below. Only a CLONED entry with a `master`
-       declaration can even have a clip to check; anything else short-
-       circuits to `false` without the `stat`. */
-    const clonedClipOnDisk =
-      entry.provenance === 'cloned' && entry.master
-        ? await clonedMasterClipExists(voiceUuid, entry.master)
-        : false;
-
-    const body = (req.body ?? {}) as AssignBody;
-    const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
-    const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
-    if (!bookId || !characterId) {
-      return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
-    }
-
-    const located = await findBookByBookId(bookId);
-    if (!located) {
-      return res.status(404).json({ error: `No book "${bookId}".` });
-    }
-
-    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
-    const characters = cast?.characters ?? [];
-    const charIndex = characters.findIndex((c) => c.id === characterId);
-    if (charIndex === -1) {
-      return res
-        .status(404)
-        .json({ error: `No character "${characterId}" in book "${bookId}".` });
-    }
-
-    const character = characters[charIndex];
-
-    /* #1933 — `clonedAdvisory` and `languageWarning` (declared together,
-       set inside their own respective provenance-scoped blocks below) are
-       mutually exclusive by construction: `clonedAdvisory` is only ever set
-       inside a `provenance === 'cloned'` branch, `languageWarning` only
-       inside a `provenance === 'designed'` one — an entry is never both —
-       so the two can share the single `warning` response field with no
-       collision to disambiguate. */
-    let clonedAdvisory: string | undefined;
-    let languageWarning: string | undefined;
-
-    /* Task 6b, widened by fs-38 Wave 3c Task 24 — a cloned voice renders on
-       a clone-capable engine ONLY (Qwen or Coqui XTTS v2 —
-       `CLONE_CAPABLE_ENGINES`, tts/clone-engines.js). Assigning one to a
-       character that routes to neither would produce exactly the same 3b2
-       resolver-pre-pass hard-fail this task exists to give an accurate
-       reason for ('wrong-engine') — but discovered only at RENDER time,
-       chapters deep. Catch it here instead, at assign time, so the user
-       gets an actionable 409 immediately. Scoped to `provenance === 'cloned'`
-       only — a DESIGNED voice has always been free to route anywhere
-       (spec §2.3); widening this guard to designed voices would be a new
-       hard failure for them.
-
-       Fix wave 2 (review) — the guard's FIRST cut computed the book's
-       effective default purely from the PERSISTED `getResolvedTtsModelKey()`
-       account default. That default is not what actually renders: the
-       engine picker on the Voices page (and the session `ui.ttsModelKey` it
-       writes) is never persisted, and generation itself routes off the
-       REQUEST's modelKey, not the account default — so a session pick of
-       Qwen against a non-Qwen persisted default produced a false 409, and
-       the reverse produced a false 200 (assign succeeds, render then fails).
-       The caller now optionally sends the modelKey it actually intends to
-       render with (`body.modelKey` — e.g. the profile drawer's PENDING
-       engine-picker choice); that wins when present. Only when the caller
-       has no meaningful engine context (and omits the field) do we fall
-       back to the persisted default. A character's own `ttsEngine` override
-       (if any) still wins via `resolveCharacterEngine`, so a character
-       explicitly cast on Qwen or Coqui is unaffected by the book/session
-       default sitting elsewhere.
-
-       #1933 — order matters: this wrong-engine check runs FIRST, the
-       per-engine readiness gate SECOND. Mirrors `classifyClonedVoice`'s own
-       precedence (`wrongEngine` beats every artifact concern) — a character
-       not even routed to a clone engine should hear about THAT, not about a
-       slot it will never use. `isCloneEngine` (tts/clone-engines.js) is
-       `CLONE_CAPABLE_ENGINES.has(e)` verbatim, so this 409 is
-       behaviour-identical to before — but as a real type guard, the early
-       return below narrows `routedEngine` to `CloneEngine` for everything
-       that follows, so `manifestSlotFor`/`clonedAssignBlock` type-check with
-       no cast. */
-    if (entry.provenance === 'cloned') {
-      const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
-      const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
-      const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
-      if (!isCloneEngine(routedEngine)) {
-        /* I-2 — name the ACTUAL cause. When the character carries its own
-           `ttsEngine` override, THAT is why it's not routing to a
-           clone-capable engine — the book/session default is irrelevant,
-           and telling the user to "switch the book's engine" would send
-           them to fix the wrong thing (the same misdiagnosis class Part A
-           eliminated for the render-time error). */
-        const characterCaused = Boolean(character.ttsEngine);
-        const cause = characterCaused
-          ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
-          : `this book is set to ${routedEngine}`;
-        const fix = characterCaused
-          ? `Switch the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)`
-          : `Switch the book's engine to Qwen or Coqui XTTS v2`;
-        return res.status(409).json({
-          error: `Cloned voices render on Qwen or Coqui XTTS v2, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
-        });
+    return await withLibraryVoiceLock(voiceUuid, async () => {
+      const entry = await readEntry(voiceUuid);
+      if (!entry) {
+        return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+      }
+      if (entry.consent?.revokedAt) {
+        return res.status(409).json({ error: 'Consent for this voice has been revoked.' });
       }
 
-      /* #1933 — readiness of the engine this assign will ACTUALLY render
-         on. Blocks the assign outright when the routed engine's own slot
-         can't back it (see `clonedAssignBlock`'s doc comment for the rule). */
-      const charName = character.name ?? characterId;
-      const block = clonedAssignBlock(entry, routedEngine, clonedClipOnDisk);
-      if (block) {
-        return res.status(409).json({ error: blockMessage(block, routedEngine, entry.name, charName) });
+      /* fs-38 Wave 3c, Task 24 (fix round 1, review) — write BOTH the qwen and
+         coqui slots when the library voice is actually clone-capable on both
+         engines, so this route closes the reachability gap: it was the only
+         writer of `libraryUuid` at all, and until this both-slots write
+         lands, no character can carry a resolvable coqui-cloned slot end to
+         end. A CLONED entry always qualifies (§2.3 — an ingested clip derives
+         on either engine). A DESIGNED entry qualifies only when it still has
+         its retained reference clip on disk (`hasRetainedDesignedClip`,
+         above) — without that clip a coqui derive has nothing to derive
+         FROM, so writing a coqui slot here would strand the character on a
+         slot the resolver can never back. `entry.master` is NOT the right
+         test — see `hasRetainedDesignedClip`'s own comment. An IMPORTED entry
+         never qualifies. This check is point-in-time only (see that helper's
+         comment) — Task 20a's render-time pre-pass is what actually enforces
+         the invariant over time, not this gate.
+
+         DELIBERATELY computed here, before `findBookByBookId`/`readJson`
+         below, not next to the `nextCharacters` build where it's consumed —
+         it depends only on `entry` and `voiceUuid`, both already in hand.
+         #1981 — this placement is now just a best-effort narrowing of an
+         unmeasured window, kept as insurance against a future writer that
+         forgets to lock; it is NOT what makes the RMW safe. The actual
+         guarantee is the `withLibraryVoiceLock` / `withCastLock` nesting
+         around the whole handler (see the route's own top comment and
+         cast-lock.ts) — a zero-`await` window was never "effectively
+         atomic" against a second, concurrently-running request: two
+         requests each running their OWN `readJson` still race each other
+         regardless of what happens between one request's own read and its
+         own write. Keep this `await` where it is anyway (still true
+         insurance), but do not treat its position as the safety property. */
+      const shouldWriteCoquiSlot =
+        entry.provenance === 'cloned' ||
+        (entry.provenance === 'designed' && (await hasRetainedDesignedClip(voiceUuid)));
+
+      /* #1933 — same placement rationale as `shouldWriteCoquiSlot` immediately
+         above: real filesystem I/O, computed here (depends only on `entry` and
+         `voiceUuid`, both already in hand) so it stays outside the cast.json
+         read-modify-write window below. Only a CLONED entry with a `master`
+         declaration can even have a clip to check; anything else short-
+         circuits to `false` without the `stat`. */
+      const clonedClipOnDisk =
+        entry.provenance === 'cloned' && entry.master
+          ? await clonedMasterClipExists(voiceUuid, entry.master)
+          : false;
+
+      const body = (req.body ?? {}) as AssignBody;
+      const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
+      const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
+      if (!bookId || !characterId) {
+        return res.status(400).json({ error: '`bookId` and `characterId` are required.' });
       }
 
-      /* #1933 — the write below persists BOTH slots unconditionally for a
-         cloned entry (`shouldWriteCoquiSlot` above), regardless of which
-         engine this assign was routed for — so warn now if the OTHER
-         clone-capable engine's slot is unusable, rather than letting the
-         user discover it only when they later switch engines. */
-      const otherEngine = otherCloneEngine(routedEngine);
-      const otherBlock = clonedAssignBlock(entry, otherEngine, clonedClipOnDisk);
-      if (otherBlock) {
-        clonedAdvisory = advisoryMessage(otherBlock, otherEngine, entry.name, charName);
+      const located = await findBookByBookId(bookId);
+      if (!located) {
+        return res.status(404).json({ error: `No book "${bookId}".` });
       }
-    }
 
-    /* #1953 — WARN, never block, when a DESIGNED voice's baked manifest
-       language differs from the book's language. This is deliberately a
-       sibling of the 409 block above, not a widening of it: the 409's own
-       comment explains why a designed voice "has always been free to route
-       anywhere" and a hard failure for it would be a regression — that
-       reasoning holds for a 409, not for a non-fatal advisory.
+      /* #1981 — hoisted out of the cast.json read-modify-write window
+         (moved up from just above the `nextCharacters` build, where it used
+         to sit alongside the cast read). Depends only on `entry.provenance`,
+         `voiceUuid` and `located.state` — all already in hand once the book
+         is located — so nothing requires it to sit inside the RMW; only the
+         warning STRING built from it (which also needs `character.name`,
+         not available until the character lookup) stays at the original
+         site, inside `withCastLock` below.
 
-       `clearMismatchedDesignedVoices` (verify-designed-voice-language.ts)
-       already catches this at RENDER time, but only for non-English books —
-       its callers gate it behind `isNonEnglish(bookLanguage)`. A designed
-       voice assigned to an ENGLISH book therefore sailed through with no
-       signal at all, right up until a full chapter rendered unintelligible
-       audio (measured on the dev box: avg_logprob -1.303 wrong-language vs.
-       -0.201 correct — a mismatch doesn't degrade the audio, it destroys
-       it). This warning is the earlier, softer signal for exactly that gap;
-       it does not move or replace the render-time gate.
+         #1953 — WARN, never block, when a DESIGNED voice's baked manifest
+         language differs from the book's language. This is deliberately a
+         sibling of the 409 block above, not a widening of it: the 409's own
+         comment explains why a designed voice "has always been free to route
+         anywhere" and a hard failure for it would be a regression — that
+         reasoning holds for a 409, not for a non-fatal advisory.
 
-       A CLONED voice has no baked design language (its manifest, when one
-       exists, reflects the speaker's own voice, not a chosen design
-       language) — `entry.provenance === 'designed'` is the library-entry
-       equivalent of `clearMismatchedDesignedVoices`'s `hasClonedProvenance`
-       skip, and an imported entry never carries a Qwen design manifest
-       either, so both fall through this block with no warning.
+         `clearMismatchedDesignedVoices` (verify-designed-voice-language.ts)
+         already catches this at RENDER time, but only for non-English books —
+         its callers gate it behind `isNonEnglish(bookLanguage)`. A designed
+         voice assigned to an ENGLISH book therefore sailed through with no
+         signal at all, right up until a full chapter rendered unintelligible
+         audio (measured on the dev box: avg_logprob -1.303 wrong-language vs.
+         -0.201 correct — a mismatch doesn't degrade the audio, it destroys
+         it). This warning is the earlier, softer signal for exactly that gap;
+         it does not move or replace the render-time gate.
 
-       Review round 2 — `sidecarLanguageName` deliberately THROWS for a book
-       language outside the registry (language.ts's own "fail-loud safety
-       net" comment), because the confirm-screen import gate is supposed to
-       block an unsupported language before it ever reaches this far. That
-       gate is client-side only; `routes/import.ts` persists an unchecked
-       `normaliseBookLanguage(body.language)` (see #1955), so a pre-existing
-       book with an unregistered language (e.g. `'pt'`) can already be on
-       disk. Assign is a route that works fine for such a book today — it
-       never used to touch the language registry — so letting the throw
-       escape here would be a NEW 500 on an existing, previously-working
-       route. With no registry entry there is no sidecar word to compare
-       the manifest against, so there is no mismatch to assert either way:
-       skip the warning, exactly like the pre-#1953 behaviour, never 500. */
-    if (entry.provenance === 'designed') {
-      const bookLanguage = bookStateLanguage(located.state);
+         A CLONED voice has no baked design language (its manifest, when one
+         exists, reflects the speaker's own voice, not a chosen design
+         language) — `entry.provenance === 'designed'` is the library-entry
+         equivalent of `clearMismatchedDesignedVoices`'s `hasClonedProvenance`
+         skip, and an imported entry never carries a Qwen design manifest
+         either, so both fall through this block with no warning.
+
+         Review round 2 — `sidecarLanguageName` deliberately THROWS for a book
+         language outside the registry (language.ts's own "fail-loud safety
+         net" comment), because the confirm-screen import gate is supposed to
+         block an unsupported language before it ever reaches this far. That
+         gate is client-side only; `routes/import.ts` persists an unchecked
+         `normaliseBookLanguage(body.language)` (see #1955), so a pre-existing
+         book with an unregistered language (e.g. `'pt'`) can already be on
+         disk. Assign is a route that works fine for such a book today — it
+         never used to touch the language registry — so letting the throw
+         escape here would be a NEW 500 on an existing, previously-working
+         route. With no registry entry there is no sidecar word to compare
+         the manifest against, so there is no mismatch to assert either way:
+         skip the warning, exactly like the pre-#1953 behaviour, never 500. */
       let expectedSidecarLang: string | undefined;
-      try {
-        expectedSidecarLang = sidecarLanguageName(bookLanguage);
-      } catch {
-        expectedSidecarLang = undefined;
+      let designedManifest: { language?: string } | null = null;
+      if (entry.provenance === 'designed') {
+        const bookLanguage = bookStateLanguage(located.state);
+        try {
+          expectedSidecarLang = sidecarLanguageName(bookLanguage);
+        } catch {
+          expectedSidecarLang = undefined;
+        }
+        designedManifest = await readJson<{ language?: string }>(
+          qwenVoiceSidecarPath(cloneStorageKey('qwen', voiceUuid)),
+        ).catch(() => null);
       }
-      const manifest = await readJson<{ language?: string }>(
-        qwenVoiceSidecarPath(cloneStorageKey('qwen', voiceUuid)),
-      ).catch(() => null);
-      if (expectedSidecarLang && manifest?.language && manifest.language !== expectedSidecarLang) {
-        languageWarning =
-          `"${character.name ?? characterId}"'s voice was designed in ${manifest.language} but this ` +
-          `book is ${expectedSidecarLang} — the audio will be unintelligible. Re-design the voice in ` +
-          `${expectedSidecarLang} to fix it.`;
-      }
-    }
 
-    /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
-       anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
-       a library voice swaps the base identity to qwen-<voiceUuid>, and
-       `pickEmotionVariantVoice` re-derives the variant key from the NEW
-       base — so a carried-over `variants` map would point at a `.pt` that
-       never existed for this voice. The pre-render pre-pass only validates
-       the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
-       synth time on the sidecar's own VoiceNotDesignedError, breaking the
-       fail-fast promise. Drop `variants` here — they're semantically tied to
-       the previous base and don't carry over (both slots, when both are
-       written). */
-    const nextCharacters = [...characters];
-    nextCharacters[charIndex] = {
-      ...character,
-      overrideTtsVoices: {
-        ...character.overrideTtsVoices,
-        qwen: {
-          ...character.overrideTtsVoices?.qwen,
-          name: cloneStorageKey('qwen', voiceUuid),
-          libraryUuid: voiceUuid,
-          provenance: entry.provenance,
-          variants: undefined,
-        },
-        ...(shouldWriteCoquiSlot
-          ? {
-              coqui: {
-                ...character.overrideTtsVoices?.coqui,
-                name: cloneStorageKey('coqui', voiceUuid),
-                libraryUuid: voiceUuid,
-                provenance: entry.provenance,
-                variants: undefined,
-              },
-            }
-          : {}),
-      },
-    };
+      return await withCastLock(located.bookDir, async () => {
+        const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+        const characters = cast?.characters ?? [];
+        const charIndex = characters.findIndex((c) => c.id === characterId);
+        if (charIndex === -1) {
+          return res
+            .status(404)
+            .json({ error: `No character "${characterId}" in book "${bookId}".` });
+        }
 
-    await writeJsonAtomic(castJsonPath(located.bookDir), { ...cast, characters: nextCharacters });
+        const character = characters[charIndex];
 
-    /* GATE 1 [F1] — report WHICH engine slots were actually persisted. The
-       response used to be a bare `{ updated: 1 }`, which told the caller
-       nothing about `shouldWriteCoquiSlot`: the profile drawer's picker
-       mirrored a coqui assignment into redux on any 200, so a designed entry
-       with no retained reference clip (coqui slot declined above) displayed
-       as a "My voice" coqui assignment that cast.json never carried, with no
-       refetch to reconcile it. Derived from the SAME `shouldWriteCoquiSlot`
-       flag the write above spreads on, not recomputed — the two cannot
-       disagree. Order mirrors the write: qwen is unconditional, coqui is
-       conditional. */
-    const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
-    /* #1933 — `clonedAdvisory` and `languageWarning` are mutually exclusive
-       by construction (see their shared declaration comment above), so
-       there is no collision picking one over the other here. */
-    const warning = clonedAdvisory ?? languageWarning;
-    res.status(200).json({ updated: 1, written, ...(warning ? { warning } : {}) });
+        /* #1933 — `clonedAdvisory` and `languageWarning` (declared together,
+           set inside their own respective provenance-scoped blocks below) are
+           mutually exclusive by construction: `clonedAdvisory` is only ever set
+           inside a `provenance === 'cloned'` branch, `languageWarning` only
+           inside a `provenance === 'designed'` one — an entry is never both —
+           so the two can share the single `warning` response field with no
+           collision to disambiguate. */
+        let clonedAdvisory: string | undefined;
+        let languageWarning: string | undefined;
+
+        /* Task 6b, widened by fs-38 Wave 3c Task 24 — a cloned voice renders on
+           a clone-capable engine ONLY (Qwen or Coqui XTTS v2 —
+           `CLONE_CAPABLE_ENGINES`, tts/clone-engines.js). Assigning one to a
+           character that routes to neither would produce exactly the same 3b2
+           resolver-pre-pass hard-fail this task exists to give an accurate
+           reason for ('wrong-engine') — but discovered only at RENDER time,
+           chapters deep. Catch it here instead, at assign time, so the user
+           gets an actionable 409 immediately. Scoped to `provenance === 'cloned'`
+           only — a DESIGNED voice has always been free to route anywhere
+           (spec §2.3); widening this guard to designed voices would be a new
+           hard failure for them.
+
+           Fix wave 2 (review) — the guard's FIRST cut computed the book's
+           effective default purely from the PERSISTED `getResolvedTtsModelKey()`
+           account default. That default is not what actually renders: the
+           engine picker on the Voices page (and the session `ui.ttsModelKey` it
+           writes) is never persisted, and generation itself routes off the
+           REQUEST's modelKey, not the account default — so a session pick of
+           Qwen against a non-Qwen persisted default produced a false 409, and
+           the reverse produced a false 200 (assign succeeds, render then fails).
+           The caller now optionally sends the modelKey it actually intends to
+           render with (`body.modelKey` — e.g. the profile drawer's PENDING
+           engine-picker choice); that wins when present. Only when the caller
+           has no meaningful engine context (and omits the field) do we fall
+           back to the persisted default. A character's own `ttsEngine` override
+           (if any) still wins via `resolveCharacterEngine`, so a character
+           explicitly cast on Qwen or Coqui is unaffected by the book/session
+           default sitting elsewhere.
+
+           #1933 — order matters: this wrong-engine check runs FIRST, the
+           per-engine readiness gate SECOND. Mirrors `classifyClonedVoice`'s own
+           precedence (`wrongEngine` beats every artifact concern) — a character
+           not even routed to a clone engine should hear about THAT, not about a
+           slot it will never use. `isCloneEngine` (tts/clone-engines.js) is
+           `CLONE_CAPABLE_ENGINES.has(e)` verbatim, so this 409 is
+           behaviour-identical to before — but as a real type guard, the early
+           return below narrows `routedEngine` to `CloneEngine` for everything
+           that follows, so `manifestSlotFor`/`clonedAssignBlock` type-check with
+           no cast. */
+        if (entry.provenance === 'cloned') {
+          const requestedModelKey = isTtsModelKey(body.modelKey) ? body.modelKey : undefined;
+          const bookDefaultEngine = engineForModelKey(requestedModelKey ?? getResolvedTtsModelKey());
+          const routedEngine = resolveCharacterEngine(character, bookDefaultEngine);
+          if (!isCloneEngine(routedEngine)) {
+            /* I-2 — name the ACTUAL cause. When the character carries its own
+               `ttsEngine` override, THAT is why it's not routing to a
+               clone-capable engine — the book/session default is irrelevant,
+               and telling the user to "switch the book's engine" would send
+               them to fix the wrong thing (the same misdiagnosis class Part A
+               eliminated for the render-time error). */
+            const characterCaused = Boolean(character.ttsEngine);
+            const cause = characterCaused
+              ? `"${character.name ?? characterId}" is cast on ${routedEngine}`
+              : `this book is set to ${routedEngine}`;
+            const fix = characterCaused
+              ? `Switch the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)`
+              : `Switch the book's engine to Qwen or Coqui XTTS v2`;
+            return res.status(409).json({
+              error: `Cloned voices render on Qwen or Coqui XTTS v2, but ${cause}. ${fix} before assigning "${character.name ?? characterId}".`,
+            });
+          }
+
+          /* #1933 — readiness of the engine this assign will ACTUALLY render
+             on. Blocks the assign outright when the routed engine's own slot
+             can't back it (see `clonedAssignBlock`'s doc comment for the rule). */
+          const charName = character.name ?? characterId;
+          const block = clonedAssignBlock(entry, routedEngine, clonedClipOnDisk);
+          if (block) {
+            return res.status(409).json({ error: blockMessage(block, routedEngine, entry.name, charName) });
+          }
+
+          /* #1933 — the write below persists BOTH slots unconditionally for a
+             cloned entry (`shouldWriteCoquiSlot` above), regardless of which
+             engine this assign was routed for — so warn now if the OTHER
+             clone-capable engine's slot is unusable, rather than letting the
+             user discover it only when they later switch engines. */
+          const otherEngine = otherCloneEngine(routedEngine);
+          const otherBlock = clonedAssignBlock(entry, otherEngine, clonedClipOnDisk);
+          if (otherBlock) {
+            clonedAdvisory = advisoryMessage(otherBlock, otherEngine, entry.name, charName);
+          }
+        }
+
+        /* #1981 — `expectedSidecarLang`/`designedManifest` were fetched
+           above, outside the cast.json RMW (see that comment for why); only
+           the warning STRING construction stays here, since it needs
+           `character.name`, not available until the character lookup a few
+           lines up. */
+        if (entry.provenance === 'designed') {
+          if (
+            expectedSidecarLang &&
+            designedManifest?.language &&
+            designedManifest.language !== expectedSidecarLang
+          ) {
+            languageWarning =
+              `"${character.name ?? characterId}"'s voice was designed in ${designedManifest.language} but this ` +
+              `book is ${expectedSidecarLang} — the audio will be unintelligible. Re-design the voice in ` +
+              `${expectedSidecarLang} to fix it.`;
+          }
+        }
+
+        /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
+           anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
+           a library voice swaps the base identity to qwen-<voiceUuid>, and
+           `pickEmotionVariantVoice` re-derives the variant key from the NEW
+           base — so a carried-over `variants` map would point at a `.pt` that
+           never existed for this voice. The pre-render pre-pass only validates
+           the BASE `.pt`, so that dangling variant key would die mid-GPU-work at
+           synth time on the sidecar's own VoiceNotDesignedError, breaking the
+           fail-fast promise. Drop `variants` here — they're semantically tied to
+           the previous base and don't carry over (both slots, when both are
+           written). */
+        const nextCharacters = [...characters];
+        nextCharacters[charIndex] = {
+          ...character,
+          overrideTtsVoices: {
+            ...character.overrideTtsVoices,
+            qwen: {
+              ...character.overrideTtsVoices?.qwen,
+              name: cloneStorageKey('qwen', voiceUuid),
+              libraryUuid: voiceUuid,
+              provenance: entry.provenance,
+              variants: undefined,
+            },
+            ...(shouldWriteCoquiSlot
+              ? {
+                  coqui: {
+                    ...character.overrideTtsVoices?.coqui,
+                    name: cloneStorageKey('coqui', voiceUuid),
+                    libraryUuid: voiceUuid,
+                    provenance: entry.provenance,
+                    variants: undefined,
+                  },
+                }
+              : {}),
+          },
+        };
+
+        await writeJsonAtomic(castJsonPath(located.bookDir), { ...cast, characters: nextCharacters });
+
+        /* GATE 1 [F1] — report WHICH engine slots were actually persisted. The
+           response used to be a bare `{ updated: 1 }`, which told the caller
+           nothing about `shouldWriteCoquiSlot`: the profile drawer's picker
+           mirrored a coqui assignment into redux on any 200, so a designed entry
+           with no retained reference clip (coqui slot declined above) displayed
+           as a "My voice" coqui assignment that cast.json never carried, with no
+           refetch to reconcile it. Derived from the SAME `shouldWriteCoquiSlot`
+           flag the write above spreads on, not recomputed — the two cannot
+           disagree. Order mirrors the write: qwen is unconditional, coqui is
+           conditional. */
+        const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
+        /* #1933 — `clonedAdvisory` and `languageWarning` are mutually exclusive
+           by construction (see their shared declaration comment above), so
+           there is no collision picking one over the other here. */
+        const warning = clonedAdvisory ?? languageWarning;
+        return res.status(200).json({ updated: 1, written, ...(warning ? { warning } : {}) });
+      });
+    });
   } catch (e) {
     console.error('[voice-library] assign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library assign failed.' });
@@ -1885,35 +1920,42 @@ voiceLibraryRouter.delete('/:voiceUuid/assign', async (req: Request, res: Respon
       return res.status(404).json({ error: `No book "${bookId}".` });
     }
 
-    const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
-    const characters = cast?.characters ?? [];
-    const charIndex = characters.findIndex((c) => c.id === characterId);
-    if (charIndex === -1) {
-      return res
-        .status(404)
-        .json({ error: `No character "${characterId}" in book "${bookId}".` });
-    }
-
-    const character = characters[charIndex];
-    const nextSlots = { ...character.overrideTtsVoices };
-    const cleared: CloneEngine[] = [];
-    for (const engine of CLONE_ENGINE_LIST) {
-      if (nextSlots[engine]?.libraryUuid === voiceUuid) {
-        delete nextSlots[engine];
-        cleared.push(engine);
+    /* #1981 — the read is inside the lock; `charIndex`/`cleared` and the
+       write are all decisions derived from it. No `withLibraryVoiceLock`
+       here — this route's own header comment already explains why: no
+       consent/readiness/provenance gate, no `readEntry` at all, so there is
+       no library-voice-scoped state to guard, only the cast.json RMW. */
+    await withCastLock(located.bookDir, async () => {
+      const cast = await readJson<CastJson>(castJsonPath(located.bookDir));
+      const characters = cast?.characters ?? [];
+      const charIndex = characters.findIndex((c) => c.id === characterId);
+      if (charIndex === -1) {
+        return res
+          .status(404)
+          .json({ error: `No character "${characterId}" in book "${bookId}".` });
       }
-    }
 
-    if (cleared.length > 0) {
-      const nextCharacters = [...characters];
-      nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
-      await writeJsonAtomic(castJsonPath(located.bookDir), {
-        ...cast,
-        characters: nextCharacters,
-      });
-    }
+      const character = characters[charIndex];
+      const nextSlots = { ...character.overrideTtsVoices };
+      const cleared: CloneEngine[] = [];
+      for (const engine of CLONE_ENGINE_LIST) {
+        if (nextSlots[engine]?.libraryUuid === voiceUuid) {
+          delete nextSlots[engine];
+          cleared.push(engine);
+        }
+      }
 
-    res.status(200).json({ cleared });
+      if (cleared.length > 0) {
+        const nextCharacters = [...characters];
+        nextCharacters[charIndex] = { ...character, overrideTtsVoices: nextSlots };
+        await writeJsonAtomic(castJsonPath(located.bookDir), {
+          ...cast,
+          characters: nextCharacters,
+        });
+      }
+
+      return res.status(200).json({ cleared });
+    });
   } catch (e) {
     console.error('[voice-library] unassign failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library unassign failed.' });
@@ -2041,39 +2083,60 @@ async function eraseLibraryVoiceArtifacts(voiceUuid: string): Promise<{ failed: 
    artifact sweep both genuinely ran; this is a partial outcome, not an
    error. `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` are the same
    two fields the revoke route above already carries (Task 14a), deliberately
-   reused rather than a second, delete-only signal. */
+   reused rather than a second, delete-only signal.
+
+   #1981 — the whole scan -> clear -> erase sequence (`readEntry` and its
+   404, `scanLibraryVoiceUsage`, `clearLibraryVoiceReferences`,
+   `eraseLibraryVoiceArtifacts`) is wrapped in `withLibraryVoiceLock`,
+   symmetric with `POST /:voiceUuid/assign`'s own use of the same key: that
+   is what closes the erase-vs-assign race (the scan can pass a book, an
+   assign then plants a reference in it, the artifacts get erased afterwards
+   — a character left pointing at a `libraryUuid` whose files are gone).
+   `library-voice` opens before `readEntry` (not just before the scan) for
+   the same rule-2 reason `/assign` states in its own comment: the 404 is a
+   decision derived from the library entry, so it belongs inside the lock
+   too — even though two concurrent DELETEs racing this window is itself
+   harmless (the second finds nothing left to erase).
+   `clearLibraryVoiceReferences` (workspace/voice-library-usage.ts) takes a
+   `withCastLock` per book INSIDE this lock, never the other way — this is
+   `library-voice -> cast`, matching cast-lock.ts's rule 4/global order, and
+   the same order `/assign` takes; either route taking the two locks in the
+   opposite order would AB/BA-deadlock the other, with no timeout and no
+   diagnostic (see cast-lock.ts's header). */
 voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => {
+  const { voiceUuid } = req.params;
   try {
-    const { voiceUuid } = req.params;
-    const existing = await readEntry(voiceUuid);
-    if (!existing) {
-      return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
-    }
+    return await withLibraryVoiceLock(voiceUuid, async () => {
+      const existing = await readEntry(voiceUuid);
+      if (!existing) {
+        return res.status(404).json({ error: `No voice-library entry "${voiceUuid}".` });
+      }
 
-    const confirmed = req.query.confirm === '1';
-    const usage = await scanLibraryVoiceUsage(voiceUuid);
-    if (usage.length > 0 && !confirmed) {
-      return res.status(409).json({ usage });
-    }
+      const confirmed = req.query.confirm === '1';
+      const usage = await scanLibraryVoiceUsage(voiceUuid);
+      if (usage.length > 0 && !confirmed) {
+        return res.status(409).json({ usage });
+      }
 
-    if (usage.length > 0) {
-      await clearLibraryVoiceReferences(voiceUuid);
-    }
-    const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
-    if (purgeResult.failed.length > 0) {
-      console.warn(
-        `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
-          `un-erased — the entry is RETAINED so the consent gates still cover them:`,
-        purgeResult.failed,
-      );
-      return res.status(200).json({
-        deleted: false,
-        artifactPurgeIncomplete: true,
-        artifactPurgeFailedPaths: purgeResult.failed,
-      });
-    }
+      if (usage.length > 0) {
+        await clearLibraryVoiceReferences(voiceUuid);
+      }
+      const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
+      if (purgeResult.failed.length > 0) {
+        console.warn(
+          `[voice-library] delete for "${voiceUuid}" left ${purgeResult.failed.length} artifact(s) ` +
+            `un-erased — the entry is RETAINED so the consent gates still cover them:`,
+          purgeResult.failed,
+        );
+        return res.status(200).json({
+          deleted: false,
+          artifactPurgeIncomplete: true,
+          artifactPurgeFailedPaths: purgeResult.failed,
+        });
+      }
 
-    res.status(200).json({ deleted: true });
+      return res.status(200).json({ deleted: true });
+    });
   } catch (e) {
     console.error('[voice-library] delete failed', e);
     res.status(500).json({ error: (e as Error).message || 'Voice library delete failed.' });

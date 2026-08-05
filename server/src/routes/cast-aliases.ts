@@ -23,6 +23,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges } from '../store/cast-merges.js';
 import { slug } from '../workspace/paths.js';
@@ -101,95 +102,101 @@ castAliasesRouter.post(
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
-      });
-    }
+    /* #1981 — the read is inside the lock, not just the write: every
+       decision below (404s, the new character's minted id, the trimmed
+       alias list) is derived from `cast`, so wrapping only the write would
+       leave those decisions racing a concurrent writer on the same book. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
+        });
+      }
 
-    const sourceIdx = cast.characters.findIndex((c) => c.id === sourceCharacterId);
-    if (sourceIdx === -1) {
-      return res.status(404).json({ error: `Character "${sourceCharacterId}" not found.` });
-    }
-    const source = cast.characters[sourceIdx];
-    const aliasKey = aliasName.toLowerCase();
-    const aliasIdx = (source.aliases ?? []).findIndex((a) => a.trim().toLowerCase() === aliasKey);
-    if (aliasIdx === -1) {
-      return res.status(404).json({
-        error: `Alias "${aliasName}" is not on character "${source.name}".`,
-      });
-    }
+      const sourceIdx = cast.characters.findIndex((c) => c.id === sourceCharacterId);
+      if (sourceIdx === -1) {
+        return res.status(404).json({ error: `Character "${sourceCharacterId}" not found.` });
+      }
+      const source = cast.characters[sourceIdx];
+      const aliasKey = aliasName.toLowerCase();
+      const aliasIdx = (source.aliases ?? []).findIndex((a) => a.trim().toLowerCase() === aliasKey);
+      if (aliasIdx === -1) {
+        return res.status(404).json({
+          error: `Alias "${aliasName}" is not on character "${source.name}".`,
+        });
+      }
 
-    /* Preserve the chip's display casing (not the lower-cased key) for the
-       new character's name. */
-    const displayName = (source.aliases ?? [])[aliasIdx];
+      /* Preserve the chip's display casing (not the lower-cased key) for the
+         new character's name. */
+      const displayName = (source.aliases ?? [])[aliasIdx];
 
-    /* Strip the alias off the source. Filter rather than splice so we
-       leave the source's array untouched in case other concurrent paths
-       hold a reference. */
-    const nextSourceAliases = (source.aliases ?? []).filter(
-      (a) => a.trim().toLowerCase() !== aliasKey,
-    );
-
-    /* Synthesise the new standalone character. Field selection mirrors
-       `makeBucket` from fold-minor-cast.ts: id, name, role, color,
-       optional gender/ageRange inherited from the source so the voice
-       picker has something to work with on day one. No description, no
-       attributes, no tone — the user will fill those in via the drawer
-       if it matters. No `aliases` (defaults to empty). */
-    const existingIds = new Set(cast.characters.map((c) => c.id));
-    const newCharacterId = mintCharacterId(displayName, existingIds);
-    const newCharacter: CharacterOutput = {
-      id: newCharacterId,
-      name: displayName,
-      role: 'character',
-      color: 'narrator',
-      aliases: [],
-    };
-    if (source.gender) newCharacter.gender = source.gender;
-    if (source.ageRange) newCharacter.ageRange = source.ageRange;
-
-    /* Build the updated character list: source with the trimmed aliases,
-       new character appended at the end (consistent with mergeCharacters'
-       append-on-new convention in cast-slice.ts). */
-    const nextCharacters: CharacterOutput[] = cast.characters.map((c, i) =>
-      i === sourceIdx ? { ...c, aliases: nextSourceAliases } : c,
-    );
-    nextCharacters.push(newCharacter);
-
-    await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
-
-    /* srv-1 — prefer the deterministic merge journal. A journal entry that
-       records THIS alias (sourceName) being merged onto THIS character
-       (targetId === sourceCharacterId) pins the exact sentences that merge
-       rewrote. Fall back to the chapterCast heuristic for pre-journal books,
-       chained merges, manual `add-alias` chips, and any alias produced by a
-       path that never rewrote sentences (see store/cast-merges.ts header). */
-    const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
-    let impactedChapters = await impactedChaptersFromJournal(
-      bookDir,
-      sourceCharacterId,
-      aliasKey,
-      edits,
-    );
-    let lineageSource: 'journal' | 'fallback' = 'journal';
-    if (!impactedChapters) {
-      lineageSource = 'fallback';
-      impactedChapters = await impactedChaptersFromChapterCast(
-        state.manuscriptId,
-        sourceCharacterId,
-        edits,
-        aliasKey,
+      /* Strip the alias off the source. Filter rather than splice so we
+         leave the source's array untouched in case other concurrent paths
+         hold a reference. */
+      const nextSourceAliases = (source.aliases ?? []).filter(
+        (a) => a.trim().toLowerCase() !== aliasKey,
       );
-    }
 
-    console.log(
-      `[cast-aliases] book=${bookId} unlinked alias "${aliasName}" from ${sourceCharacterId}` +
-        ` → ${newCharacterId} (${impactedChapters.length} impacted chapters, ${lineageSource})`,
-    );
+      /* Synthesise the new standalone character. Field selection mirrors
+         `makeBucket` from fold-minor-cast.ts: id, name, role, color,
+         optional gender/ageRange inherited from the source so the voice
+         picker has something to work with on day one. No description, no
+         attributes, no tone — the user will fill those in via the drawer
+         if it matters. No `aliases` (defaults to empty). */
+      const existingIds = new Set(cast.characters.map((c) => c.id));
+      const newCharacterId = mintCharacterId(displayName, existingIds);
+      const newCharacter: CharacterOutput = {
+        id: newCharacterId,
+        name: displayName,
+        role: 'character',
+        color: 'narrator',
+        aliases: [],
+      };
+      if (source.gender) newCharacter.gender = source.gender;
+      if (source.ageRange) newCharacter.ageRange = source.ageRange;
 
-    return res.json({ newCharacter, impactedChapters });
+      /* Build the updated character list: source with the trimmed aliases,
+         new character appended at the end (consistent with mergeCharacters'
+         append-on-new convention in cast-slice.ts). */
+      const nextCharacters: CharacterOutput[] = cast.characters.map((c, i) =>
+        i === sourceIdx ? { ...c, aliases: nextSourceAliases } : c,
+      );
+      nextCharacters.push(newCharacter);
+
+      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
+
+      /* srv-1 — prefer the deterministic merge journal. A journal entry that
+         records THIS alias (sourceName) being merged onto THIS character
+         (targetId === sourceCharacterId) pins the exact sentences that merge
+         rewrote. Fall back to the chapterCast heuristic for pre-journal books,
+         chained merges, manual `add-alias` chips, and any alias produced by a
+         path that never rewrote sentences (see store/cast-merges.ts header). */
+      const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
+      let impactedChapters = await impactedChaptersFromJournal(
+        bookDir,
+        sourceCharacterId,
+        aliasKey,
+        edits,
+      );
+      let lineageSource: 'journal' | 'fallback' = 'journal';
+      if (!impactedChapters) {
+        lineageSource = 'fallback';
+        impactedChapters = await impactedChaptersFromChapterCast(
+          state.manuscriptId,
+          sourceCharacterId,
+          edits,
+          aliasKey,
+        );
+      }
+
+      console.log(
+        `[cast-aliases] book=${bookId} unlinked alias "${aliasName}" from ${sourceCharacterId}` +
+          ` → ${newCharacterId} (${impactedChapters.length} impacted chapters, ${lineageSource})`,
+      );
+
+      return res.json({ newCharacter, impactedChapters });
+    });
   },
 );
 
@@ -229,63 +236,66 @@ castAliasesRouter.post(
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
+    /* #1981 — read inside the lock; see unlink-alias above for the rule. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
+        });
+      }
+
+      const source = cast.characters.find((c) => c.id === sourceCharacterId);
+      if (!source) return res.status(404).json({ error: `Character "${sourceCharacterId}" not found.` });
+      const target = cast.characters.find((c) => c.id === targetCharacterId);
+      if (!target) return res.status(404).json({ error: `Character "${targetCharacterId}" not found.` });
+
+      const aliasKey = aliasName.toLowerCase();
+      const aliasIdx = (source.aliases ?? []).findIndex((a) => a.trim().toLowerCase() === aliasKey);
+      if (aliasIdx === -1) {
+        return res.status(404).json({ error: `Alias "${aliasName}" is not on character "${source.name}".` });
+      }
+      /* Preserve the chip's display casing when appending to the target. */
+      const displayName = (source.aliases ?? [])[aliasIdx];
+
+      /* Always strip from source. Append to target unless it already carries the
+         alias OR the alias equals the target's own name (the name already covers
+         it) — in either case, append is a no-op and alreadyPresent is true. */
+      const nextSourceAliases = (source.aliases ?? []).filter((a) => a.trim().toLowerCase() !== aliasKey);
+      const targetAliases = target.aliases ?? [];
+      const alreadyPresent =
+        aliasKey === target.name.trim().toLowerCase() ||
+        targetAliases.some((a) => a.trim().toLowerCase() === aliasKey);
+      const nextTargetAliases = alreadyPresent ? targetAliases : [...targetAliases, displayName];
+
+      const nextCharacters: CharacterOutput[] = cast.characters.map((c) => {
+        if (c.id === sourceCharacterId) return { ...c, aliases: nextSourceAliases };
+        if (c.id === targetCharacterId) return { ...c, aliases: nextTargetAliases };
+        return c;
       });
-    }
 
-    const source = cast.characters.find((c) => c.id === sourceCharacterId);
-    if (!source) return res.status(404).json({ error: `Character "${sourceCharacterId}" not found.` });
-    const target = cast.characters.find((c) => c.id === targetCharacterId);
-    if (!target) return res.status(404).json({ error: `Character "${targetCharacterId}" not found.` });
+      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
 
-    const aliasKey = aliasName.toLowerCase();
-    const aliasIdx = (source.aliases ?? []).findIndex((a) => a.trim().toLowerCase() === aliasKey);
-    if (aliasIdx === -1) {
-      return res.status(404).json({ error: `Alias "${aliasName}" is not on character "${source.name}".` });
-    }
-    /* Preserve the chip's display casing when appending to the target. */
-    const displayName = (source.aliases ?? [])[aliasIdx];
+      /* Lineage is identical to unlink — same source-attributed candidate lines.
+         Only the destination differs, and that never touches manuscript-edits. */
+      const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
+      let impactedChapters = await impactedChaptersFromJournal(bookDir, sourceCharacterId, aliasKey, edits);
+      if (!impactedChapters) {
+        impactedChapters = await impactedChaptersFromChapterCast(
+          state.manuscriptId,
+          sourceCharacterId,
+          edits,
+          aliasKey,
+        );
+      }
 
-    /* Always strip from source. Append to target unless it already carries the
-       alias OR the alias equals the target's own name (the name already covers
-       it) — in either case, append is a no-op and alreadyPresent is true. */
-    const nextSourceAliases = (source.aliases ?? []).filter((a) => a.trim().toLowerCase() !== aliasKey);
-    const targetAliases = target.aliases ?? [];
-    const alreadyPresent =
-      aliasKey === target.name.trim().toLowerCase() ||
-      targetAliases.some((a) => a.trim().toLowerCase() === aliasKey);
-    const nextTargetAliases = alreadyPresent ? targetAliases : [...targetAliases, displayName];
-
-    const nextCharacters: CharacterOutput[] = cast.characters.map((c) => {
-      if (c.id === sourceCharacterId) return { ...c, aliases: nextSourceAliases };
-      if (c.id === targetCharacterId) return { ...c, aliases: nextTargetAliases };
-      return c;
-    });
-
-    await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
-
-    /* Lineage is identical to unlink — same source-attributed candidate lines.
-       Only the destination differs, and that never touches manuscript-edits. */
-    const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
-    let impactedChapters = await impactedChaptersFromJournal(bookDir, sourceCharacterId, aliasKey, edits);
-    if (!impactedChapters) {
-      impactedChapters = await impactedChaptersFromChapterCast(
-        state.manuscriptId,
-        sourceCharacterId,
-        edits,
-        aliasKey,
+      console.log(
+        `[cast-aliases] book=${bookId} repointed alias "${aliasName}" from ${sourceCharacterId}` +
+          ` → ${targetCharacterId} (${impactedChapters.length} impacted chapters, alreadyPresent=${alreadyPresent})`,
       );
-    }
 
-    console.log(
-      `[cast-aliases] book=${bookId} repointed alias "${aliasName}" from ${sourceCharacterId}` +
-        ` → ${targetCharacterId} (${impactedChapters.length} impacted chapters, alreadyPresent=${alreadyPresent})`,
-    );
-
-    return res.json({ impactedChapters, alreadyPresent });
+      return res.json({ impactedChapters, alreadyPresent });
+    });
   },
 );
 
@@ -317,45 +327,48 @@ castAliasesRouter.post(
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
-      });
-    }
+    /* #1981 — read inside the lock; see unlink-alias above for the rule. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before editing aliases.',
+        });
+      }
 
-    const idx = cast.characters.findIndex((c) => c.id === characterId);
-    if (idx === -1) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
+      const idx = cast.characters.findIndex((c) => c.id === characterId);
+      if (idx === -1) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
 
-    const target = cast.characters[idx];
-    /* Drop self-alias (matching the character's own name) and dedup
-       case-insensitively against the existing aliases, mirroring the
-       cast-merge.mergeAliases helper. */
-    const key = aliasName.toLowerCase();
-    if (key === target.name.trim().toLowerCase()) {
-      return res.status(400).json({
-        error: "Cannot add a character's own name as one of its aliases.",
-      });
-    }
-    const existing = target.aliases ?? [];
-    if (existing.some((a) => a.trim().toLowerCase() === key)) {
-      /* Idempotent — no disk write, but echo the addition so the frontend
-         can dispatch the same delta reducer regardless of whether the
-         alias was already on the character. */
-      return res.json({ characterId, alias: aliasName, alreadyPresent: true });
-    }
+      const target = cast.characters[idx];
+      /* Drop self-alias (matching the character's own name) and dedup
+         case-insensitively against the existing aliases, mirroring the
+         cast-merge.mergeAliases helper. */
+      const key = aliasName.toLowerCase();
+      if (key === target.name.trim().toLowerCase()) {
+        return res.status(400).json({
+          error: "Cannot add a character's own name as one of its aliases.",
+        });
+      }
+      const existing = target.aliases ?? [];
+      if (existing.some((a) => a.trim().toLowerCase() === key)) {
+        /* Idempotent — no disk write, but echo the addition so the frontend
+           can dispatch the same delta reducer regardless of whether the
+           alias was already on the character. */
+        return res.json({ characterId, alias: aliasName, alreadyPresent: true });
+      }
 
-    const nextCharacters = cast.characters.map((c, i) =>
-      i === idx ? { ...c, aliases: [...existing, aliasName] } : c,
-    );
+      const nextCharacters = cast.characters.map((c, i) =>
+        i === idx ? { ...c, aliases: [...existing, aliasName] } : c,
+      );
 
-    await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
+      await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
 
-    console.log(`[cast-aliases] book=${bookId} added alias "${aliasName}" to ${characterId}`);
+      console.log(`[cast-aliases] book=${bookId} added alias "${aliasName}" to ${characterId}`);
 
-    return res.json({ characterId, alias: aliasName, alreadyPresent: false });
+      return res.json({ characterId, alias: aliasName, alreadyPresent: false });
+    });
   },
 );
 

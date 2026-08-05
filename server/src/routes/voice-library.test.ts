@@ -15,6 +15,15 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { SidecarDesignError } from '../tts/design-voice-core.js';
+import { castJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
+
+/* #1981 — minimal local shape for the cast.json read in the race test below.
+   `CastJson` in ./voice-library.ts is not exported (route-file-local); this
+   mirrors only the fields that test actually asserts on. */
+interface CastJson {
+  characters?: Array<{ id: string; overrideTtsVoices?: { qwen?: { libraryUuid?: string } } }>;
+}
 
 /* Task 10 — the sample route calls selectTtsProvider(). Stub it the same way
    routes/voice-sample.test.ts does, so the encoder boundary (real ffmpeg) is
@@ -136,25 +145,20 @@ beforeEach(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
-  const [
-    { voiceLibraryRouter },
-    voiceLibMod,
-    modelPathsMod,
-    userSettings,
-    pathsMod,
-    qwenVoiceMod,
-    sampleCacheMod,
-    coquiVersionStateMod,
-  ] = await Promise.all([
-    import('./voice-library.js'),
-    import('../workspace/voice-library.js'),
-    import('../tts/model-paths.js'),
-    import('../workspace/user-settings.js'),
-    import('../workspace/paths.js'),
-    import('./qwen-voice.js'),
-    import('../tts/voice-sample-cache.js'),
-    import('../tts/coqui-version-state.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { voiceLibraryRouter } = await import('./voice-library.js');
+  const voiceLibMod = await import('../workspace/voice-library.js');
+  const modelPathsMod = await import('../tts/model-paths.js');
+  const userSettings = await import('../workspace/user-settings.js');
+  const pathsMod = await import('../workspace/paths.js');
+  const qwenVoiceMod = await import('./qwen-voice.js');
+  const sampleCacheMod = await import('../tts/voice-sample-cache.js');
+  const coquiVersionStateMod = await import('../tts/coqui-version-state.js');
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;
@@ -1263,6 +1267,79 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
       .send({ text: 'Hello.' });
     expect(sample.status).toBe(403);
   });
+
+  /* #1981 — the filed defect: the usage scan can pass a book, an assign can
+     then plant a reference in that book, and the artifacts are erased
+     afterwards — leaving a character pointing at a libraryUuid whose files
+     are gone. `alice` starts unassigned so the assign has something to plant
+     mid-delete; the delete is unconditionally confirmed since the race is
+     about ordering, not the pre-flight 409. */
+  it('does not leave a dangling reference when an assign races a voice delete', async () => {
+    const uuid = 'race-erase-assign';
+    const artifacts = await seedFullVoiceArtifacts(uuid);
+    const bookId = 'book-erase-assign-race';
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      { id: 'alice', name: 'Alice' },
+    ]);
+
+    await Promise.all([
+      request(app).delete(`/api/voice-library/${uuid}?confirm=1`),
+      request(app).post(`/api/voice-library/${uuid}/assign`)
+        .send({ bookId, characterId: 'alice' }),
+    ]);
+
+    const cast = await readJson<CastJson>(castJsonPath(bookDir));
+    const alice = cast?.characters?.find((c) => c.id === 'alice');
+    const stillReferenced = alice?.overrideTtsVoices?.qwen?.libraryUuid === uuid;
+    const artifactsGone = !existsSync(artifacts.ptPath);
+    /* Either the assign lost (no reference) or it won (artifacts still there).
+       Never both. */
+    expect(stillReferenced && artifactsGone).toBe(false);
+  });
+
+  /* #1981 finding 2 (Task 4 review) — nothing exercised the `library-voice`
+     lock itself, or the global `library-voice -> cast` order across the two
+     routes that both take it (POST /assign and this DELETE). Both sides take
+     the SAME order, so this can't AB/BA today — but if a future edit ever
+     inverted either side, the two would deadlock on cast-lock.ts's
+     no-timeout mutex with no diagnostic (see its header, rule 4). Race
+     against a timeout sentinel, mirroring cast-lock.test.ts's own AB/BA
+     test, so a regression fails fast in CI instead of hanging the run.
+
+     Review round 2 (#1981) — `alice` MUST already reference `uuid` (same
+     `overrideTtsVoices.qwen.libraryUuid` shape the 409 test above uses), not
+     start unassigned. `library-voice` fully serialises the two requests, so
+     with an unassigned `alice` the DELETE-first interleaving finds
+     `scanLibraryVoiceUsage` empty and never calls
+     `clearLibraryVoiceReferences` — meaning the DELETE never takes a cast
+     lock at all, and this test would still pass even with `/assign`'s
+     acquisition order inverted (proven: see the mutation-verification in
+     task-5-report.md). Seeding an existing reference forces
+     `usage.length > 0` on every interleaving, so `clearLibraryVoiceReferences`
+     — and its nested `withCastLock` — always actually runs, which is what
+     makes this test capable of catching an inverted order at all. */
+  it('#1981 — a DELETE and an assign contending on the same uuid never deadlock', async () => {
+    const uuid = 'race-lock-order';
+    await seedFullVoiceArtifacts(uuid);
+    const bookId = 'book-lock-order';
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      {
+        id: 'alice',
+        name: 'Alice',
+        overrideTtsVoices: { qwen: { name: `qwen-${uuid}`, libraryUuid: uuid } },
+      },
+    ]);
+
+    const result = await Promise.race([
+      Promise.all([
+        request(app).delete(`/api/voice-library/${uuid}?confirm=1`),
+        request(app).post(`/api/voice-library/${uuid}/assign`)
+          .send({ bookId, characterId: 'alice' }),
+      ]).then(() => 'settled'),
+      new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+    ]);
+    expect(result).toBe('settled');
+  });
 });
 
 /* Task 10 — POST /:voiceUuid/sample. Mirrors POST /api/voices/:voiceId/sample
@@ -1876,6 +1953,40 @@ describe('POST /api/voice-library/:voiceUuid/assign', () => {
     expect(cast.characters[0].overrideTtsVoices?.coqui).toBeUndefined();
     expect(res.body.written).toEqual(['qwen']);
   });
+
+  /* #1981 — the filed defect: two /assign calls for DIFFERENT characters in
+     the SAME book race on that book's cast.json. Unlocked, both requests'
+     `readJson` resolve before either `writeJsonAtomic` lands, so the later
+     write replays a `characters` snapshot taken before the earlier write
+     happened and silently drops it — one of the two assertions below fails
+     with `undefined`. This test does NOT call `vi.resetModules()` between
+     the two requests (only the file's own `beforeEach` does, once, before
+     the test body runs) so the race is free to happen within one test. */
+  it('keeps both assignments when two /assign calls for one book overlap', async () => {
+    const uuidA = 'race-a';
+    const uuidB = 'race-b';
+    await vl.writeEntry(makeEntry({ voiceUuid: uuidA }));
+    await vl.writeEntry(makeEntry({ voiceUuid: uuidB }));
+    const bookId = 'book-race';
+    const bookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', bookId, [
+      { id: 'alice', name: 'Alice' },
+      { id: 'bob', name: 'Bob' },
+    ]);
+
+    /* Two different characters, one book. Unlocked, the later write replays a
+       snapshot taken before the earlier one landed and drops it. */
+    await Promise.all([
+      request(app).post(`/api/voice-library/${uuidA}/assign`)
+        .send({ bookId, characterId: 'alice' }),
+      request(app).post(`/api/voice-library/${uuidB}/assign`)
+        .send({ bookId, characterId: 'bob' }),
+    ]);
+
+    const cast = await readJson<CastJson>(castJsonPath(bookDir));
+    const byId = Object.fromEntries((cast?.characters ?? []).map((c) => [c.id, c]));
+    expect(byId.alice.overrideTtsVoices?.qwen?.libraryUuid).toBe(uuidA);
+    expect(byId.bob.overrideTtsVoices?.qwen?.libraryUuid).toBe(uuidB);
+  });
 });
 
 /* fs-38 Wave 3c GATE 1, owner-decided [DELTA-I5] — the unassign affordance.
@@ -2114,6 +2225,58 @@ describe('DELETE /api/voice-library/:voiceUuid/assign — unassign (GATE 1, DELT
     expect(unassignRes.status).toBe(200);
     expect(unassignRes.body.cleared).toEqual(assignRes.body.written);
     expect(slotsOf(bookDir)).toEqual({});
+  });
+
+  /* #1981 — two concurrent DELETE /assign calls for DIFFERENT characters in
+     the SAME book race that book's cast.json. Unlocked, both requests'
+     readJson resolve before either writeJsonAtomic lands, so the later
+     write replays a `characters` snapshot taken before the earlier write
+     happened and silently un-clears the earlier one's slot. */
+  it('#1981 — keeps both unassigns when two DELETE /assign calls for one book overlap', async () => {
+    const bookDir = writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-unassign-race',
+      [
+        {
+          id: 'char-alice',
+          name: 'Alice',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-race-a', libraryUuid: 'race-a', provenance: 'cloned' },
+          },
+        },
+        {
+          id: 'char-bob',
+          name: 'Bob',
+          overrideTtsVoices: {
+            coqui: { name: 'xtts-race-b', libraryUuid: 'race-b', provenance: 'cloned' },
+          },
+        },
+      ],
+    );
+
+    const [resAlice, resBob] = await Promise.all([
+      request(app)
+        .delete('/api/voice-library/race-a/assign')
+        .query({ bookId: 'book-unassign-race', characterId: 'char-alice' }),
+      request(app)
+        .delete('/api/voice-library/race-b/assign')
+        .query({ bookId: 'book-unassign-race', characterId: 'char-bob' }),
+    ]);
+    expect(resAlice.status).toBe(200);
+    expect(resAlice.body).toEqual({ cleared: ['coqui'] });
+    expect(resBob.status).toBe(200);
+    expect(resBob.body).toEqual({ cleared: ['coqui'] });
+
+    const cast = JSON.parse(readFileSync(castPathFor(bookDir), 'utf8')) as {
+      characters: Array<{ id: string; overrideTtsVoices?: Record<string, unknown> }>;
+    };
+    const alice = cast.characters.find((c) => c.id === 'char-alice')!;
+    const bob = cast.characters.find((c) => c.id === 'char-bob')!;
+    expect(alice.overrideTtsVoices?.coqui).toBeUndefined();
+    expect(bob.overrideTtsVoices?.coqui).toBeUndefined();
   });
 });
 

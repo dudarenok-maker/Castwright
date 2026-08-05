@@ -125,7 +125,13 @@ beforeEach(async () => {
   vi.resetModules();
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => fakeFailingFfmpegChild());
-  [mod, paths] = await Promise.all([import('./synthesise-chapter.js'), import('../workspace/paths.js')]);
+  /* #2083 — sequential awaits, not Promise.all: two import chains reaching
+     the same to-be-mocked module (node:child_process, mocked above) inside
+     one Promise.all can race the async vi.mock factory, so whichever chain
+     resolves first can bind the REAL spawn instead of the mock. See Lane 4's
+     server-wide sweep for the mutation proof. */
+  mod = await import('./synthesise-chapter.js');
+  paths = await import('../workspace/paths.js');
   mkdirSync(paths.qwenVoicesDir(), { recursive: true });
 });
 

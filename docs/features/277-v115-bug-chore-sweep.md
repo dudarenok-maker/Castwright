@@ -6,8 +6,11 @@ owner: null
 
 # 277 — v1.15 bug & chore sweep: triage and round plan
 
-> Status: active — **Round 1 SHIPPED 2026-08-01** (all four lanes merged);
-> Rounds 2 and 3 outstanding. See "Round 1 outcome" below.
+> Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues) and
+> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues). Round 3 outstanding.
+> See "Round 1 outcome" and "Round 2 outcome" below; the latter carries the
+> round's substantive findings, including seven cases of a guard or test
+> reporting green while checking nothing.
 > Key files: this document is a coordination record, not a feature plan. The
 > per-item detail lives in each linked GitHub issue, which stays canonical.
 > URL surface: none
@@ -286,7 +289,34 @@ Two conclusions for Rounds 2 and 3:
   this round; once a half-applied verification mutation was misread as damage,
   and once a mid-cleanup probe file was nearly deleted out from under its owner.
 
-## Round 2 — five lanes, 9 issues (after Round 1 merges)
+## Round 2 — SHIPPED 2026-08-05, five lanes, 16 issues
+
+**The list below is the plan as written on 2026-08-01. What was actually
+dispatched differs, and the differences are the useful part — see "Round 2 as
+dispatched" and "Round 2 outcome" after it.** Two items moved before a single
+lane was cut: **#2033** was pulled out (it needs `server/tts-sidecar/main.py`,
+which Lane 2 held, *and* it changes the sidecar's batch response contract — a
+design-first item, not a lane), and **#2104** was closed by another session's
+PR #2112 while triage was still running. **#1931** turned out to be a duplicate
+of #2079, already shipped on 2026-08-01 — see the outcome section.
+
+### Round 2 as dispatched
+
+| Lane | Branch | PR | Issues |
+|---|---|---|---|
+| 1 | `chore/sidecar-golden-flag-split` | [#2116](https://github.com/dudarenok-maker/Castwright/pull/2116) | #2060, #2061, #2062, #2069 |
+| 2 | `fix/sidecar-main-residuals` | [#2124](https://github.com/dudarenok-maker/Castwright/pull/2124) | #2070, #2094, #2047, #2055, #2038 |
+| 3 | `fix/server-correctness-singles` | [#2126](https://github.com/dudarenok-maker/Castwright/pull/2126) | #2011, #2052, #2088 |
+| 4 | `chore/server-test-hygiene` | [#2122](https://github.com/dudarenok-maker/Castwright/pull/2122) | #2083, #2084, #2078, #2100 |
+| 5 | `chore/ops-guard-singles` | [#2125](https://github.com/dudarenok-maker/Castwright/pull/2125) | #2036, #1931 |
+
+Lane 3 was backfilled with #2052 and #2088 after #2033 came out. Lane 4 absorbed
+six chapter-family files that review found still carrying #2083's shape. Merge
+order was constrained, not first-ready-first-in: #2126 before #2122 (the
+`Closes #2083` hand-off), and the three register-touching PRs serialised with
+`npm run check:onbox-register` re-run after each.
+
+### The original Round 2 list, for reference
 
 - **#2046** — **SHIPPED.** `voices.test.ts`'s series-scope test was
   deterministically red under `--retry=0`; three describes performed
@@ -323,17 +353,141 @@ Two conclusions for Rounds 2 and 3:
   roughly 130 accumulated cast entries drop chapters. *Benefit (user):* removes
   a silent cliff for large-ensemble books.
 
-## Round 3 — design-first (9)
+## Round 2 outcome (2026-08-05)
+
+All five lanes merged; **16 issues closed**, every one verified `CLOSED` after
+its merge rather than assumed. **Nothing shipped as a partial** — seven issues
+were heading for `Refs` and each had its remaining work delivered instead
+(#1931's publish-step mechanism, #2083's six extra files, #2078's second
+symptom, #2094's attribution, #2038's dependency, #2070's and #2084's
+disclosure items).
+
+### Every lane's first attempt had a real defect, and three were in the premise
+
+This is the round's headline, and it is a stronger version of Round 1's finding.
+Not one lane's first attempt was clean, and the defects reviews found were not
+the ones the implementers were uncertain about — they were in claims the
+implementers were confident enough to write down:
+
+- **Lane 3, HIGH severity.** #2011's non-fatal catch let a chapter ship its
+  **original drift PCM stamped `verdict: ok`** on default settings. The verdict
+  was written inside the round loop while the PCM committed only after all
+  rounds; moving that commit inside the new `try` made the half-applied state
+  observable. It also poisoned the downstream #1083 calibration-bleed check,
+  which then compared against a transcript describing discarded audio. Strictly
+  worse than the abort it replaced.
+- **Lane 5, my own spec error.** The new `--against-published` gate compared
+  both directions, so it fired on **every genuine publish** and told the
+  operator to "update the live view's summary strip" — i.e. delete the rows they
+  were about to publish. #1931's own data loss, printed as an instruction. The
+  documented procedure also could not terminate. Fixed with a `direction:
+  'extraOnly'` parameter.
+- **Lane 4, a justification that did not reproduce.** The argument for touching
+  production source (`epub.ts`) rested on an experiment showing 27/27 green
+  without the change; review reproduced **both** arms and got identical
+  failures, on an unrelated error. The real defect was in the assertion:
+  `parseEpub` removes its `mkdtemp` dir in a `finally` **before returning**, so
+  a post-hoc `readdirSync` can never see the named defect — only a *leaked* dir,
+  a different two-part mutation. Fixed by spying `mkdtemp`; production change
+  dropped entirely.
+- **Lane 1, a regression the PR introduced.** The new forced-write echo printed
+  `wrote {...}` *before* an all-or-nothing write that a later field's refusal
+  aborted — newly reachable *because* of the flag split.
+- **Lane 2, three defects in one threshold.** #2055's first attempt relabelled
+  near-silence as drift one token above its tested case (including Whisper's
+  2–4-token Russian hallucinations, invisible to the English-only pattern
+  list); its fixed 0.85 bar could sit **below** the effective `maxWer`, so low
+  confidence made the gate *stricter* and `maxWer: 1.0` stopped disabling it;
+  and its length floor was on *heard* rather than *expected* tokens, so a
+  two-word Russian line with two ordinary mishearings scored WER 1.0.
+
+### Seven cases of green-checking-nothing
+
+The dominant defect shape in this repo's tooling, and worth its own rule:
+
+1. `if True:` — an unconditional skip in `_assert_against_baseline` — survived
+   all 102 golden tests (`1 skipped, 109 passed` reads green).
+2. `test:sidecar` reported `[pass] … (took 1.4s)` on a worktree with no venv,
+   having run nothing.
+3. Mutating `isDirectInvocation` to `return false` — turning
+   `npm run test:golden-audio` into a silent exit 0 — left all 9 tests green.
+4. The bless-guard test's slice anchor was depth-coupled: de-indent the block
+   and blank its env, reintroducing the ambient-bless leak, and all 9 stayed
+   green.
+5. Two `--against-published` CLI tests asserted only `status === 0`, so deleting
+   the entire CLI entry point left them green — one carrying a comment claiming
+   it guarded exactly that.
+6. The #2052 fail-closed test named `if (!health) return;` but the surrounding
+   `try/catch` ate the resulting TypeError, so deleting that line left 9/9
+   green.
+7. **The sharpest one:** two new design-lock tests asserted on a module-level
+   `Map.size` with no `{ retry: 0 }`, so attempt 1 failed and *leaked its
+   mutation* and attempt 2 passed off that state. Reverting the fix gave
+   **2 failed** at `--retry=0` and **8 passed** at the default — the gating
+   config. Exactly the hazard #2028 shipped a fix for in Round 1.
+
+**Proposed rule for Round 3:** a new guard ships with a demonstration, in the PR
+body, that neutralising it turns something red. All seven would have been caught
+at authoring time.
+
+### Two false premises inherited from issues
+
+- **#2088 claimed `withDesignLock` had "zero test coverage".** False —
+  `design-lock.test.ts` has covered the primitive since `53a30df4`, and
+  neutralising it reddens one of its three tests. The claim propagated into a PR
+  body, a release note and a committed test comment before anyone checked. The
+  accurate statement is that `qwen-voice.test.ts` had no coverage of it and the
+  series-branch double-mint property was untested anywhere. [Corrected on the
+  issue](https://github.com/dudarenok-maker/Castwright/issues/2088#issuecomment-5187432684).
+- **#1931 was a duplicate of #2079**, whose `checkLiveView` shipped on
+  2026-08-01 with 58 tests. Its brief was written from the issue without
+  checking whether it had been fixed since it was filed. The lane verified the
+  existing checker rather than rebuilding it, and delivered only the genuine
+  residual. **In a sweep working weeks-old issues, "is this still true?" belongs
+  in the brief, not in the implementer's discovery.**
+
+### Process findings
+
+- **A commit trailer beats a PR body.** #2083 was closed prematurely by
+  `Closes #2083` in commit `baaed498`, even though PR #2126's body deliberately
+  said `Refs`. Editing the body is not sufficient — **check the commit
+  trailers** (`git log base..HEAD --format=%b | grep -iE '^(closes|fixes) #'`)
+  before merging. Caught only because issue state is verified after every merge.
+- **Agents stage and report; the coordinating thread owns commit *and* push.**
+  Round 1's finding was that lanes die at the push; the "commit and report"
+  brief simply moved the failure to the commit. Lanes 2, 3 and 4 each lost
+  several turns to hooks that the coordinator cleared in one; Lane 2 spent 766k
+  tokens partly on this.
+- **The wedge is silent.** A pre-commit hook sat at exactly 0.00s CPU delta with
+  zero children for 36 minutes while looking like a running suite. Detect it by
+  sampling CPU twice and counting children — a blind wait never returns.
+- **Local hooks caught three things agent self-verification missed**: a lint
+  escape, an over-long commit subject, and a missing `config:sync` after a new
+  registry knob. Agents run scoped checks and miss repo-wide invariants.
+- **`docs/release-notes-next.md` conflicted on every merge again**, as in Round
+  1. Always purely additive. A merge driver or an append-only format would
+  remove a guaranteed hand-resolution per PR.
+- **`pr-title-lint` does not re-run on a title edit** (`edited` was dropped in
+  plan 103), so a fixed title stays red until a real push. It is not a required
+  check, so it does not block — but three titles in this round exceeded the
+  100-char limit, and nothing checks PR titles locally the way `commit-msg`
+  checks commits.
+
+## Round 3 — design-first
 
 These fail the fix-now bar: each has more than one defensible answer. The
 deliverable per item is a **phase-1 pass — ticket + plan doc**, not a diff.
 
+- **#2033** — `voiceSubstitutedFrom` on the batched Qwen path. Pulled out of
+  Round 2's Lane 3: it needs an interface change to `SynthesizeBatchOutput`
+  **plus** the sidecar's batch response contract (the header is per-response, a
+  batch is one response covering N items, so the wire shape needs a per-item
+  answer), and it collides with any lane holding `main.py`.
 - **#1996** — VRAM reclaim hook location. Sent back to design 2026-08-01 after
   review proved `/unload` is never issued at render completion and *is* issued
   mid-render at phase boundaries.
-- **#2037** — the sidecar supervisor gives up permanently when the exiting child
-  still holds `:9000`; TTS stays down until a manual server restart. Note the
-  known hazard: `/sidecar/restart` is **not** a safe supervision check.
+- **#2037** — **SHIPPED** in the interval (supervisor respawn when the exiting
+  child still holds `:9000`), merged before Round 2 was dispatched.
 - **#1984** — attribution collapse is invisible. A real book lost 103 of 144
   quoted sentences and sat that way for 17 days unnoticed.
 - **#1393** — srv-58: `reconcileResidentQwenTiers` can evict a Qwen tier a
@@ -388,5 +542,41 @@ Not applicable at the round level. Items with on-box acceptance are listed under
 
 ## Ship notes
 
-(Filled in when the sweep completes — per-round PR numbers and the final
-open-queue count.)
+**Round 1 — shipped 2026-08-01.** Four lanes, 12 issues closed across PRs
+[#2045](https://github.com/dudarenok-maker/Castwright/pull/2045),
+[#2049](https://github.com/dudarenok-maker/Castwright/pull/2049),
+[#2048](https://github.com/dudarenok-maker/Castwright/pull/2048),
+[#2064](https://github.com/dudarenok-maker/Castwright/pull/2064) and
+[#2066](https://github.com/dudarenok-maker/Castwright/pull/2066). 14 issues
+filed; the open queue went 54 → 60.
+
+**Round 2 — shipped 2026-08-05.** Five lanes, **16 issues closed** across PRs
+[#2116](https://github.com/dudarenok-maker/Castwright/pull/2116),
+[#2124](https://github.com/dudarenok-maker/Castwright/pull/2124),
+[#2125](https://github.com/dudarenok-maker/Castwright/pull/2125),
+[#2126](https://github.com/dudarenok-maker/Castwright/pull/2126) and
+[#2122](https://github.com/dudarenok-maker/Castwright/pull/2122):
+
+| Issue | Lane |
+|---|---|
+| #2060, #2061, #2062, #2069 | 1 · golden bless-guard flag split |
+| #2070, #2094, #2047, #2055, #2038 | 2 · sidecar `main.py` |
+| #2011, #2052, #2088 | 3 · server correctness singles |
+| #2083, #2084, #2078, #2100 | 4 · test hygiene |
+| #2036, #1931 | 5 · ops guards |
+
+**Nothing shipped as a partial.** Seven issues were heading for `Refs` and each
+had its remaining work delivered instead, at the repo owner's explicit
+direction ("want these closed, not another follow-up run").
+
+Round 2 filed **no new issues** — a change from Round 1, where 14 were filed
+against 13 closed. Every finding was either fixed in the lane that surfaced it
+or, where it was a false premise, corrected in place on the issue that carried
+it.
+
+**Still open from this sweep:** Round 3's design-first list, headed by #2033
+(pulled out of Round 2 because it changes the sidecar batch wire contract).
+
+The round's substantive findings are in "Round 2 outcome" above — in particular
+the seven green-checking-nothing cases and the proposed rule that a new guard
+must ship with a demonstration that neutralising it turns something red.

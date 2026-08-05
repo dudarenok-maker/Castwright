@@ -22,6 +22,7 @@ import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { retireCharacterId } from '../store/cast-id-history.js';
@@ -79,221 +80,228 @@ export interface CastMergeArgs {
 export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeResult> {
   const { bookId, bookDir, state, sourceId, targetId } = args;
 
-  const cast = await readJson<CastFile>(castJsonPath(bookDir));
-  if (!cast?.characters?.length) {
-    throw { status: 409, error: 'Book has no cast on disk yet. Run analysis before merging characters.' };
-  }
-
-  const source = cast.characters.find((c) => c.id === sourceId);
-  let target = cast.characters.find((c) => c.id === targetId);
-  if (!source) throw { status: 404, error: `Character "${sourceId}" not found.` };
-  /* Downgrade-to-bucket path: when the caller targets one of the standing
-     `unknown-male` / `unknown-female` buckets and that bucket doesn't yet
-     exist in cast.json (the book had no auto-folded background speakers),
-     synthesise it on the fly using the same factory the analyser's
-     post-stage-2 fold uses. Keeps the manual downgrade UI from having to
-     special-case "book has never had a background voice before". */
-  let createdBucket: CharacterOutput | null = null;
-  if (!target && (targetId === MALE_BUCKET_ID || targetId === FEMALE_BUCKET_ID)) {
-    /* Localize the minted bucket's display name to the book's language so a
-       manual downgrade on a non-English book produces the SAME name the
-       analyser's fold would (e.g. Russian "Незнакомый Парень"). Resolved via
-       the canonical seam; defaults to English when state has no language. */
-    const language = bookStateLanguage(state);
-    createdBucket = makeBucket(targetId, targetId === MALE_BUCKET_ID ? 'male' : 'female', language);
-    cast.characters.push(createdBucket);
-    target = createdBucket;
-  }
-  if (!target) throw { status: 404, error: `Character "${targetId}" not found.` };
-
-  /* Build the merged target. Field rules mirror mergeRosterChapter, with
-     two twists for the manual-merge case:
-       - aliases: target's existing + source's name + source's existing,
-         deduped on lower-case. Captures the human's intent ("these are the
-         same person") so the matcher can use it later.
-       - lines/scenes: recomputed below once we know the remapped sentence
-         set. Stored on the merged Character at the end. */
-  const merged: CharacterOutput = { ...target };
-
-  /* Aliases — keep target's, then source.name (the new alias), then
-     anything source had already learned. Drop target.name itself (no point
-     listing a name as its own alias) and dedup case-insensitively. */
-  merged.aliases = mergeAliases(target, source);
-
-  /* Description: longer wins. The longer one usually carries more context. */
-  if (
-    source.description &&
-    (!target.description || source.description.length > target.description.length)
-  ) {
-    merged.description = source.description;
-  }
-
-  /* Attributes: union, case-insensitive dedup. Target order first. */
-  merged.attributes = unionStrings(target.attributes, source.attributes);
-
-  /* Evidence: union, dedup on normalised quote text. */
-  merged.evidence = mergeEvidence(target.evidence, source.evidence);
-
-  /* Tone: target wins per field; missing fields filled from source. */
-  if (source.tone || target.tone) {
-    merged.tone = { ...source.tone, ...target.tone };
-  }
-
-  /* Identity fields: only adopt source's value when target lacks one. */
-  if (!merged.gender && source.gender) merged.gender = source.gender;
-  if (!merged.ageRange && source.ageRange) merged.ageRange = source.ageRange;
-
-  /* Filter source out of the cast (in-place build for stable order). */
-  const nextCharacters: CharacterOutput[] = [];
-  for (const c of cast.characters) {
-    if (c.id === sourceId) continue;
-    nextCharacters.push(c.id === targetId ? merged : c);
-  }
-
-  /* Remap sentence attributions in manuscript-edits.json. The edits file
-     is the authoritative per-sentence record once stage 2 has completed —
-     we rewrite it first so the lines/scenes recompute below sees the new
-     state. */
-  const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
-  let editsTouched = false;
-  let editsAfter: SentenceOutput[] | null = null;
-  /* srv-1 — chapter-qualified ids of the sentences this merge rewrites
-     source → target. Sentence ids are unique only within a chapter, so we
-     keep the chapterId alongside each id. */
-  const affected: Array<{ chapterId: number; sentenceId: number }> = [];
-  if (edits?.sentences?.length) {
-    let changed = 0;
-    editsAfter = edits.sentences.map((s) => {
-      if (s.characterId === sourceId) {
-        changed += 1;
-        affected.push({ chapterId: s.chapterId, sentenceId: s.id });
-        return { ...s, characterId: targetId };
-      }
-      return s;
-    });
-    if (changed > 0) {
-      editsTouched = true;
-      await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: editsAfter });
+  /* #1981 — the read is inside the lock; every decision below (404s, the
+     downgrade-bucket synthesis, the merged fields, the remapped sentences)
+     is derived from it. The inner `writeJsonAtomic(manuscriptEditsJsonPath(...))`
+     is a DIFFERENT file — the cast lock doesn't cover it, it's just along
+     for the ride inside this span. */
+  return withCastLock(bookDir, async () => {
+    const cast = await readJson<CastFile>(castJsonPath(bookDir));
+    if (!cast?.characters?.length) {
+      throw { status: 409, error: 'Book has no cast on disk yet. Run analysis before merging characters.' };
     }
-  }
 
-  /* Recompute lines / scenes on the merged character from the up-to-date
-     sentence list. Avoids the over-count that a naive sum produces when
-     the same chapter contained both ids. */
-  if (editsAfter?.length) {
-    let lines = 0;
-    const scenes = new Set<number>();
-    for (const s of editsAfter) {
-      if (s.characterId === targetId) {
-        lines += 1;
-        scenes.add(s.chapterId);
-      }
+    const source = cast.characters.find((c) => c.id === sourceId);
+    let target = cast.characters.find((c) => c.id === targetId);
+    if (!source) throw { status: 404, error: `Character "${sourceId}" not found.` };
+    /* Downgrade-to-bucket path: when the caller targets one of the standing
+       `unknown-male` / `unknown-female` buckets and that bucket doesn't yet
+       exist in cast.json (the book had no auto-folded background speakers),
+       synthesise it on the fly using the same factory the analyser's
+       post-stage-2 fold uses. Keeps the manual downgrade UI from having to
+       special-case "book has never had a background voice before". */
+    let createdBucket: CharacterOutput | null = null;
+    if (!target && (targetId === MALE_BUCKET_ID || targetId === FEMALE_BUCKET_ID)) {
+      /* Localize the minted bucket's display name to the book's language so a
+         manual downgrade on a non-English book produces the SAME name the
+         analyser's fold would (e.g. Russian "Незнакомый Парень"). Resolved via
+         the canonical seam; defaults to English when state has no language. */
+      const language = bookStateLanguage(state);
+      createdBucket = makeBucket(targetId, targetId === MALE_BUCKET_ID ? 'male' : 'female', language);
+      cast.characters.push(createdBucket);
+      target = createdBucket;
     }
-    merged.lines = lines;
-    merged.scenes = scenes.size;
-  } else {
-    /* No edits on disk — best effort: sum lines, sum scenes (will
-       over-count if they overlapped, but that recomputes the moment
-       stage 2 lands). */
-    merged.lines = (target.lines ?? 0) + (source.lines ?? 0);
-    merged.scenes = (target.scenes ?? 0) + (source.scenes ?? 0);
-  }
+    if (!target) throw { status: 404, error: `Character "${targetId}" not found.` };
 
-  await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
+    /* Build the merged target. Field rules mirror mergeRosterChapter, with
+       two twists for the manual-merge case:
+         - aliases: target's existing + source's name + source's existing,
+           deduped on lower-case. Captures the human's intent ("these are the
+           same person") so the matcher can use it later.
+         - lines/scenes: recomputed below once we know the remapped sentence
+           set. Stored on the merged Character at the end. */
+    const merged: CharacterOutput = { ...target };
 
-  /* §4.4 call site 5 — a merge drops sourceId outright; every segment that
-     row already rendered would otherwise orphan the instant this lands.
-     Record the retirement through the same choke point every other
-     id-losing path uses, so the resolver (§4.3) picks it up at render time.
+    /* Aliases — keep target's, then source.name (the new alias), then
+       anything source had already learned. Drop target.name itself (no point
+       listing a name as its own alias) and dedup case-insensitively. */
+    merged.aliases = mergeAliases(target, source);
 
-     Wrapped (Wave 2 final review, finding 4). This call sits between the
-     authoritative cast.json write above and the analysis-cache
-     reconciliation below, and was the only one of the seven retirement sites
-     left unguarded — an EPERM/ENOSPC/AV-lock here rejected the whole merge
-     with cast.json ALREADY missing sourceId while the cache still held it,
-     the exact state the comment below says must not happen, plus a 500 on a
-     half-applied merge. Kept HERE rather than moved after the cache update:
-     the position is correct (record after the authoritative write, #2040
-     Task 8 fix round 1 item 1) and moving it would not help — an unguarded
-     throw still rejects, just later. The side-table is never authoritative
-     for identity (spec §4.1), so losing an entry degrades to today's
-     behaviour while losing the merge does not. Mirrors the six analysis-path
-     sites. */
-  try {
-    await retireCharacterId(bookDir, sourceId, targetId);
-  } catch (historyErr) {
-    console.warn('[cast-merge] failed to record character-id retirement', historyErr);
-  }
-
-  /* Analysis cache update — stage1.characters AND per-chapter sentences.
-     The cache is what the route replays on resume, so leaving the source
-     in here would reintroduce the duplicate as soon as the user clicks
-     "resume" after a network blip. */
-  let cacheTouched = false;
-  const cache = await loadAnalysisCache(state.manuscriptId);
-  if (cache.stage1?.characters?.length) {
-    const before = cache.stage1.characters.length;
-    let next = cache.stage1.characters
-      .filter((c) => c.id !== sourceId)
-      .map((c) => (c.id === targetId ? merged : c));
-    /* Auto-created bucket: the cache wouldn't have known about it yet, so
-       append the merged entry so a Phase-1 cache replay sees the same
-       roster as cast.json. */
-    if (createdBucket && !next.some((c) => c.id === targetId)) {
-      next = [...next, merged];
-      cacheTouched = true;
+    /* Description: longer wins. The longer one usually carries more context. */
+    if (
+      source.description &&
+      (!target.description || source.description.length > target.description.length)
+    ) {
+      merged.description = source.description;
     }
-    if (next.length !== before) cacheTouched = true;
-    cache.stage1.characters = next;
-  }
-  if (cache.chapters) {
-    for (const [chapterId, sentences] of Object.entries(cache.chapters)) {
-      let chChanged = false;
-      const remapped = sentences.map((s) => {
+
+    /* Attributes: union, case-insensitive dedup. Target order first. */
+    merged.attributes = unionStrings(target.attributes, source.attributes);
+
+    /* Evidence: union, dedup on normalised quote text. */
+    merged.evidence = mergeEvidence(target.evidence, source.evidence);
+
+    /* Tone: target wins per field; missing fields filled from source. */
+    if (source.tone || target.tone) {
+      merged.tone = { ...source.tone, ...target.tone };
+    }
+
+    /* Identity fields: only adopt source's value when target lacks one. */
+    if (!merged.gender && source.gender) merged.gender = source.gender;
+    if (!merged.ageRange && source.ageRange) merged.ageRange = source.ageRange;
+
+    /* Filter source out of the cast (in-place build for stable order). */
+    const nextCharacters: CharacterOutput[] = [];
+    for (const c of cast.characters) {
+      if (c.id === sourceId) continue;
+      nextCharacters.push(c.id === targetId ? merged : c);
+    }
+
+    /* Remap sentence attributions in manuscript-edits.json. The edits file
+       is the authoritative per-sentence record once stage 2 has completed —
+       we rewrite it first so the lines/scenes recompute below sees the new
+       state. */
+    const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
+    let editsTouched = false;
+    let editsAfter: SentenceOutput[] | null = null;
+    /* srv-1 — chapter-qualified ids of the sentences this merge rewrites
+       source → target. Sentence ids are unique only within a chapter, so we
+       keep the chapterId alongside each id. */
+    const affected: Array<{ chapterId: number; sentenceId: number }> = [];
+    if (edits?.sentences?.length) {
+      let changed = 0;
+      editsAfter = edits.sentences.map((s) => {
         if (s.characterId === sourceId) {
-          chChanged = true;
+          changed += 1;
+          affected.push({ chapterId: s.chapterId, sentenceId: s.id });
           return { ...s, characterId: targetId };
         }
         return s;
       });
-      if (chChanged) {
-        cache.chapters[Number(chapterId)] = remapped;
-        cacheTouched = true;
+      if (changed > 0) {
+        editsTouched = true;
+        await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: editsAfter });
       }
     }
-  }
-  if (cacheTouched) {
-    await saveAnalysisCache(state.manuscriptId, cache);
-  }
 
-  /* srv-1 — append this merge to the deterministic lineage journal so the
-     unlink-alias route can later surface exactly these sentences. Non-fatal:
-     cast.json / edits / cache already persisted above, so a journal failure
-     must never fail the merge (mirrors the reuse-link precedent). */
-  try {
-    const journal = await loadCastMerges(bookDir);
-    await saveCastMerges(
-      bookDir,
-      appendManualEntry(journal, {
-        ts: new Date().toISOString(),
-        kind: 'manual',
-        sourceId,
-        sourceName: source.name,
-        targetId,
-        affected,
-      }),
+    /* Recompute lines / scenes on the merged character from the up-to-date
+       sentence list. Avoids the over-count that a naive sum produces when
+       the same chapter contained both ids. */
+    if (editsAfter?.length) {
+      let lines = 0;
+      const scenes = new Set<number>();
+      for (const s of editsAfter) {
+        if (s.characterId === targetId) {
+          lines += 1;
+          scenes.add(s.chapterId);
+        }
+      }
+      merged.lines = lines;
+      merged.scenes = scenes.size;
+    } else {
+      /* No edits on disk — best effort: sum lines, sum scenes (will
+         over-count if they overlapped, but that recomputes the moment
+         stage 2 lands). */
+      merged.lines = (target.lines ?? 0) + (source.lines ?? 0);
+      merged.scenes = (target.scenes ?? 0) + (source.scenes ?? 0);
+    }
+
+    await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
+
+    /* §4.4 call site 5 — a merge drops sourceId outright; every segment that
+       row already rendered would otherwise orphan the instant this lands.
+       Record the retirement through the same choke point every other
+       id-losing path uses, so the resolver (§4.3) picks it up at render time.
+
+       Wrapped (Wave 2 final review, finding 4). This call sits between the
+       authoritative cast.json write above and the analysis-cache
+       reconciliation below, and was the only one of the seven retirement sites
+       left unguarded — an EPERM/ENOSPC/AV-lock here rejected the whole merge
+       with cast.json ALREADY missing sourceId while the cache still held it,
+       the exact state the comment below says must not happen, plus a 500 on a
+       half-applied merge. Kept HERE rather than moved after the cache update:
+       the position is correct (record after the authoritative write, #2040
+       Task 8 fix round 1 item 1) and moving it would not help — an unguarded
+       throw still rejects, just later. The side-table is never authoritative
+       for identity (spec §4.1), so losing an entry degrades to today's
+       behaviour while losing the merge does not. Mirrors the six analysis-path
+       sites. */
+    try {
+      await retireCharacterId(bookDir, sourceId, targetId);
+    } catch (historyErr) {
+      console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+    }
+
+    /* Analysis cache update — stage1.characters AND per-chapter sentences.
+       The cache is what the route replays on resume, so leaving the source
+       in here would reintroduce the duplicate as soon as the user clicks
+       "resume" after a network blip. */
+    let cacheTouched = false;
+    const cache = await loadAnalysisCache(state.manuscriptId);
+    if (cache.stage1?.characters?.length) {
+      const before = cache.stage1.characters.length;
+      let next = cache.stage1.characters
+        .filter((c) => c.id !== sourceId)
+        .map((c) => (c.id === targetId ? merged : c));
+      /* Auto-created bucket: the cache wouldn't have known about it yet, so
+         append the merged entry so a Phase-1 cache replay sees the same
+         roster as cast.json. */
+      if (createdBucket && !next.some((c) => c.id === targetId)) {
+        next = [...next, merged];
+        cacheTouched = true;
+      }
+      if (next.length !== before) cacheTouched = true;
+      cache.stage1.characters = next;
+    }
+    if (cache.chapters) {
+      for (const [chapterId, sentences] of Object.entries(cache.chapters)) {
+        let chChanged = false;
+        const remapped = sentences.map((s) => {
+          if (s.characterId === sourceId) {
+            chChanged = true;
+            return { ...s, characterId: targetId };
+          }
+          return s;
+        });
+        if (chChanged) {
+          cache.chapters[Number(chapterId)] = remapped;
+          cacheTouched = true;
+        }
+      }
+    }
+    if (cacheTouched) {
+      await saveAnalysisCache(state.manuscriptId, cache);
+    }
+
+    /* srv-1 — append this merge to the deterministic lineage journal so the
+       unlink-alias route can later surface exactly these sentences. Non-fatal:
+       cast.json / edits / cache already persisted above, so a journal failure
+       must never fail the merge (mirrors the reuse-link precedent). */
+    try {
+      const journal = await loadCastMerges(bookDir);
+      await saveCastMerges(
+        bookDir,
+        appendManualEntry(journal, {
+          ts: new Date().toISOString(),
+          kind: 'manual',
+          sourceId,
+          sourceName: source.name,
+          targetId,
+          affected,
+        }),
+      );
+    } catch (journalErr) {
+      console.warn('[cast-merge] failed to write cast-merges journal', journalErr);
+    }
+
+    console.log(
+      `[cast-merge] book=${bookId} merged ${sourceId} → ${targetId}` +
+        (editsTouched ? ' (remapped sentences)' : '') +
+        (cacheTouched ? ' (rewrote cache)' : ''),
     );
-  } catch (journalErr) {
-    console.warn('[cast-merge] failed to write cast-merges journal', journalErr);
-  }
 
-  console.log(
-    `[cast-merge] book=${bookId} merged ${sourceId} → ${targetId}` +
-      (editsTouched ? ' (remapped sentences)' : '') +
-      (cacheTouched ? ' (rewrote cache)' : ''),
-  );
-
-  return { characters: nextCharacters, sourceId };
+    return { characters: nextCharacters, sourceId };
+  });
 }
 
 castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) => {

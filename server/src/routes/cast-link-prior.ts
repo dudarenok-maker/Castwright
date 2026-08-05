@@ -32,6 +32,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLocks } from '../workspace/cast-lock.js';
 import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
@@ -109,174 +110,187 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     });
   }
 
-  const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-  const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
-  if (!sourceCast?.characters?.length) {
-    return res
-      .status(409)
-      .json({ error: 'Source book has no cast on disk yet. Run analysis before linking.' });
-  }
-  if (!targetCast?.characters?.length) {
-    return res.status(409).json({ error: 'Target book has no cast on disk.' });
-  }
-
-  const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
-  if (!source)
-    return res.status(404).json({ error: `Source character "${sourceCharacterId}" not found.` });
-  const target = targetCast.characters.find((c) => c.id === targetCharacterId);
-  if (!target)
-    return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
-
-  /* Append source.name + source.aliases to target.aliases (case-insensitive
-     dedup, drop target.name itself). The matcher uses these on future
-     books to recognise either surface form. Skip the write entirely when
-     no new alias would land — keeps the call idempotent on the disk side. */
-  const nextAliases = appendAliases(target, source);
-  const aliasesChanged = !arraysShallowEqual(target.aliases ?? [], nextAliases ?? []);
-
-  if (aliasesChanged) {
-    const mergedTarget: CharacterOutput = { ...target, aliases: nextAliases };
-    const nextTargetCharacters = targetCast.characters.map((c) =>
-      c.id === targetCharacterId ? mergedTarget : c,
-    );
-    await writeJsonAtomic(castJsonPath(targetLocated.bookDir), {
-      characters: nextTargetCharacters,
-    });
-  }
-
-  /* Unify the propagation key (plan 122). Aliases alone let the matcher
-     RECOGNISE both surface forms, but they don't make the two rows share the
-     series-override write key `voiceId ?? id` — so a later "Propose voices"
-     approve would skip the source book. Stamp the source character's voiceId
-     with the target's canonical key so a manual continuity link truly unifies
-     them. Idempotent: skip the write when it already matches. */
-  const canonicalVoiceId = target.voiceId ?? target.id;
-  const voiceIdChanged = source.voiceId !== canonicalVoiceId;
-
-  /* Denormalise the bespoke (qwen) voice onto the source at link time. A
-     reused character whose own `overrideTtsVoices.qwen` is empty would
-     otherwise resolve to '' at generation and fall back to Kokoro — the
-     reused-voice consistency bug. Copying the target's designed voice (engine
-     + override) here keeps the source's cast.json self-complete, so it no
-     longer depends on read-time hydration. Only fills when the source lacks
-     its own qwen voice and the target carries one; never clobbers an explicit
-     source override. The persona (`voiceStyle`) rides along the same gate
-     (srv-18) — copied from the target only when the source lacks its own, so
-     the reused row carries the persona on disk without a backfill.
-
-     [Task 6a] — a source that already carries a CLONED voice on ANY
-     clone-capable engine (e.g. coqui) must never be denormalised onto the
-     target's qwen slot: `sourceHasQwen` is a name-only test on the qwen slot
-     specifically, so a coqui-cloned character (which genuinely has no qwen
-     slot) read as `!sourceHasQwen` and inherited the target's qwen voice via
-     `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` — planting
-     another character's designed voice on a real person's cloned record, and
-     (via the `ttsEngine` fallback below) retargeting them onto qwen for
-     generation. FAIL-SAFE test (`characterHasClonedSlot`, provenance only,
-     no libraryUuid validation) — this is a destructive/preserving guard, so
-     a malformed cloned slot must still count as cloned and stay protected.
-     Cloned source: fail loud/preserve (never denormalise, never retarget
-     engine). Designed/no-voice source: unchanged fail-soft denormalise below.
-
-     [#1885] — the OTHER half of the same laundering shape: this route is a
-     MANUAL link (the client supplies targetBookId/targetCharacterId
-     directly), so — unlike the auto-matcher's candidate list, which
-     `library-cast-scan.ts` already filters to exclude any character
-     carrying a cloned slot on any engine — nothing upstream of this route
-     guarantees the target isn't itself a real person's consented clone. If
-     the target carries ANY clone-capable engine's cloned slot, denormalising
-     `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` below
-     would copy that clone (its qwen slot, or any other engine's cloned
-     slot the spread pulls in unfiltered) onto the source's book — a
-     cross-book consent bypass, not the Task 6a engine-force shape. Same
-     FAIL-SAFE test as the source-side guard above, applied to the target. */
-  const sourceIsCloned = characterHasClonedSlot(source);
-  const targetIsCloned = characterHasClonedSlot(target);
-  const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
-  const targetQwen = target.overrideTtsVoices?.qwen?.name;
-  const shouldDenormaliseVoice = !sourceIsCloned && !targetIsCloned && !sourceHasQwen && !!targetQwen;
-
-  /* Carry the prior character's PROFILE content onto the source at link time.
-     A manual continuity link declares "these are the same person", so the
-     reused row should inherit the canonical character's representative quotes
-     and descriptors — not just its voice. Without this a roster-carried row
-     (e.g. an The Floodmark "Dame Linnet" with zero of its own detected lines) stays
-     blank after linking, which reads as "the link did nothing". Merge rules
-     mirror the in-book merge (cast-merge.ts): union the list fields (evidence,
-     attributes) source-first so the current book's own quotes lead, and
-     fill-if-missing the scalar fields (description, tone, gender, ageRange) so
-     a richer local profile is never clobbered. */
-  const mergedEvidence = mergeEvidence(source.evidence, target.evidence);
-  const mergedAttributes = unionStrings(source.attributes, target.attributes);
-  const mergedDescription =
-    source.description && source.description.trim() ? source.description : target.description;
-  const mergedTone =
-    source.tone || target.tone ? { ...target.tone, ...source.tone } : undefined;
-  const mergedGender = source.gender ?? target.gender;
-  const mergedAgeRange = source.ageRange ?? target.ageRange;
-
-  const profileChanged =
-    !evidenceEqual(source.evidence, mergedEvidence) ||
-    !arraysShallowEqual(source.attributes ?? [], mergedAttributes ?? []) ||
-    source.description !== mergedDescription ||
-    source.gender !== mergedGender ||
-    source.ageRange !== mergedAgeRange ||
-    JSON.stringify(source.tone ?? null) !== JSON.stringify(mergedTone ?? null);
-
-  if (voiceIdChanged || shouldDenormaliseVoice || profileChanged) {
-    const mergedSource: PersistedCharacter = {
-      ...source,
-      voiceId: canonicalVoiceId,
-      evidence: mergedEvidence,
-      attributes: mergedAttributes,
-      description: mergedDescription,
-      tone: mergedTone,
-      gender: mergedGender,
-      ageRange: mergedAgeRange,
-    };
-    if (shouldDenormaliseVoice) {
-      mergedSource.ttsEngine = source.ttsEngine ?? target.ttsEngine ?? 'qwen';
-      mergedSource.overrideTtsVoices = {
-        ...(target.overrideTtsVoices ?? {}),
-        ...(source.overrideTtsVoices ?? {}),
-      };
-      mergedSource.voiceStyle = source.voiceStyle ?? target.voiceStyle;
+  /* #1981 (Task 8) — this route touches TWO books' cast.json (target's
+     aliases write, source's profile/voice write). withCastLocks holds both
+     for the whole read-through-write span, sorted so a concurrent call with
+     the books in the opposite role (this book as someone else's target)
+     can't AB/BA against it. The read and every decision derived from it
+     (aliasesChanged, voiceIdChanged, shouldDenormaliseVoice, profileChanged)
+     live inside the lock, per rule 2. */
+  return withCastLocks([sourceLocated.bookDir, targetLocated.bookDir], async () => {
+    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+    const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
+    if (!sourceCast?.characters?.length) {
+      return res
+        .status(409)
+        .json({ error: 'Source book has no cast on disk yet. Run analysis before linking.' });
     }
-    const nextSourceCharacters = sourceCast.characters.map((c) =>
-      c.id === sourceCharacterId ? mergedSource : c,
+    if (!targetCast?.characters?.length) {
+      return res.status(409).json({ error: 'Target book has no cast on disk.' });
+    }
+
+    const source = sourceCast.characters.find((c) => c.id === sourceCharacterId);
+    if (!source)
+      return res
+        .status(404)
+        .json({ error: `Source character "${sourceCharacterId}" not found.` });
+    const target = targetCast.characters.find((c) => c.id === targetCharacterId);
+    if (!target)
+      return res
+        .status(404)
+        .json({ error: `Target character "${targetCharacterId}" not found.` });
+
+    /* Append source.name + source.aliases to target.aliases (case-insensitive
+       dedup, drop target.name itself). The matcher uses these on future
+       books to recognise either surface form. Skip the write entirely when
+       no new alias would land — keeps the call idempotent on the disk side. */
+    const nextAliases = appendAliases(target, source);
+    const aliasesChanged = !arraysShallowEqual(target.aliases ?? [], nextAliases ?? []);
+
+    if (aliasesChanged) {
+      const mergedTarget: CharacterOutput = { ...target, aliases: nextAliases };
+      const nextTargetCharacters = targetCast.characters.map((c) =>
+        c.id === targetCharacterId ? mergedTarget : c,
+      );
+      await writeJsonAtomic(castJsonPath(targetLocated.bookDir), {
+        characters: nextTargetCharacters,
+      });
+    }
+
+    /* Unify the propagation key (plan 122). Aliases alone let the matcher
+       RECOGNISE both surface forms, but they don't make the two rows share the
+       series-override write key `voiceId ?? id` — so a later "Propose voices"
+       approve would skip the source book. Stamp the source character's voiceId
+       with the target's canonical key so a manual continuity link truly unifies
+       them. Idempotent: skip the write when it already matches. */
+    const canonicalVoiceId = target.voiceId ?? target.id;
+    const voiceIdChanged = source.voiceId !== canonicalVoiceId;
+
+    /* Denormalise the bespoke (qwen) voice onto the source at link time. A
+       reused character whose own `overrideTtsVoices.qwen` is empty would
+       otherwise resolve to '' at generation and fall back to Kokoro — the
+       reused-voice consistency bug. Copying the target's designed voice (engine
+       + override) here keeps the source's cast.json self-complete, so it no
+       longer depends on read-time hydration. Only fills when the source lacks
+       its own qwen voice and the target carries one; never clobbers an explicit
+       source override. The persona (`voiceStyle`) rides along the same gate
+       (srv-18) — copied from the target only when the source lacks its own, so
+       the reused row carries the persona on disk without a backfill.
+
+       [Task 6a] — a source that already carries a CLONED voice on ANY
+       clone-capable engine (e.g. coqui) must never be denormalised onto the
+       target's qwen slot: `sourceHasQwen` is a name-only test on the qwen slot
+       specifically, so a coqui-cloned character (which genuinely has no qwen
+       slot) read as `!sourceHasQwen` and inherited the target's qwen voice via
+       `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` — planting
+       another character's designed voice on a real person's cloned record, and
+       (via the `ttsEngine` fallback below) retargeting them onto qwen for
+       generation. FAIL-SAFE test (`characterHasClonedSlot`, provenance only,
+       no libraryUuid validation) — this is a destructive/preserving guard, so
+       a malformed cloned slot must still count as cloned and stay protected.
+       Cloned source: fail loud/preserve (never denormalise, never retarget
+       engine). Designed/no-voice source: unchanged fail-soft denormalise below.
+
+       [#1885] — the OTHER half of the same laundering shape: this route is a
+       MANUAL link (the client supplies targetBookId/targetCharacterId
+       directly), so — unlike the auto-matcher's candidate list, which
+       `library-cast-scan.ts` already filters to exclude any character
+       carrying a cloned slot on any engine — nothing upstream of this route
+       guarantees the target isn't itself a real person's consented clone. If
+       the target carries ANY clone-capable engine's cloned slot, denormalising
+       `{ ...target.overrideTtsVoices, ...source.overrideTtsVoices }` below
+       would copy that clone (its qwen slot, or any other engine's cloned
+       slot the spread pulls in unfiltered) onto the source's book — a
+       cross-book consent bypass, not the Task 6a engine-force shape. Same
+       FAIL-SAFE test as the source-side guard above, applied to the target. */
+    const sourceIsCloned = characterHasClonedSlot(source);
+    const targetIsCloned = characterHasClonedSlot(target);
+    const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
+    const targetQwen = target.overrideTtsVoices?.qwen?.name;
+    const shouldDenormaliseVoice = !sourceIsCloned && !targetIsCloned && !sourceHasQwen && !!targetQwen;
+
+    /* Carry the prior character's PROFILE content onto the source at link time.
+       A manual continuity link declares "these are the same person", so the
+       reused row should inherit the canonical character's representative quotes
+       and descriptors — not just its voice. Without this a roster-carried row
+       (e.g. an The Floodmark "Dame Linnet" with zero of its own detected lines) stays
+       blank after linking, which reads as "the link did nothing". Merge rules
+       mirror the in-book merge (cast-merge.ts): union the list fields (evidence,
+       attributes) source-first so the current book's own quotes lead, and
+       fill-if-missing the scalar fields (description, tone, gender, ageRange) so
+       a richer local profile is never clobbered. */
+    const mergedEvidence = mergeEvidence(source.evidence, target.evidence);
+    const mergedAttributes = unionStrings(source.attributes, target.attributes);
+    const mergedDescription =
+      source.description && source.description.trim() ? source.description : target.description;
+    const mergedTone =
+      source.tone || target.tone ? { ...target.tone, ...source.tone } : undefined;
+    const mergedGender = source.gender ?? target.gender;
+    const mergedAgeRange = source.ageRange ?? target.ageRange;
+
+    const profileChanged =
+      !evidenceEqual(source.evidence, mergedEvidence) ||
+      !arraysShallowEqual(source.attributes ?? [], mergedAttributes ?? []) ||
+      source.description !== mergedDescription ||
+      source.gender !== mergedGender ||
+      source.ageRange !== mergedAgeRange ||
+      JSON.stringify(source.tone ?? null) !== JSON.stringify(mergedTone ?? null);
+
+    if (voiceIdChanged || shouldDenormaliseVoice || profileChanged) {
+      const mergedSource: PersistedCharacter = {
+        ...source,
+        voiceId: canonicalVoiceId,
+        evidence: mergedEvidence,
+        attributes: mergedAttributes,
+        description: mergedDescription,
+        tone: mergedTone,
+        gender: mergedGender,
+        ageRange: mergedAgeRange,
+      };
+      if (shouldDenormaliseVoice) {
+        mergedSource.ttsEngine = source.ttsEngine ?? target.ttsEngine ?? 'qwen';
+        mergedSource.overrideTtsVoices = {
+          ...(target.overrideTtsVoices ?? {}),
+          ...(source.overrideTtsVoices ?? {}),
+        };
+        mergedSource.voiceStyle = source.voiceStyle ?? target.voiceStyle;
+      }
+      const nextSourceCharacters = sourceCast.characters.map((c) =>
+        c.id === sourceCharacterId ? mergedSource : c,
+      );
+      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+        characters: nextSourceCharacters,
+      });
+    }
+
+    console.log(
+      `[cast-link-prior] ${sourceBookId}/${sourceCharacterId} → ${targetBookId}/${targetCharacterId}` +
+        (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)') +
+        (voiceIdChanged ? ` (voiceId → ${canonicalVoiceId})` : '') +
+        (profileChanged ? ' (merged profile)' : ''),
     );
-    await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
-      characters: nextSourceCharacters,
+
+    return res.json({
+      matchedFrom: {
+        bookId: targetBookId,
+        characterId: targetCharacterId,
+        bookTitle: targetLocated.state.title,
+        confidence: 1,
+      },
+      voiceId: canonicalVoiceId,
+      /* Echo the merged profile so the frontend updates the open drawer +
+         redux without a reload. Only present when something changed. */
+      profile: profileChanged
+        ? {
+            evidence: mergedEvidence,
+            attributes: mergedAttributes,
+            description: mergedDescription,
+            tone: mergedTone,
+            gender: mergedGender,
+            ageRange: mergedAgeRange,
+          }
+        : undefined,
     });
-  }
-
-  console.log(
-    `[cast-link-prior] ${sourceBookId}/${sourceCharacterId} → ${targetBookId}/${targetCharacterId}` +
-      (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)') +
-      (voiceIdChanged ? ` (voiceId → ${canonicalVoiceId})` : '') +
-      (profileChanged ? ' (merged profile)' : ''),
-  );
-
-  return res.json({
-    matchedFrom: {
-      bookId: targetBookId,
-      characterId: targetCharacterId,
-      bookTitle: targetLocated.state.title,
-      confidence: 1,
-    },
-    voiceId: canonicalVoiceId,
-    /* Echo the merged profile so the frontend updates the open drawer +
-       redux without a reload. Only present when something changed. */
-    profile: profileChanged
-      ? {
-          evidence: mergedEvidence,
-          attributes: mergedAttributes,
-          description: mergedDescription,
-          tone: mergedTone,
-          gender: mergedGender,
-          ageRange: mergedAgeRange,
-        }
-      : undefined,
   });
 });
 

@@ -348,18 +348,38 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(existsSync(legacyDir)).toBe(false);
   }, 30_000);
 
+  /* #2078 / #2084 — this test (and, per #2078, the unrelated "404s for an
+     unknown book" test below in this same file) has twice been observed
+     failing on its first attempt only under a contended full-suite run,
+     clean every time in isolation (6/6 across both issues' reports). The
+     404 test doesn't touch an export job at all, which rules out shared
+     mutable fixture state (beforeEach already resets jobs + every export
+     dir per test) — this is generic resource contention (CPU/ffmpeg/process
+     starvation from other concurrently-running suites), the same class
+     vitest.config.ts's maxForks tuning exists to absorb. The `done.status`
+     assertions below fix THIS test: a future export failure now fails with
+     an honest "expected done, got failed/timeout" instead of a misleading
+     assertion about a manifest file. The 404 test's own fix (poll the
+     assertion instead of trusting one shot under load) is at its call site
+     below. */
   it('revokes the older same-format manifest when a re-export of the same format finishes', async () => {
     const first = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const firstId = first.body.id as string;
-    await waitForDone(firstId);
+    const { body: firstDone } = await waitForDone(firstId);
+    // #2084 — waitForDone treats 'failed' as terminal too, so without this
+    // assertion a genuine export failure under contention (this is a
+    // describeIfFfmpeg suite) presents as a confusing "expected false to be
+    // true" about a manifest path instead of "the export failed".
+    expect(firstDone.status).toBe('done');
 
     const second = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const secondId = second.body.id as string;
-    await waitForDone(secondId);
+    const { body: secondDone } = await waitForDone(secondId);
+    expect(secondDone.status).toBe('done');
 
     /* First manifest is gone, second is present. */
     const firstManifest = join(bookDir, '.audiobook', 'export-manifests', `${firstId}.json`);
@@ -637,7 +657,16 @@ describe('GET /api/books/:bookId/exports (list)', () => {
   });
 
   it('404s for an unknown book', async () => {
-    await request(app).get('/api/books/does-not-exist/exports').expect(404);
+    // #2078 — this request has no shared/leaked state to make it order-
+    // dependent (a fresh isolated lookup every poll), so an intermittent
+    // failure here is full-suite resource contention, not a logic bug.
+    // Poll the same assertion instead of trusting one shot under load,
+    // rather than widening a timeout or weakening what's checked.
+    await expect
+      .poll(async () => (await request(app).get('/api/books/does-not-exist/exports')).status, {
+        timeout: 10_000,
+      })
+      .toBe(404);
   });
 });
 
