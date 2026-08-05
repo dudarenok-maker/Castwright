@@ -10,8 +10,18 @@ Three call sites reach `unload_design()` and so can raise this:
 fell into the generic 500). All three are covered here so a future call
 site gains coverage automatically only if it's added to this file — the
 route wiring itself is untestable from `test_design_contention.py`, which
-drives `unload_design()` directly, never through a route."""
+drives `unload_design()` directly, never through a route.
+
+The three tests above each use a FAKE engine that raises
+`DesignContentionTimeoutError` directly — they cover the route's mapping,
+not the producer. `test_synthesize_maps_a_real_unload_design_timeout_to_503`
+below is #2070's own acceptance criterion: it drives the REAL chain — a
+real `QwenEngine.synthesize()` -> real `unload_design()` -> a real timeout
+against a real in-flight claim -> the route's catch — with only the wait
+budget shortened so it runs fast."""
 from __future__ import annotations
+
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -108,3 +118,72 @@ def test_mint_variant_maps_design_contention_timeout_to_503(monkeypatch: pytest.
     assert body["code"] == "design_in_flight"
     assert body.get("poisoned") is not True
     assert body["detail"] != "Internal error."
+
+
+def test_synthesize_maps_a_real_unload_design_timeout_to_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2070's own acceptance criterion, driving the REAL chain end to end —
+    not a fake engine that raises `DesignContentionTimeoutError` directly
+    (that's `test_synthesize_maps_design_contention_timeout_to_503` above).
+
+    A real `QwenEngine` with a resident `_design` and a real in-flight claim
+    (mirroring `design_voice()`'s own `with self._design_in_flight.claim():`
+    bracket, exactly as `test_design_contention.py` drives `unload_design()`
+    directly) is registered as `ENGINES["qwen"]`. `POST /synthesize` then
+    runs the real `synthesize()` -> real `unload_design()` -> real bounded
+    wait -> real `DesignContentionTimeoutError` -> the route's catch — no
+    GPU/torch needed, since the timeout fires before `synthesize()` reaches
+    any model load.
+
+    The 150s production wait (`_DESIGN_CONTENTION_WAIT_S_DEFAULT`) is
+    shortened by rewriting `QwenEngine.unload_design`'s bound `__defaults__`
+    tuple directly — a plain `monkeypatch.setattr(main,
+    "_DESIGN_CONTENTION_WAIT_S_DEFAULT", ...)` would NOT reach the running
+    method: Python resolves a default argument value once, at function-
+    definition time (module import), not per call, so the module-level
+    constant is already baked into `unload_design.__defaults__` by the time
+    this test runs.
+
+    Mutation that must fail it — breaks the PRODUCER: revert `unload_design`'s
+    `while self._design_in_flight.busy: ... raise DesignContentionTimeoutError`
+    wait/timeout loop to the pre-#2070 unconditional `self._design = None`
+    (silently nulling instead of waiting/raising). The response would then be
+    a normal (non-503) synth attempt instead of `design_in_flight` — see
+    `test_design_contention.py`'s own mutation note for the equivalent
+    producer-level assertion.
+    """
+    _reset_poison_guards(monkeypatch)
+    # Rewrite the bound defaults so the real unload_design() times out fast —
+    # (wait_seconds, poll_seconds) in declaration order.
+    monkeypatch.setattr(main.QwenEngine.unload_design, "__defaults__", (0.3, 0.02))
+
+    engine = main.QwenEngine()
+    engine._design = object()  # any resident, non-None design — identity only matters
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_design_in_flight() -> None:
+        with engine._design_in_flight.claim():
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_design_in_flight, daemon=True)
+    holder.start()
+    try:
+        assert entered.wait(2), "claim() never entered — test bug"
+
+        monkeypatch.setitem(main.ENGINES, "qwen", engine)
+        client = TestClient(main.app)
+        res = client.post(
+            "/synthesize",
+            json={"engine": "qwen", "model": "0.6b", "voice": "some-voice", "text": "hi"},
+        )
+
+        assert res.status_code == 503
+        body = res.json()
+        assert body["code"] == "design_in_flight"
+        assert body.get("poisoned") is not True
+        assert body["detail"] != "Internal error."
+    finally:
+        release.set()
+        holder.join(5)

@@ -145,15 +145,22 @@ def test_load_cuda_uses_int8_float16(fake_whisper_module, monkeypatch) -> None:
 
 
 def test_load_omits_revision_pin_by_default(fake_whisper_module, monkeypatch) -> None:
-    """#2047 — no ASR_MODEL_REVISION set: production stays unpinned,
-    byte-for-byte the pre-#2047 call. `WhisperModel(revision=None)` is
-    faster-whisper's own unpinned default."""
+    """#2047/R8 — no ASR_MODEL_REVISION set: production stays unpinned,
+    byte-for-byte the pre-#2047 call. Asserts the `revision` kwarg is
+    OMITTED entirely, not merely `None` — `model.kwargs.get("revision") is
+    None` alone can't distinguish "omitted" from "passed as None", and
+    `_FakeWhisperModel` accepts `**kw` unconditionally so it can't catch a
+    caller that still passes `revision=None` explicitly (R8 — see
+    `test_load_survives_a_whisper_model_that_rejects_an_explicit_none_revision`
+    below, which drives the same load through a STRICT fake that does
+    reject it, for why that distinction matters on a real faster-whisper
+    release)."""
     monkeypatch.delenv("ASR_MODEL_REVISION", raising=False)
     engine = main.WhisperEngine()
     assert engine._model_revision is None
     engine._ensure_loaded()
     model = fake_whisper_module.instances[-1]
-    assert model.kwargs.get("revision") is None
+    assert "revision" not in model.kwargs
 
 
 def test_load_passes_revision_when_pinned(fake_whisper_module, monkeypatch) -> None:
@@ -166,6 +173,77 @@ def test_load_passes_revision_when_pinned(fake_whisper_module, monkeypatch) -> N
     assert engine._model_revision == "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
     engine._ensure_loaded()
     model = fake_whisper_module.instances[-1]
+    assert model.kwargs.get("revision") == "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+
+
+class _StrictFakeWhisperModel:
+    """R8 regression double — mimics a faster-whisper release whose
+    `WhisperModel`/`ctranslate2.models.Whisper` forwarding chain rejects an
+    EXPLICIT `revision=None` (raises `TypeError`), while omitting the kwarg
+    entirely — or passing a real pinned revision string — works fine. The
+    ordinary `_FakeWhisperModel` above declares `**kw` and swallows
+    anything, so it structurally cannot catch a caller that still passes
+    `revision=None` unconditionally; this double exists specifically to
+    catch that regression."""
+
+    instances: list["_StrictFakeWhisperModel"] = []
+
+    def __init__(self, model_name: str, device: str = "cpu", compute_type: str = "int8", **kw: Any) -> None:
+        if "revision" in kw and kw["revision"] is None:
+            raise TypeError("Whisper() got an unexpected keyword argument 'revision'")
+        self.model_name = model_name
+        self.device = device
+        self.compute_type = compute_type
+        self.kwargs = kw
+        _StrictFakeWhisperModel.instances.append(self)
+
+
+@pytest.fixture
+def strict_fake_whisper_module(monkeypatch):
+    """Same wiring as `fake_whisper_module`, but backed by
+    `_StrictFakeWhisperModel` — the double that actually fails on an
+    unconditional `revision=None`."""
+    _StrictFakeWhisperModel.instances = []
+    fake_mod = types.ModuleType("faster_whisper")
+    fake_mod.WhisperModel = _StrictFakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_mod)
+    yield _StrictFakeWhisperModel
+
+
+def test_load_survives_a_whisper_model_that_rejects_an_explicit_none_revision(
+    strict_fake_whisper_module, monkeypatch
+) -> None:
+    """R8 — the actual regression this exists to close: `requirements/base.txt`
+    only floors faster-whisper at `>=1.0`, and `WhisperModel.__init__` forwards
+    `**model_kwargs` straight to `ctranslate2.models.Whisper` — on a release
+    without the named `revision` parameter, `revision=None` passed
+    UNCONDITIONALLY (the pre-fix shape) raises `TypeError` and breaks EVERY
+    ASR load, pinned or not. `_ensure_loaded()` must not raise here, and the
+    kwarg must be OMITTED (not merely `None`) when unset.
+
+    Mutation that must fail it — breaks the PRODUCER: revert
+    `WhisperEngine._ensure_loaded`'s conditional
+    `**({"revision": self._model_revision} if self._model_revision else {})`
+    back to passing `revision=self._model_revision` unconditionally. This
+    test would then raise `TypeError` instead of loading.
+    """
+    monkeypatch.delenv("ASR_MODEL_REVISION", raising=False)
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()  # must NOT raise TypeError
+    model = strict_fake_whisper_module.instances[-1]
+    assert "revision" not in model.kwargs
+
+
+def test_load_still_passes_a_pinned_revision_to_a_strict_model(
+    strict_fake_whisper_module, monkeypatch
+) -> None:
+    """The conditional-kwarg fix must not silently drop a REAL pin — only
+    the unset/`None` case is omitted; an explicit pin still reaches the
+    constructor, even against the strict double."""
+    monkeypatch.setenv("ASR_MODEL_REVISION", "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()
+    model = strict_fake_whisper_module.instances[-1]
     assert model.kwargs.get("revision") == "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
 
 

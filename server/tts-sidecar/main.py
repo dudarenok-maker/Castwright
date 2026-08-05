@@ -3845,6 +3845,22 @@ def _reclaim_device_cache(device_key: str) -> None:
 _RECLAIM_COOLDOWN_SECONDS = 30.0
 
 
+def _load_pynvml():
+    """#2094 — lazy, guarded import of the optional `pynvml` (package name
+    `nvidia-ml-py`) dependency `PlacementController._foreign_pid_holds_device`
+    uses for per-process VRAM attribution. A separate top-level function (not
+    inlined into the caller) so tests can monkeypatch it directly to script
+    "NVML unavailable" or a fake module's process list, without needing the
+    real optional dependency installed or a real device to query. Returns the
+    module, or `None` when it isn't importable — never raises."""
+    try:
+        import pynvml  # type: ignore
+
+        return pynvml
+    except Exception:
+        return None
+
+
 class PlacementController:
     """Capacity-aware admission: decides which device (or cpu, or no
     capacity) a model load / synth op may proceed on, and reserves the
@@ -4190,6 +4206,53 @@ class PlacementController:
         except Exception:
             return None
 
+    @staticmethod
+    def _foreign_pid_holds_device(device_key: Optional[str]) -> Optional[bool]:
+        """#2094 — per-process VRAM attribution via NVML, closing the
+        cold-bucket gap the two existing guards leave open: Guard 1
+        (`ledger.engines_holding`) only knows about SIDECAR-tracked
+        reservations, and Guard 2 (the implausible-delta ceiling in
+        `reservation()`) is WARM-only. A foreign, non-sidecar process on the
+        same card — a concurrent worktree's pytest suite holding VRAM is the
+        documented failure mode — is invisible to both, and a COLD ASR
+        reservation's delta has no ceiling at all, so it can be contaminated
+        exactly like #2094's own 3707 MB finding.
+
+        Enumerates the device's compute processes via
+        `nvmlDeviceGetComputeRunningProcesses` and reports whether any PID
+        OTHER than this process currently holds memory there.
+
+        Returns:
+          - `True`  — a foreign PID is present; the caller must discard the
+            sample.
+          - `False` — NVML was queried successfully and every process
+            holding memory on the device (if any) is this one; a positive
+            confirmation the reading is attributable.
+          - `None`  — could not determine (non-CUDA device, `pynvml` not
+            installed, NVML init/query failure, an unexpected shape). The
+            caller MUST treat `None` exactly like `True` (discard) — an
+            unattributable reading must never become a learned p95.
+
+        Never raises. NVML covers NVIDIA only — a `rocm:` device_key returns
+        `None` (AMD's equivalent is `amdsmi`, out of scope here)."""
+        if not device_key or not device_key.startswith("cuda:"):
+            return None
+        pynvml = _load_pynvml()
+        if pynvml is None:
+            return None
+        try:
+            index = int(device_key.split(":", 1)[1])
+            pynvml.nvmlInit()
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            finally:
+                pynvml.nvmlShutdown()
+            own_pid = os.getpid()
+            return any(getattr(p, "pid", None) != own_pid for p in procs)
+        except Exception:
+            return None
+
     async def _resolve_admission(
         self,
         engine: str,
@@ -4198,22 +4261,29 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
         pinned: Optional[str],
-    ) -> tuple[dict, Optional[tuple], bool, Optional[int]]:
+    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
-        the lock. Returns `(admission, held, resident, mem_before_mb)`; `held`
-        is the ledger token `reservation()` must release on exit, or None
-        (cpu / noCapacity — nothing was held). `resident` (#2094) is whether
-        `engine` was already loaded BEFORE this reservation — `reservation()`
-        threads it through to `footprints.record()` so the observation lands
-        in the same peak-mb bucket (`FootprintTable._key`) the reservation
-        itself was booked under. `mem_before_mb` (#2094 review) is the
-        `_device_free_mb` snapshot taken for `engine == "asr"` specifically —
-        `None` for every other engine, and `None` when the snapshot itself
-        failed — so `reservation()` can measure ASR's peak via a device-wide
-        free-memory DELTA instead of torch's allocator, which CTranslate2
-        (faster-whisper's backend) allocates entirely outside of."""
+        the lock. Returns `(admission, held, resident, mem_before_mb,
+        foreign_before)`; `held` is the ledger token `reservation()` must
+        release on exit, or None (cpu / noCapacity — nothing was held).
+        `resident` (#2094) is whether `engine` was already loaded BEFORE this
+        reservation — `reservation()` threads it through to
+        `footprints.record()` so the observation lands in the same peak-mb
+        bucket (`FootprintTable._key`) the reservation itself was booked
+        under. `mem_before_mb` (#2094 review) is the `_device_free_mb`
+        snapshot taken for `engine == "asr"` specifically — `None` for every
+        other engine, and `None` when the snapshot itself failed — so
+        `reservation()` can measure ASR's peak via a device-wide free-memory
+        DELTA instead of torch's allocator, which CTranslate2 (faster-whisper's
+        backend) allocates entirely outside of. `foreign_before` (#2094
+        per-process attribution) is whether `_foreign_pid_holds_device`
+        reported (or could not rule out) a non-sidecar process on the device
+        at this SAME snapshot point — `False` for every non-ASR engine;
+        `reservation()` ORs it with an equivalent after-snapshot check so a
+        foreign process present at either end of the window discards the
+        sample."""
         resident = self.is_resident(engine)
         # #2094 — consult residency BEFORE booking: an already-resident engine
         # (currently only distinguished for "asr", see `FootprintTable._key`)
@@ -4257,6 +4327,7 @@ class PlacementController:
                     )
 
         mem_before_mb: Optional[int] = None
+        foreign_before = False
         if held is not None:
             admission: dict = {"device": held[0]}
             # Device-wide reset, not scoped to this op — a concurrent op on the
@@ -4271,12 +4342,21 @@ class PlacementController:
             # the torch-allocator peak every other engine uses.
             if engine == "asr":
                 mem_before_mb = self._device_free_mb(held[0])
+                # #2094 per-process attribution — only bother querying NVML
+                # when the free-mb snapshot itself succeeded; a failed
+                # snapshot already discards the sample downstream (see
+                # `reservation()`'s `mem_before_mb is not None` guard), so
+                # there's nothing for this to protect. `True` (foreign PID
+                # present) AND `None` (couldn't determine) both mean
+                # "discard"; only a positive `False` clears this snapshot.
+                if mem_before_mb is not None:
+                    foreign_before = self._foreign_pid_holds_device(held[0]) is not False
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
-        return admission, held, resident is not None, mem_before_mb
+        return admission, held, resident is not None, mem_before_mb, foreign_before
 
     @asynccontextmanager
     async def reservation(
@@ -4314,7 +4394,7 @@ class PlacementController:
         real hazard for tests, which must therefore each drive this
         `PlacementController` under exactly one `asyncio.run()`."""
         async with self._admit_lock:
-            admission, held, resident, mem_before_mb = await self._resolve_admission(
+            admission, held, resident, mem_before_mb, foreign_before = await self._resolve_admission(
                 engine, model, cfg, cpu_capable, heavy, pinned
             )
         try:
@@ -4332,7 +4412,19 @@ class PlacementController:
                 if engine == "asr" and mem_before_mb is not None:
                     mem_after_mb = self._device_free_mb(device_key)
                     other_engines = self.ledger.engines_holding(device_key) - {engine}
-                    if mem_after_mb is not None and not other_engines:
+                    # #2094 per-process attribution — the AFTER-snapshot's own
+                    # NVML check. `foreign_before` (captured in
+                    # `_resolve_admission`) covers the start of the window;
+                    # this covers the end. A foreign PID present at EITHER
+                    # point contaminates the delta, since it may have
+                    # allocated/freed at any point during the window.
+                    foreign_after = self._foreign_pid_holds_device(device_key) is not False
+                    if (
+                        mem_after_mb is not None
+                        and not other_engines
+                        and not foreign_before
+                        and not foreign_after
+                    ):
                         delta = mem_before_mb - mem_after_mb
                         # Conservative, not optimistic (review): a resident
                         # ("warm") forward should NEVER need more than a cold
@@ -4350,16 +4442,17 @@ class PlacementController:
                         if not (resident and warm_ceiling > 0 and delta > warm_ceiling):
                             asr_observed_mb = delta
                     # else: another engine holds a concurrent reservation on
-                    # this device, or the after-snapshot itself failed — the
-                    # measurement is contaminated or unavailable, so it is
-                    # discarded (asr_observed_mb stays None → record() below
-                    # sees 0 via the `or 0` and its own `<= 0` guard drops it)
-                    # rather than attributed to ASR. This narrows but does not
-                    # eliminate #2094's contamination question — a foreign
-                    # process outside this ledger entirely (a concurrent
-                    # worktree's pytest suite, say) is still invisible to
-                    # `engines_holding` and would still contaminate a reading;
-                    # that residual is not solved here.
+                    # this device, the after-snapshot itself failed, or a
+                    # foreign (non-sidecar) PID was seen holding memory on the
+                    # device at either snapshot point (`_foreign_pid_holds_
+                    # device`, #2094 per-process attribution — closes the
+                    # residual this comment used to describe as unsolved: a
+                    # concurrent worktree's pytest suite on the same card is
+                    # no longer invisible) — the measurement is contaminated
+                    # or unattributable, so it is discarded (asr_observed_mb
+                    # stays None -> record() below sees 0 via the `or 0` and
+                    # its own `<= 0` guard drops it) rather than attributed to
+                    # ASR.
                 self.ledger.release(held)
                 # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
                 # booked the reservation under — recording under that same key
@@ -7114,11 +7207,19 @@ class WhisperEngine:
             "Loading Whisper ASR model=%s device=%s compute=%s revision=%s ...",
             self._model_name, dev, self._compute_type(dev), self._model_revision or "(unpinned)",
         )
-        # #2047 — `revision=None` (the default when ASR_MODEL_REVISION is
-        # unset) is faster-whisper's own unpinned behaviour, so this is a
-        # byte-for-byte no-op for every caller that doesn't set the env var.
+        # #2047/R8 — `revision` is passed CONDITIONALLY, not as
+        # `revision=self._model_revision` unconditionally: `WhisperModel.__init__`
+        # forwards **model_kwargs straight through to
+        # `ctranslate2.models.Whisper`, and `requirements/base.txt` only floors
+        # faster-whisper at >=1.0 — a 1.0.x release without the named `revision`
+        # parameter would raise `TypeError` on `revision=None` and break EVERY
+        # ASR load, pinned or not. Omitting the kwarg entirely when unset (the
+        # common case) is what actually makes this a byte-for-byte no-op for a
+        # caller that doesn't set ASR_MODEL_REVISION, rather than just
+        # "harmless on the faster-whisper version this was tested against."
         self._model = WhisperModel(
-            self._model_name, revision=self._model_revision,
+            self._model_name,
+            **({"revision": self._model_revision} if self._model_revision else {}),
             **_ct2_kwargs(dev, self._compute_type(dev)),
         )
         # Reflect the resolved card for /health fell_back detection once loaded.

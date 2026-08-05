@@ -388,6 +388,36 @@ describe('classifyTranscript', () => {
     expect(untrustworthy.wer).toBeCloseTo(0.9, 5);
   });
 
+  it('#2055 review R2 — maxWer: 1.0 (an operator disabling WER-based drift entirely) keeps the catastrophic override disabled too', () => {
+    // The literal ceiling case, not just a raised-but-still-normal cap: an
+    // operator who sets `maxWer: 1.0` is disabling WER-based drift outright
+    // (no real WER can exceed 1.0 on this alignment, so the trustworthy
+    // branch's `wer > t.maxWer` check can never fire). `catastrophicBar =
+    // Math.max(catastrophicWer, maxWer)` must resolve to 1.0 here too — if it
+    // instead fell back to the fixed 0.85 default, the untrustworthy branch
+    // would re-introduce exactly the drift verdict the operator disabled on
+    // the trustworthy branch, at an identical WER. Same 20-word/18-
+    // substitution shape (wer 0.90) as the `maxWer: 0.95` case above.
+    const longExpected = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    const eighteenWrong = Array.from({ length: 20 }, (_, i) =>
+      i < 18 ? `wrong${i}` : `word${i}`,
+    ).join(' ');
+    const trustworthy = classifyTranscript(longExpected, eighteenWrong, CLEAN, {
+      thresholds: { maxWer: 1.0 },
+    });
+    expect(trustworthy.verdict).toBe('ok');
+    expect(trustworthy.wer).toBeCloseTo(0.9, 5);
+
+    const untrustworthy = classifyTranscript(
+      longExpected,
+      eighteenWrong,
+      { ...CLEAN, avgLogprob: -1.8 },
+      { thresholds: { maxWer: 1.0 } },
+    );
+    expect(untrustworthy.verdict).toBe('inconclusive');
+    expect(untrustworthy.wer).toBeCloseTo(0.9, 5);
+  });
+
   it('#2055 review R3 — a SHORT reference never triggers the override, however wrong the transcript', () => {
     // #2055's own repro lines ("Хорошее олово.", "Тёплое море.") are 2-word
     // references — on a reference this short, "both words wrong" is
@@ -679,6 +709,28 @@ describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
     process.env.SEG_ASR_MAX_WER_FR = '0.5';
     expect(resolveAsrThresholds(undefined, 'fr').maxWer).toBeCloseTo(0.5);
     expect(resolveAsrThresholds(undefined, 'de').maxWer).toBe(0.4);
+  });
+});
+
+describe('resolveAsrThresholds catastrophicWer (#2055 review R4)', () => {
+  // The registry knob (`qa.asr.catastrophicWer`, env SEG_ASR_CATASTROPHIC_WER)
+  // had no resolver test of its own — its only prior coverage (the R2 tests
+  // above) inject the value directly via `{ thresholds: { catastrophicWer } }`,
+  // never through `resolveAsrThresholds()`'s `configValue('qa.asr.catastrophicWer')`
+  // wiring. Mirrors the per-language `maxWer` resolver tests immediately above
+  // — same shape (env var set/cleared per test, asserted straight off
+  // `resolveAsrThresholds()`), the closest sibling with its own resolver test.
+  afterEach(() => {
+    delete process.env.SEG_ASR_CATASTROPHIC_WER;
+  });
+
+  it('defaults to 0.85 (DEFAULT_ASR_THRESHOLDS.catastrophicWer)', () => {
+    expect(resolveAsrThresholds().catastrophicWer).toBe(0.85);
+  });
+
+  it('SEG_ASR_CATASTROPHIC_WER overrides the resolved value', () => {
+    process.env.SEG_ASR_CATASTROPHIC_WER = '0.7';
+    expect(resolveAsrThresholds().catastrophicWer).toBeCloseTo(0.7);
   });
 });
 
