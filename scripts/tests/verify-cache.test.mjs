@@ -10,14 +10,15 @@ import {
   mkdirSync,
   writeFileSync,
   existsSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+import { walk } from '../lib/module-graph.mjs';
 import {
   composeInputHash,
   decide,
@@ -513,6 +514,22 @@ test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
   }
 });
 
+// The hole this closes: verify:fast:scoped runs --steps test:hooks,test,
+// test:server --scope-staged, and test:hooks' globs exclude server/src/**.
+// So on a server-only staged diff the budgeted-poll guardrail never ran on
+// the very commit introducing the pattern (#2120b).
+test('stepTouchedByDiff: a server test diff is in scope for check:budget-poll', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['server/src/tts/foo.test.ts']), true);
+});
+
+test('stepTouchedByDiff: a server test diff still does NOT bust test:hooks', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/src/tts/foo.test.ts']), false);
+});
+
+test('stepTouchedByDiff: editing the budget-poll script is in scope for its own step', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']), true);
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['vite.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
@@ -632,92 +649,181 @@ test('stepTouchedByDiff: a run-golden-tests stub module is in scope for test:scr
   );
 });
 
-// --- test:hooks completeness guard (ops-18, #2115) -------------------------
+// --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c
+// follow-up #2120a) -----------------------------------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
 // file a hooks test depends on". This test checks that approximation against
-// reality: statically scan every scripts/tests/*.test.mjs for the producer
-// files it actually imports (relative specifiers only — bare specifiers like
-// `node:fs` or `archiver` aren't producers under test), and assert each one
-// is stepTouchedByDiff-visible to test:hooks. Without this, a producer that a
-// test imports but the cache step doesn't declare sits in the exact #1847
-// trap the extraFiles comments above describe: a producer-only diff prints
-// [cached] and the test that covers it never runs locally.
+// reality: walk the full TRANSITIVE import closure of every
+// scripts/tests/*.test.mjs entry point (not just its direct imports — a
+// producer reached two hops away is just as real a dependency) and assert
+// every file in that closure is stepTouchedByDiff-visible to test:hooks.
+// Without this, a producer that a test depends on but the cache step doesn't
+// declare sits in the exact #1847 trap the extraFiles comments above
+// describe: a producer-only diff prints [cached] and the test that covers it
+// never runs locally — including when the producer is only reached
+// transitively (#2120a: editing pinokio-scripts/lib/menu.js left test:hooks
+// [cached] locally because the old guard only looked at test files' DIRECT
+// imports, one hop short of the real edge through pinokio.js).
 const testsDir = resolve(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = resolve(testsDir, '..', '..');
 
-// Pull relative-specifier producer imports out of a test file's source: the
-// static ESM `from` form, the dynamic `import()` form, and the CJS
-// `require()` form (pinokio-entry.test.mjs uses createRequire + require()
-// deliberately, to reproduce Pinokio's own CJS kernel loader — that is a
-// genuine direct import edge the guard must see; ops-17c review, #2115).
-// Only a dot- or dot-dot-prefixed relative specifier counts as a producer
-// import — bare specifiers like `node:fs` are not producers under test. (Do
-// not spell out a literal example specifier in this comment: the patterns
-// below would extract it too, and it would then be silently discarded by
-// the on-disk existsSync check in the test below rather than caught.)
-function extractRelativeImportSpecifiers(source) {
-  const specifiers = new Set();
-  const patterns = [
-    /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
-    /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-    /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      specifiers.add(match[1]);
-    }
-  }
-  return [...specifiers];
-}
-
-// Pins the require() pattern directly. Without this, a regression that drops
-// that pattern is invisible to the completeness guard below whenever the
-// require()d producer (pinokio.js) already happens to be a declared
-// extraFiles entry — the guard would just stop scanning that edge and stay
-// silently green rather than catching the regex regression (ops-17c review,
-// #2115: verified by mutation — removing the require() pattern alone left
-// every test in this file green until this pinning test was added).
-test('extractRelativeImportSpecifiers: extracts a require() edge (pinokio-entry.test.mjs shape)', () => {
-  const source = "const config = require('../../pinokio.js');";
-  assert.deepEqual(extractRelativeImportSpecifiers(source), ['../../pinokio.js']);
-});
-
-test('test:hooks completeness guard: every producer a hooks test imports is a cache input', () => {
+test('test:hooks completeness guard: every producer a hooks test depends on is a cache input', () => {
   const hooksStep = stepByName['test:hooks'];
-  const testFiles = readdirSync(testsDir).filter((f) => f.endsWith('.test.mjs'));
-  const missing = [];
-  let producersScanned = 0;
+  const entryFiles = readdirSync(testsDir)
+    .filter((f) => f.endsWith('.test.mjs'))
+    .map((f) => join(testsDir, f));
 
-  for (const testFile of testFiles) {
-    const source = readFileSync(join(testsDir, testFile), 'utf8');
-    for (const specifier of extractRelativeImportSpecifiers(source)) {
-      const absProducer = resolve(testsDir, specifier);
-      if (!existsSync(absProducer)) continue; // not a file on disk — nothing to require as an input
-      producersScanned += 1;
-      // path.relative (not a fixed-length slice off repoRoot) so a specifier
-      // that happens to resolve outside the repo root doesn't yield garbage.
-      const repoRelative = _internals.toPosix(relative(repoRoot, absProducer));
-      if (!stepTouchedByDiff(hooksStep, [repoRelative])) {
-        missing.push(`${repoRelative} (imported by scripts/tests/${testFile})`);
-      }
-    }
-  }
+  const { files, unresolvable, unparseable } = walk({ entryFiles, repoRoot });
 
-  // Anti-vacuity: if the regex above ever silently matched nothing, this
-  // guard would pass forever while proving nothing (ops-18 brief mutation
-  // (c) — the exact "absent reads as clean" failure mode). A count this low
-  // means either the extraction regex broke, or a legitimate batch of hooks
-  // tests (and their imports) was deleted — both are worth a human look
-  // before lowering this floor.
-  assert.ok(
-    producersScanned >= 30,
-    `expected to scan at least 30 relative producer imports across scripts/tests/*.test.mjs, found ${producersScanned} — either the extraction regex broke, or hooks tests/imports were legitimately removed`,
+  // Fail closed on a specifier that resolves to nothing (defect A). The old
+  // guard's existsSync-then-continue silently dropped these.
+  assert.deepEqual(
+    unresolvable,
+    [],
+    `specifier(s) that resolve to nothing:\n${unresolvable.map((u) => `${u.specifier} <- ${u.from}`).join('\n')}`,
   );
 
+  // I3 (#2154 review): `unparseable` was computed and then discarded here —
+  // the module comment at module-graph.mjs's top documents it as the
+  // visibility mechanism for a truncated subtree ("never hidden... named in
+  // `unparseable`"), but nothing actually read the list, so that visibility
+  // was theoretical. Pinning the exact, known entry turns a NEW unparseable
+  // file (up to 13 possible before the floor above goes red) into a
+  // deliberate, reviewed decision instead of a silent one.
+  assert.deepEqual(
+    unparseable,
+    ['server/src/handoff/schemas.ts'],
+    `unparseable file(s) changed — a new entry here silently shrinks the ` +
+      `walked closure by everything past it; confirm this is intended:\n${unparseable.join('\n')}`,
+  );
+
+  // Anti-vacuity on METRIC B (unique tracked closure files), NOT on the old
+  // occurrence counter (METRIC A) — different units, and conflating them is
+  // how the old floor came to be 30 against a real 60: that 60 counted
+  // per-test-file direct-import OCCURRENCES (duplicates across files each
+  // counted separately), not unique files. Re-measured on this branch (task
+  // 13, transitive walk over all 63 scripts/tests/*.test.mjs entries):
+  // Metric B (files.length, unique files in the closure) = 63; the
+  // equivalent direct-imports-only occurrence count (Metric A's unit) = 66.
+  // Floor 50 is set against Metric B and gives ~20% headroom below 63: a
+  // legitimate one- or two-file removal must not go red, while a collapse
+  // toward zero (broken regex or resolver) must.
+  assert.ok(
+    files.length >= 50,
+    `expected >= 50 unique files in the hooks-test closure, found ${files.length} — either extraction/resolution broke, or hooks tests were legitimately removed`,
+  );
+
+  const missing = files.filter((f) => !stepTouchedByDiff(hooksStep, [f]));
   assert.deepEqual(
     missing,
     [],
-    `producer(s) imported by a hooks test but not an input to test:hooks:\n${missing.join('\n')}`,
+    `producer(s) a hooks test depends on but not an input to test:hooks:\n${missing.join('\n')}`,
+  );
+});
+
+// --- Acceptance through the real cached/run decision (#2120) -------------
+// #2120 explicitly rejects stepTouchedByDiff as sufficient proof: PR #2117
+// showed it and the real [cached]/[run] decision are different code paths.
+// These two tests drive selectStepFiles -> composeInputHash -> decide — the
+// actual decision runPipeline makes — rather than modeling it against the
+// unit seam.
+
+// Shared harness: builds a real input hash for a step from a file list,
+// letting the caller perturb one file's content hash.
+function hashFor(step, fileList, bump = () => 'h0') {
+  const entries = selectStepFiles({ fileList, step }).map((rel) => [rel, bump(rel)]);
+  return composeInputHash({
+    stepName: step.name,
+    sortedFileEntries: entries,
+    lockHashes: {},
+    nodeVer: 'v20.0.0',
+    schemaVer: 1,
+    toolFingerprint: 'test',
+  });
+}
+
+test('acceptance #2120a: editing menu.js makes test:hooks RUN, not [cached]', () => {
+  const step = stepByName['test:hooks'];
+  const fileList = ['scripts/tests/pinokio-entry.test.mjs', 'pinokio-scripts/lib/menu.js'];
+
+  assert.ok(
+    selectStepFiles({ fileList, step }).includes('pinokio-scripts/lib/menu.js'),
+    'menu.js must be among the files whose content feeds the hash',
+  );
+
+  const base = hashFor(step, fileList);
+  const edited = hashFor(step, fileList, (rel) => (rel.endsWith('menu.js') ? 'h1' : 'h0'));
+  assert.notEqual(base, edited, 'a menu.js edit must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: edited, cache }), 'run');
+  assert.equal(decide({ stepName: step.name, currentHash: base, cache }), 'skip');
+});
+
+test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () => {
+  const step = stepByName['check:budget-poll'];
+  const withoutTest = ['scripts/check-no-budget-poll.mjs'];
+  const withTest = ['scripts/check-no-budget-poll.mjs', 'server/src/tts/new.test.ts'];
+
+  assert.ok(selectStepFiles({ fileList: withTest, step }).includes('server/src/tts/new.test.ts'));
+
+  const base = hashFor(step, withoutTest);
+  const added = hashFor(step, withTest);
+  assert.notEqual(base, added, 'adding a server test must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: added, cache }), 'run');
+});
+
+// C1 (#2154 review): `check:budget-poll` had a real STEPS[] entry with correct
+// inputs, but NONE of the three local `--steps` CSVs in package.json
+// (`verify:fast`, `verify:fast:scoped`, `verify:fast:branch`) named it —
+// `runPipeline` filters STEPS down to exactly the names it's given, so the
+// step was silently dropped from every local entry point and only ever ran
+// under bare `npm run verify` or in cloud CI. This guard closes that class of
+// bug generally: a STEPS[] entry that isn't in ANY local CSV, and isn't
+// explicitly named below as cloud/full-verify-only by design, goes red.
+//
+// The allowlist mirrors CLAUDE.md's own Commands section, which documents
+// each of these as deliberately absent from the fast local paths:
+//   - test:e2e / test:e2e:visual — cloud verify.yml only (Playwright).
+//   - test:server-slow — cloud verify.yml + full `npm run verify`, not the
+//     fast paths (docs/features/archive/45-vitest-pool-tuning.md).
+//   - test:scripts / test:pinokio — not in any of the three fast aliases
+//     today (`npm run test:all` / `verify` cover them instead).
+// Reading package.json's real scripts (rather than hardcoding the CSVs here)
+// means an edit to any of the three that drops a step name is what this test
+// actually watches for.
+const CLOUD_OR_FULL_VERIFY_ONLY_STEPS = new Set([
+  'test:e2e',
+  'test:e2e:visual',
+  'test:server-slow',
+  'test:scripts',
+  'test:pinokio',
+]);
+
+test('every STEPS[] entry is covered by a local --steps CSV or explicitly allowlisted as cloud/full-verify-only', () => {
+  const pkgPath = resolve(repoRoot, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const LOCAL_ENTRY_POINTS = ['verify:fast', 'verify:fast:scoped', 'verify:fast:branch'];
+
+  const covered = new Set();
+  for (const scriptName of LOCAL_ENTRY_POINTS) {
+    const cmd = pkg.scripts[scriptName];
+    assert.ok(cmd, `package.json is missing its "${scriptName}" script`);
+    const m = cmd.match(/--steps[ =]([^\s]+)/);
+    assert.ok(m, `"${scriptName}" must pass --steps`);
+    for (const name of m[1].split(',')) covered.add(name);
+  }
+
+  const missing = STEPS.map((s) => s.name).filter(
+    (name) => !covered.has(name) && !CLOUD_OR_FULL_VERIFY_ONLY_STEPS.has(name),
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `STEPS[] entr(y/ies) absent from every local --steps CSV and not allowlisted ` +
+      `as cloud/full-verify-only: ${missing.join(', ')}`,
   );
 });
 

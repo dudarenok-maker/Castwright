@@ -171,8 +171,30 @@ export const STEPS = [
         // which proves nothing about the guardrail test itself
         // (ops-17c review, #2115).
         'eslint.config.mjs',
+        // menu.js is a TRANSITIVE dep: pinokio-entry.test.mjs asserts on the
+        // menu() item list, which is implemented here and reached via
+        // pinokio.js. Editing it used to leave test:hooks [cached] locally,
+        // while in cloud it set pinokio=true — running test:pinokio, a
+        // DIFFERENT suite from the test that asserts on it (#2120a).
+        'pinokio-scripts/lib/menu.js',
+        // schemas.ts is reached from diff-analysis-ab.mjs, which imports it
+        // with a .js specifier per the TypeScript convention.
+        'server/src/handoff/schemas.ts',
       ],
       includeLockfiles: ['root'],
+    },
+  },
+  {
+    name: 'check:budget-poll',
+    inputs: {
+      /* Its own step rather than widening test:hooks' inputs: this scans
+         server/src/**\/*.test.ts at RUNTIME, and server tests are the hottest
+         surface in the repo. Folding them into test:hooks would bust a ~25s
+         cache on every server test edit; as its own ~1s step it costs almost
+         nothing AND it runs on a server-only staged diff, which is exactly
+         the case verify:fast:scoped used to skip. */
+      globs: ['server/src/**/*.test.ts'],
+      extraFiles: ['scripts/check-no-budget-poll.mjs'],
     },
   },
   {

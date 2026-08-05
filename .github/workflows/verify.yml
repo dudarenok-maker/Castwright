@@ -195,6 +195,11 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_test_hooks || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:hooks
 
+      # leg: check:budget-poll
+      - name: Budgeted-poll guardrail
+        if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run check:budget-poll
+
       # No-ops with a banner on a runner without Pester 5 (the GitHub
       # ubuntu image ships pwsh but not Pester 5), exactly as the old
       # `npm run verify` leg did. Kept gated on `test:scripts` so it provides
