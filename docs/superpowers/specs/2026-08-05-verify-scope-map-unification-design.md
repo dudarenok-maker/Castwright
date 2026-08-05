@@ -321,8 +321,17 @@ leg's.
    where a `.gitignore` pattern is file-specific rather than
    directory-prefixed, so classify-once could disagree with what resolution
    lands on. Verified: `git check-ignore server/dist/does/not/exist.js`
-   returns 0 — it is pure pattern matching and answers correctly for paths
-   that do not exist, which is exactly the property the rule needs.
+   returns 0 — it answers correctly for paths that do not exist, which is
+   the property the rule needs.
+
+   **Correction (plan review):** `check-ignore` is **index-aware**, not pure
+   `.gitignore` matching. Measured: a file matching an ignore rule but
+   force-added to the index reports exit 1 (*not* ignored); `--no-index`
+   reports 0. This is kept deliberately — a tracked file is a real producer
+   and belongs in the closure — but the simpler "property of `.gitignore`
+   alone" framing is wrong and would mislead anyone later tempted to add
+   `--no-index`. The `server/dist/**` conclusion is unaffected: never
+   tracked, so ignored in a fresh clone and a built tree alike.
 
    **Exit codes are three-valued, and the contract is explicit** (measured in
    this repo): `0` = ignored, `1` = not ignored, **`128` = error** (e.g.
@@ -447,12 +456,20 @@ re-measures rather than trusting these.
 | Unresolvable **post** comment-stripping | specifiers | **0** |
 | `server/dist` files present locally / on fresh clone | files | 1,812 / 0 |
 | Unresolvable under "untracked" rule, CI-simulated | specifiers | 7 |
-| Depth-1 closure (M6/M17 counterfactual) | unique files | 56 |
+| Depth-1 closure (M6/M17 counterfactual) | unique files | 56–57 |
 | `check-ignore` — 81 spawns vs one `--stdin` batch | ms | 3972 / 60 (66×) |
 | Module-scope test imports absent from the lean venv | modules | 2 (`torch`, `speechbrain`) |
 
 The two genuine additions are `pinokio-scripts/lib/menu.js` (the #2120(a)
 instance) and `server/src/handoff/schemas.ts`.
+
+**Metric B is 59–60 depending on predicate**, and the plan review measured
+the upper end. The difference is real and explainable: `ls-files` ("tracked")
+excludes a file that is untracked but *not* ignored, while `check-ignore`
+("ignored") includes it — so the shipped predicate counts marginally more.
+Immaterial against a floor of 50, but **do not assert an exact count**; the
+load-bearing assertion is the *identity* of the missing files (exactly two),
+which both measurements agree on.
 
 **Floor rule.** The hardened guard asserts on **Metric B**. The floor catches
 *extraction or resolution breakage*, whose signature is a collapse toward

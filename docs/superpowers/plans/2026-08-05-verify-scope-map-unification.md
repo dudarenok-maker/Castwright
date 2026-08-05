@@ -361,7 +361,7 @@ Create `scripts/run-sidecar-tests.mjs`:
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SIDECAR_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'server', 'tts-sidecar');
 
@@ -409,7 +409,13 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   return result.status ?? 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`.replace(/\\/g, '/')) {
+// Direct-execution guard. MUST use pathToFileURL: the naive
+// `file://${process.argv[1]}` form yields two slashes on Windows
+// (file://C:/...) where import.meta.url has three (file:///C:/...), so it is
+// ALWAYS false there — the script would silently do nothing and exit 0.
+// Every other script in scripts/ uses this form; see bump-version.mjs:654.
+const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
+if (invokedHref && import.meta.url === invokedHref) {
   process.exit(main());
 }
 ```
@@ -419,6 +425,19 @@ if (import.meta.url === `file://${process.argv[1]}`.replace(/\\/g, '/')) {
 Run: `node --test scripts/tests/run-sidecar-tests.test.mjs`
 Expected: PASS, 4/4.
 
+- [ ] **Step 4b: Prove the entry point actually EXECUTES**
+
+The unit tests import `resolveVenvPython` and would pass even if the script
+never ran anything. Verify the guard directly:
+
+```bash
+node scripts/run-sidecar-tests.mjs
+```
+
+Expected: either the pytest output or the SKIP banner — **never silence**.
+Silence means the direct-execution guard is false and the runner is
+vacuously green, which is precisely the defect this task exists to remove.
+
 - [ ] **Step 5: Rewire the npm script**
 
 In `package.json`, change `test:sidecar` from the `run-powershell.mjs` form
@@ -427,6 +446,31 @@ to:
 ```json
     "test:sidecar": "node scripts/run-sidecar-tests.mjs",
 ```
+
+- [ ] **Step 5b: Keep `test:sidecar`'s own cache inputs honest**
+
+`verify-cache.mjs`'s `test:sidecar` step declares
+`extraFiles: ['server/tts-sidecar/run-tests.ps1']`. After the rewire above,
+the runner that actually executes is `scripts/run-sidecar-tests.mjs` — so
+without this the step sits in the exact #1847 trap this whole plan is about:
+editing the runner would leave `test:sidecar` printing `[cached]`.
+
+```js
+      extraFiles: [
+        'server/tts-sidecar/run-tests.ps1',
+        // The npm script now invokes this instead; run-tests.ps1 is retained
+        // for direct local/PowerShell use, so BOTH are inputs.
+        'scripts/run-sidecar-tests.mjs',
+      ],
+```
+
+Verify:
+
+```bash
+node -e "import('./scripts/verify-cache.mjs').then(({STEPS,stepTouchedByDiff})=>{const s=STEPS.find(x=>x.name==='test:sidecar');console.log(stepTouchedByDiff(s,['scripts/run-sidecar-tests.mjs']));})"
+```
+
+Expected: `true`.
 
 - [ ] **Step 6: Verify local behaviour is unchanged**
 
@@ -686,6 +730,7 @@ Create `scripts/ci-scope.mjs`:
 // string, silently disabling a leg while both wiring directions still pass.
 // One json output makes that map a single static line.
 
+import { pathToFileURL } from 'node:url';
 import { STEPS, stepTouchedByDiff, computeShared } from './verify-cache.mjs';
 
 export function slugFor(stepName) {
@@ -751,15 +796,26 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`.replace(/\\/g, '/')) {
+// See run-sidecar-tests.mjs — the naive `file://${process.argv[1]}` form is
+// ALWAYS false on Windows (two slashes vs three). Here the consequence is
+// worse than silence: the detect job would emit nothing, every `if:` would be
+// false, and only the `ok` sentinel (Task 9) would catch it — as a confusing
+// red rather than a clear one.
+const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
+if (invokedHref && import.meta.url === invokedHref) {
   process.exit(main());
 }
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [ ] **Step 4: Run to verify pass, and that it EXECUTES**
 
 Run: `node --test scripts/tests/ci-scope.test.mjs`
 Expected: PASS, all tests.
+
+Run: `node scripts/ci-scope.mjs --files=launch.mjs`
+Expected: two lines — `scopes={...}` and `ok=true`. **Silence means the
+direct-execution guard is broken**; the unit tests cannot catch that because
+they import `computeScopes` directly.
 
 - [ ] **Step 5: Prove the fail-safe (mutation M10)**
 
@@ -851,16 +907,45 @@ git commit -m "feat(ops): derive per-step CI scope from verify-cache STEPS"
       ok: ${{ steps.changes.outputs.ok }}
 ```
 
-- [ ] **Step 2: Replace the detection step body**
+- [ ] **Step 2: Replace the WHOLE detection step body**
 
-Replace the `match()` block (`:142-180`) — keep the `MERGE_BASE`/`FILES`
-lines above it (`:137-141`) untouched:
+Not just the `match()` block. `verify.yml:115-123` has a **separate
+`workflow_dispatch` early-exit** that emits the nine legacy scope names and
+`exit 0`s. Leaving it in place means a manual dispatch emits no `scopes` and
+no `ok` at all — so `fromJSON('')` raises in every `if:` **and** Task 9's
+sentinel fails, turning the documented clean-room full-battery run
+permanently red. `ci-scope.mjs` already handles dispatch (all-true), so the
+bash branch must go.
+
+But the `git merge-base` / `git diff` lines below it would then run on a
+dispatch with empty `BASE`/`HEAD` and fail under `set -e`. Guard them.
+Replace the entire `run:` body (`:113` through `:180`) with:
 
 ```yaml
+        run: |
+          # A manual dispatch has no PR base/head to diff against. Leave FILES
+          # empty and let ci-scope.mjs branch on GITHUB_EVENT_NAME — it emits
+          # all-true for a dispatch, matching the old bash early-exit.
+          FILES=""
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            # Merge-base, not BASE itself: a PR branch created from a stale
+            # main would otherwise treat every file main moved past the fork
+            # point as "changed in this PR".
+            MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+            FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
+          fi
+          echo "Changed files in this PR:"
+          echo "$FILES"
+          echo "---"
           node scripts/ci-scope.mjs --files="$FILES" >> "$GITHUB_OUTPUT"
           echo "--- derived scope ---"
           node scripts/ci-scope.mjs --files="$FILES"
 ```
+
+`GITHUB_EVENT_NAME` is set by the runner automatically, so `ci-scope.mjs`
+reads it without it being passed explicitly.
 
 - [ ] **Step 3: Ensure Node is available in detect**
 
@@ -917,11 +1002,44 @@ apply the same shape to every `if:`:
 
       # Server tests — test:server AND test:server-slow share this one step,
       # so the condition is the union of both steps' keys.
+      # leg: test:server
       - name: Server tests (fast + slow)
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
 ```
 
+**Every leg step gets a `# leg: <step-name>` marker** immediately above its
+`- name:`. Task 8's setup-binding assertion identifies legs by that marker,
+not by searching for the first `if:` mentioning a key — setup steps precede
+their leg in file order, and slugs nest (`step_test` is a substring of
+`step_test_hooks`), so both heuristics bind the wrong step.
+
 **Do not hoist any of these to job level** (Global Constraints).
+
+- [ ] **Step 1b: Decide the `frontend-tests` condition explicitly**
+
+This one is not mechanical and the spec flags it as an N:M irregularity
+without resolving it. The step runs `vitest --changed` **plus**
+`npm run test:a11y` — so it is not `npm run test`, and `test:a11y` has no
+STEP of its own. Its current condition is
+`frontend || e2e || shared || openapi`.
+
+Measured: `stepTouchedByDiff(STEPS['test'], ['e2e/foo.spec.ts'])` is
+**false**, so a naive `step_test || shared` would stop running the frontend
+unit suite and a11y on an e2e-spec-only PR — a silent narrowing of what runs
+today. `openapi.yaml` needs no special handling: it is already in `test`'s
+`extraFiles`, so `step_test` covers it.
+
+Preserve today's behaviour explicitly rather than narrowing by accident:
+
+```yaml
+      # leg: test
+      # test:e2e is a deliberate extra trigger: this step also runs
+      # `npm run test:a11y`, which has no STEP of its own, and an e2e-only
+      # diff should still exercise the a11y battery. Dropping it would be a
+      # silent narrowing of what runs today.
+      - name: Frontend tests + a11y
+        if: fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
+```
 
 - [ ] **Step 2: Bind each setup step to the leg it supports**
 
@@ -997,10 +1115,16 @@ const referenced = [...source.matchAll(/fromJSON\(needs\.detect\.outputs\.scopes
   .map((m) => m[1]);
 
 test('anti-vacuity: the workflow scan finds references', () => {
-  // Measured at authoring time: ~20 if: sites, most with two disjuncts.
+  // UNITS: this counts REFERENCES, not `if:` sites. Measured on the
+  // pre-derivation workflow: 17 `if:` lines but 55 scope references, and A1's
+  // sidecar job adds ~6 more. An earlier draft of this plan set the floor to
+  // 20 while reasoning about "~20 if: sites" — the exact unit conflation the
+  // spec's Measurements section warns about, and the same mistake that left
+  // the old guard's floor at 30 against a real 60. Floor 50 gives ~18%
+  // headroom against ~61.
   assert.ok(
-    referenced.length >= 20,
-    `expected >= 20 fromJSON references, found ${referenced.length} — either the regex broke or the workflow changed shape`,
+    referenced.length >= 50,
+    `expected >= 50 fromJSON references, found ${referenced.length} — either the regex broke or the workflow lost wiring`,
   );
 });
 
@@ -1043,30 +1167,49 @@ test('^ every job with a derived condition is in the aggregator needs:', () => {
 // Setup steps (ffmpeg, Playwright cache/install) are not legs. Each declares
 // the leg it supports; its condition must be identical to that leg's, or e2e
 // runs without a browser.
-test('setup steps carry the same condition as the leg they support', () => {
-  const stepBlocks = [...source.matchAll(
+// The set of scope keys a condition depends on, order-independent. Compared
+// instead of the raw string because a setup step legitimately carries extra
+// NON-scope conjuncts: verify.yml's two "Install Playwright chromium" steps
+// are `(...scopes...) && steps.playwright-cache.outputs.cache-hit != 'true'`,
+// which can never be string-identical to the leg's condition. An earlier
+// draft compared whole strings and would have instructed the implementer to
+// delete a correct cache guard.
+const scopeKeysOf = (condition) =>
+  [...condition.matchAll(/fromJSON\(needs\.detect\.outputs\.scopes\)\.([A-Za-z0-9_]+)/g)]
+    .map((m) => m[1])
+    .sort()
+    .join('|');
+
+test('setup steps depend on the same scope keys as the leg they support', () => {
+  // Legs are tagged explicitly rather than found by "first step whose if:
+  // mentions this key". That heuristic is wrong twice over: setup steps
+  // PRECEDE their leg in every job (Install ffmpeg :345 before E2E :363), so
+  // first-match returns another setup step; and slugs nest
+  // (step_test is a substring of step_test_hooks / step_test_e2e;
+  // step_test_server of step_test_server_slow), so a substring match binds
+  // the wrong leg entirely.
+  const legs = new Map(
+    [...source.matchAll(/# leg: ([a-z:0-9-]+)\n\s*- name: [^\n]+\n\s*if: ([^\n]+)\n/g)]
+      .map(([, leg, condition]) => [leg, condition.trim()]),
+  );
+  const setups = [...source.matchAll(
     /# supports: ([a-z:0-9-]+)\n\s*- name: ([^\n]+)\n\s*if: ([^\n]+)\n/g,
   )];
-  assert.ok(stepBlocks.length >= 7, `expected >= 7 '# supports:' declarations, found ${stepBlocks.length}`);
 
-  // Build leg name -> its own if: condition.
-  const legConditions = new Map();
-  for (const step of STEPS) {
-    const key = slugFor(step.name);
-    const re = new RegExp(`- name: [^\\n]+\\n\\s*if: ([^\\n]*${key}[^\\n]*)\\n`);
-    const m = source.match(re);
-    if (m) legConditions.set(step.name, m[1].trim());
-  }
+  assert.ok(setups.length >= 7, `expected >= 7 '# supports:' declarations, found ${setups.length}`);
+  assert.ok(legs.size >= 7, `expected >= 7 '# leg:' declarations, found ${legs.size}`);
 
   const mismatched = [];
-  for (const [, leg, stepName, condition] of stepBlocks) {
-    const expected = legConditions.get(leg);
-    if (!expected) { mismatched.push(`${stepName}: unknown leg '${leg}'`); continue; }
-    if (condition.trim() !== expected) {
-      mismatched.push(`${stepName}\n  supports ${leg}\n  has:      ${condition.trim()}\n  expected: ${expected}`);
+  for (const [, leg, stepName, condition] of setups) {
+    const expected = legs.get(leg);
+    if (!expected) { mismatched.push(`${stepName}: no '# leg: ${leg}' declaration found`); continue; }
+    if (scopeKeysOf(condition) !== scopeKeysOf(expected)) {
+      mismatched.push(
+        `${stepName}\n  supports: ${leg}\n  has keys:      ${scopeKeysOf(condition) || '(none)'}\n  leg has keys:  ${scopeKeysOf(expected) || '(none)'}`,
+      );
     }
   }
-  assert.deepEqual(mismatched, [], `setup step condition(s) diverged from their leg:\n${mismatched.join('\n')}`);
+  assert.deepEqual(mismatched, [], `setup step(s) diverged from their leg:\n${mismatched.join('\n')}`);
 });
 ```
 
@@ -1226,10 +1369,28 @@ Create `scripts/tests/module-graph.test.mjs`:
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+// `resolve` and `relative` are needed by the whole-repo desync test below AND
+// by Task 11's out-of-repo case — imported here once for the whole file.
+import { join, resolve, relative, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { stripComments, extractRelativeSpecifiers, resolveSpecifier } from '../lib/module-graph.mjs';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Minimal recursive walker: fast-glob is a dependency of the runner, not of
+// this test — node:test files here stay dependency-free.
+function walkDir(dir, exts, acc = []) {
+  if (!existsSync(dir)) return acc;
+  for (const entry of readdirSync(dir)) {
+    if (entry === 'node_modules' || entry === '.git') continue;
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) walkDir(p, exts, acc);
+    else if (exts.some((x) => p.endsWith(x))) acc.push(p);
+  }
+  return acc;
+}
 
 test('stripComments removes line comments', () => {
   assert.equal(stripComments("const a = 1; // require('../x.js')\n").includes('../x.js'), false);
@@ -1244,6 +1405,51 @@ test('stripComments preserves // inside string literals', () => {
   const out = stripComments(`const url = "https://example.com/x"; // gone\n`);
   assert.ok(out.includes('https://example.com/x'), 'URL must survive');
   assert.ok(!out.includes('gone'), 'trailing comment must be removed');
+});
+
+// --- regex literals: the failure mode that makes this a FAIL-OPEN ---------
+// A regex with an odd number of quotes sends a naive scanner into a phantom
+// string state it never leaves, so the REST OF THE FILE goes unscanned and
+// any import in that tail is invisible to the completeness guard. Measured
+// against an earlier draft: 3 real files desynced, including
+// release-notes-gate.mjs, itself a declared test:hooks input.
+test('stripComments survives a regex literal containing quotes', () => {
+  const src = `const r = /media-type="[^"]+"/;\nimport x from './real.mjs';\n`;
+  assert.ok(
+    stripComments(src).includes('./real.mjs'),
+    'an import after a quote-bearing regex must survive',
+  );
+});
+
+test('stripComments survives a regex literal ending in an escaped slash', () => {
+  const src = `if (/^refs\\/heads\\//.test(p)) {}\nconst y = require('./real.js');\n`;
+  assert.ok(stripComments(src).includes('./real.js'));
+});
+
+// The other direction: division must NOT be mistaken for a regex, or
+// everything up to the next / is eaten.
+test('stripComments treats / as division after a value', () => {
+  const src = `const a = (x + 1) / 2; const b = 3 / 4;\nimport z from './real.mjs';\n`;
+  assert.ok(stripComments(src).includes('./real.mjs'));
+});
+
+// The real guard: whole-repo desync detection. The targeted cases above only
+// catch shapes someone thought of; this catches the class. Verified at
+// authoring time — 166 files, 0 desyncs.
+test('stripComments does not desync on any real script in the repo', () => {
+  const roots = [
+    ...walkDir(resolve(repoRoot, 'scripts'), ['.mjs', '.cjs']),
+    ...walkDir(resolve(repoRoot, 'pinokio-scripts'), ['.js']),
+  ];
+  assert.ok(roots.length >= 100, `expected >= 100 scripts to scan, found ${roots.length}`);
+
+  const desynced = [];
+  for (const file of roots) {
+    stripComments(readFileSync(file, 'utf8'), {
+      onDesync: (state) => desynced.push(`${relative(repoRoot, file)} -> ended in '${state}'`),
+    });
+  }
+  assert.deepEqual(desynced, [], `stripComments desynced on:\n${desynced.join('\n')}`);
 });
 
 // This is why stripping is load-bearing rather than cosmetic:
@@ -1323,9 +1529,27 @@ import { resolve, dirname } from 'node:path';
 // contains a literal require('../../pinokio.js') that resolves outside the
 // repo. Under fail-closed resolution that would be a false failure — and it
 // is exactly the git check-ignore exit-128 case.
-export function stripComments(source) {
+// Regex literals MUST be consumed atomically. Two ways they break a naive
+// scanner, both live in this repo:
+//   * /media-type="[^"]+"/ has an ODD number of quotes, so the scanner enters
+//     a phantom string state and never leaves — the rest of the file is
+//     silently unscanned (a fail-OPEN: imports in that tail become invisible).
+//     Real: scripts/lib/slim-epub-cover.mjs, wt-merge.mjs, release-notes-gate.mjs
+//     (the last is itself a declared test:hooks input).
+//   * /^refs\/heads\// ends in an escaped slash, so `//` reads as a comment
+//     start and truncates the line. Real: code-stats.mjs, wt-list.mjs.
+// A `/` starts a regex (rather than being division) when the previous
+// significant character is one that cannot end an expression.
+const REGEX_PRECEDERS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '\n', '+', '-', '*', '%', '<', '>', '~', '^', undefined]);
+
+// `onDesync` is how the whole-repo test detects the failure above. It cannot
+// be detected from the OUTPUT — a desynced scan still emits the text, and
+// re-running it desyncs identically, so the result is stable and looks fine.
+// Only the terminal state reveals it.
+export function stripComments(source, { onDesync } = {}) {
   let out = '';
   let i = 0;
+  let prev; // last significant code char
   let state = 'code'; // code | line | block | single | double | template
   while (i < source.length) {
     const c = source[i];
@@ -1333,9 +1557,28 @@ export function stripComments(source) {
     if (state === 'code') {
       if (c === '/' && next === '/') { state = 'line'; i += 2; continue; }
       if (c === '/' && next === '*') { state = 'block'; i += 2; continue; }
+      if (c === '/' && REGEX_PRECEDERS.has(prev)) {
+        // Consume the whole literal, honouring escapes and [...] classes,
+        // where an unescaped '/' does NOT terminate.
+        out += c; i += 1;
+        let inClass = false;
+        while (i < source.length) {
+          const r = source[i];
+          if (r === '\\') { out += r + (source[i + 1] ?? ''); i += 2; continue; }
+          if (r === '[') inClass = true;
+          else if (r === ']') inClass = false;
+          else if (r === '/' && !inClass) { out += r; i += 1; break; }
+          else if (r === '\n') break; // unterminated — bail rather than run away
+          out += r; i += 1;
+        }
+        prev = '/';
+        continue;
+      }
       if (c === "'") state = 'single';
       else if (c === '"') state = 'double';
       else if (c === '`') state = 'template';
+      if (!/\s/.test(c)) prev = c;
+      else if (c === '\n') prev = '\n';
       out += c; i += 1; continue;
     }
     if (state === 'line') {
@@ -1354,6 +1597,10 @@ export function stripComments(source) {
     }
     out += c; i += 1;
   }
+  // A scan that ends anywhere but `code` ran off the rails — most often on a
+  // regex literal with an odd quote count, after which the remainder of the
+  // file was treated as string content and never scanned for imports.
+  if (state !== 'code' && onDesync) onDesync(state);
   return out;
 }
 
@@ -1483,6 +1730,17 @@ const toPosix = (p) => p.split(sep).join('/');
 
 // Classify a batch of candidate paths as gitignored or not.
 //
+// NOTE: check-ignore is INDEX-AWARE, not pure .gitignore pattern matching.
+// Measured: a file matching an ignore rule but force-added to the index
+// reports exit 1 (NOT ignored); with --no-index it reports 0. This is
+// deliberate and must NOT be "fixed" by adding --no-index: a tracked file is
+// a real producer and belongs in the closure regardless of what .gitignore
+// says about its directory. The server/dist/** conclusion is unaffected —
+// those files are never tracked, so they classify as ignored in both a fresh
+// clone and a built tree, which is the clone-state independence this rule
+// needs. What is NOT true is the simpler story that this is a property of
+// .gitignore alone.
+//
 // BATCHED via --stdin, not one spawn per path: measured 81 individual spawns
 // = 3972 ms vs one batch = 60 ms (66x). test:hooks runs in pre-commit via
 // verify:fast:scoped, a path documented as sub-5s — per-query spawning would
@@ -1515,8 +1773,13 @@ export function classifyIgnored(absPaths, cwd) {
     throw new Error(`check-ignore: failed to spawn git (${proc.error.message}) — refusing to guess`);
   }
   if (proc.status !== 0 && proc.status !== 1) {
+    // Name the paths: check-ignore batches, and on 128 it prints nothing about
+    // the good ones — so without this the error identifies neither the
+    // offending specifier nor the file that imported it. Fail-closed but
+    // undiagnosable is only half a guard.
     throw new Error(
-      `check-ignore: git exited ${proc.status} — refusing to guess.\n${proc.stderr ?? ''}`,
+      `check-ignore: git exited ${proc.status} — refusing to guess.\n` +
+      `${proc.stderr ?? ''}\nPaths in this batch:\n${posix.join('\n')}`,
     );
   }
 
@@ -1533,25 +1796,10 @@ export function classifyIgnored(absPaths, cwd) {
 Run: `node --test scripts/tests/module-graph.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 4b: Run mutation M8 — the predicate itself**
-
-Temporarily reimplement `classifyIgnored` using `git ls-files` ("untracked")
-instead of `git check-ignore` ("ignored"), then simulate a fresh clone by
-renaming `server/dist` aside:
-
-```bash
-mv server/dist server/dist.bak
-node --test scripts/tests/verify-cache.test.mjs   # after Task 13 lands
-mv server/dist.bak server/dist
-```
-
-Expected under the "untracked" predicate: **7 unresolvable specifiers** from
-`scripts/repair-cast-id-drift.mjs`'s `../server/dist/**` imports — i.e. red
-on a fresh clone, green on this box. Under `check-ignore`: identical result
-either way. Revert the reimplementation.
-
-This is the mutation that proves the *predicate choice* is load-bearing, not
-merely the batching or the exit-code handling.
+> **M8 is NOT run here.** At this point the completeness guard still uses the
+> old inline extractor and never calls `classifyIgnored`, so swapping the
+> predicate would change nothing and prove nothing. M8 moves to **Task 13
+> Step 4b**, after the guard actually consumes the walk.
 
 - [ ] **Step 5: Verify the cost claim holds**
 
@@ -1840,6 +2088,31 @@ In `scripts/verify-cache.mjs`, `test:hooks` `extraFiles`:
 Run: `node --test scripts/tests/verify-cache.test.mjs`
 Expected: PASS.
 
+- [ ] **Step 4b: Run mutation M8 — the predicate itself**
+
+Only meaningful here, now that the guard actually consumes `classifyIgnored`.
+
+Temporarily reimplement `classifyIgnored` using `git ls-files` ("untracked")
+instead of `git check-ignore` ("ignored"), then simulate a fresh clone:
+
+```powershell
+Rename-Item server/dist server/dist.bak
+node --test scripts/tests/verify-cache.test.mjs
+Rename-Item server/dist.bak server/dist
+```
+
+(Windows: this moves ~1,812 files and fails if a server process holds any of
+them — stop `npm start` first. On POSIX, `mv server/dist server/dist.bak`.)
+
+Expected under "untracked": **7 unresolvable specifiers** from
+`scripts/repair-cast-id-drift.mjs:1203-1209`'s `../server/dist/**` imports —
+red on a fresh clone, green on this box. Under `check-ignore`: identical
+either way. Revert the reimplementation.
+
+This is the mutation proving the *predicate choice* is load-bearing, as
+distinct from the batching (Task 11 Step 5) and the exit-code contract
+(Task 11 Step 1).
+
 - [ ] **Step 5: Run mutation M5**
 
 Remove `'pinokio-scripts/lib/menu.js'` from `extraFiles`.
@@ -1948,20 +2221,32 @@ if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
 process.exit(0);
 ```
 
-- [ ] **Step 6: Run to verify pass**
+- [ ] **Step 6: Wire it into CI — BEFORE running the suite**
 
-Run: `node --test scripts/tests/verify-cache.test.mjs && npm run test:hooks && npm run check:budget-poll`
-Expected: all pass.
-
-- [ ] **Step 7: Wire it into CI**
+Order matters here. `npm run test:hooks` globs `scripts/tests/*.test.mjs`,
+which now includes `workflow-wiring.test.mjs`, whose **←** assertion reports
+any emitted key no workflow condition references. Between Step 3 (adds the
+STEP) and this step, `step_check_budget_poll` is exactly that — so running
+the suite first fails for a reason unrelated to what is being built, and the
+implementer would waste a cycle chasing it.
 
 In `.github/workflows/verify.yml`, in `lint-and-checks`, after "Hooks tests":
 
 ```yaml
+      # leg: check:budget-poll
       - name: Budgeted-poll guardrail
         if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run check:budget-poll
 ```
+
+`lint-and-checks` is already in the aggregator's `needs:`, so the ↑ assertion
+is satisfied without further change — this is a step in an existing job, not
+a new job.
+
+- [ ] **Step 7: Run to verify pass**
+
+Run: `node --test scripts/tests/verify-cache.test.mjs && npm run test:hooks && npm run check:budget-poll`
+Expected: all pass.
 
 - [ ] **Step 8: Confirm A2's assertions still pass**
 
@@ -2092,7 +2377,7 @@ regresses.
 | M9 | unresolvable specifiers fail closed | Task 12 Step 1, `walk reports an unresolvable specifier` | pinned by test |
 | M10 | `ci-scope.mjs` fails safe, not silent | Task 5 Steps 5 + 5b | run it |
 | M11 | Metric B floor catches a dead regex | Task 13 Step 6 | run it |
-| M12 | the `ok` sentinel rejects an empty value | Task 9 Step 3 | run it |
+| M12 | the `ok` sentinel rejects an empty value | Task 9 Step 3 | **partial — see below** |
 | M13 | the sidecar leg reddens the **pinned context** | Task 4 Step 6 | run it (on the PR) |
 | M14 | a workflow-only edit runs the assertions | Task 1 Steps 1–2 + Task 8 Step 5 | pinned by test |
 | M15 | a job outside `needs:` is caught | Task 8 Step 3 | run it |
@@ -2101,11 +2386,27 @@ regresses.
 | M18 | `check-ignore` exit 128 fails closed | Task 11 Step 1, `throws on a path outside the repository` | pinned by test |
 
 **M6 deserves a note.** It is the one "mutation" that is really a *measured
-claim*: against the real repo a depth-1 walk yields closure 56, clears the
-floor of 50, and reports `missing = []` — **green**. That is why M17's
+claim*: against the real repo a depth-1 walk yields closure **57**, clears
+the floor of 50, and reports `missing = []` — **green**. That is why M17's
 synthetic fixture exists at all. Do not try to make M6 red against the real
 tree; if it ever does go red there, the two declarations from Task 13 have
 been lost and M5 will say so.
+
+**M12 is only partially dischargeable before merge, and the ledger says so
+rather than overclaiming.** Task 9 Step 3 proves the *bash comparison* —
+that an empty `ok` fails the step. It does **not** prove that a silently-empty
+producer is caught end-to-end, because that requires a real workflow run with
+a broken `detect`. Options, in order of preference:
+
+1. On A2's PR, push one scratch commit that drops the `>> "$GITHUB_OUTPUT"`
+   redirect, confirm `npm run verify` goes red with the sentinel's message,
+   then revert it in the same PR.
+2. If that is not acceptable on the required check, mark M12 **unproven at
+   merge** in the PR body and discharge it on the first workflow-only PR
+   after A2 lands.
+
+Do not silently treat Step 3 as full discharge — that is the "test that
+cannot fail" shape this plan exists to prevent.
 
 ## Post-merge
 
