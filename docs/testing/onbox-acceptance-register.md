@@ -1430,9 +1430,9 @@ live against dummy listeners (see `task-18-report.md`) — but nothing has ever
 exercised the actual `--apply` write path against the real
 `C:\AudiobookWorkspace\books` tree.
 
-**Dry-run result (round-2 review fixes applied, re-measured 2026-08-05 with
-`CACHE_DIR` correctly pointed at the checkout that ran this workspace's
-analysis — confirmed no drift since):**
+**Dry-run result (independent-review Critical C1 fix applied, re-measured
+2026-08-05 with `CACHE_DIR` correctly pointed at the checkout that ran this
+workspace's analysis):**
 
 - **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
   and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
@@ -1465,23 +1465,74 @@ analysis — confirmed no drift since):**
   disk. This, not the report-only total above, is the actual damage figure.
 - **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
   a workspace-wide file search before and after every dry run.
-- **0 books missing analysis-cache evidence** — the round-2 review's
-  fail-closed fix (see the precondition bullet below): a dry run from a
-  worktree whose own `server/handoff/cache` doesn't hold these 20 real books
-  reports **20** books missing cache evidence and **0** auto-recordable
-  aliases instead, since the cross-source ambiguity veto can't see cache
-  ambiguity without the file. Confirm this line reads `0` before trusting any
-  of the numbers above, and before `--apply`.
+- **1 book missing analysis-cache evidence, 0 books with an auto-record
+  withheld because of it** — these are now two DIFFERENT numbers (owner-
+  decided policy, review round 2, 2026-08-05), and **only the second one
+  gates `--apply`**. *Unlocked*'s cache file
+  (`server/handoff/cache/mns_dLurz4I544.json`) exists and parses as valid
+  JSON, but names **zero** characters (neither `stage1.characters` nor any
+  `chapterCast` entry — both are optional per the schema, and this file
+  happens to have neither populated) — found by independent review (Critical
+  C1) after the #2093 residual-1 fix first shipped gating only on "exists and
+  parses": the cross-source ambiguity veto doesn't consume "did it parse", it
+  consumes the cache's actual name/id entries, so a validly-parsing,
+  evidence-free file is exactly as blind to the veto as a missing one.
+  `isCacheAvailable` now also requires at least one name/id entry that
+  `buildNameIndex` itself would keep, not merely one `cacheEntriesOf` treats
+  as string-shaped (pre-merge review I1 closed a further gap — an entry
+  like `{id:"sandor", name:""}` used to pass the raw `cacheEntriesOf` check
+  while `buildNameIndex`, what guard 2 actually reads, silently drops it;
+  zero of the real workspace's 80 cache files exhibit this shape today).
+  Re-measuring the SAME real cache directory (76 files parse, 0 unparseable,
+  10 parse with zero character entries) surfaces this one book. **This is
+  expected and does NOT block `--apply`** — but **not because *Unlocked* has
+  nothing orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed both by a live pre-merge-review scan and by the real `--apply`
+  run above). The reason it doesn't block: `unknown-male` is a **reserved
+  fold-bucket SOURCE id**, and guard 1 refuses to auto-record from a
+  reserved source unconditionally, firing *before* the cache-availability
+  gate is ever reached — so *Unlocked*'s blind ambiguity veto never actually
+  stood between the pass and a real candidate. `--apply` refuses only when a
+  book's blind veto DID withhold a real candidate — that count is separately
+  reported and currently reads `0`. The trigger that WOULD change this: a
+  **non-reserved** orphaned id in *Unlocked* with a real Tier A/B name/id
+  match (from a future re-render or re-analysis) — and, per pre-merge review
+  I2, a match with **zero rendered segments** would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached). Re-check before trusting the `0` if *Unlocked* changes.
 
 - **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
   fresh worktree's own (git-ignored, per-checkout — see the script's module
   doc comment). Run the dry run first and confirm the summary reads `books
-  missing analysis-cache evidence: 0` — `--apply` now refuses outright
-  otherwise (round-2 review fail-closed fix for the cross-source ambiguity
-  veto's blind spot when cache evidence is absent).
+  with an auto-record withheld for missing cache evidence: 0` — `--apply`
+  now refuses outright otherwise (round-2 review fail-closed fix for the
+  cross-source ambiguity veto's blind spot when cache evidence is absent;
+  #2093 residual 1, strengthened by independent-review Critical C1,
+  tightened `isCacheAvailable` to require the file exist, parse, AND name at
+  least one character; then re-scoped by owner-decided policy, review round
+  2, so the refusal gates on an actual withheld candidate, not merely a book
+  whose cache happens to be unusable). **A nonzero `books missing
+  analysis-cache evidence` count is expected and does NOT by itself block
+  `--apply`** — as measured today it reads `1` (*Unlocked*, see above), while
+  the gating `books with an auto-record withheld…` line reads `0`, so this
+  precondition IS currently satisfied. Don't stop just because the first
+  number is nonzero — check the second one.
+- **Precondition (#2108): `WORKSPACE_DIR` must actually point at the real
+  20-book workspace.** Confirm the summary reads `books scanned: 20`
+  alongside the cache-evidence lines above — a wrong `WORKSPACE_DIR` (the
+  script defaults to `<home>/AudiobookWorkspace`, which does not exist)
+  scans **0** books and, before this fix, printed a clean-looking `books
+  missing analysis-cache evidence: 0` and exited `--apply` with code `0`
+  having written nothing — an empty tree reading as a healthy one, on
+  exactly the line this precondition told the operator to trust. `--apply`
+  now refuses outright when `books scanned` is `0`, and the dry-run summary
+  calls out a zero-book scan explicitly instead of rendering a row of clean
+  zeros.
 - Stop any real server bound to the configured probe port(s) (default `8080`
-  and the LAN HTTPS `8443`) — `--apply` refuses outright while either answers,
-  since the write is out-of-process and no in-process lock covers it. Confirm
+  and the LAN HTTPS `8443`) **or their auto-rebind range** (up to 19 ports
+  above each default, matching `listenWithAutoRebind` — #2090) — `--apply`
+  refuses outright while any of them answers, since the write is
+  out-of-process and no in-process lock covers it. Confirm
   the refusal fires first, against the *real* dev server (not only a dummy
   listener): start `cd server && npm run dev`, run `--apply`, confirm it exits
   1 naming the reachable port and writes nothing, then stop the server.

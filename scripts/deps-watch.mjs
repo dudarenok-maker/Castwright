@@ -1,7 +1,7 @@
 // scripts/deps-watch.mjs
-// Pure helpers for the ops-17 deps-watch (#790). NO IO here — see
-// scripts/deps-watch-run.mjs for the orchestrator. Unit-tested under
-// scripts/tests/deps-watch.test.mjs (npm run test:hooks).
+// Pure helpers for the ops-17 deps-watch (#790). NO IO here — `publish` below
+// takes `gh` as an injected dependency and calls it, but never performs IO
+// itself. Unit-tested under scripts/tests/deps-watch.test.mjs (npm run test:hooks).
 
 export const KGP_PLUGINS = ['audio_session', 'flutter_foreground_task', 'mobile_scanner'];
 export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
@@ -132,6 +132,24 @@ export function stickyRequest(existing, repo, issue) {
   return existing
     ? { method: 'PATCH', path: `repos/${repo}/issues/comments/${existing.id}` }
     : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
+}
+
+/** Posts the A2 transition comment (if any) FIRST, then writes the sticky —
+ *  never the reverse. The sticky body embeds the new `latest` for every
+ *  plugin, so writing it first would let a failed transition POST (rate
+ *  limit, transient `gh`/network fault) commit state for a notification that
+ *  never went out, permanently suppressing it (ops-17c, #2113). State is
+ *  committed only after the notification it implies has been delivered.
+ *  `gh` is injected here, so `publish` calls it but does no IO itself. */
+export function publish({ gh, repo, issue, existing, stickyBody, transitionComment }) {
+  if (transitionComment) {
+    // `-f` (not `-F`) — same rationale as the runner's `gh` helper (gh
+    // community #148257): raw field bytes transmit as-is, so a leading
+    // `@mention` isn't mistaken for a file. Do not "fix" this to `-F`.
+    gh(['api', `repos/${repo}/issues/${issue}/comments`, '--method', 'POST', '-f', `body=${transitionComment}`]);
+  }
+  const req = stickyRequest(existing, repo, issue);
+  gh(['api', req.path, '--method', req.method, '-f', `body=${stickyBody}`]);
 }
 
 /** The human-visible markdown (used for both the job summary and sticky body). */
