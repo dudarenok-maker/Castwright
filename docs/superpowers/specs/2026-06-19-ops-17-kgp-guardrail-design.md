@@ -215,6 +215,20 @@ not-currently-broken build.
     - Editing a comment in place sends **no** notification — that's by design:
       the sticky is the durable *current-state* record; the **A2 transition
       comment** and the **A1 red email** are the active pings.
+    - > **Correction (ops-17c, [#2113](https://github.com/dudarenok-maker/Castwright/issues/2113), 2026-08-05):**
+      > this section originally left the write order between the sticky refresh
+      > and the A2 transition comment unspecified. That is a hazard: the sticky
+      > body embeds the new `latest` for every plugin, so if it is written FIRST
+      > and the transition POST that follows throws (rate limit, transient
+      > `gh`/network fault), the next run computes `prior.latest === s.latest` →
+      > no transition, and that release's `@mention` is silently dropped forever
+      > — nothing records it was ever owed. **The invariant: state is committed
+      > only after the notification it implies has been delivered.** The
+      > exported `publish` helper in `scripts/deps-watch.mjs` now posts the A2
+      > transition comment first, then writes the sticky; `deps-watch-run.mjs`
+      > calls it instead of doing the two `gh api` calls inline. A duplicate
+      > `@mention` on a failed sticky write is accepted — cheap and
+      > self-announcing on a monthly cron — where permanent silence is not.
 
 ### 2. Trip B — escape-hatch + pin assertions in `app.yml`
 

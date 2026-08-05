@@ -212,6 +212,7 @@ import {
   renderSticky,
   renderSummary,
   renderTransitionComment,
+  publish,
 } from '../deps-watch.mjs';
 
 const STATUS_CLEAN = [
@@ -278,4 +279,82 @@ test('renderTransitionComment: recipe covers BOTH outcomes, and says the pin no 
   // pass every assertion above. `.` doesn't match `\n` by default, so this only
   // matches if both phrases are on one line with nothing else between them.
   assert.match(md, /warning is still there.*leave the pin alone/i);
+});
+
+// A fake `gh` that records each call's argv and can be told to throw on the
+// Nth call (1-indexed) — used to drive `publish` (ops-17c, #2113).
+function fakeGh({ throwOnCall } = {}) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (throwOnCall && calls.length === throwOnCall) {
+      throw new Error(`gh call ${calls.length} failed (fake)`);
+    }
+    return '';
+  };
+  gh.calls = calls;
+  return gh;
+}
+
+test('publish: transition present, both calls succeed -> transition POST is call 1, sticky write is call 2', () => {
+  const gh = fakeGh();
+  publish({
+    gh,
+    repo: 'o/r',
+    issue: '790',
+    existing: { id: 42 },
+    stickyBody: 'sticky-body',
+    transitionComment: 'transition-body',
+  });
+  assert.equal(gh.calls.length, 2);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
+  assert.deepEqual(gh.calls[1], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
+});
+
+test('publish: #2113 regression — the transition POST throws, and the sticky is NEVER called', () => {
+  const gh = fakeGh({ throwOnCall: 1 });
+  assert.throws(() =>
+    publish({
+      gh,
+      repo: 'o/r',
+      issue: '790',
+      existing: { id: 42 },
+      stickyBody: 'sticky-body',
+      transitionComment: 'transition-body',
+    }),
+  );
+  assert.equal(gh.calls.length, 1); // only the failed call — sticky never reached
+  // Must be the TRANSITION post that failed, not merely "some first call" — a
+  // sticky-first ordering would also stop at 1 call, just the wrong one.
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
+});
+
+test('publish: no transition -> exactly one call, and it is the sticky write (no spurious POST)', () => {
+  const gh = fakeGh();
+  publish({
+    gh,
+    repo: 'o/r',
+    issue: '790',
+    existing: null,
+    stickyBody: 'sticky-body',
+    transitionComment: null,
+  });
+  assert.equal(gh.calls.length, 1);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=sticky-body']);
+});
+
+test('publish: the sticky write throws -> the transition POST already happened (accepted duplicate-risk trade)', () => {
+  const gh = fakeGh({ throwOnCall: 2 });
+  assert.throws(() =>
+    publish({
+      gh,
+      repo: 'o/r',
+      issue: '790',
+      existing: { id: 42 },
+      stickyBody: 'sticky-body',
+      transitionComment: 'transition-body',
+    }),
+  );
+  assert.equal(gh.calls.length, 2);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
 });

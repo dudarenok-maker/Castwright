@@ -15,7 +15,7 @@ import {
   extractState,
   computeTransitions,
   findSticky,
-  stickyRequest,
+  publish,
   renderSticky,
   renderSummary,
   renderTransitionComment,
@@ -61,16 +61,13 @@ try {
   const summary = renderSummary({ pluginStatus, behind, today });
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
 
-  // 5. Sticky comment — edit in place, or create once (decision is pure)
+  // 5. Publish: post the A2 transition comment (a NEW comment => a real
+  //    GitHub notification) FIRST, then the sticky comment — edit in place,
+  //    or create once (decision is pure). State is committed only after the
+  //    notification it implies has been delivered (ops-17c, #2113).
   const stickyBody = renderSticky({ pluginStatus, behind, today });
-  const req = stickyRequest(existing, repo, issue);
-  gh(['api', req.path, '--method', req.method, '-f', `body=${stickyBody}`]);
-
-  // 6. A2 transition notification (a NEW comment => a real GitHub notification)
   const transitionComment = renderTransitionComment(transitions, pluginStatus);
-  if (transitionComment) {
-    gh(['api', `repos/${repo}/issues/${issue}/comments`, '--method', 'POST', '-f', `body=${transitionComment}`]);
-  }
+  publish({ gh, repo, issue, existing, stickyBody, transitionComment });
 
   console.log(`deps-watch: ${behind.length} direct/dev behind; transitions: ${transitions.join(',') || 'none'}`);
   process.exit(exitCodeFor(behind)); // 0 or 1 — the clean path only
