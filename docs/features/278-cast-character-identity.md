@@ -98,21 +98,30 @@ owner: null
    `AUTO_REBIND_RANGE`) — #2090, closed by the same PR as #2093 below.
 3. **The resolver never matches on display names.** `buildCastResolver` is
    ids-only — four tiers, first hit wins: a live exact id (`via: 'exact'`), a
-   non-rejected `rejected`-checked-after-exact history hit (`via: 'history'`), a
-   normalised id (`via: 'normalised-id'`), a normalised history hit
-   (`via: 'normalised-history'`). Name matching happens only at merge/repair time
-   (`server/src/store/remap-fresh-to-prior.ts`, and the Tier A/B matcher inside
-   `scripts/repair-cast-id-drift.mjs`) — never inside the resolver itself.
+   non-rejected history hit (`via: 'history'`, gated against both the legacy
+   id-wide `rejected` list and the pair-scoped `rejectedPairs` — #2092/#2089,
+   now the only field production writes), a normalised id
+   (`via: 'normalised-id'`, gated the same way), a normalised history hit
+   (`via: 'normalised-history'`, likewise). Name matching happens only at
+   merge/repair time (`server/src/store/remap-fresh-to-prior.ts`, and the
+   Tier A/B matcher inside `scripts/repair-cast-id-drift.mjs`) — never inside
+   the resolver itself.
 4. **A tie never guesses.** If two cast rows (or two history entries) share a
    normalised key, `buildCastResolver.resolve()` returns `undefined` rather than
    picking one — silently rendering one character's lines in another's voice is
    strictly worse than the narrator-substitution fallback it would replace.
-5. **`rejected` is checked after `exact`, ahead of the other three tiers**
-   (`cast-resolve.ts:108-116`) — a live cast row always wins over a stale
-   rejection, so a reclaimed id (the character's own name minted again by a later
-   re-analysis) is never permanently shadowed by a past "not the same character"
-   decision. This is a deliberate deviation from spec §4.6's original wording; see
-   "Deviations from the spec" below.
+5. **`rejected`/`rejectedPairs` are checked after `exact`, ahead of the other
+   three tiers** (`cast-resolve.ts:164` for `rejected`; `:172`, `:184`, `:191`
+   for `rejectedPairs` against tiers 2/3/4 respectively — NOT the map
+   construction above them) — a live cast row always wins over a stale
+   rejection, so a reclaimed id (the character's own name minted again by a
+   later re-analysis) is never permanently shadowed by a past "not the same
+   character" decision. `rejectedPairs` (#2092/#2089) additionally scopes the
+   block to the SPECIFIC rejected target rather than every candidate — see
+   `rejectedPairs`'s own doc comment on `CastIdHistory`
+   (`server/src/store/cast-id-history.ts`) for the full design. This is a
+   deliberate deviation from spec §4.6's original wording; see "Deviations
+   from the spec" below.
 6. **Frozen `<slug>.segments.json` files are never rewritten to migrate ids**
    (spec §3) — the resolver reads through drift instead of correcting it at rest.
    `chapter-qa-repair.ts` rewriting a segments file as part of its own normal
