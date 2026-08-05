@@ -2251,11 +2251,18 @@ Only meaningful here, now that the guard actually consumes `classifyIgnored`.
 literally means *not in the index ⇒ stop*, under which `server/dist/**` is
 untracked whether or not it exists on disk — so renaming the directory
 changes nothing, the mutation stays green, and the implementer reports it as
-a placebo. The predicate that actually reproduces the clone-state divergence
-is *present on disk but untracked*:
+a placebo. That is exactly what the code below is: an **index-only**
+predicate. `git ls-files` reflects the index, not the working tree, so this
+cannot tell "untracked and absent" from "untracked and present on disk"
+apart — both read as untracked regardless of clone state. As written, it
+therefore **cannot reproduce a clone-state divergence** at all; a predicate
+that did would additionally have to probe disk existence (e.g. `existsSync`)
+alongside tracked status, which nothing here does:
 
 ```js
-// MUTATION ONLY — the "untracked" predicate this design rejects.
+// MUTATION ONLY — the "untracked" predicate this design rejects. Index-only:
+// git ls-files reflects the INDEX, not the working tree, so it cannot see
+// whether a path exists on disk, and cannot reproduce the divergence below.
 export function classifyIgnored(absPaths, cwd) {
   const tracked = new Set(
     execFileSync('git', ['ls-files'], { cwd, encoding: 'utf8', maxBuffer: 1e8 })
@@ -2278,16 +2285,19 @@ Rename-Item ../dist-mutation-stash server/dist
 (Windows: this moves ~1,812 files and fails if a server process holds any of
 them — stop `npm start` first. On POSIX, `mv server/dist ../dist-mutation-stash`.)
 
-Expected under "untracked": **7 unresolvable specifiers** from
-`scripts/repair-cast-id-drift.mjs`'s `../server/dist/**` dynamic imports
-(currently `:1379-1385`; **grep rather than trusting the line numbers** —
-they moved once already between commits) —
-red on a fresh clone, green on this box. Under `check-ignore`: identical
-either way. Revert the reimplementation.
+Because the predicate above never inspects the filesystem, **both clone
+states come back identical**: 0 unresolvable specifiers whether
+`server/dist/` (and the 7 stub paths `scripts/repair-cast-id-drift.mjs`
+dynamically imports from it, currently `:1379-1385` — **grep rather than
+trusting the line numbers**, they moved once already between commits) is
+present or absent. Under `check-ignore`: also identical either way, but for
+the correct reason. Revert the reimplementation.
 
-This is the mutation proving the *predicate choice* is load-bearing, as
-distinct from the batching (Task 11 Step 5) and the exit-code contract
-(Task 11 Step 1).
+This mutation is a **placebo for this corpus** — see the M8 ledger row —
+not proof the *predicate choice* is load-bearing. Proving that would need a
+predicate that also varies with disk existence for a genuinely
+tracked-but-ignored file; none is implemented here, and is left as an open
+follow-up rather than invented to force a pass.
 
 - [ ] **Step 5: Run mutation M5**
 
