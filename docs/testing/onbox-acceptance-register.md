@@ -1466,6 +1466,31 @@ to sweep the **whole** 20-book workspace at once.
 > report-only; neither real auto-record (`lightning-dave -> lightning_dave`
 > Tier A, `the-torment -> the_torment` Tier B) trips the new conflict guard,
 > since both already agree with their own live id-shape resolution.
+>
+> **Fix round 3 (independent review, 2026-08-05) found the round-2 fix
+> itself defaulted fail-OPEN, closed:** `historyResolver` (threaded through
+> `main()`) defaulted a missing value to `{ resolve: () => undefined }` when
+> omitted — but `planBookRepairs` no longer reads `history.supersededBy`
+> directly at all (that was the whole point of the round-2 fix), so a
+> caller that omitted the resolver while still passing a fully populated
+> `history` got **zero protection** from either guard, with no error.
+> `undefined` from `.resolve()` means both "asked, nothing resolves" and
+> "never asked" — the tenth instance of this wave's recurring shape, one
+> level up from round 2's own fix. Measured on the round-2 conflict-guard
+> probe: omitting the resolver auto-recorded a 67-segment durable repoint
+> onto the wrong character; omitting it with `history.supersededBy`
+> populated also went silently past the already-recorded skip. Fixed the
+> same way `cacheAvailable`'s own pre-#2093 fail-open default was fixed:
+> default to building the REAL resolver from the args already in scope
+> (`buildCastResolver(liveCast, history)` — the identical construction
+> `collectSegmentOrphans` uses), so an omitted `historyResolver` is a
+> (redundant) optimisation for the production path, never a correctness
+> hole for any other caller. Also printed the re-render list's segment
+> total (`188`) in the summary line alongside the row count (`23`), which
+> previously required an operator to sum every row by hand to get the
+> figure this row's own arithmetic check depends on. **Verified latent, not
+> live** — a third fresh dry run reports the identical **23 rows / 188
+> segments** (now printed directly rather than hand-summed).
 > [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) — **FIXED**
 > (PR #2102, before this branch was cut) — a wrong `WORKSPACE_DIR` used to scan
 > **0** books and still print `books missing analysis-cache evidence: 0` and

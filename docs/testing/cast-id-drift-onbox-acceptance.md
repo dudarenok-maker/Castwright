@@ -567,6 +567,37 @@ changed this round). **Identical to step 9a**: auto-recordable aliases
 ids/93 segments**; re-render candidates **23 rows/188 segments**. Confirms
 both fix-round-2 defects are latent on this workspace today, as expected.
 
+**Fix round 3 (independent review, 2026-08-05) found the round-2 fix's own
+`historyResolver` default was fail-OPEN, closed:** an omitted resolver
+defaulted to `{ resolve: () => undefined }` — but `planBookRepairs` no
+longer reads `history.supersededBy` directly at all, so a caller that
+omitted the resolver while passing a fully populated `history` got zero
+protection from either the already-recorded skip or the round-2 conflict
+guard, silently. Fixed the same way `cacheAvailable`'s own pre-#2093
+fail-open default was fixed: default to building the real resolver from
+`liveCast`/`history` (the identical construction `collectSegmentOrphans`
+uses), so a missing `historyResolver` is a redundant optimisation for the
+production path — which always threads the real one anyway — never a
+correctness hole for any other caller. Also: the summary line now prints
+the re-render list's segment total (`188`) alongside the row count (`23`),
+which previously required summing every row by hand.
+
+9c. Re-run the script in dry-run mode a fourth time, on top of the
+    fix-round-3 changes, to confirm the fail-closed default doesn't move
+    the real workspace's figures.
+
+Expected: identical numbers to steps 9a/9b, now with the segment total
+printed directly in the summary line instead of needing to be hand-summed.
+
+Result: **RUN 2026-08-05** (same branch, dry run only, same invocation).
+**Identical to steps 9a/9b**: `re-render candidates: 23 chapter row(s) /
+188 segment(s)` (the new segment-total print, matching the hand-summed
+figure from every prior run); auto-recordable aliases **2 (68 segments)**;
+reported for human decision **91 ids/93 segments**; skipped **3**. Confirms
+the fail-closed default is latent on this workspace today, as expected —
+the production path in `main()` always threaded the real resolver through
+explicitly, so this fix protects a future/test caller, not today's run.
+
 ### 8.7 Confirm the fix reaches actual audio
 
 10. Re-render *Заказ Коалфолла* chapter 2 (the chapter carrying the
@@ -600,7 +631,8 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 - [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across two independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a and 9b), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
+- [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real
