@@ -1365,6 +1365,26 @@ export function formatBooksScannedLine(booksScanned) {
   );
 }
 
+/** finding 1 follow-up (round 4 review, 2026-08-05): formats the
+ *  `'not-yet-analysed'` summary line. Extracted and pinned because the fix
+ *  in `collectBooks` (see its own doc comment) changed what lands in this
+ *  bucket without this label being updated to match — the label used to
+ *  read "no cast.json or state.json at all", describing the OLD
+ *  both-files-missing discriminator, and stayed wrong once the fix widened
+ *  the bucket to include a book with a perfectly good `state.json` (the
+ *  bucket's primary member post-fix) or a perfectly good `cast.json` (the
+ *  symmetry case). An operator reading the old text, checking disk, and
+ *  finding the file right there is exactly the kind of on-screen line
+ *  A33's own precondition tells them to trust — so this is pinned directly,
+ *  not left to eyeball review. */
+export function formatNotYetAnalysedLine(count) {
+  return (
+    `books not yet analysed (cast.json and/or state.json genuinely missing, judged independently per ` +
+    `file — the normal shape for a book before its first analysis or just after a reparse, not evidence ` +
+    `loss; a file that's PRESENT but unreadable is counted separately below, not here): ${count}`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // I/O — everything below touches the filesystem or the network.
 // ---------------------------------------------------------------------------
@@ -1455,7 +1475,15 @@ function readJsonTriState(p) {
  *      missing before granting this reason — which classified the ordinary
  *      mid-import/post-reparse shape above as `'unreadable'` and refused
  *      `--apply` for the entire workspace over one freshly-imported book.
- *      Caught and fixed before ever reaching `main` (round 3 review).
+ *      Caught and fixed before ever reaching `main` (round 3 review). The
+ *      classification is deliberately PER FILE, not special-cased to
+ *      `cast.json` alone: "`cast.json` present, `state.json` missing" also
+ *      grants `'not-yet-analysed'`, even though no server route deletes
+ *      `state.json` on its own — grep of `server/src` confirms it — so that
+ *      direction is unreached in production today. Symmetry is the point,
+ *      not an accident: a future code path that DOES drop a lone
+ *      `state.json` inherits the same "genuinely missing is never lost
+ *      evidence" rule for free, rather than needing its own carve-out here.
  *    - **`'unreadable'`** — at least one file is PRESENT but could not be
  *      read/parsed (`readJsonTriState`'s `'unreadable'` status), or parsed
  *      fine but failed the shape check anyway (missing/wrong-shaped
@@ -2145,10 +2173,7 @@ async function main() {
   const unreadableBooks = droppedBooks.filter((b) => b.reason === 'unreadable');
   const notYetAnalysedBooks = droppedBooks.filter((b) => b.reason === 'not-yet-analysed');
   if (notYetAnalysedBooks.length) {
-    console.log(
-      `books not yet analysed (no cast.json or state.json at all — normal for a book mid-import): ` +
-        `${notYetAnalysedBooks.length}`,
-    );
+    console.log(formatNotYetAnalysedLine(notYetAnalysedBooks.length));
     for (const b of notYetAnalysedBooks) console.log(`  - ${b.label}`);
   }
   if (unreadableBooks.length) {

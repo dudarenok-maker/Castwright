@@ -44,6 +44,7 @@ import {
   AUTO_REBIND_RANGE,
   shouldRefuseApplyForEmptyScan,
   formatBooksScannedLine,
+  formatNotYetAnalysedLine,
   collectBooks,
   collectBakNameEntries,
   shouldRefuseApplyForUnreadableBooks,
@@ -2619,5 +2620,29 @@ describe('formatBooksScannedLine (#2108)', () => {
     assert.match(line, /^books scanned: 0 — WARNING:/);
     assert.match(line, /nothing was examined/i);
     assert.match(line, /WORKSPACE_DIR/);
+  });
+});
+
+describe("formatNotYetAnalysedLine (round 4 review, 2026-08-05) — pins the operator-facing label so it can't silently drift back to describing the OLD bucket", () => {
+  test('prints the count and does NOT claim BOTH files are missing — the old text ("no cast.json or state.json at all") described a bucket this fix widened past', () => {
+    const line = formatNotYetAnalysedLine(3);
+    assert.match(line, /: 3$/);
+    assert.doesNotMatch(
+      line,
+      /no cast\.json or state\.json at all/,
+      'the label must not claim BOTH files are missing — a book with a perfectly good state.json (or cast.json) can land in this bucket too',
+    );
+  });
+
+  test('names cast.json AND state.json, "per file", and calls out that a present-but-unreadable file is counted elsewhere', () => {
+    const line = formatNotYetAnalysedLine(1);
+    assert.match(line, /cast\.json/);
+    assert.match(line, /state\.json/);
+    assert.match(line, /per\s+file/i);
+    assert.match(line, /PRESENT but unreadable/);
+  });
+
+  test('a zero count still renders (defensive — main() only calls this when notYetAnalysedBooks.length is truthy, but the formatter itself makes no such assumption)', () => {
+    assert.match(formatNotYetAnalysedLine(0), /: 0$/);
   });
 });
