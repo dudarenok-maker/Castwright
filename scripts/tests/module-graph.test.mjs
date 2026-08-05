@@ -218,10 +218,17 @@ test('walk survives an import cycle', () => {
   assert.deepEqual(files.sort(), ['a.mjs', 'b.mjs']);
 });
 
+// A bare specifier that isn't filtered before candidate resolution would
+// still leave `files` empty (it would resolve to nothing and land in
+// `unresolvable` instead) — asserting `files` alone cannot fail if bare-
+// specifier filtering breaks. `unresolvable` must ALSO stay empty: a bare
+// specifier is not a broken relative import, it's not an import edge at all,
+// so it must never reach candidate resolution in either list.
 test('walk does not follow bare specifiers', () => {
   const d = gitRepo({ 'test.mjs': "import fs from 'node:fs';\nimport x from 'archiver';\n" }, '');
-  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  const { files, unresolvable } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
   assert.deepEqual(files, []);
+  assert.deepEqual(unresolvable, [], 'a bare specifier must never reach candidate resolution');
 });
 
 // M9 — needs a synthetic fixture: post-hardening the real tree has ZERO
