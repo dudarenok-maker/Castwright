@@ -5,8 +5,8 @@
 
    No auth/CSRF middleware in the test harness — mirrors cast-add-from-roster.test.ts. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -69,8 +69,9 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castCreateRouter }, { makeBookId }] = await Promise.all([
+  const [{ castCreateRouter }, { castMergeRouter }, { makeBookId }] = await Promise.all([
     import('./cast-create.js'),
+    import('./cast-merge.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK_WITH_CAST);
@@ -79,6 +80,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', castCreateRouter);
+  app.use('/api/books', castMergeRouter);
 });
 
 beforeEach(() => {
@@ -160,5 +162,198 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     const res = await callCreate(bookIdNoCast, { name: 'Ferra' });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/no cast/i);
+  });
+});
+
+describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 / #2085)', () => {
+  const historyPath = () =>
+    join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST, '.audiobook', 'cast-id-history.json');
+  const bookDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_WITH_CAST);
+
+  // The outer `beforeEach` (module-level) only rewrites cast.json/state.json
+  // via `writeBookOnDisk` — it never touches cast-id-history.json, so a file
+  // one test writes (directly, or via a real merge) survives into the next
+  // test in this describe unless removed here. Review round 1 (Important)
+  // caught the "no history file" test below running with a stale history
+  // file left behind by an earlier test, passing for the wrong reason.
+  beforeEach(() => {
+    rmSync(historyPath(), { force: true });
+  });
+
+  it('does not re-mint an id a merge retired — the merge-then-recreate repro', async () => {
+    // Seed a cast with the two characters the issue's repro merges.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'anton', name: 'Anton', role: 'character', color: 'unset' },
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+
+    // 1. Merge "anton" into "антон" — the real route, so cast-id-history.json
+    //    gets its "anton" -> "антон" entry the same way a user's merge would.
+    const mergeRes = await request(app)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'anton', targetId: 'антон' });
+    expect(mergeRes.status).toBe(200);
+    const historyAfterMerge = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(historyAfterMerge.supersededBy).toEqual({ anton: 'антон' });
+
+    // 2. Create a brand-new character named "Anton" — the exact name whose
+    //    naive mint is the retired id.
+    const createRes = await callCreate(bookId, { name: 'Anton' });
+    expect(createRes.status).toBe(200);
+
+    // The new character must NOT have re-minted "anton" — that id is still
+    // protecting every segment the original Anton rendered (they now
+    // resolve, via history, onto "антон"). Reusing it here would hijack that
+    // protection onto this brand-new, empty character (spec §4.3/§4.4).
+    expect(createRes.body.character.id).not.toBe('anton');
+    expect(createRes.body.character.name).toBe('Anton');
+
+    // The history entry itself must survive untouched — this route avoids
+    // the id rather than dropping the entry (unlike the analyzer paths,
+    // this route controls its own mint and doesn't need to).
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(historyAfterCreate.supersededBy).toEqual({ anton: 'антон' });
+  });
+
+  it('is reported, not silent, when a history-protected id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { anton: 'антон' } }));
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Anton' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('anton');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('avoided re-minting "anton"'))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('mints normally when no cast-id-history.json exists yet (the common case)', async () => {
+    // This describe's own beforeEach (above) removes any history file left
+    // behind by a previous test, so this genuinely exercises
+    // loadCastIdHistory's `raw === null` (absent-file) branch.
+    expect(existsSync(historyPath())).toBe(false);
+    const res = await callCreate(bookId, { name: 'Nobody Retired This' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).toBe('nobody-retired-this');
+  });
+
+  it('does not re-mint an id whose history key is a differently-spelled encoding of the same name (review round 1, Critical)', async () => {
+    // Real-workspace shape (docs/testing/cast-id-drift-onbox-acceptance.md):
+    // cast.json historically held the pre-RC2 underscore id "the_torment"
+    // for "The Torment", while frozen segments already carried the
+    // analyzer's hyphen spelling "the-torment", resolving via the
+    // normalised-id tier. A merge folding "the_torment" into some other
+    // character records history keyed on the RAW pre-RC2 spelling.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'lightning-dave', name: 'Lightning Dave', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({ schema: 1, supersededBy: { the_torment: 'lightning-dave' } }),
+    );
+
+    // A naive re-create of "The Torment" mints safeId's hyphen normal form,
+    // "the-torment" — NOT a raw match for the history key "the_torment".
+    // Only a normalised comparison catches the collision.
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).not.toBe('the-torment');
+
+    // The history entry survives — this route avoids the id, it doesn't
+    // drop the entry.
+    const history = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    expect(history.supersededBy).toEqual({ the_torment: 'lightning-dave' });
+  });
+
+  it('does not re-mint an id that collides, only after normalisation, with a LIVE character — no history involved (review round 1, sibling defect)', async () => {
+    // Same encoding gap, no merge/history at all: a live character already
+    // holds the pre-RC2 underscore spelling. Re-creating under the name
+    // whose normal-form mint is the hyphen spelling used to collide with it
+    // only after normalisation — invisible to a raw existingIds check, but
+    // it collapses `byNormId` for both spellings the instant it lands.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'the_torment', name: 'The Torment', role: 'character', color: 'unset' },
+    ]);
+
+    // Review round 2 (M4) — this avoidance used to be silent (the report
+    // only fired for a history match). Assert it's reported too, naming the
+    // live id it collided with, not just that a suffixed id was minted.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'The Torment' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('the-torment');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) => m.includes('normalises the same as live character id "the_torment"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('still mints ordinary same-name collisions silently — the widened report does not fire for a plain raw collision (review round 2, M4 scope)', async () => {
+    // Two live characters already sharing a name is the mundane, pre-#2085
+    // path (safeId's own hash-suffix + this route's -n loop) — unrelated to
+    // history/normalisation protection, and was never logged before this
+    // fix existed. The widened report (M4) must not start logging it now.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await callCreate(bookId, { name: 'Alden' });
+      await callCreate(bookId, { name: 'Alden' });
+      const res3 = await callCreate(bookId, { name: 'Alden' });
+      expect(res3.status).toBe(200);
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('avoided re-minting'))).toBe(false);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('creates successfully rather than 500ing when cast.json has a row with a missing/non-string id (review round 2, I1)', async () => {
+    // cast.json is read via an unvalidated readJson<CastFile> on this route
+    // — characterSchema is never applied — so a corrupt/hand-edited file can
+    // carry a row with no `id` at all. Before review round 2, the new
+    // normaliseIdKey calls this fix added would dereference that id and
+    // throw a TypeError instead of the route degrading gracefully.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { name: 'No Id At All', role: 'character', color: 'unset' },
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+
+    const res = await callCreate(bookId, { name: 'Anton' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.name).toBe('Anton');
+  });
+
+  it('does not crash and does not block minting when cast-id-history.json is malformed', async () => {
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), '{not valid json');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Ferra' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).toBe('ferra');
+      // Absent/unreadable history must not silently disable the protection
+      // without a trace — one warning naming the path.
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('cast-id-history.json') && m.includes('unreadable'))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
