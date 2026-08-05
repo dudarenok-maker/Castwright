@@ -408,6 +408,18 @@ Design rationale:
   `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
   `npx madge --circular --extensions ts server/src`, which should stay at
   its 15-cycle baseline.
+- **`cast.json` writes go through `withCastLock`/`withCastLocks`, never a
+  bare `writeJsonAtomic`/`rm`** (`server/src/workspace/cast-lock.ts`). Four
+  rules: (1) lock the innermost read-through-write, never the caller — one
+  level only, a locked function must not call another locked function on the
+  same book; (2) the read goes inside the lock, and so does every decision
+  derived from it — wrapping only the write buys nothing at all; (3) two or
+  more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
+  order is **`design` → `library-voice` → `cast`** — never acquire an earlier
+  class while holding a later one, or two requests hang forever with no
+  timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
+  fails the build on a new unlocked site (the one allowed exception is
+  `analysis.ts`'s five merge-base writes, deferred to #2015).
 
 ## Testing discipline (REQUIRED for every change)
 

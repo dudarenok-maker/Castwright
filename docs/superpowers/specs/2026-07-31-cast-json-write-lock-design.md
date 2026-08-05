@@ -1,6 +1,8 @@
 # cast.json write lock — design
 
-**Status:** approved
+**Status:** implemented — all 13 plan tasks complete on `feat/server-1981-cast-lock`
+(2026-08-05); see `docs/features/279-cast-json-write-lock.md` for the regression
+plan and manual acceptance walkthrough.
 **Closes:** #1981 (the filed defect), #2000 (the sweep), #2001 (§11)
 **Defers:** #2006, #2015 — the cross-scope staleness work, deliberately. Four
 mechanisms were designed for it and none survived review; see §13.
