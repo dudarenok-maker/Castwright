@@ -97,6 +97,29 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxNoSpeechProb: 0.6,
 };
 
+/** #2055 — an "untrustworthy transcript" (low avg_logprob / high
+    no_speech_prob) is normally routed to `inconclusive`, never `drift`:
+    re-recording on a guess is how false-positive loops start (see
+    `classifyTranscript`'s module docstring). But #2055's own repro shape — a
+    Coqui XTTS language-collapse into FLUENT audio in the WRONG language — trips
+    exactly this signal for a reason that has nothing to do with transcript
+    trustworthiness: forcing Whisper to decode a wrong-language clip in the
+    book's configured language routinely looks low-confidence even though the
+    render is genuinely broken (#2026's own repros were "fluent multi-word
+    utterances", i.e. the loop/repeat compression-ratio guard above doesn't
+    catch them either). That shape is otherwise indistinguishable from "hard to
+    transcribe but actually correct" — UNLESS the transcript is ALSO nowhere
+    near the reference. A word-error-rate this catastrophic (near-total
+    mismatch, not merely over `maxWer`) is compounding evidence the
+    untrustworthy signal alone can't provide, so it still counts as drift.
+    Deliberately a much higher bar than `maxWer` (0.4) — this must never fire on
+    an ordinary low-confidence line, only a wholesale collapse. A fixed
+    constant (not a config knob, unlike every `AsrThresholds` field above):
+    there is no evidence yet that a per-operator or per-language override is
+    warranted, and CLAUDE.md's simplicity-first rule is "no configurability
+    that wasn't requested". */
+const CATASTROPHIC_WER = 0.85;
+
 /** BCP-47 primary subtag, lower-cased ('es-ES' → 'es', '' for nullish). */
 function baseSubtag(language?: string | null): string {
   return (language ?? '').toLowerCase().split('-')[0];
@@ -531,6 +554,12 @@ export function classifyTranscript(
     return base('inconclusive');
   }
 
+  // #2055 — pending "untrustworthy transcript" verdict: recorded here, decided
+  // once `wer` exists below (the catastrophic-mismatch override), rather than
+  // returning immediately as before. `null` = trustworthy signals, proceed
+  // normally.
+  let untrustworthyReason: string | null = null;
+
   // Loop/repeat hallucination is positive drift evidence even at low WER.
   if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
     reasons.push(
@@ -539,24 +568,14 @@ export function classifyTranscript(
       } cap (likely repeated/garbled synthesis).`,
     );
     // Still compute WER below for observability, but the verdict is drift.
-  } else {
-    // Untrustworthy transcript → inconclusive (do NOT re-record on a guess).
-    if (signals.avgLogprob != null && signals.avgLogprob < t.minAvgLogprob) {
-      reasons.push(
-        `Transcript untrustworthy — avg logprob ${signals.avgLogprob.toFixed(
-          2,
-        )} below ${t.minAvgLogprob}; not scoring.`,
-      );
-      return base('inconclusive');
-    }
-    if (signals.noSpeechProb != null && signals.noSpeechProb > t.maxNoSpeechProb) {
-      reasons.push(
-        `Transcript untrustworthy — no-speech prob ${signals.noSpeechProb.toFixed(
-          2,
-        )} above ${t.maxNoSpeechProb}; not scoring.`,
-      );
-      return base('inconclusive');
-    }
+  } else if (signals.avgLogprob != null && signals.avgLogprob < t.minAvgLogprob) {
+    untrustworthyReason = `Transcript untrustworthy — avg logprob ${signals.avgLogprob.toFixed(
+      2,
+    )} below ${t.minAvgLogprob}`;
+  } else if (signals.noSpeechProb != null && signals.noSpeechProb > t.maxNoSpeechProb) {
+    untrustworthyReason = `Transcript untrustworthy — no-speech prob ${signals.noSpeechProb.toFixed(
+      2,
+    )} above ${t.maxNoSpeechProb}`;
   }
 
   // Computed once, up front, and reused for BOTH the allowlist normalization
@@ -660,6 +679,36 @@ export function classifyTranscript(
 
   const { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer } = alignment;
   const metrics = { wer, sub, del, ins, longestDeletionRun };
+
+  // #2055 — decide the pending untrustworthy-transcript verdict now that `wer`
+  // exists. Below CATASTROPHIC_WER (or on a near-empty transcript): unchanged
+  // pre-#2055 behaviour, inconclusive (do not re-record on a guess). At/above
+  // it, WITH substantial heard content: the transcript isn't merely
+  // low-confidence, it's a FLUENT multi-word transcript bearing almost no
+  // resemblance to the reference — treated as drift instead of silently
+  // passing a collapse through the "don't guess" backstop that exists to
+  // protect confident-but-imperfect transcripts, not ones this far gone.
+  //
+  // The `heardTokens.length >= 2` floor is deliberate and load-bearing: a
+  // near-empty/silent transcript (few or no heard words) is a DIFFERENT
+  // defect this gate explicitly defers to `segment-qa.ts`'s dead-RMS check
+  // (see this file's module docstring) — no_speech_prob flagging genuine
+  // silence must stay inconclusive here, not get relabelled drift just
+  // because an empty transcript trivially maximises WER against any
+  // non-empty reference. #2055's repro shape was specifically "FLUENT
+  // multi-word utterances" (#2026's own wording), never silence.
+  if (untrustworthyReason !== null) {
+    if (wer >= CATASTROPHIC_WER && heardTokens.length >= 2) {
+      reasons.push(
+        `${untrustworthyReason}, AND content is catastrophically wrong (WER ` +
+          `${wer.toFixed(2)} >= ${CATASTROPHIC_WER} on a ${heardTokens.length}-word ` +
+          `transcript) — treated as drift rather than an untrustworthy guess (#2055).`,
+      );
+      return base('drift', metrics);
+    }
+    reasons.push(`${untrustworthyReason}; not scoring.`);
+    return base('inconclusive', metrics);
+  }
 
   // Compression-ratio drift was flagged above.
   if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {

@@ -249,17 +249,59 @@ describe('classifyTranscript', () => {
     expect(c.reasons.join(' ')).toMatch(/compression/i);
   });
 
-  it('low avg_logprob → inconclusive (transcript untrustworthy), not a re-record', () => {
+  it('low avg_logprob with a MODERATELY wrong transcript → inconclusive, not a re-record', () => {
+    // WER ~0.57 (below CATASTROPHIC_WER=0.85) — an untrustworthy transcript
+    // that's wrong but not a wholesale collapse still doesn't get re-recorded
+    // on a guess. (#2055 narrowed this to CATASTROPHIC mismatches only — see
+    // the two tests below for the new drift branch.)
+    const c = classifyTranscript(
+      EXPECTED,
+      'She climbed the stairs to a completely different rooftop under the moon.',
+      { ...CLEAN, avgLogprob: -1.8 },
+    );
+    expect(c.verdict).toBe('inconclusive');
+    expect(c.wer).toBeLessThan(0.85);
+  });
+
+  it('#2055 — low avg_logprob with a CATASTROPHICALLY wrong transcript → drift, not inconclusive', () => {
+    // The Coqui language-collapse shape #2055 describes: a FLUENT transcript
+    // ("mumble mumble nonsense" stands in for fluent wrong-language audio)
+    // that bears almost no resemblance to the reference (WER 1.0 here) AND
+    // trips the untrustworthy-transcript signal — forcing Whisper to decode a
+    // wrong-language/garbled clip in the book's language routinely looks
+    // low-confidence even though the render is genuinely broken. Compounding
+    // evidence (catastrophic WER + low confidence) overrides the "don't guess"
+    // backstop that protects merely-imperfect transcripts.
     const c = classifyTranscript(EXPECTED, 'mumble mumble nonsense', {
       ...CLEAN,
       avgLogprob: -1.8,
     });
-    expect(c.verdict).toBe('inconclusive');
+    expect(c.verdict).toBe('drift');
+    expect(c.wer).toBeGreaterThanOrEqual(0.85);
+    expect(c.reasons.join(' ')).toMatch(/catastrophically wrong/i);
   });
 
   it('high no_speech_prob → inconclusive', () => {
     const c = classifyTranscript(EXPECTED, '', { ...CLEAN, noSpeechProb: 0.9 });
     expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('#2055 — high no_speech_prob stays inconclusive on a NEAR-EMPTY transcript even at WER 1.0', () => {
+    // Silence/near-silence is segment-qa.ts's dead-RMS job, not this gate's —
+    // the catastrophic-WER override requires a FLUENT (>=2 heard words)
+    // transcript so an empty/near-empty one (which trivially maximises WER
+    // against any non-empty reference) is never relabelled drift here.
+    const c = classifyTranscript(EXPECTED, 'um', { ...CLEAN, noSpeechProb: 0.9 });
+    expect(c.verdict).toBe('inconclusive');
+    expect(c.wer).toBe(1);
+  });
+
+  it('#2055 — high no_speech_prob with a FLUENT catastrophically-wrong transcript → drift', () => {
+    const c = classifyTranscript(EXPECTED, 'mumble mumble nonsense', {
+      ...CLEAN,
+      noSpeechProb: 0.9,
+    });
+    expect(c.verdict).toBe('drift');
   });
 
   it('proper-noun substitution is tolerated via the allowlist', () => {
