@@ -64,6 +64,38 @@ export interface OrphanedCharacterFallback {
   resolution: 'alias' | 'normalised' | 'unresolved';
   resolvedCharacterId?: string;
   segments: number;
+  /** #2092/#2089 D4 — every live cast id this orphaned id has been rejected
+      AGAINST. Absent when never rejected. Populated regardless of
+      `resolution` — a rejected id is NOT filtered out of the map (mirrors
+      server/src/audio/segments-io.ts's `OrphanedCharacterFallback`). The
+      banner renders one "Not <Name> · Undo" chip per entry. */
+  rejectedAgainst?: string[];
+}
+
+/** How `orphanedId` resolves against the live cast + id history, per the
+    reject/undo routes' own response (`server/src/routes/cast-reject-orphan.ts`'s
+    `ResolutionTier`). Kept as a local literal union — mirrors
+    `src/lib/api.ts`'s `RejectOrphanResolutionTier` structurally rather than
+    importing it, so this slice doesn't take a dependency on the api layer's
+    types. */
+type RejectOrphanResolutionTier =
+  | 'exact'
+  | 'history'
+  | 'normalised-id'
+  | 'normalised-history'
+  | null;
+
+/** Collapse the route response's 4-tier-plus-null taxonomy down to the
+    banner's own 3-value one — the SAME collapse
+    server/src/audio/segments-io.ts's collector already performs when
+    building `OrphanedCharacterFallback.resolution` from `resolve().via`:
+    `'normalised-id'` is the only tier that means "resolved with no history
+    involved" (`'normalised'`); every other non-null tier (including the
+    practically-unreachable `'exact'` — an id already present in this map
+    cannot literally equal a live cast id, since the collector never adds an
+    exact match to the map in the first place) collapses to `'alias'`. */
+function toBannerResolution(tier: RejectOrphanResolutionTier): OrphanedCharacterFallback['resolution'] {
+  return tier === null ? 'unresolved' : tier === 'normalised-id' ? 'normalised' : 'alias';
 }
 
 export interface CastState {
@@ -589,25 +621,71 @@ export const castSlice = createSlice({
       );
     },
     /* From POST /api/books/:bookId/cast/:characterId/reject-orphan-match
-       (#2040 Task 17). The user has just declared "orphanedId is NOT the
-       same character as the one it resolved onto (or was compared
-       against)" via the orphaned-character-fallback banner's "not the same
-       character" action. The server has recorded the rejection durably
-       (cast-id-history.json's `rejected` list, honoured after the exact-id
-       tier but ahead of the history / normalised-id / normalised-history
-       tiers — fix round 1) — this mirrors that into the local orphan-fallback
-       map so the banner immediately reflects it as unresolved, matching
-       what the next book-state hydrate would report, rather than
-       continuing to show the auto-match the user just rejected. No-op for
-       an id no longer in the map (double-dispatch under network retry, or
-       already updated). The `notLinkedTo` mirror onto the live character
-       is a separate dispatch (`applyNotLinked`, same as the cross-book
-       "different variant" flow) — this reducer only owns the orphan map. */
-    applyOrphanRejection: (s, a: PayloadAction<{ orphanedId: string }>) => {
-      const entry = s.orphanedCharacterFallbacks?.[a.payload.orphanedId];
+       (#2040 Task 17; pair-scoped + response-driven by #2092/#2089). The
+       user has just declared "orphanedId is NOT the same character as
+       characterId" via the orphaned-character-fallback banner's "not the
+       same character" action. The server has recorded the rejection
+       durably (cast-id-history.json's `rejectedPairs`, honoured after the
+       exact-id tier but ahead of the history / normalised-id /
+       normalised-history tiers) and returned `orphanedId`'s resolution
+       RECOMPUTED after that write — this reducer applies the server's own
+       answer rather than guessing 'unresolved' (D2 makes that the common
+       case, but not the only one: some OTHER, unblocked tier can still
+       resolve `orphanedId` post-reject, and guessing would silently
+       disagree with what the next book-state hydrate reports). Also pushes
+       `characterId` onto `rejectedAgainst` (deduped) so the banner can
+       render the "Not <Name> · Undo" chip. No-op for an id no longer in the
+       map (double-dispatch under network retry, or already updated). The
+       `notLinkedTo` mirror onto the live character is a separate dispatch
+       (`applyNotLinked`, same as the cross-book "different variant" flow)
+       — this reducer only owns the orphan map. */
+    applyOrphanRejection: (
+      s,
+      a: PayloadAction<{
+        orphanedId: string;
+        characterId: string;
+        resolution: RejectOrphanResolutionTier;
+        resolvedCharacterId?: string;
+      }>,
+    ) => {
+      const { orphanedId, characterId, resolution, resolvedCharacterId } = a.payload;
+      const entry = s.orphanedCharacterFallbacks?.[orphanedId];
       if (!entry) return;
-      entry.resolution = 'unresolved';
-      entry.resolvedCharacterId = undefined;
+      entry.resolution = toBannerResolution(resolution);
+      entry.resolvedCharacterId = resolvedCharacterId;
+      const existing = entry.rejectedAgainst ?? [];
+      if (!existing.includes(characterId)) {
+        entry.rejectedAgainst = [...existing, characterId];
+      }
+    },
+    /* From DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match
+       (#2092/#2089 D5) — undo a prior reject. Mirrors applyOrphanRejection
+       above: applies the server's own post-undo resolution rather than
+       guessing (restoring a forgotten `supersededBy` alias is what makes
+       the undo lossless, and only the server knows whether that happened),
+       and drops `characterId` out of `rejectedAgainst` (clearing the field
+       entirely once the list is empty, matching the "absent when never
+       rejected" contract the collector documents). No-op for an id no
+       longer in the map. The `notLinkedTo` mirror is a separate dispatch
+       (`removeNotLinked`) — this reducer only owns the orphan map. */
+    undoOrphanRejection: (
+      s,
+      a: PayloadAction<{
+        orphanedId: string;
+        characterId: string;
+        resolution: RejectOrphanResolutionTier;
+        resolvedCharacterId?: string;
+      }>,
+    ) => {
+      const { orphanedId, characterId, resolution, resolvedCharacterId } = a.payload;
+      const entry = s.orphanedCharacterFallbacks?.[orphanedId];
+      if (!entry) return;
+      entry.resolution = toBannerResolution(resolution);
+      entry.resolvedCharacterId = resolvedCharacterId;
+      if (entry.rejectedAgainst) {
+        const next = entry.rejectedAgainst.filter((id) => id !== characterId);
+        entry.rejectedAgainst = next.length ? next : undefined;
+      }
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a

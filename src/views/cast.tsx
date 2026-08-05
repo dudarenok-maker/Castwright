@@ -116,6 +116,56 @@ const EMPTY_FALLBACK_MAP: Record<string, string> = {};
    reading values instead of just keys. */
 const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {};
 
+/* #2092/#2089 D4 — one "Not <Name> · Undo" chip per rejectedAgainst target,
+   shared by BOTH banner sections (needs-decision and auto-reconciled): the
+   field lives on the orphan-map entry, not the section, so one component
+   serves both `<li>`s rather than duplicating this JSX. Not role="status" —
+   trap 6 (fix round 3's finding on the sibling toggle button, restated in
+   this issue's own brief): a live-region role on a button's only text
+   excludes that content from the button's accessible-name computation,
+   leaving the button with NO accessible name at all. The Undo button's name
+   comes from its own text content instead. */
+function OrphanRejectedChips({
+  orphanedId,
+  targets,
+  characters,
+  busyId,
+  onUndo,
+}: {
+  orphanedId: string;
+  targets: string[] | undefined;
+  characters: Character[];
+  busyId: string | null;
+  onUndo: (orphanedId: string, characterId: string) => void;
+}) {
+  if (!targets?.length) return null;
+  return (
+    <>
+      {targets.map((targetId) => {
+        const name = characters.find((c) => c.id === targetId)?.name ?? targetId;
+        return (
+          <span
+            key={targetId}
+            data-testid={`orphaned-rejected-chip-${orphanedId}-${targetId}`}
+            className="inline-flex items-center gap-1 rounded-full bg-ink/10 px-2 py-1 text-xs text-ink/70"
+          >
+            Not {name}
+            <button
+              type="button"
+              disabled={busyId === orphanedId}
+              onClick={() => onUndo(orphanedId, targetId)}
+              aria-label={`Undo "not ${name}" for "${orphanedId}"`}
+              className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Undo
+            </button>
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
    provenance chip last. Absent statuses are skipped, so a given cast only
@@ -276,19 +326,27 @@ export function CastView({
   /* #2040 Task 17 — "not the same character" for either banner section.
      targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
      or the user-picked live candidate for a needs-decision row. Writes the
-     rejection to the server (durable: cast-id-history.json `rejected` list +
-     a one-sided notLinkedTo edge), then mirrors it into redux via TWO
-     dispatches: applyOrphanRejection (flips the orphan-map entry to
-     unresolved) and applyNotLinked (the notLinkedTo mirror onto the live
-     character — reused as-is; the matcher it feeds ignores bookId, so a
-     same-book edge binds correctly even though the action was designed for
-     cross-book pairs). */
+     rejection to the server (durable, pair-scoped: cast-id-history.json's
+     `rejectedPairs` + a one-sided notLinkedTo edge — #2092/#2089 D1), then
+     mirrors it into redux via TWO dispatches: applyOrphanRejection (applies
+     the server's own post-write resolution and pushes targetCharacterId
+     onto rejectedAgainst, for the "Not <Name> · Undo" chip) and
+     applyNotLinked (the notLinkedTo mirror onto the live character — reused
+     as-is; the matcher it feeds ignores bookId, so a same-book edge binds
+     correctly even though the action was designed for cross-book pairs). */
   async function handleRejectOrphanMatch(orphanedId: string, targetCharacterId: string) {
     if (!bookId || !targetCharacterId) return;
     setOrphanRejectBusyId(orphanedId);
     try {
-      await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
-      dispatch(castActions.applyOrphanRejection({ orphanedId }));
+      const res = await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
+      dispatch(
+        castActions.applyOrphanRejection({
+          orphanedId,
+          characterId: targetCharacterId,
+          resolution: res.resolution,
+          resolvedCharacterId: res.resolvedCharacterId,
+        }),
+      );
       dispatch(
         castActions.applyNotLinked({
           characterId: targetCharacterId,
@@ -296,6 +354,9 @@ export function CastView({
           otherCharacterId: orphanedId,
         }),
       );
+      /* Reset the needs-decision row's candidate select — a no-op for the
+         auto-reconciled section, which has no select. */
+      setOrphanRejectCandidate((prev) => ({ ...prev, [orphanedId]: '' }));
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-reject-${orphanedId}`,
@@ -308,6 +369,59 @@ export function CastView({
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-reject-error-${orphanedId}`,
+          kind: 'error',
+          message: msg,
+        }),
+      );
+    } finally {
+      setOrphanRejectBusyId(null);
+    }
+  }
+
+  /* #2092/#2089 D5 — undo a prior reject via the chip's Undo control. Same
+     shape as handleRejectOrphanMatch above: writes the undo to the server
+     (removes the rejectedPairs entry + the same-book notLinkedTo edge,
+     restores a forgotten supersededBy alias when present — lossless), then
+     mirrors it via TWO dispatches: undoOrphanRejection (applies the
+     server's own post-undo resolution and drops targetCharacterId out of
+     rejectedAgainst) and removeNotLinked (the notLinkedTo mirror, same
+     fs-11 reducer the sibling "unmark variant" flow uses). */
+  async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
+    if (!bookId) return;
+    setOrphanRejectBusyId(orphanedId);
+    try {
+      const res = await api.undoRejectOrphanMatch({
+        bookId,
+        characterId: targetCharacterId,
+        orphanedId,
+      });
+      dispatch(
+        castActions.undoOrphanRejection({
+          orphanedId,
+          characterId: targetCharacterId,
+          resolution: res.resolution,
+          resolvedCharacterId: res.resolvedCharacterId,
+        }),
+      );
+      dispatch(
+        castActions.removeNotLinked({
+          characterId: targetCharacterId,
+          otherBookId: bookId,
+          otherCharacterId: orphanedId,
+        }),
+      );
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-undo-${orphanedId}-${targetCharacterId}`,
+          kind: 'info',
+          message: `Undid "not the same character" for "${orphanedId}".`,
+        }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-undo-error-${orphanedId}`,
           kind: 'error',
           message: msg,
         }),
@@ -1080,7 +1194,11 @@ export function CastView({
                       </select>
                       <button
                         type="button"
-                        disabled={!orphanRejectCandidate[orphanedId] || orphanRejectBusyId === orphanedId}
+                        disabled={
+                          !orphanRejectCandidate[orphanedId] ||
+                          orphanRejectBusyId === orphanedId ||
+                          (info.rejectedAgainst?.includes(orphanRejectCandidate[orphanedId]) ?? false)
+                        }
                         onClick={() =>
                           handleRejectOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
                         }
@@ -1088,6 +1206,13 @@ export function CastView({
                       >
                         Not the same character
                       </button>
+                      <OrphanRejectedChips
+                        orphanedId={orphanedId}
+                        targets={info.rejectedAgainst}
+                        characters={characters}
+                        busyId={orphanRejectBusyId}
+                        onUndo={handleUndoOrphanRejection}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -1155,7 +1280,11 @@ export function CastView({
                           </span>
                           <button
                             type="button"
-                            disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}
+                            disabled={
+                              orphanRejectBusyId === orphanedId ||
+                              !info.resolvedCharacterId ||
+                              (info.rejectedAgainst?.includes(info.resolvedCharacterId) ?? false)
+                            }
                             onClick={() =>
                               info.resolvedCharacterId &&
                               handleRejectOrphanMatch(orphanedId, info.resolvedCharacterId)
@@ -1164,6 +1293,13 @@ export function CastView({
                           >
                             Not the same character
                           </button>
+                          <OrphanRejectedChips
+                            orphanedId={orphanedId}
+                            targets={info.rejectedAgainst}
+                            characters={characters}
+                            busyId={orphanRejectBusyId}
+                            onUndo={handleUndoOrphanRejection}
+                          />
                         </li>
                       );
                     })}

@@ -28,11 +28,25 @@ vi.mock('../lib/api', () => ({
     pauseCastDesign: vi.fn().mockResolvedValue(undefined),
     setCastTier: vi.fn().mockResolvedValue({ updated: 0 }),
     /* #2040 Task 17 — orphaned-character-fallback banner's "not the same
-       character" action. */
+       character" action. #2092/#2089 — pair-scoped: the response now
+       carries the server-recomputed resolution (null here — D2's ordinary
+       "the pair-scoped block this call just wrote applies" outcome). */
     rejectOrphanMatch: vi.fn().mockResolvedValue({
       characterId: 'marrow',
       orphanedId: 'mayrin',
       alreadyPresent: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+    }),
+    /* #2092/#2089 D5 — undo. Kept in sync field-for-field with
+       rejectOrphanMatch's mock above (trap: an omitted field here would let
+       a test pass while asserting nothing). */
+    undoRejectOrphanMatch: vi.fn().mockResolvedValue({
+      characterId: 'marrow',
+      orphanedId: 'mayrin',
+      wasRejected: true,
+      resolution: 'history',
+      resolvedCharacterId: 'marrow',
     }),
   },
 }));
@@ -801,12 +815,59 @@ describe('CastView Qwen status pill (plan 117)', () => {
           resolution: 'unresolved',
           resolvedCharacterId: undefined,
           segments: 6,
+          rejectedAgainst: ['marrow'],
         });
       });
       // Mirrored onto the live character's own notLinkedTo array.
       await waitFor(() => {
         const marrowState = store.getState().cast.characters.find((c) => c.id === 'marrow');
         expect(marrowState?.notLinkedTo).toEqual([{ bookId: 'b_current', characterId: 'mayrin' }]);
+      });
+      // #2092/#2089 D4 — the row (now in needs-your-decision, since it
+      // flipped unresolved) shows the "Not <Name> · Undo" chip.
+      const movedRow = within(screen.getByTestId('orphaned-needs-decision'))
+        .getByText(/mayrin/)
+        .closest('li')!;
+      expect(within(movedRow).getByText('Not Mr. Marrow')).toBeInTheDocument();
+      expect(within(movedRow).getByRole('button', { name: /undo "not mr\. marrow"/i })).toBeInTheDocument();
+    });
+
+    it('#2092/#2089 D5 — clicking Undo on a rejected row removes the chip, calls the API, and restores the resolution', async () => {
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      const movedRow = await waitFor(() =>
+        within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/mayrin/)
+          .closest('li'),
+      );
+      const undoButton = within(movedRow!).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(api.undoRejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'mayrin',
+        });
+      });
+      // Server's mocked undo response restores 'history' (→ 'alias') /
+      // 'marrow' — the row moves back to auto-reconciled and the chip is gone.
+      await waitFor(() => {
+        expect(store.getState().cast.orphanedCharacterFallbacks?.mayrin).toEqual({
+          resolution: 'alias',
+          resolvedCharacterId: 'marrow',
+          segments: 6,
+          rejectedAgainst: undefined,
+        });
+      });
+      // The notLinkedTo mirror is removed too.
+      await waitFor(() => {
+        const marrowState = store.getState().cast.characters.find((c) => c.id === 'marrow');
+        expect(marrowState?.notLinkedTo ?? []).toEqual([]);
       });
     });
 
@@ -816,9 +877,10 @@ describe('CastView Qwen status pill (plan 117)', () => {
       const section = screen.getByTestId('orphaned-needs-decision');
       const row = within(section).getByText(/coalfall/).closest('li')!;
       const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+      const select = within(row).getByRole('combobox') as HTMLSelectElement;
       expect(rejectButton).toBeDisabled();
 
-      fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'narrator' } });
+      fireEvent.change(select, { target: { value: 'narrator' } });
       expect(rejectButton).not.toBeDisabled();
 
       fireEvent.click(rejectButton);
@@ -829,6 +891,53 @@ describe('CastView Qwen status pill (plan 117)', () => {
           orphanedId: 'coalfall',
         });
       });
+      // #2092/#2089 D4/T7 — the row (still needs-your-decision, since D2
+      // leaves an unresolved id unresolved) shows the chip…
+      await waitFor(() => {
+        expect(within(row).getByText('Not Narrator')).toBeInTheDocument();
+      });
+      // …and the <select> resets so a second, different rejection isn't
+      // pre-filled with the last pick.
+      expect(select.value).toBe('');
+    });
+
+    it('needs-your-decision: the reject button is disabled once the selected candidate is already in rejectedAgainst', () => {
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              coalfall: {
+                resolution: 'unresolved' as const,
+                segments: 67,
+                rejectedAgainst: ['narrator'],
+              },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      const row = within(screen.getByTestId('orphaned-needs-decision'))
+        .getByText(/coalfall/)
+        .closest('li')!;
+      const rejectButton = within(row).getByRole('button', { name: /not the same character/i });
+
+      fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'narrator' } });
+      expect(rejectButton).toBeDisabled();
+
+      fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
+      expect(rejectButton).not.toBeDisabled();
     });
 
     it('#2040 Task 17 fix round 2 — shows an error toast and resets the busy state when the reject call fails', async () => {
@@ -870,7 +979,13 @@ describe('CastView Qwen status pill (plan 117)', () => {
         () =>
           new Promise((resolve) => {
             resolveReject = () =>
-              resolve({ characterId: 'marrow', orphanedId: 'mayrin', alreadyPresent: false });
+              resolve({
+                characterId: 'marrow',
+                orphanedId: 'mayrin',
+                alreadyPresent: false,
+                resolution: null,
+                resolvedCharacterId: undefined,
+              });
           }),
       );
       const store = makeSplitStore();
