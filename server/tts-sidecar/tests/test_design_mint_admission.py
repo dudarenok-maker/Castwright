@@ -297,6 +297,10 @@ def test_concurrent_design_and_mint_each_load_own_admitted_device(monkeypatch, _
     neither clobbers the other's `self._device`. (Pre-fix, with a dedicated
     per-model lock each, they interleave: peak 2 and the design lands on
     cuda:0.)"""
+    # `_ensure_design_loaded`/`_ensure_base17_loaded` -> `_ensure_device_resolved()`
+    # does an unconditional `import torch` (main.py) even with `_load_qwen_model`
+    # stubbed by `_FakeLoadRecorder` — needs the real package.
+    pytest.importorskip("torch")
     eng = _FakeLoadRecorder(overlap_delay=0.03)
     ready = threading.Barrier(2)
 
@@ -326,6 +330,9 @@ def test_ensure_design_and_base17_for_mint_steer_own_device(monkeypatch, _stub_c
     """Sequential: `_ensure_design_loaded(cuda:1)` resolves+loads on cuda:1, and
     `_ensure_base17_for_mint(cuda:0)` FORWARDS its device into
     `_ensure_base17_loaded`, resolving+loading on cuda:0."""
+    # `_ensure_device_resolved()` does an unconditional `import torch`
+    # (main.py) even with `_load_qwen_model` stubbed — needs the real package.
+    pytest.importorskip("torch")
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     eng = _FakeLoadRecorder(overlap_delay=0.0)
 
@@ -342,6 +349,9 @@ def test_design_path_threads_same_device_into_design_and_base(monkeypatch, _stub
     """design_voice steers BOTH its VoiceDesign and its 0.6B-Base cold loads to
     the one admitted card — mirror that: `_ensure_design_loaded(cuda:1)` then
     `_ensure_base_loaded(cuda:1)` both land on cuda:1."""
+    # `_ensure_device_resolved()` does an unconditional `import torch`
+    # (main.py) even with `_load_qwen_model` stubbed — needs the real package.
+    pytest.importorskip("torch")
     eng = _FakeLoadRecorder(overlap_delay=0.0)
     eng._ensure_design_loaded(device="cuda:1")
     eng._ensure_base_loaded(device="cuda:1")
@@ -352,6 +362,9 @@ def test_design_path_threads_same_device_into_design_and_base(monkeypatch, _stub
 def test_device_none_leaves_device_pref_untouched(monkeypatch, _stub_codec):
     """Flag-off parity: a `device=None` cold load never mutates `_device_pref`
     (the admission override is the ONLY writer of that field)."""
+    # `_ensure_device_resolved()` does an unconditional `import torch`
+    # (main.py) even with `_load_qwen_model` stubbed — needs the real package.
+    pytest.importorskip("torch")
     monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
 
     eng = _FakeLoadRecorder(overlap_delay=0.0)

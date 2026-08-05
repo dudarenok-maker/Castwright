@@ -5,7 +5,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +32,7 @@ import {
   parseNvidiaSmiUtil,
   isVitestPoolCrash,
   branchDiffFiles,
+  sidecarFingerprint,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
@@ -460,6 +468,51 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
+// PR ran zero legs — in cloud AND locally. This suite's own stepTouchedByDiff
+// assertions against real workflow paths are what must stay in scope when
+// verify.yml changes, or the guard cannot run on the PR that breaks it.
+test('stepTouchedByDiff: a verify.yml diff matches test:hooks via globs', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/cross-os.yml']),
+    true,
+  );
+});
+
+// I1 (#2146 review): .github/actions/** is defect D's other half — the
+// composite setup action is consumed by every verify.yml job but matched no
+// scope at all, so an actions-only diff ran zero legs and printed [cached].
+test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/actions/setup/action.yml']),
+    true,
+  );
+});
+
+// .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
+// (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
+// stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
+// defect D again for .husky, on the very PR that fixes it for .github, and
+// none of the four wiring assertions can see it (they check key existence
+// and job membership, not whether a derived condition still covers what the
+// legacy one did). release-manifest.test.mjs:95 includes .husky/pre-commit
+// as a literal string in an array of sample paths fed to a pure classifier —
+// it does not read the file from disk — but it is still a real edge worth
+// pinning, not a theoretical one (M1, #2146 review: corrects the previous
+// "reads at runtime" claim, which was false).
+test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
+  for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
+    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);
+  }
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['tailwind.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
@@ -478,6 +531,29 @@ test('stepTouchedByDiff: the server lockfile is in scope for server legs only', 
 
 test('stepTouchedByDiff: an empty diff touches nothing', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], []), false);
+});
+
+// M3 (#2146 review): 'server/tts-sidecar/requirements*.txt' compiles to
+// `requirements[^/]*\.txt$` (the single-segment `*` cannot cross a `/`), so
+// it never matched a file under the requirements/ SUBDIRECTORY —
+// requirements/base.txt became load-bearing in this PR (the CI bootstrap
+// installs from it directly) but editing it prints [cached] locally. Same
+// gap for pytest.ini: it sits at server/tts-sidecar/pytest.ini, not matched
+// by '**/*.py'. Cloud is unaffected (verify.yml's `^server/tts-sidecar/`
+// match already covers both) — this is a LOCAL-cache-only hole, same shape
+// as M3's sibling findings across this PR.
+test('stepTouchedByDiff: server/tts-sidecar/requirements/base.txt is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/requirements/base.txt']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: server/tts-sidecar/pytest.ini is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/pytest.ini']),
+    true,
+  );
 });
 
 // --- test:hooks completeness guard (ops-18, #2115) -------------------------
@@ -674,4 +750,30 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
   }
+});
+
+// I2 (#2146 review): sidecarFingerprint used to hardcode
+// `.venv/Scripts/python.exe` (Windows-only). On a POSIX box that meant the
+// fingerprint was the literal string 'unavailable' BEFORE bootstrap and
+// STAYED 'unavailable' after bootstrapping the venv (since the hardcoded
+// Windows path never exists there) — so the tool fingerprint never moved and
+// test:sidecar would report [cached] forever locally, with nothing under
+// **/*.py changed. Pins the POSIX branch specifically (a Windows-only
+// assertion would leave the exact bug in place): a POSIX-layout venv
+// (.venv/bin/python, no Windows layout present) must resolve to something
+// other than 'unavailable' even when forced via the `platform` param — this
+// does not depend on the host OS actually running the test.
+test('sidecarFingerprint resolves the POSIX venv layout (not just Windows)', () => {
+  const dir = mkTmp();
+  const pyPath = join(dir, '.venv', 'bin', 'python');
+  mkdirSync(dirname(pyPath), { recursive: true });
+  writeFileSync(pyPath, '', 'utf8'); // existence is all resolveVenvPython checks
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.notEqual(result, 'unavailable');
+});
+
+test('sidecarFingerprint still returns unavailable when no venv exists on POSIX', () => {
+  const dir = mkTmp();
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.equal(result, 'unavailable');
 });

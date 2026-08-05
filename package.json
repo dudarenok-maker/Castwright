@@ -41,7 +41,7 @@
     "test:server": "npm --prefix server run test",
     "test:server-slow": "npm --prefix server run test:slow",
     "test:scripts": "node scripts/run-powershell.mjs scripts/tests/run.ps1",
-    "test:sidecar": "node scripts/run-powershell.mjs server/tts-sidecar/run-tests.ps1",
+    "test:sidecar": "node scripts/run-sidecar-tests.mjs",
     "test:hooks": "node scripts/run-hooks-tests.mjs",
     "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
     "test:e2e:mobile": "playwright test --project=mobile-chrome --project=tablet-chrome --workers=2 --grep-invert=\"visual baselines\"",

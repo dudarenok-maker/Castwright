@@ -34,7 +34,12 @@ import main  # noqa: E402
 # dependency) supplies the real LazyModule base class. Subclassing it (rather
 # than a hand-rolled stand-in) means `isinstance(m, LazyModule)` inside the
 # helper under test genuinely exercises the same check production hits.
-from speechbrain.utils.importutils import LazyModule  # noqa: E402
+#
+# speechbrain lives in requirements/speaker-qa.txt (NOT base.txt) because it
+# pulls torch, so the lean CI venv does not have it. Same treatment as
+# test_speaker_embed.py:21.
+_sb_importutils = pytest.importorskip("speechbrain.utils.importutils")
+LazyModule = _sb_importutils.LazyModule
 
 
 class _AlwaysFailingLazyModule(LazyModule):

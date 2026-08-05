@@ -29,7 +29,7 @@ Design of record: [`../superpowers/specs/2026-06-18-lan-browser-device-auth-desi
 ## Invariants to preserve
 
 1. **`extractToken` reads the cookie first** (`server/src/lan-auth.ts`, `extractToken` → `readCwLanCookie`): the `__Host-cw_lan` cookie is checked before Bearer / `X-Lan-Token` / `?token=`. `readCwLanCookie` wraps `cookie.parse` in try/catch (runs on every `/api` request — an unguarded throw would 500 the API).
-2. **Expiry + revocation live ONLY in `findValidDevice`** (`server/src/workspace/device-tokens.ts`): rejects `revoked`, `expiresAt === undefined`, or `now > Date.parse(expiresAt)`. `isValidDeviceToken` stays single-arg and calls it with the default clock. The client cookie `Max-Age` is not authoritative.
+2. **Expiry + revocation live ONLY in `findValidDevice`** (`server/src/workspace/device-tokens.ts`): rejects `revoked`, `expiresAt === undefined`, an `expiresAt` whose `Date.parse` is not finite, or `now > exp`. **The `Number.isFinite` arm is load-bearing, not defensive** (#2144): `Date.parse` returns `NaN` for `null`/`""`/garbage and every comparison against `NaN` is `false`, so a bare `now > Date.parse(...)` let those records authenticate forever. Do not "simplify" it back. `isValidDeviceToken` stays single-arg and calls it with the default clock. The client cookie `Max-Age` is not authoritative.
 3. **Every `createDevice` caller passes a clamped TTL** (`devices.ts` admin mint, `pairing.ts` companion `/redeem`, `pairing.ts` `/redeem-browser`): `createDevice(label, clampTtlDays(configValue('lan.deviceTokenTtlDays')))`. `createDevice` stamps `expiresAt` and caps the label at 64 chars (app-17). No token is born without an `expiresAt`.
 4. **`persist()` writes then sets the cache** (`device-tokens.ts`): `await writeJsonAtomic(...); cache = devices;` — never cache-before-write (else a failed write leaves a phantom device or resurrects a revoked one on restart). `persist` writes `{ schema: 2 }`.
 5. **CSRF: cookie-bearing writes are Origin-gated** (`server/src/csrf-origin.ts`, `requireSameOrigin`): only state-changing methods carrying `__Host-cw_lan` are checked, via the SAME `readCwLanCookie` parser as the guard (no parser divergence). Allow-list = `enumerateLanUrls(port,'https').urls` + explicit loopback origins, recomputed per request, **fails closed** to loopback-only if enumeration throws, and 403s when Origin+Referer are both absent.
@@ -43,7 +43,7 @@ Design of record: [`../superpowers/specs/2026-06-18-lan-browser-device-auth-desi
 
 ### Automated coverage
 
-- `server/src/workspace/device-tokens.pure.test.ts` / `device-tokens.test.ts` — expiry (expired / undefined / injected-now), `clampTtlDays`, throttled `lastSeenAt` touch, label cap, schema-2 persist.
+- `server/src/workspace/device-tokens.pure.test.ts` / `device-tokens.test.ts` — expiry (expired / undefined / **malformed: `null`, `""`, unparseable — #2144** / injected-now), `clampTtlDays`, throttled `lastSeenAt` touch, label cap, schema-2 persist.
 - `server/src/lan-auth.test.ts` — cookie-auth pass/reject through the guard; header/Bearer/query paths intact; loopback bypass.
 - `server/src/csrf-origin.test.ts` — allowed/loopback origin pass, foreign origin 403, no-Origin+no-Referer 403, header-token bypass, parser-agreement (a cookie `cookie.parse` accepts still gates).
 - `server/src/routes/devices.test.ts` — `pair-session` loopback-only URL payload + 409; admin mint 403 from non-loopback; label cap.
