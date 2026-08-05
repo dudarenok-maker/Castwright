@@ -180,6 +180,20 @@ const LEGACY_MATCHERS = {
     /^(\.husky\/|\.github\/workflows\/|\.github\/actions\/|scripts\/run-hooks-tests\.mjs$|scripts\/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs\/release-notes-next\.md$|scripts\/release-notes-gate\.mjs$|docs\/testing\/onbox-acceptance-register\.md$|docs\/testing\/onbox-acceptance-register-live-view\.html$)/,
   pinokio: /^(pinokio\.js$|pinokio-scripts\/|scripts\/run-pinokio-tests\.mjs$)/,
   openapi: /^openapi\.yaml$/,
+  // `shared` = a root dependency-manifest change, treated as global in the
+  // legacy workflow (git show a1e4b70e:.github/workflows/verify.yml:184-186:
+  // `match '^(package\.json|package-lock\.json)$' && shared=true`). Added
+  // for Gap 2 (workflow-wiring review): needed because the two LEGACY_GATES
+  // rows added for Gap 1 ('OpenAPI types up to date', 'Sidecar tests') both
+  // had `|| shared` as a real disjunct in their pre-derivation `if:` — a
+  // faithful legacy-scope list for those two rows can't omit it. The
+  // existing 11 LEGACY_GATES rows also had `|| shared` in their real legacy
+  // conditions but predate this key and are left as-is (out of this gap's
+  // scope; every derived condition already includes `shared` as its own
+  // disjunct per this branch's constraints, so omitting it from those rows'
+  // legacy list costs no coverage — `shared` is on both sides of the
+  // comparison for them regardless).
+  shared: /^(package\.json|package-lock\.json)$/,
 };
 
 // Legacy step name -> the scopes that used to gate it, from git history of
@@ -196,6 +210,15 @@ const LEGACY_GATES = {
   'E2E (chromium)': ['frontend', 'e2e'],
   'E2E visual baselines (chromium)': ['frontend', 'e2e'],
   Build: ['frontend', 'server'],
+  // Gap 1 (workflow-wiring review Finding — two reviewers, independently):
+  // these two rows were missing entirely, so the coverage-parity loop below
+  // never iterated them and neither leg had ANY guard against a silent
+  // narrowing. Read verbatim from the real pre-derivation file (git show
+  // a1e4b70e:.github/workflows/verify.yml), not inferred:
+  //   OpenAPI types up to date: `openapi || frontend || shared` (line 228)
+  //   Sidecar tests:            `sidecar || shared`              (line 371)
+  'OpenAPI types up to date': ['openapi', 'frontend', 'shared'],
+  'Sidecar tests': ['sidecar', 'shared'],
 };
 
 // Narrowings judged CORRECT. Each needs a reason — an unexplained entry here
@@ -385,6 +408,26 @@ const ACCEPTED_NARROWINGS = [
     'Build',
     'scripts/repair-cast-id-drift.mjs',
     "vite build's entry graph is index.html -> src/**; server/src/** is compiled separately by tsc. scripts/repair-cast-id-drift.mjs is a standalone script under scripts/, outside both, so it is not bundled or compiled by `npm run build`",
+  ],
+
+  // Gap 1 (workflow-wiring review) -- adding the two missing LEGACY_GATES
+  // rows above surfaces these two. `openapi:types` (package.json:73) is
+  // literally `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`
+  // -- verified by reading the script, not assumed -- a single codegen
+  // invocation that reads only openapi.yaml and writes api-types.ts. It
+  // never invokes tsc or eslint, so neither tsconfig.json nor
+  // eslint.config.mjs can change its output; same "tool doesn't read this
+  // file" shape as the G2 entries above, just for a step that predates this
+  // test's LEGACY_GATES coverage.
+  [
+    'OpenAPI types up to date',
+    'tsconfig.json',
+    "openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes tsc or reads tsconfig.json -- same reasoning as Lint/tsconfig.json above",
+  ],
+  [
+    'OpenAPI types up to date',
+    'eslint.config.mjs',
+    "openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes eslint -- same reasoning as Typecheck/eslint.config.mjs above",
   ],
 ];
 
