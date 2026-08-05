@@ -114,10 +114,13 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-add-from-roster-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castAddFromRosterRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-add-from-roster.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential awaits, NOT `Promise.all` — this file now carries a hoisted
+     async `vi.mock` factory for state-io.js, and a `Promise.all` of dynamic
+     imports can resolve a branch before that factory has materialised,
+     handing the module under test the REAL binding on some runs. Same idiom
+     as cast-not-linked-to.test.ts. */
+  const { castAddFromRosterRouter } = await import('./cast-add-from-roster.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   priorBookId = makeBookId(AUTHOR, SERIES, PRIOR_BOOK);
   sourceBookId = makeBookId(AUTHOR, SERIES, SOURCE_BOOK);
   otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);

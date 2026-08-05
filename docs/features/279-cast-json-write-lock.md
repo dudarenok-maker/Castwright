@@ -381,9 +381,14 @@ clearing CLAUDE.md's fix-now bar:
   once serialised.
 
 Every race/outcome test in this sweep is proven able to fail, not merely
-read as correct: mutating `withCastLock`'s primitive body to a
-pass-through (`return fn();`) across multiple separate process runs, per
-CLAUDE.md's "a test that passes in the red phase is a harness problem."
+read as correct: mutating to a pass-through (`return fn();`) the primitive
+body of **whichever entry point the site under test actually calls** —
+`withCastLock` OR `withCastLocks`, confirmed by reading the module —
+across multiple separate process runs, per CLAUDE.md's "a test that passes
+in the red phase is a harness problem." Mutating only one of the two is
+NOT a completeness check: it silently exempts every site built on the
+other, and a spec that stays green under it is evidence of nothing (see
+the `#2123` note above, which is what that mistake cost).
 Two shapes were rejected after being measured, not assumed: a bare
 `Promise.all` for AB/BA ordering (proven a placebo — see above), and a
 multi-trial retry loop for a probabilistic race (repeating inside one
