@@ -115,25 +115,57 @@ function worksWhenRelocated(pythonExe) {
   }
 }
 
+// Returns { exe, attempts } rather than throwing: this runs at module scope,
+// and node:test treats an uncaught module-load error as the WHOLE FILE
+// failing as one unit — which would take the four resolveVenvPython layout
+// tests above down with it, even though they need no Python at all. `attempts`
+// records exactly which candidate was tried and how each one failed, so a
+// caller can print a specific, non-silent reason rather than just "skipped".
 function findRealPython() {
   const candidates = IS_WIN
     ? [['python', []], ['py', ['-3']]]
     : [['python3', []], ['python', []]];
+  const attempts = [];
   for (const [cmd, baseArgs] of candidates) {
+    const label = [cmd, ...baseArgs].join(' ');
     const probe = spawnSync(cmd, [...baseArgs, '-c', 'import sys; print(sys.executable)'], {
       encoding: 'utf8',
     });
-    const exe = probe.status === 0 ? probe.stdout.trim() : null;
-    if (exe && worksWhenRelocated(exe)) return exe;
+    if (probe.error) {
+      attempts.push(`${label}: not found on PATH (${probe.error.code ?? probe.error.message})`);
+      continue;
+    }
+    if (probe.status !== 0 || !probe.stdout.trim()) {
+      attempts.push(`${label}: ran but did not report an interpreter (exit code ${probe.status})`);
+      continue;
+    }
+    const exe = probe.stdout.trim();
+    if (!worksWhenRelocated(exe)) {
+      attempts.push(
+        `${label} -> ${exe}: found, but does not survive being relocated via hardlink/copy ` +
+          '(likely a portable/embeddable install that resolves its stdlib relative to its own exe path)',
+      );
+      continue;
+    }
+    return { exe, attempts: [] };
   }
-  throw new Error(
-    'No python interpreter on PATH (python / py -3 / python3) survives being relocated via ' +
-      'hardlink/copy — cannot build the test fixture. A portable/embeddable Python install ' +
-      "resolves its stdlib relative to its own exe path and won't work here; a traditional " +
-      'installer-based CPython is required.',
-  );
+  return { exe: null, attempts };
 }
-const REAL_PYTHON = findRealPython();
+
+// Computed once at module load (a couple of cheap spawnSync probes) and
+// shared by all 7 CLI-level tests below rather than rebuilt per test.
+// PYTHON_SKIP_REASON is null (falsy) whenever a usable interpreter WAS
+// found, so `{ skip: PYTHON_SKIP_REASON ?? false }` only ever skips for the
+// real, reproducible cause — never unconditionally.
+const PYTHON_DISCOVERY = findRealPython();
+const REAL_PYTHON = PYTHON_DISCOVERY.exe;
+const PYTHON_SKIP_REASON = REAL_PYTHON
+  ? null
+  : [
+      'no relocatable Python interpreter available to build the CLI-level fixture (main()\'s',
+      'exit-code contract is untested on this run, not confirmed passing). Tried:',
+      ...PYTHON_DISCOVERY.attempts.map((a) => `  - ${a}`),
+    ].join('\n');
 
 // Builds <tmp>/scripts/run-sidecar-tests.mjs as a byte-for-byte copy of the
 // real script. Its own SIDECAR_DIR resolution then lands on
@@ -198,7 +230,7 @@ else:
 // broken": both hit the identical `(probe.status ?? 1) !== 0` branch.
 const BROKEN_PYTEST = 'import sys\nsys.exit(1)\n';
 
-test('run-sidecar-tests.mjs (real CLI): --require-venv + absent venv -> exit 1 (fail-closed guard)', () => {
+test('run-sidecar-tests.mjs (real CLI): --require-venv + absent venv -> exit 1 (fail-closed guard)', { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   try {
     const out = runEntryPoint(root, ['--require-venv']);
@@ -209,7 +241,7 @@ test('run-sidecar-tests.mjs (real CLI): --require-venv + absent venv -> exit 1 (
   }
 });
 
-test('run-sidecar-tests.mjs (real CLI): absent venv, no flag -> exit 0 with the SKIP banner', () => {
+test('run-sidecar-tests.mjs (real CLI): absent venv, no flag -> exit 0 with the SKIP banner', { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   try {
     const out = runEntryPoint(root, []);
@@ -220,7 +252,7 @@ test('run-sidecar-tests.mjs (real CLI): absent venv, no flag -> exit 0 with the 
   }
 });
 
-test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, no flag -> exit 0 with the SKIP banner', () => {
+test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, no flag -> exit 0 with the SKIP banner', { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   const { pythonPathDir } = makeFakeVenv(root, BROKEN_PYTEST);
   try {
@@ -232,7 +264,7 @@ test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, no flag
   }
 });
 
-test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, --require-venv -> exit 1', () => {
+test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, --require-venv -> exit 1', { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   const { pythonPathDir } = makeFakeVenv(root, BROKEN_PYTEST);
   try {
@@ -243,7 +275,7 @@ test('run-sidecar-tests.mjs (real CLI): venv present, pytest not usable, --requi
   }
 });
 
-test("run-sidecar-tests.mjs (real CLI): pytest exit 0 propagates as the CLI's exit code 0 (pass)", () => {
+test("run-sidecar-tests.mjs (real CLI): pytest exit 0 propagates as the CLI's exit code 0 (pass)", { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   const { pythonPathDir } = makeFakeVenv(root, CONTROLLABLE_PYTEST);
   try {
@@ -254,7 +286,7 @@ test("run-sidecar-tests.mjs (real CLI): pytest exit 0 propagates as the CLI's ex
   }
 });
 
-test("run-sidecar-tests.mjs (real CLI): pytest's non-zero exit code propagates as the CLI's exit code (fail)", () => {
+test("run-sidecar-tests.mjs (real CLI): pytest's non-zero exit code propagates as the CLI's exit code (fail)", { skip: PYTHON_SKIP_REASON ?? false }, () => {
   const root = makeFixtureRoot();
   const { pythonPathDir } = makeFakeVenv(root, CONTROLLABLE_PYTEST);
   try {
@@ -265,7 +297,7 @@ test("run-sidecar-tests.mjs (real CLI): pytest's non-zero exit code propagates a
   }
 });
 
-test('run-sidecar-tests.mjs (real CLI): a python.exe that exists but is not a valid executable never reports exit 0', () => {
+test('run-sidecar-tests.mjs (real CLI): a python.exe that exists but is not a valid executable never reports exit 0', { skip: PYTHON_SKIP_REASON ?? false }, () => {
   // Exploits a real OS-level failure mode directly: on Windows, a file named
   // *.exe that is not a valid PE image cannot be launched at all (spawnSync
   // sets .error); on POSIX, a non-executable file fails the same way. This
