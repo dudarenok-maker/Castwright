@@ -527,6 +527,54 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord[0].to, 'timkin');
   });
 
+  // I2 (review round 1) — the repair pass's own real drift shape:
+  // `the_torment`/`The-Torment` both normalise to the same key. Rejecting
+  // one raw spelling must still block a DIFFERENT raw spelling's Tier B
+  // (normalised-id) match onto the same target — the guard has to mirror
+  // the SAME keyspace the tier it protects actually matches on.
+  test('I2: rejecting one raw spelling blocks a DIFFERENT raw spelling that normalises the same (Tier B match)', () => {
+    const liveCastWithTorment = [...liveCast, { id: 'the-torment', name: 'The Torment' }];
+    // No name evidence anywhere — forces Tier B (id-shape) rather than Tier A.
+    const orphans = new Map([['the_torment', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast: liveCastWithTorment,
+        history: { rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }] },
+        cacheNameIndex: new Map(),
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].id, 'the_torment');
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+  });
+
+  test('I2: an id that normalises DIFFERENTLY from the rejected pair still auto-records (the fix is not over-broad)', () => {
+    const liveCastWithTorment = [...liveCast, { id: 'the-torment', name: 'The Torment' }];
+    const orphans = new Map([['the_torment', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast: liveCastWithTorment,
+        // Rejection names an unrelated `from` that does NOT normalise the
+        // same as 'the_torment' — must not block it.
+        history: { rejectedPairs: [{ from: 'unrelated-id', to: 'timkin' }] },
+        cacheNameIndex: new Map(),
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.skipped.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'the_torment');
+    assert.equal(plan.autoRecord[0].to, 'the-torment');
+  });
+
   test('inconsistent characterSnapshots across chapters downgrade a name match to report-only (non-reserved id)', () => {
     const bakNameIndex = buildNameIndex([{ id: 'unstable-guy', name: 'Timkin' }], lc);
     const orphans = new Map([
