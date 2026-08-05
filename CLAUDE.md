@@ -300,31 +300,42 @@ Design rationale:
   THRESHOLD (`tolerances.rtf_max` etc.) with raw stochastic measurements
   (`identity` cosines, `loudness_dbfs`) that later assertions are diffed
   against — a `--bless` that would move ANY of the three is guarded by
-  `bless_guard_thresholds` (#1995, widened by #2035/#2045), but not
-  identically: `tolerances` is quantised, so an EXACT change refuses
-  outright; `identity`/`loudness_dbfs` are noisy (~0.0014 run-to-run
-  identity spread per the committed baseline's own `metadata.notes`), so a
-  move under a field-specific `epsilon` (`compare.LOUDNESS_DBFS_EPSILON` is
-  10% of the ±`loudness_dbfs_abs` window the field is diffed against;
+  `bless_guard_thresholds` (#1995, widened by #2035/#2045, split and
+  hardened by #2060/#2061/#2062/#2069), but not identically: `tolerances`
+  is quantised, so an EXACT change refuses outright; `identity`/
+  `loudness_dbfs` are noisy (~0.0014 run-to-run identity spread per the
+  committed baseline's own `metadata.notes`), so a move under a
+  field-specific `epsilon` (`compare.LOUDNESS_DBFS_EPSILON` is 10% of the
+  ±`loudness_dbfs_abs` window the field is diffed against;
   `compare.IDENTITY_COSINE_EPSILON` has no equivalent window — `identity`
   feeds an absolute ceiling, not a diff — so it's calibrated instead off the
-  committed baseline's own ~0.0014 run-to-run noise) is
-  WRITTEN and echoed to stdout rather than refused — an exact-equality
-  guard on those two was found to refuse on every honest re-bless, which
-  trained an operator to reach for the shared flag on a ROUTINE bless and
-  silently re-open the `tolerances` hole one level down. All three fields
-  refusing beyond their own bar need `GOLDEN_REBLESS_THRESHOLDS=1`,
-  including when a previously-blessed baseline lost one of its keys
-  outright (same merge-conflict shape as above; disambiguated from a
-  genuine first bless via `any(baseline.get(k) is not None for k in ("rtf",
-  "identity", "loudness_dbfs", "tolerances"))`, not any single key and not
-  bare `k in baseline` — a single-key probe was tried twice and both times
-  left a narrower version of the same blind spot, and a bare presence check
+  committed baseline's own ~0.0014 run-to-run noise) is ACCEPTED WITHOUT
+  REWRITING the reference (#2060) — the existing block is kept as-is; only
+  a first bless or an explicitly-flagged forced move ever overwrites it, so
+  N consecutive noise-sized moves can no longer walk the reference across
+  its own window — and echoed to stdout. An exact-equality guard on those
+  two was found to refuse on every honest re-bless, which is *why*
+  `identity`/`loudness_dbfs` now sit behind their OWN flag rather than the
+  single shared one used before: reaching for that one flag on a routine
+  re-bless used to silently re-open the `tolerances` hole one level down
+  (#2060's root cause). `tolerances` refusing beyond its bar needs
+  `GOLDEN_REBLESS_THRESHOLDS=1`; `identity`/`loudness_dbfs` refusing beyond
+  THEIRS needs the separate `GOLDEN_REBLESS_MEASUREMENTS=1` — including
+  when a previously-blessed baseline lost one of its keys outright (same
+  merge-conflict shape as above; disambiguated from a genuine first bless
+  via `any(baseline.get(k) is not None for k in ("rtf", "identity",
+  "loudness_dbfs", "tolerances"))`, not any single key and not bare `k in
+  baseline` — a single-key probe was tried twice and both times left a
+  narrower version of the same blind spot, and a bare presence check
   refuses the documented first-bless scaffold shape (all four keys present
   but `null`) — so an unrelated bless (e.g. one only meant to re-record
   Kokoro transcripts) can't silently loosen a throughput/identity/loudness
   ceiling, or re-centre identity/loudness beyond noise, to whatever the
-  blessing box happened to measure.
+  blessing box happened to measure. That key-was-missing forced write is
+  the highest-stakes case the guard handles, and used to be the one echo
+  shape that printed nothing at all; it now reads `<field>: FORCED, key
+  was ABSENT -- no prior reference; wrote {...}` (#2069), unmistakably
+  distinct from both a noise line and a normal forced-move line.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
@@ -517,7 +528,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute.
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 
