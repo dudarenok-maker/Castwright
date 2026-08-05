@@ -51,7 +51,7 @@
 //   GOLDEN_COQUI=1   GOLDEN_QWEN_VOICE=<designed voiceId>
 
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { parseNvidiaSmiUtil } from './verify-cache.mjs';
 
@@ -79,6 +79,39 @@ if (assemblyOnly && sidecarOnly) {
 // rather than standing up a second contention probe.
 const GPU_BUSY_THRESHOLD = 40; // % utilization -- mirrors verify-cache.mjs's own threshold
 
+// #2036: `parseNvidiaSmiUtil` (verify-cache.mjs) only returns the FIRST GPU's
+// utilization line. On a multi-GPU box (this dev box is cuda:0 4070 8GB /
+// cuda:1 5070 Ti 16GB) a busy second card is invisible to a first-line read —
+// exactly the #1995 scenario the warning exists to catch. Take a local max()
+// over every parsed line here rather than widening the shared parser, which
+// has other callers with their own semantics (#2036).
+export function maxNvidiaSmiUtil(stdout) {
+  if (!stdout) return null;
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let max = null;
+  for (const line of lines) {
+    const util = parseNvidiaSmiUtil(line);
+    if (util !== null && (max === null || util > max)) max = util;
+  }
+  return max;
+}
+
+// Pure: given raw nvidia-smi stdout, returns the warning message to print, or
+// null if nothing should be flagged. Split out from `warnIfGpuBusyForBless`
+// so the decision logic is testable without spawning a real `nvidia-smi`.
+export function gpuBusyWarningFor(stdout) {
+  const util = maxNvidiaSmiUtil(stdout);
+  if (util === null || util < GPU_BUSY_THRESHOLD) return null;
+  return (
+    `[contention] GPU busy (~${util}% util) while blessing — a measurement recorded now ` +
+    '(e.g. instruct-baseline.json rtf_max) may reflect contention, not steady-state ' +
+    'performance. Consider re-blessing on a quiet box.'
+  );
+}
+
 function warnIfGpuBusyForBless() {
   if (!bless) return;
   const r = spawnSync(
@@ -87,17 +120,9 @@ function warnIfGpuBusyForBless() {
     { encoding: 'utf8', timeout: 5000 },
   );
   if (r.error || r.status !== 0) return; // no GPU / nvidia-smi absent -- nothing to flag
-  const util = parseNvidiaSmiUtil(r.stdout);
-  if (util !== null && util >= GPU_BUSY_THRESHOLD) {
-    console.log(
-      `[contention] GPU busy (~${util}% util) while blessing — a measurement recorded now ` +
-        '(e.g. instruct-baseline.json rtf_max) may reflect contention, not steady-state ' +
-        'performance. Consider re-blessing on a quiet box.',
-    );
-  }
+  const warning = gpuBusyWarningFor(r.stdout);
+  if (warning) console.log(warning);
 }
-
-warnIfGpuBusyForBless();
 
 const results = [];
 
@@ -117,37 +142,55 @@ function run(label, cmd, cmdArgs, { env, shell } = {}) {
   return code;
 }
 
-if (!sidecarOnly) {
-  // Suite B — GPU-free assembly golden (real ffmpeg, recorded PCM fixture).
-  run('assembly (Suite B)', 'npm', ['--prefix', 'server', 'run', 'test:golden'], {
-    shell: true,
-    // Explicit `undefined` (not `{}`) so an ambient GOLDEN_BLESS=1 exported in
-    // the shell can't leak through on the non-bless path and silently turn an
-    // ordinary assert run into a bless that overwrites committed fixtures —
-    // `run()`'s `{ ...process.env, ...env }` spread only clears an inherited
-    // key when this object explicitly sets it to `undefined`.
-    env: { GOLDEN_BLESS: bless ? '1' : undefined },
-  });
-}
+// Guard the actual run (spawns real suites / real nvidia-smi) so a test file
+// can `import` this module for its pure exports (`maxNvidiaSmiUtil`,
+// `gpuBusyWarningFor`) without triggering a full golden-audio run — same
+// pattern as verify-cache.mjs's `isDirectInvocation`.
+const isDirectInvocation = (() => {
+  const arg1 = process.argv[1];
+  if (!arg1) return false;
+  try {
+    return import.meta.url === pathToFileURL(arg1).href;
+  } catch {
+    return false;
+  }
+})();
 
-if (!assemblyOnly) {
-  // Suite A — real-model golden (SKIP+exit0 without venv/weights).
-  const pytestArgs = engine ? ['-k', engine] : [];
-  run(
-    'sidecar (Suite A)',
-    process.execPath,
-    ['scripts/run-powershell.mjs', 'server/tts-sidecar/run-golden-tests.ps1', ...pytestArgs],
-    // Same ambient-leak guard as the Suite B call above.
-    { env: { GOLDEN_BLESS: bless ? '1' : undefined } },
-  );
-}
+if (isDirectInvocation) {
+  warnIfGpuBusyForBless();
 
-const failed = results.filter((r) => r.code !== 0);
-console.log('\n=== golden-audio summary ===');
-for (const r of results) console.log(`  ${r.code === 0 ? 'OK  ' : 'FAIL'} ${r.label}`);
-if (failed.length) {
-  console.error(`golden-audio: ${failed.length} suite(s) failed.`);
-  process.exit(1);
+  if (!sidecarOnly) {
+    // Suite B — GPU-free assembly golden (real ffmpeg, recorded PCM fixture).
+    run('assembly (Suite B)', 'npm', ['--prefix', 'server', 'run', 'test:golden'], {
+      shell: true,
+      // Explicit `undefined` (not `{}`) so an ambient GOLDEN_BLESS=1 exported in
+      // the shell can't leak through on the non-bless path and silently turn an
+      // ordinary assert run into a bless that overwrites committed fixtures —
+      // `run()`'s `{ ...process.env, ...env }` spread only clears an inherited
+      // key when this object explicitly sets it to `undefined`.
+      env: { GOLDEN_BLESS: bless ? '1' : undefined },
+    });
+  }
+
+  if (!assemblyOnly) {
+    // Suite A — real-model golden (SKIP+exit0 without venv/weights).
+    const pytestArgs = engine ? ['-k', engine] : [];
+    run(
+      'sidecar (Suite A)',
+      process.execPath,
+      ['scripts/run-powershell.mjs', 'server/tts-sidecar/run-golden-tests.ps1', ...pytestArgs],
+      // Same ambient-leak guard as the Suite B call above.
+      { env: { GOLDEN_BLESS: bless ? '1' : undefined } },
+    );
+  }
+
+  const failed = results.filter((r) => r.code !== 0);
+  console.log('\n=== golden-audio summary ===');
+  for (const r of results) console.log(`  ${r.code === 0 ? 'OK  ' : 'FAIL'} ${r.label}`);
+  if (failed.length) {
+    console.error(`golden-audio: ${failed.length} suite(s) failed.`);
+    process.exit(1);
+  }
+  console.log('golden-audio: all selected suites passed (SKIPs are clean).');
+  process.exit(0);
 }
-console.log('golden-audio: all selected suites passed (SKIPs are clean).');
-process.exit(0);
