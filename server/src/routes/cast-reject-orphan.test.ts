@@ -305,6 +305,8 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
     expect(res.body.wasRejected).toBe(false);
+    // removedFrom is always present (never omitted) — empty for a no-op.
+    expect(res.body.removedFrom).toEqual([]);
   });
 
   it('removes the notLinkedTo edge and the rejectedPairs entry', async () => {
@@ -312,6 +314,8 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
     expect(res.body.wasRejected).toBe(true);
+    // Round 3 (I-B) — names the raw `from` id(s) actually removed.
+    expect(res.body.removedFrom).toEqual(['mayrin']);
 
     const cast = readCast();
     const mairin = cast.characters.find((c) => c.id === 'mairin');
@@ -433,8 +437,9 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     // The rejection IS undone (the pair is removed) —
     expect(res.body.wasRejected).toBe(true);
     // — but the alias restore was correctly SKIPPED, and the response says
-    // so, naming the newer alias's current target.
-    expect(res.body.supersededByOther).toBe('mr-marrow');
+    // so, naming the newer alias's current target. Round 3 (M-7) — an
+    // array, since more than one removed pair can each skip independently.
+    expect(res.body.supersededByOther).toEqual(['mr-marrow']);
 
     const history = readHistory();
     // THE FAILURE MODE C1 EXISTS TO PREVENT: the correct, newer alias must
@@ -502,6 +507,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     // unchanged, and reported success anyway (the client dispatches its
     // "undone" state on any 200).
     expect(undoRes.body.wasRejected).toBe(true);
+    // Round 3 (I-B) — names the PAIR's own 'The-Torment', not the row's own
+    // 'the_torment': the client must key its notLinkedTo redux mirror off
+    // THIS value, not `orphanedId`, or the removal would silently target
+    // the wrong (non-existent) edge client-side.
+    expect(undoRes.body.removedFrom).toEqual(['The-Torment']);
 
     const history = readHistory();
     expect(history?.rejectedPairs).toEqual([]);
@@ -517,6 +527,121 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     const after = await resolveOrphanedId('the_torment');
     expect(after?.character.id).toBe('the-torment');
     expect(after?.via).toBe('normalised-id');
+  });
+
+  it('M-6 (review round 3) — a row governing TWO pairs removes both on one Undo click, and names both in the response', async () => {
+    // Both 'the_torment' (this row's own raw id — rule 1, raw-always) AND
+    // 'The-Torment' (a different spelling that normalises the same — rule
+    // 2, since NEITHER has its own supersededBy entry, so 'the_torment'
+    // resolves ignoring-pair-rejects via the normalised-id tier) govern
+    // this row simultaneously. Seeded directly at the history/cast level
+    // (rather than via two POSTs) so the scenario is pinned exactly:
+    // rejectedPairs carries both, and notLinkedTo on the live target
+    // carries both edges, as if two separate rejects had landed on two
+    // differently-spelled rows that both collapse onto the same normalised
+    // key.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          ...initialCast,
+          {
+            id: 'the-torment',
+            name: 'The Torment',
+            role: 'character',
+            color: 'unset',
+            notLinkedTo: [
+              { bookId, characterId: 'the_torment' },
+              { bookId, characterId: 'The-Torment' },
+            ],
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [
+          { from: 'the_torment', to: 'the-torment' },
+          { from: 'The-Torment', to: 'the-torment' },
+        ],
+      }),
+    );
+
+    const res = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(true);
+    // Both raw spellings named, deduped — order is [raw-self, normalised]
+    // per rejectedPairsGoverning's own [...raw, ...normalised] shape.
+    expect(res.body.removedFrom).toEqual(['the_torment', 'The-Torment']);
+
+    const history = readHistory();
+    expect(history?.rejectedPairs).toEqual([]);
+
+    // BOTH notLinkedTo edges are gone — the resolver treats every one of
+    // those spellings as governing the same normalised block, so leaving
+    // either behind would silently keep blocking a future by-name remap.
+    const cast = readCast();
+    const theTorment = cast.characters.find((c) => c.id === 'the-torment');
+    expect(theTorment?.notLinkedTo).toEqual([]);
+  });
+
+  it('M-2 (review round 3) — restoring a cross-spelling pair\'s forgotSupersededTo uses the PAIR\'s own `from`, not the row\'s `orphanedId`', async () => {
+    // Round 2's two cross-spelling tests (Important 1/2, below and above)
+    // both happen to produce a pair with NO forgotSupersededTo to restore —
+    // Important 2 never seeds a supersededBy entry before its POST, and
+    // Important 1 writes rejectedPairs directly without ever calling POST
+    // at all. Neither exercises restoreSupersededId's `pair.from` argument
+    // under the cross-spelling shape, so reverting that argument back to
+    // `orphanedId` (the row's own id, which the pair's `from` need NOT
+    // match) passed the whole suite. This test seeds a supersededBy entry
+    // under the DIFFERENT raw spelling the pair will actually govern
+    // through, so the restore has something real to distinguish.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          ...initialCast,
+          { id: 'the-torment', name: 'The Torment', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { 'The-Torment': 'the-torment' } }),
+    );
+
+    // Reject 'The-Torment' — POST's guard finds supersededBy['The-Torment']
+    // === 'the-torment' (matches characterId), so it stashes
+    // forgotSupersededTo: 'the-torment' on the pair and forgets the entry.
+    const rejectRes = await callReject(bookId, 'the-torment', { orphanedId: 'The-Torment' });
+    expect(rejectRes.status).toBe(200);
+    expect(readHistory()).toEqual({
+      schema: 1,
+      supersededBy: {},
+      rejectedPairs: [{ from: 'The-Torment', to: 'the-torment', forgotSupersededTo: 'the-torment' }],
+    });
+
+    // The UI sends the DELETE using the ROW's own raw id — 'the_torment' —
+    // a DIFFERENT spelling that normalises the same, never 'The-Torment'.
+    const undoRes = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.body.wasRejected).toBe(true);
+    expect(undoRes.body.removedFrom).toEqual(['The-Torment']);
+    // The restore succeeded (no newer alias exists) — proven by BOTH the
+    // response and, more importantly, by which KEY landed back in
+    // supersededBy: 'The-Torment', the pair's own `from`. A restore call
+    // that used `orphanedId` ('the_torment') instead would silently write
+    // the WRONG key here, leaving 'The-Torment' unrestored while
+    // fabricating an entry for 'the_torment' that was never rejected under
+    // that spelling in the first place.
+    expect(undoRes.body.supersededByOther).toBeUndefined();
+
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({ 'The-Torment': 'the-torment' });
+    expect(history?.rejectedPairs).toEqual([]);
   });
 
   it('Important 1 (review round 2) — DELETE for a row resolving via tier 2 (raw) is a genuine no-op and does NOT collaterally remove an unrelated normalised-only pair', async () => {

@@ -250,17 +250,44 @@ interface UndoRejectOrphanMatchResponse {
   wasRejected: boolean;
   resolution: ResolutionTier | null;
   resolvedCharacterId?: string;
-  /** C1 (fix round 1) — set when the pair had a `forgotSupersededTo` to
-      restore but the restore was SKIPPED because `supersededBy[orphanedId]`
-      already points somewhere else (a later, unrelated re-analysis recorded
-      a different, presumably-correct alias since the original reject). The
-      value is that alias's current target. `resolution`/`resolvedCharacterId`
-      above already reflect the real post-undo truth regardless of this
-      field — this exists purely so the client can explain to the user WHY
-      the alias didn't visibly change, instead of it reading as Undo having
-      silently done nothing. Absent in the ordinary case: nothing to
-      restore, or the restore succeeded. */
-  supersededByOther?: string;
+  /** Round 3 (#2092/#2089 review round 3, I-B/M-6) — the raw `from` id(s) of
+      every `rejectedPairs` entry this DELETE actually removed, i.e.
+      `matchingPairs.map(p => p.from)` deduped. Always present (possibly
+      empty). This is the THIRD consumer of `rejectedPairsGoverning`'s
+      raw-`from` key the round exists to unify: the read side keys the
+      banner chip off it, this route's write side already keyed the
+      `notLinkedTo` removal and the `supersededBy` restore off it
+      (`matchingPairs`, above) — but until now the RESPONSE never echoed it,
+      so the client had no correct value to mirror its own `notLinkedTo`
+      removal onto and fell back to `orphanedId` (the row's own raw id),
+      which can legitimately differ from a governing pair's `from` (the
+      `the_torment`/`The-Torment` shape `rejectedPairsGoverning` exists to
+      handle) — leaving a stale edge in redux no later hydrate could correct
+      (`cast-slice.ts`'s merge prefers a truthy EXISTING `notLinkedTo` over
+      the server's own value). Also closes M-6: a row governing more than
+      one pair removes ALL of them (and their `notLinkedTo` edges) in one
+      Undo click — necessary, since the resolver treats every one of those
+      spellings as the same normalised block — but previously nothing in
+      the response, the log line below, or the toast said so; naming every
+      removed `from` here is what lets the client render an honest toast
+      and the log line name them all. */
+  removedFrom: string[];
+  /** C1 (fix round 1) — set when a pair had a `forgotSupersededTo` to
+      restore but the restore was SKIPPED because `supersededBy[<that pair's
+      from>]` already points somewhere else (a later, unrelated re-analysis
+      recorded a different, presumably-correct alias since the original
+      reject). Each entry is that alias's current target. `resolution`/
+      `resolvedCharacterId` above already reflect the real post-undo truth
+      regardless of this field — this exists purely so the client can
+      explain to the user WHY the alias didn't visibly change, instead of it
+      reading as Undo having silently done nothing. Round 3 (M-7) — an
+      ARRAY, not a single string: when a row governs more than one pair
+      (M-6, above) and more than one of them skips its restore, round 1's
+      single field only ever surfaced the LAST one, silently dropping the
+      others from both the response and the toast. Absent (never an empty
+      array) when nothing was skipped: nothing to restore, or every restore
+      that was attempted succeeded. */
+  supersededByOther?: string[];
 }
 
 castRejectOrphanRouter.post(
@@ -438,16 +465,14 @@ castRejectOrphanRouter.delete(
        `orphanedId` (the row's own raw id) — every id-history and
        notLinkedTo operation below uses the PAIR's own `from`, not
        `orphanedId`, since that is the raw spelling the original POST
-       actually wrote under. */
+       actually wrote under. Round 3 — `rejectedPairsGoverning` now takes
+       `(cast, history)` directly and builds its own ignoring-resolver
+       internally, so this route no longer builds one itself (see the
+       helper's own doc comment for why: it closes M-1, a legacy `rejected`
+       block getting mis-attributed to an unrelated pair, and makes passing
+       the wrong resolver structurally unrepresentable at this call site). */
     const historyBeforeUndo = await loadCastIdHistory(bookDir);
-    const resolveIgnoringRejects = buildCastResolver(cast.characters, {
-      supersededBy: historyBeforeUndo.supersededBy,
-    }).resolve;
-    const governingPairs = rejectedPairsGoverning(
-      orphanedId,
-      historyBeforeUndo.rejectedPairs ?? [],
-      resolveIgnoringRejects,
-    );
+    const governingPairs = rejectedPairsGoverning(orphanedId, cast.characters, historyBeforeUndo);
     const matchingPairs = governingPairs.filter((p) => p.to === characterId);
     const wasRejected = matchingPairs.length > 0;
 
@@ -479,17 +504,21 @@ castRejectOrphanRouter.delete(
        `restoreSupersededId`'s own doc comment in `cast-id-history.ts`.
        Looped over `matchingPairs` (ordinarily just one) rather than a
        single pair, for the same reason the notLinkedTo removal above is:
-       whichever pair(s) the shared helper says govern this row. */
-    let supersededByOther: string | undefined;
+       whichever pair(s) the shared helper says govern this row. Round 3
+       (M-7) — accumulates into an ARRAY rather than overwriting a single
+       local: round 1 only ever kept the LAST skipped restore's target, so a
+       row governing two pairs that both skipped silently dropped the first
+       one from the response, the log, and the toast. */
+    const supersededByOthers: string[] = [];
     for (const pair of matchingPairs) {
       if (pair.forgotSupersededTo === undefined) continue;
       try {
         const restoreResult = await restoreSupersededId(bookDir, pair.from, pair.forgotSupersededTo);
-        if (!restoreResult.restored) {
-          supersededByOther = restoreResult.supersededByOther;
+        if (!restoreResult.restored && restoreResult.supersededByOther !== undefined) {
+          supersededByOthers.push(restoreResult.supersededByOther);
           console.log(
             `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
-              `"${pair.forgotSupersededTo}" — a newer alias to "${supersededByOther}" already exists`,
+              `"${pair.forgotSupersededTo}" — a newer alias to "${restoreResult.supersededByOther}" already exists`,
           );
         }
       } catch (restoreErr) {
@@ -525,9 +554,18 @@ castRejectOrphanRouter.delete(
 
     const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
 
+    /* Round 3 (M-6) — deduped, and names every removed spelling when the
+       row governed more than one, instead of only ever naming `orphanedId`
+       (which, per `rejectedPairsGoverning`, need not be any pair's own
+       `from`). */
+    const removedFrom = [...new Set(matchingPairs.map((p) => p.from))];
     console.log(
       `[cast-reject-orphan] (undo) book=${bookId} un-rejected "${orphanedId}" as ${characterId}` +
-        (wasRejected ? '' : ' (pair already absent)'),
+        (wasRejected
+          ? removedFrom.length > 1
+            ? ` — removed ${removedFrom.length} pairs: ${removedFrom.map((f) => `"${f}"`).join(', ')}`
+            : ''
+          : ' (pair already absent)'),
     );
 
     return res.json({
@@ -536,7 +574,8 @@ castRejectOrphanRouter.delete(
       wasRejected,
       resolution: resolution?.via ?? null,
       resolvedCharacterId: resolution?.character.id,
-      supersededByOther,
+      removedFrom,
+      supersededByOther: supersededByOthers.length ? supersededByOthers : undefined,
     });
   },
 );

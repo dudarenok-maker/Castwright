@@ -3447,14 +3447,16 @@ paths:
       operationId: undoRejectOrphanMatch
       description: |
         Undoes the POST above. Same path and body shape (`{ orphanedId }`)
-        deliberately. Removes `(orphanedId, characterId)` from
-        `cast-id-history.json`'s `rejectedPairs`, removes the same-book
-        `notLinkedTo` entry keyed on THIS book's id (a cross-book edge for the
-        same character id, written by
+        deliberately. Removes every `rejectedPairs` entry that governs
+        `orphanedId` against `characterId` (ordinarily one, but a row can
+        govern more than one differently-punctuated raw spelling of the same
+        underlying id — see `removedFrom` below), removes each one's
+        same-book `notLinkedTo` entry keyed on THIS book's id (a cross-book
+        edge for the same character id, written by
         `/api/books/{bookId}/cast/{characterId}/not-linked-to`, is never
         touched), and restores any `supersededBy` alias entry the original
-        reject forgot — making the undo lossless. Idempotent: a DELETE for a
-        pair that was never rejected 200s with `wasRejected: false`.
+        reject(s) forgot — making the undo lossless. Idempotent: a DELETE for
+        a pair that was never rejected 200s with `wasRejected: false`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: characterId, required: true, schema: { type: string } }
@@ -7388,7 +7390,7 @@ components:
           description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
     UndoRejectOrphanMatchResponse:
       type: object
-      required: [characterId, orphanedId, wasRejected, resolution]
+      required: [characterId, orphanedId, wasRejected, resolution, removedFrom]
       properties:
         characterId: { type: string, description: 'The live character (path param, echoed back).' }
         orphanedId: { type: string }
@@ -7411,18 +7413,39 @@ components:
         resolvedCharacterId:
           type: string
           description: The live cast id `orphanedId` resolves onto, when `resolution` is non-null.
-        supersededByOther:
-          type: string
+        removedFrom:
+          type: array
+          items: { type: string }
           description: |
-            Set when the pair had a forgotten `supersededBy` alias to
-            restore, but the restore was SKIPPED because `orphanedId`
-            already resolves through a DIFFERENT, newer alias on disk (a
-            later, unrelated re-analysis recorded the correct one since the
-            original reject). The value is that alias's current target.
+            Review round 3 (I-B/M-6) — the raw `from` id(s) of every
+            `rejectedPairs` entry this DELETE actually removed. Always
+            present (empty when `wasRejected` is false). A governing pair's
+            `from` need not equal `orphanedId` itself — a row can resolve
+            through a normalised-tier collision under a DIFFERENTLY-spelled
+            raw `from` than its own id — and a single Undo click can remove
+            more than one pair when a row governs several differently-
+            punctuated spellings of the same underlying id. The client keys
+            its `notLinkedTo` redux mirror off THIS field, not `orphanedId`
+            — mirroring off the row's own raw id was a latent drift bug
+            whenever the two differed.
+        supersededByOther:
+          type: array
+          items: { type: string }
+          description: |
+            Set (non-empty) when one or more of the removed pairs had a
+            forgotten `supersededBy` alias to restore, but the restore was
+            SKIPPED because that pair's `from` already resolves through a
+            DIFFERENT, newer alias on disk (a later, unrelated re-analysis
+            recorded the correct one since the original reject). Each entry
+            is that alias's current target, one per skipped restore.
             Restoring unconditionally here would silently overwrite the
             newer, presumably-correct alias with the stale rejected one —
             the exact failure mode this field exists to avoid reproducing.
-            Absent in the ordinary case: nothing to restore, or the restore
+            Review round 3 (M-7) — an ARRAY, not a single string: a row
+            governing more than one pair can have more than one restore
+            skipped, and round 1's single-value shape silently dropped every
+            skip but the last one. Absent (never an empty array) in the
+            ordinary case: nothing to restore, or every restore attempted
             succeeded.
 
     # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
