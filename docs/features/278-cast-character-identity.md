@@ -151,6 +151,32 @@ owner: null
    spellings the instant `the-torment` landed, killing normalised-id
    resolution for both (review round 1) — the same normalised taken-set
    (built from `existingIds` **and** `historyKeys`) covers it.
+9. **An interim `cast.json` write never removes an id from the persisted
+   roster** (srv-87, #2086). The three interim ("Cast so far") writes
+   (`analysis.ts:3633`, `:3845`, `:5613`) go through
+   `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
+   which has no id-drift name-fallback and produces no `retirements` — there is
+   nothing in its return type for a caller to discard. Only the two
+   authoritative end-of-run writes (`:4885`, `:6148`) apply identity merges and
+   call `retireCharacterId`. Before this fix, a mid-run death — **or a
+   completed run whose `phase1DriftExceeded` gate skipped the authoritative
+   write** (`analysis.ts:4868`; `attributionDriftExceeded` is a normal, logged,
+   non-crash outcome, not only a process kill) — could leave a character's id
+   durably swapped in `cast.json` with no history record, orphaning that
+   character's frozen `<slug>.segments.json` entries to the narrator. Residual
+   risk this closes is **not** self-repairing: the prior belief that a damaged
+   `cast.json` "self-repairs on the next completed analysis" is false for the
+   old→new *mapping* — the next run reads the already-swapped file as its
+   prior, the analysis cache already holds the drifted id, so the fallback
+   never re-fires for that pair and no retirement is ever recorded for it. Only
+   the *file* becomes authoritative again; the mapping itself needs
+   `scripts/repair-cast-id-drift.mjs --apply` (A33 — run 2026-08-05, but only
+   **partially** discharged: the write path is proven and recorded 3
+   auto-recordable aliases across 2 books, but the workspace is not
+   orphan-free — 93 ids / 161 segments remain report-only, needing a human
+   decision, and *Unlocked* alone still carries 34 orphaned segments under
+   `unknown-male`; see the on-box register's A33 row) or a re-render to
+   recover.
 
 ## Deviations from the spec
 
@@ -362,9 +388,9 @@ redux → rendered DOM, not the server-side aggregation (which has its own
 - **`cast-create` re-minting a merged-away character id** — filed as
   [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) during
   Wave 2, **now fixed** (invariant 8 above) — kept here only as the historical
-  filing note. **Auto-repairing the interim cast.json write path** — filed as
-  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) —
-  remains out of scope/open.
+  filing note. **Auto-repairing the interim `cast.json` write path** — filed as
+  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) during
+  Wave 2, **now also fixed** (invariant 9 above) — likewise kept as a filing note.
 - **The repair script's `--apply` liveness probe missing an auto-rebound port** —
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS
