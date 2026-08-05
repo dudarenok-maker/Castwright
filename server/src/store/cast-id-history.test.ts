@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -159,6 +159,60 @@ describe('cast id history', () => {
       writeTestHistoryFile('null');
       const result = await loadCastIdHistory(dir);
       expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('operator-visible warnings (srv-86 review round 2 — M1/M2)', () => {
+    // M1: every "never-throws" test above proves the RETURN value degrades
+    // gracefully, but none of them assert anything was actually logged — a
+    // suite that only checks the return value can't tell a warning from no
+    // warning, so it stays green even if the console.warn call in
+    // loadCastIdHistory's SHAPE branch (well-formed JSON, wrong shape) were
+    // deleted outright.
+    it('warns when the file exists but has an unexpected shape (well-formed JSON, wrong shape)', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 2, supersededBy: {} }));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistory(dir);
+        expect(result).toEqual({ schema: 1, supersededBy: {} });
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const message = String(warnSpy.mock.calls[0][0]);
+        expect(message).toContain(castIdHistoryPath(dir));
+        expect(message).toMatch(/unexpected shape/);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('warns when the file is unreadable (truncated/invalid JSON — the parse-throw branch)', async () => {
+      writeTestHistoryFile('{invalid json');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistory(dir);
+        expect(result).toEqual({ schema: 1, supersededBy: {} });
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const message = String(warnSpy.mock.calls[0][0]);
+        expect(message).toContain(castIdHistoryPath(dir));
+        expect(message).toMatch(/unreadable/);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    // M2: a missing file is the common case (most books never retire an id)
+    // and must stay silent — if the `raw === null` early return were
+    // removed, `raw.schema` on `null` would throw into the catch branch and
+    // start logging a warning for every book with no history file, on every
+    // render and every book-state read.
+    it('does not warn when the file is simply absent — the common case', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistory(dir);
+        expect(result).toEqual({ schema: 1, supersededBy: {} });
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 

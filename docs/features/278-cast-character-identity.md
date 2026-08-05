@@ -9,8 +9,8 @@ owner: null
 > Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A32, B3, A33)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
-> `server/src/routes/cast-reject-orphan.ts`, `src/views/cast.tsx`, `src/store/cast-slice.ts`,
-> `scripts/repair-cast-id-drift.mjs`
+> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-create.ts`,
+> `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
 > `POST /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
@@ -92,7 +92,10 @@ owner: null
    general case (the repoint loop at `:151-158`). The five original call sites
    are enumerated in the design spec §4.4; a sixth (`scripts/repair-cast-id-drift.mjs`)
    writes the same side-table out-of-process, gated on no live server being
-   reachable (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:689`).
+   reachable (`probePortRefused`, `scripts/repair-cast-id-drift.mjs:1016`). The
+   liveness probe covers not just the configured port but its whole
+   `listenWithAutoRebind` auto-rebind range (`probePortRangeRefused`,
+   `AUTO_REBIND_RANGE`) — #2090, closed by the same PR as #2093 below.
 3. **The resolver never matches on display names.** `buildCastResolver` is
    ids-only — four tiers, first hit wins: a live exact id (`via: 'exact'`), a
    non-rejected `rejected`-checked-after-exact history hit (`via: 'history'`), a
@@ -121,6 +124,49 @@ owner: null
    (`rankSnapshotCandidates`). Two independent rankers is the exact
    duplicate-matching-logic defect class Task 16's CRITICAL finding came from
    (see "Deviations from the spec").
+8. **`cast-create`'s mint checks `cast-id-history.json` too, not just the live
+   roster — and the check is `normaliseIdKey`-equivalence, not raw string
+   equality** (srv-86, #2085) — `server/src/routes/cast-create.ts` treats every
+   key in `supersededBy`, and every live cast id, as "taken" alongside an exact
+   match: a name whose naive mint collides with a retired or live id **after
+   normalisation** (e.g. mints `the-torment` where the id on disk is the pre-RC2
+   `the_torment`) gets the existing collision-suffix path instead. A raw-only
+   check is insufficient — `safeId`'s output (and its own and this route's
+   collision suffixes) is always a `normaliseIdKey` fixed point, but a history
+   key or a pre-RC2 live id is whatever spelling actually landed on disk, so the
+   gap is one-directional and opens exactly where invariant 3's normalised-id
+   tier already has real drift to protect (review round 1, Critical; caught
+   against the real *Playing with Fire* `the_torment`/`the-torment` shape,
+   `docs/testing/cast-id-drift-onbox-acceptance.md:40-44`). This is the mirror
+   image of the analyzer's `dropSupersededIdsReclaimedByLiveCast`: that path
+   doesn't control the mint (an LLM produced the id, and a fresh roster
+   legitimately reclaimed it) so it drops the stale history entry; `cast-create`
+   DOES control the mint, so it avoids the collision instead of sacrificing a
+   history entry that is still protecting real rendered segments. Reported via a
+   `console.log` line, matched by the same normalised comparison, whenever the
+   avoidance fires for either reason it can fire — a history match (raw or
+   normalised) or a live row that normalises the same with no history involved
+   (review round 2, M4; the report used to be gated on the history case only,
+   which left the sibling avoidance below silent) — but deliberately NOT for
+   an ordinary raw collision between two live ids sharing a name, which is the
+   ordinary pre-#2085 `-n`-suffix path and unrelated to this invariant. No
+   `displaced` entry is written, because nothing is dropped; the log names the
+   colliding id as a **recorded** history entry rather than an active redirect
+   (review round 2, M3), since a chained or since-deleted target can leave a
+   `supersededBy` entry pointing at an id that is no longer itself live.
+   `existingIds` is filtered to `typeof id === 'string'` before any of this
+   runs (review round 2, I1) — `cast.json` is read here without
+   `characterSchema` validation, and the normalised-comparison machinery this
+   invariant introduced calls `normaliseIdKey` on every id in `existingIds`,
+   so an unvalidated missing/non-string `id` on disk would otherwise throw a
+   `TypeError` into the route's error handler (a 500) instead of degrading
+   gracefully, mirroring the guard `cast-resolve.ts`'s `resolve()` entry point
+   already applies for the same reason. Also closes a pre-existing
+   sibling with no history involved at all: a live `the_torment` with nothing
+   retired, re-created as "The Torment", used to collide `byNormId` for both
+   spellings the instant `the-torment` landed, killing normalised-id
+   resolution for both (review round 1) — the same normalised taken-set
+   (built from `existingIds` **and** `historyKeys`) covers it.
 
 ## Deviations from the spec
 
@@ -234,15 +280,63 @@ down, each a deliberate controller ruling made during implementation:
   (auto-reconciled collapsed by default, needs-your-decision always expanded),
   `applyOrphanRejection`, error-toast and busy-disable paths on the reject action.
 - `scripts/tests/repair-cast-id-drift.test.mjs` — every pure helper: name-index
-  building, Tier A/B candidate resolution, `snapshotsConsistent`, the reserved-
-  source guard, the cross-source ambiguity veto, the zero-segment guard,
-  `rankSnapshotCandidates`'s scoring, the re-render list shape, and
-  `probePortRefused`'s fail-closed behaviour (verified live against three real
-  listener shapes, not only unit-tested).
+  building, Tier A/B candidate resolution (both normalised against a reserved
+  fold-bucket id on the source AND the target side — #2093 residual 4),
+  `snapshotsConsistent`, the reserved-source guard, the cross-source ambiguity
+  veto, the zero-segment guard, `rankSnapshotCandidates`'s scoring, the
+  re-render list shape, `buildOrphansFromSegments` (the auto-reconciled map's
+  producer half, including the `'normalised-history'` tier — #2093 residual
+  5/6), `isCacheAvailable`/`readAnalysisCache` against real fixtures covering
+  every refusal state — missing, unparseable, validly-parsing-but-names-zero-
+  characters (independent-review Critical C1), and (pre-merge review I1) a
+  validly-parsing entry whose id or name is an EMPTY STRING — `isCacheAvailable`
+  now builds the real `cacheNameIndex` via `buildNameIndex` (the same call
+  guard 2 consumes) instead of a looser `cacheEntriesOf`-only check, closing
+  the gap one field deeper than C1 (#2093 residual 1), `planBookRepairs`'s
+  `withheldForMissingCache` count — proven both to increment when a real Tier
+  A/B candidate is withheld for missing cache evidence AND to stay `0` for a
+  matched-but-zero-segment id (pre-merge review I2 moved the cache-
+  availability gate to fire after the zero-segment/snapshot-consistency
+  guards, so a candidate those guards would have refused anyway can't inflate
+  the count that gates the whole-workspace `--apply` refusal) and for a
+  reserved-source id (guard 1 refuses before the cache gate is ever reached —
+  the actual *Unlocked* shape), `shouldRefuseApplyForWithheldAutoRecord`'s
+  decision logic (#2093 residual 2, renamed and re-scoped by owner-decided
+  policy in review round 2 — this covers the pure `apply &&
+  booksWithheldForMissingCache > 0` decision only; its wiring into `main()`'s
+  actual exit path is untestable without `server/dist` and is verified only
+  by the live dry run, not by this suite), and `probePortRangeRefused`'s
+  fail-closed behaviour across the whole `listenWithAutoRebind` auto-rebind
+  range, not only the configured port (#2090) — verified live against real
+  TCP listeners, including both boundaries of the range directly (pre-merge
+  review I3: mutation-testing found the original three tests could not
+  distinguish `startPort + i` from `startPort + i + 1`, nor `AUTO_REBIND_RANGE`
+  20 from 19) and a configured port near the top of the valid TCP range
+  (minor: `probePortRangeRefused` now clamps at 65535 rather than letting
+  `net.connect` throw synchronously on an out-of-range port).
 - `e2e/orphaned-character-fallback-banner.spec.ts` — both banner sections render
   from a real hydrate-shaped payload; the reject flow round-trips through the
   redux store in a real browser; the reject button stays disabled until a
   candidate is picked.
+- `server/src/routes/cast-create.test.ts` (srv-86, #2085) — the merge-then-
+  recreate repro driven through the real merge and create routes: a re-created
+  character never re-mints an id `cast-id-history.json` still protects, the
+  avoidance is logged, the history entry survives untouched; a raw spelling
+  drift (the real `the_torment`/`the-torment` shape, review round 1) is caught
+  by the normalised comparison whether the drifted id is in history or only in
+  the live roster (and the live-only case is logged too — review round 2,
+  M4); an ordinary raw collision between two live same-named characters stays
+  silent (review round 2, M4 scope — the widened report doesn't fire for the
+  pre-#2085 case); a `cast.json` row with a missing/non-string `id` creates
+  successfully rather than 500ing (review round 2, I1); and the route neither
+  crashes nor silently disables the check when `cast-id-history.json` is
+  genuinely absent (confirmed via `existsSync`, not merely "the previous test
+  happened not to write one") or malformed (the latter also logs).
+- `server/src/store/cast-id-history.test.ts`'s "operator-visible warnings"
+  block (review round 2, M1/M2) — `loadCastIdHistory` actually calls
+  `console.warn` (not just returns the degraded value) for both the
+  wrong-shape branch and the unreadable/parse-throw branch, each naming the
+  file path, and stays silent for the common absent-file case.
 
 ### Manual acceptance walkthrough
 
@@ -302,10 +396,11 @@ redux → rendered DOM, not the server-side aggregation (which has its own
   [#2089](https://github.com/dudarenok-maker/Castwright/issues/2089) (fs-78) —
   rejecting is durable and irreversible today, with no confirm step.
 - **`cast-create` re-minting a merged-away character id** — filed as
-  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) — and
-  **auto-repairing the interim cast.json write path** — filed as
-  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) — both
-  during Wave 2.
+  [#2085](https://github.com/dudarenok-maker/Castwright/issues/2085) during
+  Wave 2, **now fixed** (invariant 8 above) — kept here only as the historical
+  filing note. **Auto-repairing the interim cast.json write path** — filed as
+  [#2086](https://github.com/dudarenok-maker/Castwright/issues/2086) —
+  remains out of scope/open.
 - **The repair script's `--apply` liveness probe missing an auto-rebound port** —
   `server/src/crash-logging.ts:155-162` auto-rebinds on `EADDRINUSE` to
   `port+1..port+19`; the probe only checks the configured port and the LAN HTTPS
@@ -324,7 +419,7 @@ redux → rendered DOM, not the server-side aggregation (which has its own
 
 ## On-box acceptance
 
-Three rows owed — see
+Three rows tracked (A33 partially discharged 2026-08-05 — see below) — see
 [`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
 and the run sheet
 [`docs/testing/cast-id-drift-onbox-acceptance.md`](../testing/cast-id-drift-onbox-acceptance.md):
@@ -336,16 +431,50 @@ and the run sheet
   keeps the cast's existing id (or correctly records a genuine change) instead of
   drifting it further.
 - **A33** (Wave 3) — the repair pass's `--apply` run against the real workspace.
-  **Never executed as of this plan's `active` status.** The dry run (2026-08-05,
-  round-2 review fixes applied, `CACHE_DIR` correctly pointed at the checkout
-  that ran this workspace's analysis) reports: **3 auto-recordable aliases
-  covering 27 segments**, **93 ids reported for a human decision covering 161
-  segments** (corrected from a prior 93 — see below), **17 re-render rows
-  covering 120 segments**, **0 books modified**, **0 books missing
-  analysis-cache evidence**. `--apply` now refuses outright if that last
-  number is nonzero (round-2 review fail-closed fix — a missing cache file
-  silently defeated the cross-source ambiguity veto). See the run sheet's
-  Wave 3 section for the exact walkthrough.
+  **PARTIALLY DISCHARGED 2026-08-05** — `--apply` was run for real (against
+  `main` @ `f3d6ae0f`) and wrote exactly the 3 predicted aliases across 2
+  books (*Заказ Коалфолла*, *Everblaze*), all 20 `cast.json` files
+  byte-unchanged; the liveness rail caught a real `npm run dev` via its LAN
+  HTTPS half before that. **Still owed:** confirming the fix reaches actual
+  audio (re-render *Заказ Коалфолла* ch2 and listen) and the Cast-screen
+  banner cross-check — see the register row A33 and the run sheet's §8.6+
+  for the full account, including two defects the run surfaced
+  ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
+  re-render list drops an aliased row's segments after `--apply` — **still
+  OPEN, tracked separately, fixed on its own branch, NOT in the #2102 PR**;
+  [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108), a
+  wrong `WORKSPACE_DIR` scanned 0 books and still reported a clean summary
+  — fixed here in the #2102 PR that also closes the residuals below).
+  The dry run (re-measured 2026-08-05, `CACHE_DIR` correctly pointed at the
+  checkout that ran this workspace's analysis) reports: **3 auto-recordable
+  aliases covering 27 segments**, **93 ids reported for a human decision
+  covering 161 segments** (corrected from a prior 93 — see below), **17
+  re-render rows covering 120 segments** (the pre-#2107 figure — with #2107
+  still open, the re-render list drops the 3 freshly-aliased rows' segments,
+  so a dry run against the real workspace right now reports **13** rows,
+  not 17; the true damage figure is still 17 rows / 120 segments, and the
+  13 must not be read as a regression once #2107 lands), **0 books
+  modified**, **1 book missing analysis-cache evidence, 0 books with an
+  auto-record withheld because of it**. These are two DIFFERENT numbers (independent-review
+  Critical C1, widened by a later pre-merge review pass (I1), found the
+  cache-availability gate could read a cache as usable when it wasn't; the
+  repo owner then decided that a book's raw missing-cache status should stop
+  gating `--apply` on its own). *Unlocked*'s cache file — the one book this
+  surfaces — parses but names zero characters; **it is NOT an orphan-free
+  book** — it carries `unknown-male`, 34 rendered segments across ch63/ch67
+  (confirmed both by a live scan and by the real `--apply` run above). The
+  reason it doesn't block `--apply`: `unknown-male` is a reserved
+  fold-bucket SOURCE id, and guard 1 refuses to auto-record from a reserved
+  source unconditionally, firing before the cache-availability gate is ever
+  reached — so *Unlocked*'s blind ambiguity veto never actually stood
+  between the pass and a real candidate. `--apply` refuses only when a
+  book's blind ambiguity veto actually withheld a real auto-record
+  candidate (`booksWithheldForMissingCache`, currently `0`; a pre-merge
+  review pass (I2) also moved this check to fire after the zero-segment and
+  snapshot-consistency guards, so a matched-but-unrendered id can't inflate
+  it either) — the broader `booksMissingCache` count stays reported for
+  operator visibility but no longer gates. See the run sheet's Wave 3
+  section for the exact walkthrough.
 
 ## Ship notes
 

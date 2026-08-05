@@ -25,6 +25,8 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId } from '../util/safe-id.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { normaliseIdKey } from '../util/character-id.js';
 
 export const castCreateRouter = Router();
 
@@ -58,17 +60,125 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
     return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
   }
 
-  const existingIds = new Set(cast.characters.map((c) => c.id));
+  /* `cast` is an unvalidated `readJson<CastFile>` read — `characterSchema` is
+     never applied on this route — so a row's `id` can be missing or
+     non-string on a corrupt/hand-edited cast.json. Pre-#2085 this was safe
+     because `existingIds` was only ever `.has()`-tested; review round 2
+     caught that the `normaliseIdKey` calls below now DEREFERENCE every id in
+     the set, so a non-string id would throw a `TypeError` into the route's
+     error handler instead of 500ing gracefully. Filter here, at the source —
+     the same guard `cast-resolve.ts`'s `resolve()` entry point applies for
+     the identical reason. */
+  const existingIds = new Set(
+    cast.characters.map((c) => c.id).filter((id): id is string => typeof id === 'string'),
+  );
+
+  /* srv-86 (#2040 follow-up) — an id retired by a merge (cast-id-history.json's
+     `supersededBy`) is still actively protecting every segment the retired
+     character rendered: resolution is exact-id-first (spec §4.3), so a LIVE
+     row minted with that exact id always wins over the history redirect,
+     silently, with no tie and no warning. This route mints ids from
+     user-supplied names, so a merge followed by an ordinary re-create (the
+     issue's repro: merge "anton" into "антон", then create a new "Anton")
+     would otherwise re-mint the retired id for a brand-new, unrelated
+     character and hijack the original's recorded audio.
+     Unlike the analyzer paths (`dropSupersededIdsReclaimedByLiveCast`),
+     which don't control the mint — the LLM produces the id, and a fresh
+     roster has legitimately reclaimed it — THIS route does control the
+     mint, and already has a collision-suffix path (below) for live-id
+     collisions. So the fix here is to never mint a history-protected id in
+     the first place, rather than drop the history entry that is actively
+     guarding real rendered segments to hand the id to an empty new
+     character. Treat history keys as additional "taken" ids for exactly
+     that reason.
+
+     Review round 1 (Critical) — the check must be NORMALISED, not raw. A
+     mint is always a `normaliseIdKey` fixed point (`safeId`'s output, and
+     both its own and this route's collision suffixes are already in
+     normal form), but a history key — or a pre-RC2 live id — is whatever
+     string was on disk, e.g. an underscore slug (`the_torment`) or LLM
+     free text. A raw-only check leaves the gap open in exactly the
+     dangerous direction: cast.json has `the_torment`, frozen segments
+     carry `the-torment` (tier-4 normalised match); merging `the_torment`
+     into some other character records `{the_torment: <target>}`;
+     re-creating "The Torment" mints `the-torment` (safeId's normal form),
+     which isn't a raw match for `the_torment` in either `existingIds` or
+     `historyKeys` — so the raw-only check would have let it through, tier
+     1 would then beat the tier-4 history redirect, and every segment
+     carrying the drifted spelling would hijack onto the new, empty
+     character. This is the exact `Unknown_Male`-vs-normalised defect
+     shape `repair-cast-id-drift.mjs`'s guard was already fixed for
+     (#2040 Wave 3 review) — carried over here.
+
+     This also closes a pre-existing SIBLING bug with no history involved
+     at all: a live `the_torment` with nothing retired, re-created as "The
+     Torment", used to mint `the-torment` — tier 1 then beats tier 4 for
+     the drifted-spelling segments AND collapses `byNormId` for both
+     spellings to `undefined` (two live rows sharing a normalised key),
+     killing tier 3 resolution for both. The normalised taken-check below
+     covers this case too, since it also normalises `existingIds`, not
+     only `historyKeys`. */
+  const history = await loadCastIdHistory(located.bookDir);
+  const historyKeys = new Set(Object.keys(history.supersededBy));
+  const takenIds = new Set([...existingIds, ...historyKeys]);
+  const takenNorm = new Set([...takenIds].map(normaliseIdKey));
+  const isTaken = (id: string) => takenIds.has(id) || takenNorm.has(normaliseIdKey(id));
+
   // safeId's own collision suffix is a hash of the NAME, checked once — a
   // second character sharing a name gets a distinct id, but a third
   // collides with the second (same name -> same hash, and safeId never
   // re-checks its own output). Guarantee uniqueness here regardless of how
-  // many characters share a name.
-  let newId = safeId(name, { taken: existingIds });
-  if (existingIds.has(newId)) {
+  // many characters share a name (or how many retired/live ids share a
+  // normalised name).
+  let newId = safeId(name, { taken: takenIds });
+  if (isTaken(newId)) {
     let n = 2;
-    while (existingIds.has(`${newId}-${n}`)) n += 1;
+    while (isTaken(`${newId}-${n}`)) n += 1;
     newId = `${newId}-${n}`;
+  }
+
+  /* Report, not silent (issue acceptance) — mirrors the operator-visible
+     log line Wave 2 added around `dropSupersededIdsReclaimedByLiveCast`,
+     though nothing is dropped here: the history entry (if any) survives
+     untouched and keeps protecting whatever it protects. Only the id this
+     NEW character receives differs from what an unprotected mint would have
+     picked. Computed against `existingIds` alone (not `takenIds`) so this
+     reports exactly the delta the fix above introduces — matched by
+     NORMALISED key (review round 1).
+
+     Review round 2 (M4) — this used to fire only for a history match, so
+     the sibling defect's avoidance (a live row that normalises the same,
+     no history involved — test 5) minted a suffixed id with no stated
+     reason, even though invariant 8 documents the report firing "when the
+     avoidance fires" for both. Widened to name whichever of the two this
+     route's `isTaken` check actually caught. Deliberately NOT widened to
+     every `unprotectedId !== newId`: a live id colliding on a RAW (not
+     merely normalised) match is the ordinary, pre-#2085 "second/third
+     character shares a name" path — already silently handled before this
+     fix existed, and not part of what it reports on. */
+  const unprotectedId = safeId(name, { taken: existingIds });
+  const unprotectedNorm = normaliseIdKey(unprotectedId);
+  const collidingHistoryKey = [...historyKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
+  const collidingLiveId = !existingIds.has(unprotectedId)
+    ? [...existingIds].find((id) => normaliseIdKey(id) === unprotectedNorm)
+    : undefined;
+
+  if (unprotectedId !== newId && collidingHistoryKey) {
+    /* Review round 2 (M3) — `history.supersededBy[collidingHistoryKey]` is
+       only what was RECORDED, not a guarantee the target is still a live
+       character (a chained or since-deleted target resolves nowhere per
+       `cast-resolve.ts`'s own liveness check). Describe the recorded entry,
+       not an active redirect, so this can't claim something untrue. */
+    console.log(
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+        `history-protected "${collidingHistoryKey}", recorded as retired in favour of ` +
+        `"${history.supersededBy[collidingHistoryKey]}"; minted "${newId}" instead.`,
+    );
+  } else if (unprotectedId !== newId && collidingLiveId) {
+    console.log(
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — normalises the same as ` +
+        `live character id "${collidingLiveId}"; minted "${newId}" instead.`,
+    );
   }
 
   const newCharacter: PersistedCharacter = {
