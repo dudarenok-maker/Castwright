@@ -211,9 +211,12 @@ down, each a deliberate controller ruling made during implementation:
   all three refusal states — missing, unparseable, and (independent-review
   Critical C1) validly-parsing-but-names-zero-characters, since guard 2
   consumes `cacheEntriesOf(cache)`, not "did it parse" (#2093 residual 1),
-  `shouldRefuseApplyForMissingCache`'s decision logic (#2093 residual 2 —
-  this covers the pure `apply && booksMissingCache > 0` decision only; its
-  wiring into `main()`'s actual exit path is untestable without
+  `shouldRefuseApplyForWithheldAutoRecord`'s decision logic (#2093 residual
+  2, renamed and re-scoped by owner-decided policy in review round 2 — this
+  covers the pure `apply && booksWithheldForMissingCache > 0` decision
+  only, gated on a book's actual withheld auto-record candidates rather
+  than the broader "cache is unusable" fact `planBookRepairs` also tracks;
+  its wiring into `main()`'s actual exit path is untestable without
   `server/dist` and is verified only by the live dry run, not by this
   suite), and `probePortRangeRefused`'s fail-closed behaviour across the
   whole `listenWithAutoRebind` auto-rebind range, not only the configured port
@@ -315,23 +318,26 @@ and the run sheet
   keeps the cast's existing id (or correctly records a genuine change) instead of
   drifting it further.
 - **A33** (Wave 3) — the repair pass's `--apply` run against the real workspace.
-  **Never executed as of this plan's `active` status, and currently BLOCKED**
-  from being executed. The dry run (re-measured 2026-08-05 after
-  independent-review Critical C1, `CACHE_DIR` correctly pointed at the
-  checkout that ran this workspace's analysis) reports: **3 auto-recordable
-  aliases covering 27 segments**, **93 ids reported for a human decision
-  covering 161 segments** (corrected from a prior 93 — see below), **17
-  re-render rows covering 120 segments**, **0 books modified**, **1 book
-  missing analysis-cache evidence** (up from a previously-reported `0` —
-  *Unlocked*'s cache file parses but names zero characters, which C1 found
-  the narrower "exists and parses" gate had missed). `--apply` refuses
-  outright while that last number is nonzero (round-2 review fail-closed fix,
-  strengthened twice more by #2093 residual 1 and by C1 — a missing,
-  unparseable, OR evidence-free cache file all now defeat the cross-source
-  ambiguity veto's ability to see cache ambiguity), so the acceptance run
-  cannot proceed until *Unlocked*'s analysis cache is regenerated or another
-  resolution is decided. See the run sheet's Wave 3 section for the exact
-  walkthrough and current blocker detail.
+  **Never executed as of this plan's `active` status; NOT currently blocked.**
+  The dry run (re-measured 2026-08-05 after owner-decided policy, review
+  round 2, `CACHE_DIR` correctly pointed at the checkout that ran this
+  workspace's analysis) reports: **3 auto-recordable aliases covering 27
+  segments**, **93 ids reported for a human decision covering 161 segments**
+  (corrected from a prior 93 — see below), **17 re-render rows covering 120
+  segments**, **0 books modified**, **1 book missing analysis-cache
+  evidence, 0 books with an auto-record withheld because of it**. These are
+  now two DIFFERENT numbers (independent-review Critical C1 found a
+  validly-parsing-but-empty cache file — *Unlocked*'s — slipped past the
+  original "exists and parses" gate; the repo owner then decided that a
+  book's raw missing-cache status should stop gating `--apply` on its own,
+  since a book with unusable cache evidence but nothing this pass would
+  ever have auto-recorded for it — *Unlocked* currently has zero orphaned
+  characterIds — has nothing at stake). `--apply` refuses only when a
+  book's blind ambiguity veto actually withheld a real auto-record
+  candidate (`booksWithheldForMissingCache`, currently `0`) — the
+  broader `booksMissingCache` count stays reported for operator visibility
+  but no longer gates. See the run sheet's Wave 3 section for the exact
+  walkthrough.
 
 ## Ship notes
 
