@@ -3,219 +3,298 @@ status: draft
 date: 2026-08-06
 ---
 
-# Attribution collapse visibility: say what happened, where the user will see it
+# Attribution collapse visibility: measure it first, then say what happened
 
 Design work behind **#1984** — _"Attribution collapse is invisible: the
 dropped-quotes panel shows the last batch only, in a transient view, and never
 the effect."_
+
+> **Revision 2.** Revision 1 went through the mandatory adversarial review gate
+> and did not survive it. The gate found the headline fix was a **placebo**, the
+> metric's numerator matched **one of two** narrator ids and missed the orphan
+> class entirely, the threshold was **uncalibrated**, and the "shared module"
+> safeguard for the library badge **did not exist**. Every finding below was
+> re-verified against the tree before folding. §Review findings records the
+> round.
 
 ## Problem
 
 On 2026-07-14 a real book in the library — _Der Auftrag von Coalfall_ (de) —
 lost **103 of its 144 quoted sentences to the narrator** during analysis.
 Dialogue collapsed from 178 lines to 41; ten of thirteen cast members ended up
-with almost nothing to say. The book then sat that way for **17 days**, and the
-damage was found only while chasing an unrelated bug. A library-wide sweep found
-one other affected book (_Юный дрессировщик_, ru, 78%). Every other book in the
-library measured ≤ 15%, most 0–3%.
+with almost nothing to say. The book then sat that way for **17 days**, found
+only while chasing an unrelated bug. A library-wide sweep found one other
+affected book (_Юный дрессировщик_, ru, 78%). Every other book measured ≤ 15%,
+most 0–3%.
 
 The signal was not absent. It could not have communicated the damage:
 
 1. **Latest batch only.** `DroppedQuotesPanel`
    (`src/components/analysing/phase-card.tsx:252`) narrows to
-   `batches[batches.length - 1]`. The book accumulated 16 dropped attributions
-   across 5 batches; the final batch dropped 1. The user was shown _"Verifier
-   dropped 1 quote across 1 character."_
+   `batches[batches.length - 1]`. The book's ledger held 16 dropped
+   attributions across 5 batches; the last held 1. The user was shown
+   _"Verifier dropped 1 quote across 1 character."_
 2. **Styled to recede.** A `<details>` at `text-[11px] text-ink/60`.
 3. **Transient.** It exists only on the analysing screen. Once analysis
-   finished there was no residue anywhere — no badge, no banner, nothing on the
-   book.
+   finished there was no residue anywhere.
 4. **It reports the cause, not the effect.** "N quotes dropped" is a
    verifier-internal statistic. The number that decides whether the book is
    usable is _"103 of 144 quoted sentences are now attributed to the narrator"_,
-   and that number is never computed anywhere.
+   and it is never computed anywhere.
 
 Point 4 is the crux: **the two numbers are not proportional.** Dropping one
 quote can re-attribute a long run of dialogue; dropping ten can be harmless.
-Here, 16 drops produced a 72% collapse. A user cannot infer the second number
-from the first.
+Here, 16 drops produced a 72% collapse.
 
 ### What this is not
 
-The corruption itself was produced by the pre-fix analyzer of
+The corruption was produced by the pre-fix analyzer of
 [#1598](https://github.com/dudarenok-maker/Castwright/issues/1598), which closed
-11 minutes after this book's journal was written. Re-analysis on current `main`
-takes the book from 72% → 0% and 41 → 178 dialogue lines with all 13 voice
-assignments preserved, so #1598's fix is confirmed good on real data.
-
-**This spec changes no analyzer behaviour.** It is about the fact that when
-attribution collapses — for any reason, including future ones — the product does
-not tell the user in terms they can act on, and the damage persists silently
-into every downstream render.
+11 minutes after this book's journal was written. **This spec changes no
+analyzer behaviour.** It is about the fact that when attribution collapses — for
+any reason, including future ones — the product does not tell the user in terms
+they can act on.
 
 ## Decisions taken
 
-Recorded here because each was a product call, not an engineering one:
-
 | # | Decision |
 |---|---|
-| D1 | **Warn everywhere; require an acknowledgement before generating; never permanently refuse.** A collapsed book can always be generated — but not by accident. |
-| D2 | **One book-level threshold decides the state; per-chapter figures are shown as detail** and never trigger anything on their own. |
-| D3 | **Badge on the library card AND a banner in the Cast view.** Auto-clears when a re-analysis drops it under the line; an explicit per-book dismiss handles the false positive. |
-| D4 | **A dismissal re-arms on every new analysis.** A new run is new evidence. |
-| D5 | **Copy leads with the effect; the verifier's cause is available but secondary.** |
-| D6 | **The analysing-view panel is fixed in place (cumulative, not last-batch); the collapse warning appears at the end of the run, not live mid-run** — the figure swings wildly over a novel's opening chapters. |
-| D7 | **Stamp for the library, live compute for the detail surfaces** (§Storage). |
+| D1 | **Warn everywhere; require an acknowledgement before generating; never permanently refuse.** |
+| D2 | **Book-level share OR any single chapter crosses the line.** Revised in revision 2 — see R-M8. |
+| D3 | **Badge on the library card AND a banner in the Cast view.** Auto-clears on a good re-analysis; an explicit per-book dismiss handles false positives. |
+| D4 | **A dismissal re-arms whenever the attribution data changes.** |
+| D5 | **Copy leads with the effect; the verifier's cause is secondary.** |
+| D6 | **The analysing-view panel sums the whole ledger** and labels it honestly. Revised in revision 2 — see R-C1. |
+| D7 | **Stamp for the library, live compute for the detail surfaces.** |
+| D8 | **Ship in two waves: measure, then decide.** The threshold is set from the real library, not from a sweep whose method no longer exists. See R-C3. |
+| D9 | **"Narrator" means every id that renders in the narrator's voice** — both members of `NARRATOR_CHARACTER_IDS`, plus unresolvable ids. See R-C2. |
+| D10 | **The Cast-view re-run confirms first when rendered audio exists.** |
+
+---
+
+# Wave 1 — measure
+
+Wave 1 ships **no threshold and no UI.** It ships the metric and a read-only
+script that prints the figure for every book in the real library, so the
+threshold in Wave 2 is set from data rather than from a sweep whose counting
+method is not in the tree.
 
 ## The metric
 
 New pure module `server/src/store/attribution-health.ts`. No I/O, no model call.
 
 **Universe.** Sentences from the book's analysis cache
-(`server/handoff/cache/{manuscriptId}.json`), minus chapters marked `excluded`
-in `state.json` — EPUB back-matter would otherwise skew the denominator — and
-minus sentences flagged `excludeFromSynthesis` (import residue: page numbers,
-running headers).
+(`cache.chapters: Record<number, SentenceOutput[]>`,
+`server/src/store/analysis-cache.ts:79`), minus chapters marked `excluded` in
+`state.json` (`server/src/workspace/scan.ts:77`) — EPUB back-matter would
+otherwise skew the denominator — and minus sentences flagged
+`excludeFromSynthesis` (`server/src/handoff/schemas.ts:135`).
 
-**Numerator and denominator.**
+**Denominator.** Sentences where `isSpokenLine(text)` is true, **reusing
+`server/src/analyzer/narrator-default.ts:29` verbatim, not a second copy.**
+Whatever the analyzer treats as a spoken line is what we measure; a divergent
+second implementation would report a number the analyzer does not act on.
 
-- Denominator: sentences where `isSpokenLine(text)` is true, **reusing
-  `server/src/analyzer/narrator-default.ts:29` verbatim, not a second copy.**
-  Whatever the analyzer treats as a spoken line is what we measure; a divergent
-  second implementation would report a number the analyzer does not act on.
-- Numerator: of those, sentences whose speaker resolves to `narrator`.
+**Numerator (D9).** Of those, sentences whose speaker renders in the narrator's
+voice. That is three cases, not one:
 
-**Resolution, not raw comparison.** The sentence's `characterId` goes through
-`buildCastResolver` (`server/src/store/cast-resolve.ts`) before the narrator
-test, per the CLAUDE.md rule that an analyzer `characterId` is only an alias
-into `cast.json`. A raw `=== 'narrator'` comparison would miscount any book
-whose ids drifted — the #2040 class of bug.
+| Case | Why it counts |
+|---|---|
+| Resolved id ∈ `NARRATOR_CHARACTER_IDS` | `server/src/analyzer/narrator-identity.ts:26` — `['narrator', 'char-narrator']`. Centralised in #1895 precisely because it had been inline-copied across server modules. |
+| `buildCastResolver.resolve()` returns `undefined` | `server/src/store/cast-resolve.ts:105` — an unresolvable id. At render time `server/src/tts/synthesise-chapter.ts:1553` substitutes the narrator for any group whose `characterId` isn't in `cast`. Audibly narrator, so it counts. |
+| — | Everything else does not count. |
 
-**Thresholds** — hardcoded exported constants. Deliberately **not** registry
-knobs: nobody asked for them to be tunable, and a knob would owe an
-Advanced-Settings row and a config-sync entry for no benefit.
+Resolution goes through `buildCastResolver` per the CLAUDE.md rule that an
+analyzer `characterId` is only an alias into `cast.json`.
 
-```
-COLLAPSE_SHARE_THRESHOLD = 0.40   // book is collapsed at or above
-MIN_SPOKEN_FOR_VERDICT   = 20     // fewer spoken sentences → no verdict at all
-MIN_SPOKEN_PER_CHAPTER   = 5      // fewer → chapter shows "—", not a misleading %
-```
+The two contributing cases are **reported separately** (`narratorIdSpoken`,
+`orphanSpoken`) so the Wave 1 measurement can tell "attribution collapsed" from
+"ids drifted" — the #2040 class — rather than blending them into one number.
 
-0.40 sits clear of the worst healthy book measured (15%) and well under both
-damaged books (72%, 78%).
-
-**Shape:**
+**Shape (Wave 1):**
 
 ```ts
-interface AttributionHealth {
+interface AttributionMeasurement {
   spokenTotal: number;
-  narratorSpoken: number;
-  share: number | null;          // null when spokenTotal < MIN_SPOKEN_FOR_VERDICT
-  collapsed: boolean;            // share !== null && share >= COLLAPSE_SHARE_THRESHOLD
-  chapters: {
-    chapterId: number;
-    spokenTotal: number;
-    narratorSpoken: number;
-    share: number | null;        // null under MIN_SPOKEN_PER_CHAPTER
-  }[];
-  quietCastCount: number;        // cast members other than narrator with < 2 spoken lines
-  castCount: number;             // cast members other than narrator
-  analysedAt: string;            // set ONLY by an analysis run — the dismissal key
-  measuredAt: string;            // bumped by any recompute
+  narratorIdSpoken: number;      // resolved to a NARRATOR_CHARACTER_IDS member
+  orphanSpoken: number;          // unresolvable id → renders as narrator
+  narratorSpoken: number;        // the sum; the figure the warning quotes
+  dashOnlySpoken: number;        // diagnostic — see below
+  quietCastCount: number;        // non-narrator cast members with < 2 spoken lines
+  castCount: number;             // non-narrator cast members
+  chapters: { chapterId: number; spokenTotal: number; narratorSpoken: number }[];
 }
 ```
 
-**The two timestamps are load-bearing.** Under D7 the stamp is refreshed
-opportunistically by detail-surface reads. If the dismissal keyed on
-`measuredAt`, a dismissed book would re-arm the next time anyone opened it.
-`analysedAt` moves only when an analysis run writes it, so D4 ("re-arms on every
-new analysis") means exactly that and nothing more.
+**`dashOnlySpoken` is the calibration diagnostic.** `isSpokenLine` returns true
+for **any** sentence beginning `-`, `–`, `—`, `&mdash;` or `&ndash;`
+(`narrator-default.ts:32`), not only for quote marks. In a Russian or French
+novel — or any EPUB whose conversion prefixes continuation lines with a dash —
+narration asides land in **both** numerator and denominator and inflate the
+share. Counting how much of each book's denominator is dash-only, with no quote
+mark present, is what tells us whether 40% is a sane line or a trap. The second
+known-damaged book is Russian, where the em-dash is both the dialogue mark and
+ordinary punctuation.
 
-**When there is no prior stamp** — a book analysed before this shipped, read by a
-detail surface before the backfill runs — the refresh has no `analysedAt` to
-preserve. It uses the analysis cache file's mtime, identical to what the backfill
-script would have written. The two paths must agree, or whichever runs second
-would silently re-arm a dismissal the other had honoured.
+## The measurement script
+
+`scripts/measure-attribution.mjs` — read-only, writes nothing to any book.
+Walks the workspace, prints one row per book (title, language, `spokenTotal`,
+`narratorSpoken`, share, `orphanSpoken`, `dashOnlySpoken`) sorted by share
+descending, plus the worst chapter per book, and writes a JSON report to the
+scratch path for follow-up.
+
+Its output is the input to the Wave 2 threshold decision. Pure helpers
+unit-tested in `scripts/tests/`, matching the `build-companion-apk.test.mjs`
+pattern.
+
+## Wave 1 acceptance criteria
+
+1. `computeAttributionMeasurement` is pure, has no I/O, and reuses
+   `isSpokenLine` and `NARRATOR_CHARACTER_IDS` rather than re-implementing
+   either.
+2. An unresolvable `characterId` counts toward `narratorSpoken` via
+   `orphanSpoken`, and is separately visible.
+3. The script runs against the live workspace and prints a row for every book,
+   skipping and reporting books with no cache.
+4. No threshold constant, no UI, no persisted state exists yet.
+
+---
+
+# Wave 2 — warn
+
+Built only after the Wave 1 numbers are read. Everything below is settled
+**except** the numeric threshold, which Wave 1 sets.
+
+## Trigger (D2, revised)
+
+Revision 1 triggered on the book-level share alone. That leaves partial damage
+silent: a 40-chapter book where two chapters collapse completely scores
+`60/1200 = 5%` and shows nothing — two hours of audio in the wrong voice, which
+is the exact expense the issue says this exists to prevent.
+
+**A book is collapsed when the book-level share crosses the threshold, OR when
+any single chapter with at least `MIN_SPOKEN_PER_CHAPTER_TRIGGER` spoken
+sentences crosses it.**
+
+```
+COLLAPSE_SHARE_THRESHOLD        = <set by Wave 1>
+MIN_SPOKEN_FOR_VERDICT          = 20   // book-level floor
+MIN_SPOKEN_PER_CHAPTER_TRIGGER  = 20   // a chapter may only TRIGGER above this
+MIN_SPOKEN_PER_CHAPTER_DISPLAY  = 5    // a chapter shows a % above this
+```
+
+The display floor and the trigger floor are deliberately different, and
+conflating them is the easy mistake: a 6-spoken-line chapter is worth showing a
+number for and is not worth flagging a book over.
+
+Hardcoded exported constants, **not** registry knobs — nobody asked for them to
+be tunable, and a knob would owe an Advanced-Settings row and a config-sync
+entry for no benefit.
 
 ## Storage and data flow
 
-`GET /api/library` never reads the analysis cache, and it must not start:
-measured on the reference box, the cache is **76 files, 24.9 MB total, largest
-3.4 MB.** Loading all of it to render a badge on every library navigation is not
-viable. Hence the split.
+`GET /api/library` never reads the analysis cache and must not start: measured
+on the reference box, the cache is **76 files, 24.9 MB total, largest 3.4 MB.**
+Loading that to render a badge on every library navigation is not viable.
 
-### Two files, not one
+### `analysedAt` is a property of the data, not of who wrote it
 
-The derived counts and the user's dismissal are different kinds of data — one is
-a cache anything may overwrite, the other is user intent nothing may lose.
-Storing them together would make every opportunistic refresh a read-merge-write
-over the dismissal, with a race that silently discards it.
+`saveAnalysisCache` already stamps `updatedAt` on **every** write
+(`server/src/store/analysis-cache.ts:146`). That is the identity used:
+
+```
+analysedAt = cache.updatedAt   (fallback: cache file mtime when the field is
+                                absent, i.e. a cache written before the field
+                                existed — `updatedAt?` is optional at :109)
+```
+
+This is load-bearing for three separate reasons:
+
+- **It fixes the crashed-run hole (R-M6).** Phase 1 writes the cache per chapter.
+  A run that dies mid-Phase-1 leaves a half-attributed cache but never reaches
+  the success-path stamp write. Keyed on a write timestamp, a dismissal made
+  before the crash would suppress the damage on every surface. Keyed on
+  `cache.updatedAt`, the crash moved it, so the dismissal re-arms.
+- **It removes the race revision 1 claimed to have removed (R-M2).** When
+  `analysedAt` is a pure function of the cache, no write ordering between the
+  backfill, the refresh, and the analysis routes can orphan a dismissal. Nothing
+  needs a lock, because nothing is racing over a value anyone mints.
+- **It survives a backup restore or a workspace move**, which file mtime does
+  not (R-Mi4).
+
+Consequence, accepted: a per-chapter retry moves `cache.updatedAt` and so
+re-arms a dismissal for the whole book. With a per-chapter trigger now in play
+that is the right behaviour — and if the retry fixed the chapter, the warning
+auto-clears without the user doing anything.
+
+### Two files
 
 | File | Written by | Contains |
 |---|---|---|
-| `.audiobook/attribution-health.json` | analysis completion, opportunistic refresh, backfill script | the counts, `analysedAt`, `measuredAt` |
+| `.audiobook/attribution-health.json` | analysis completion, any detail-surface read, the backfill script | the counts + `analysedAt`. **Pure derived cache — no user intent.** |
 | `.audiobook/attribution-dismissal.json` | the dismiss endpoint only | `{ dismissedForAnalysedAt: string }` |
 
-Both get path constants in `server/src/workspace/paths.ts` alongside
-`droppedQuotesJsonPath`. Neither touches `cast.json`, so no `withCastLock`
-involvement and no new lock class.
+Path constants join `droppedQuotesJsonPath` in `server/src/workspace/paths.ts`.
+Neither touches `cast.json`, so no `withCastLock` involvement and no new lock
+class. There is no `measuredAt`: revision 1 introduced it as "load-bearing" and
+gave it no consumer.
 
 ### Write sites at analysis completion
 
-The same two places that already append a dropped-quotes batch:
-`analysis-stream` and `analysis-chapters` in `server/src/routes/analysis.ts`.
-
-**`analysis-chapters` is a subset re-run and must recompute over the whole
-book,** not the chapters it just did. A subset run that fixes three chapters
-still moves the book-level figure, and it does count as new evidence — so it
-stamps a fresh `analysedAt` and re-arms any dismissal.
+`persistDroppedQuotesBatch`'s three call sites in `server/src/routes/analysis.ts`
+— `:3184`, `:3824`, `:5740` — are where the stamp is refreshed too.
+`analysis-chapters` (`:5740`) is a **subset** re-run and must recompute over the
+**whole book**, not the chapters it just did.
 
 ### API
 
 `openapi.yaml` is edited first (it is the type source of truth), then
 `npm run openapi:types`.
 
-- `GET /api/books/:bookId/attribution-health` — computes live from that book's
-  cache, refreshes the stamp as a side effect while preserving `analysedAt`, and
-  returns `AttributionHealth` plus two merged fields the store shape does not
-  carry:
+- `GET /api/books/:bookId/attribution-health` — computes live, rewrites the
+  stamp, returns:
 
   ```ts
-  type AttributionHealthResponse = AttributionHealth & {
+  type AttributionHealthResponse = AttributionMeasurement & {
+    share: number | null;                             // null under the floor
     state: 'ok' | 'collapsed' | 'unmeasurable';
-    dismissed: boolean;    // dismissedForAnalysedAt === analysedAt
+    triggeredBy: 'book' | 'chapter' | null;
+    worstChapterId: number | null;
+    analysedAt: string;
+    dismissed: boolean;
   };
   ```
 
-  `state` is derived server-side so the three placements and the library badge
-  cannot drift into four different readings of the same numbers.
-- `POST /api/books/:bookId/attribution-health/dismiss` — body
-  `{ analysedAt: string }`, writes the dismissal file.
-- `GET /api/library` — each book gains `attributionCollapsed: boolean`, read
-  from the stamp and already net of the dismissal.
+- `POST /api/books/:bookId/attribution-health/dismiss` — **takes no body.** The
+  server reads `analysedAt` from the cache itself and writes the dismissal. A
+  client-supplied timestamp (revision 1) could go stale between the client's GET
+  and its POST, making the dismiss button do nothing, silently (R-M7).
+- `GET /api/library` — each book gains
+  `attributionState: 'ok' | 'collapsed' | 'unmeasurable'`. **Not a boolean:** a
+  boolean cannot distinguish `unmeasurable` from `ok`, which is how revision 1
+  reproduced the silence it was written to fix (R-M5).
+
+### Keeping the badge and the banner honest
+
+The badge reads the stamp; the detail surfaces compute live. They can disagree —
+exclude some back-matter and the book becomes healthy while the badge persists.
+Revision 1's answer, "the stamp catches up on the next read", is circular: the
+next read *is* the detail surface, which the badge exists to drive you to.
+
+So: **a detail-surface fetch also patches that book's `attributionState` in
+`library-slice.ts`.** The badge updates in the same session, with no refetch and
+no cache read on the library path.
 
 ### Backfill
 
-`scripts/backfill-attribution-health.mjs` walks the workspace and stamps every
-book that lacks one, using the analysis cache file's mtime as `analysedAt`.
-Books with no cache are skipped and reported. Pure helpers unit-tested in
-`scripts/tests/`, matching the `build-companion-apk.test.mjs` pattern. Run once
-after deploy; the two known damaged books badge immediately.
-
-### Frontend state
-
-The library badge comes free from the existing `library-slice.ts` payload. The
-three detail surfaces share one small `attribution-slice.ts`, fetched once when
-a book is opened, with an optimistic dismissal — rather than three independent
-`useEffect` fetches. The generation acknowledgement reads the same slice via the
-existing `start-generation-flow.ts`.
+`scripts/backfill-attribution-health.mjs` stamps every book that lacks one.
+Because `analysedAt` comes from the cache, the backfill and the live path cannot
+disagree about it. Books with no cache are skipped and reported.
 
 ## Surfaces and copy
 
-One shared component, `src/components/attribution-collapse-notice.tsx`, in three
-placements plus a badge and a bug fix.
-
-### The notice
+One shared component, `src/components/attribution-collapse-notice.tsx`.
 
 ```
 ⚠  Most of this book's dialogue is being read by the narrator.
@@ -223,162 +302,261 @@ placements plus a badge and a bug fix.
    72% of quoted lines (103 of 144) went to the narrator.
    10 of 13 cast members have almost nothing to say.
 
-   The verifier dropped 16 quotes across 5 passes in this
-   analysis, which is often the cause.
+   The verifier dropped 16 quotes across 5 analysis passes,
+   which is often the cause.
 
    [ Re-run analysis ]  [ Chapter breakdown ▾ ]
    [ Dropped quotes ▾ ] [ This book is fine — dismiss ]
 ```
 
-- **"almost nothing to say"** is defined, or it cannot be computed: cast members
-  other than the narrator with **fewer than 2** spoken sentences attributed to
-  them (`quietCastCount` / `castCount`). Same single pass as the metric.
-- The cause line is **omitted entirely** when the run dropped no quotes.
-  Collapse has other causes, and a "dropped 0 quotes" line would misdirect.
-- `Chapter breakdown` and `Dropped quotes` are collapsed `<details>`. The
-  breakdown renders the per-chapter table; chapters under
-  `MIN_SPOKEN_PER_CHAPTER` show `—`.
+- **"almost nothing to say"** is defined or it cannot be computed: non-narrator
+  cast members with **fewer than 2** spoken sentences.
+- When `triggeredBy === 'chapter'`, the heading names the chapter instead:
+  _"Chapter 3's dialogue is being read by the narrator."_ A book-level 5% with a
+  96% chapter must not open with "most of this book's dialogue".
+- The cause line is **omitted entirely** when the ledger is empty. Collapse has
+  other causes, and "dropped 0 quotes" would misdirect.
+- Chapters under `MIN_SPOKEN_PER_CHAPTER_DISPLAY` show `—`.
 
 ### Placements
 
 | Surface | Treatment |
 |---|---|
-| `src/views/confirm-cast.tsx` | Full notice above the cast list. `Re-run analysis` wires to the existing `onReanalyse` prop. |
-| `src/views/cast.tsx` | Full notice at the top of the view, where the empty cast members are visibly the symptom. |
-| `src/views/generation.tsx` / `src/store/start-generation-flow.ts` | Full notice as the acknowledgement gate. Buttons become `[ Re-run analysis ]` and `[ Generate anyway ]`. Asked on **every** generation start until fixed or dismissed. |
-| `src/components/library/library-status-ui.tsx` | Badge only — warning icon + `Attribution`, no number. |
+| `src/views/confirm-cast.tsx` | Full notice above the cast list. **No `Re-run analysis` button** — `:240-244` already renders "Re-analyse manuscript"; a second identical button is noise. |
+| `src/views/cast.tsx` | Full notice at the top, where the empty cast members are visibly the symptom. |
+| `src/views/generation.tsx` / `src/store/start-generation-flow.ts` | The acknowledgement gate. |
+| `src/components/library/library-grid.tsx` **and** `src/components/library/library-table.tsx` | The badge, in **both**. |
 
-The badge goes through the shared status module so the **grid and the table**
-both get it; adding it to `library-grid.tsx` alone would leave the table view
-silent.
+**The badge has no shared render path (R-M1).** `library-status-ui.tsx:24`
+exports only `STATUS_UI: Record<LibraryBookStatus, StatusMeta>` — a map, no
+component; the grid (`:167`) and the table (`:266`) each render their own pill.
+Attribution-collapse is orthogonal to `LibraryBookStatus` (a book can be
+`complete` *and* collapsed), and `library-status-ui.test.ts` pins a hardcoded
+status list, so a new key is not representable there. The badge is therefore a
+**new small shared component** rendered from both files — and the test asserts
+it in both, because "I put it in the shared module" is precisely the false
+comfort revision 1 shipped.
 
-Dismissal clears all four at once — it writes `dismissedForAnalysedAt`, and
-every surface reads the same slice.
+`unmeasurable` renders a distinct neutral marker in the library, not nothing.
 
-### The panel fix
+### The generation gate (R-M3)
 
-`phase-card.tsx:252`'s `batches[batches.length - 1]` becomes a sum over the
-current run's batches. "The run" needs an identity the ledger does not currently
-have — batches carry only `recordedAt` and `route`. So `DroppedQuotesBatch`
-gains a **`runId`**: an ISO timestamp minted at run start and threaded to the
-batch write in both analysis routes.
+`start-generation-flow.ts` is not the only entry: `requestStartGeneration` is
+dispatched from `start-generation-flow.ts:83` and `:93`, `layout.tsx:1823` (tier
+prompt), and `clone-readiness-gate.tsx:238` ("proceed anyway"), and
+`generation-stream-middleware.ts:72` enqueues on the action type.
 
-Backward compatible: the file is append-only and existing batches have no
-`runId`, so they group as a single legacy run. Without this, "sum across
-batches" can only mean "sum across all history" — which would show a
-re-analysed, now-healthy book its old failures forever, since the ledger is
-never truncated.
+Therefore:
+
+- The attribution gate is the **first** gate in the thunk, before voice-readiness
+  (`:56`), clone-readiness (`:69`), and the tier prompt (`:96`). The other three
+  dispatch sites are *continuations of gates that run after it*, so placing it
+  first leaves them correct and unbypassable.
+- "Generate anyway" **re-enters the thunk** with `attributionAcknowledged: true`.
+  It must not dispatch `requestStartGeneration` directly — that pattern
+  (`clone-readiness-gate.tsx:238`) is correct for the *last* gate and would, from
+  the first, skip the voice-readiness, clone, and tier gates entirely.
+- A test asserts gate composition: a Qwen book that is both attribution-collapsed
+  and voice-unready must see **both** gates, in order.
+
+### The Cast-view re-run (D10, R-Mi1)
+
+`confirm-cast.tsx`'s `onReanalyse` (wired at `:240-244`, labelled "Re-analyse
+manuscript") resolves to a handler that dispatches
+`changeLogActions.wipeBookShapeEvents()` (`src/routes/index.tsx:685`) then
+`uiActions.reanalyse()`. Fired from the `ready`-stage Cast view on an
+already-generated book, that wipes chapter-id-bearing history and invalidates
+rendered audio.
+
+So in the Cast view the button confirms first **when the book has rendered
+audio**, naming what re-analysis will invalidate. On a book with no audio it
+fires directly.
+
+### The panel fix (D6, revised — R-C1)
+
+Revision 1 proposed grouping batches by a new `runId`. **A run writes exactly
+one batch.** `persistDroppedQuotesBatch` has three call sites, none in a loop,
+and `:3184`/`:3824` are mutually exclusive branches;
+`server/src/store/dropped-quotes.ts:55` states it outright — _"Multiple batches
+accumulate across **re-runs**."_ The incident's 5 batches were 5 separate runs.
+Under `runId` grouping the panel would find one batch and render "dropped 1
+quote across 1 character" — byte-identical to today. It was a placebo, and its
+"fails before, passes after" test constructed a fixture no writer can produce.
+
+**The fix is to sum the whole ledger and label it honestly:**
+
+> Verifier dropped 16 quotes across 5 analysis passes
+
+replacing today's `latest.totalDropped` and its `· latest batch` disclaimer
+(`phase-card.tsx:264-266`). No `runId`, no schema change, no threading through
+the routes. This reproduces exactly the number #1984 says the user should have
+seen.
+
+The cost is the one revision 1 used to justify `runId`: a re-analysed, healthy
+book still shows its old failures. That is acceptable because the label says
+"across 5 analysis passes" rather than implying they are current, and because
+the collapse notice — which is what the user acts on — appears only when the
+book is actually collapsed now.
 
 ## Failure modes
 
-The computation **fails open**: a book whose cache is absent or corrupt must not
-500 the library or block generation. But failing open is how a book goes silent,
-which is the entire complaint in #1984. So there are **three** states, not two:
+The computation **fails open**, but failing open is how a book goes silent, so
+there are **three** states and the library shows all three:
 
 | State | Library | Cast view |
 |---|---|---|
 | `ok` | nothing | nothing |
-| `collapsed` | badge | full notice |
-| `unmeasurable` | nothing | quiet line: _"Attribution health couldn't be measured for this book."_ |
+| `collapsed` | warning badge | full notice |
+| `unmeasurable` | neutral marker | _"Attribution health couldn't be measured for this book."_ |
 
-A book that has never been analysed is `ok`, not `unmeasurable` — there is
-nothing to measure yet. `assertCacheChaptersShape`
-(`server/src/store/analysis-cache.ts`) already throws a named error on
-corruption; we catch it, log it, and land in `unmeasurable` rather than
-swallowing it into silence.
+A book never analysed is `ok`, not `unmeasurable`.
+
+`assertCacheChaptersShape` throws **inside `loadAnalysisCache`**
+(`analysis-cache.ts:124`), not at measure time, so the catch must wrap the
+**load**, not the metric.
+
+**The cache is gitignored and lives outside the workspace** (`.gitignore:94`,
+`CACHE_DIR` in `analysis-cache.ts`). A server reinstall or workspace move makes
+every book `unmeasurable` — the feature turning itself off wholesale. That is
+why `unmeasurable` is visible in the library: the failure announces itself
+instead of reading as a clean bill of health.
 
 ### Edge cases, decided
 
 | Case | Behaviour |
 |---|---|
-| Zero spoken sentences (non-fiction, pure narration) | `share: null`, not collapsed. There is nothing to collapse. |
-| Fewer than 20 spoken sentences | `share: null`, no verdict. |
-| Dismissal file present, `analysedAt` mismatched | Ignored — re-armed. |
-| User excludes back-matter chapters after analysis | Live compute on the detail surfaces picks it up immediately; the stamp catches up on the next read. Consistent with D7. |
+| Zero spoken sentences (non-fiction, pure narration) | `share: null`, not collapsed. |
+| Under 20 spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. |
+| Chapter with 6 spoken lines, all narrator | Shows `100%` in the breakdown; does **not** trigger (under the 20-line trigger floor). |
+| User excludes back-matter after analysis | Live compute picks it up; the library badge is patched in the same session. |
 | First-person book | See below. |
 
-### Known false positive: first-person narration
+### Known false positives
 
-The analyzer resolves a first-person speaker to a **roster character**
-(`server/src/analyzer/dialogue-structure/evidence.ts:28`, `windows.ts:56`), not
-to `narrator`, so a healthy first-person book should not trip this. If that
-resolution fails, the protagonist's dialogue legitimately lands on `narrator`
-and the book reads as collapsed when it is not.
+- **Dash-prefixed narration.** The larger of the two, and unmentioned in
+  revision 1. Quantified in Wave 1 via `dashOnlySpoken`; the threshold is set
+  against it. Deliberately **not** fixed by changing `isSpokenLine`, which the
+  analyzer also acts on — that is a much wider blast radius and its own piece of
+  work.
+- **First-person narration.** The analyzer resolves a first-person speaker to a
+  roster character (`dialogue-structure/evidence.ts:28`, `windows.ts:56`), so a
+  healthy first-person book should not trip this. If that resolution fails, the
+  protagonist's dialogue legitimately lands on `narrator`.
 
-This is why D3 keeps a manual dismiss. It is a documented limitation, not a
-defect to be designed away.
+Both are why D3 keeps a manual dismiss. Documented limitations, not defects to
+design away.
 
 ## Testing
 
-**Pure metric (Vitest, server).** Thresholds at 0.39 / 0.40 / 0.41; the
-20-sentence floor; chapter floor rendering `null`; excluded chapters and
-`excludeFromSynthesis` removed from **both** numerator and denominator; a
-sentence carrying a retired id still counting as narrator through
-`buildCastResolver`; zero spoken → `null`; the `quietCastCount` "< 2 lines"
-count.
+**Wave 1 — pure metric (Vitest, server).** `orphanSpoken` counts an unresolvable
+id; `narratorIdSpoken` counts **both** `narrator` and `char-narrator` — the
+`char-narrator` case is asserted explicitly, since matching only `'narrator'` is
+the exact regression #1895 centralised the constant to prevent; excluded chapters
+and `excludeFromSynthesis` removed from both numerator and denominator; zero
+spoken → `0/0` handled; `quietCastCount` at exactly 1 and 2 lines;
+`dashOnlySpoken` counts a dash-prefixed sentence with no quote mark and does not
+count a dash-prefixed sentence that also contains one.
 
-**Store.** Stamp read/write; dismissal read/write; refresh preserves
-`analysedAt` while bumping `measuredAt`.
+**Wave 2 — trigger.** Book-level at threshold ±1 sentence; a chapter trigger
+firing while the book-level share is far below it; a chapter at 100% with 19
+spoken lines **not** triggering and the same chapter with 20 triggering;
+`triggeredBy` and `worstChapterId` correct in both directions.
 
-**Routes.** GET computes and refreshes; POST dismiss; a **subset** re-run
-recomputes the whole book and re-arms a dismissal; corrupt cache →
-`unmeasurable`, not 500; `GET /api/library` carries `attributionCollapsed` net
-of the dismissal.
+**Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
+only when the field is absent; the dismiss endpoint resolves `analysedAt`
+server-side; a cache write between dismiss and read re-arms.
 
-**The named regression test.** A ledger fixture with 5 batches in one run whose
-last batch holds 1 entry, asserting the panel reads "16 quotes across 5 passes".
-**Fails on current `main`, passes after** — this is the fails-before/passes-after
-test the bug fix owes.
+**Routes.** GET computes and rewrites the stamp; a subset re-run recomputes the
+whole book; corrupt cache → `unmeasurable`, not 500; `GET /api/library` carries
+the three-state value.
 
-**Frontend (Vitest + RTL).** Notice renders each state; cause line omitted at 0
-drops; chapter rows show `—` under the floor; badge present in **both** the grid
-and the table; dismissal clears all four surfaces.
+**Gate composition.** A book that is attribution-collapsed **and** voice-unready
+sees both gates in order; "Generate anyway" does not skip the later three.
+
+**The named regression test.** The incident's real ledger shape — 5 batches, one
+per run, the last holding 1 entry — asserting the panel reads "16 quotes across
+5 analysis passes". **Fails on `main`, passes after**, and unlike revision 1's
+version it is a shape the writers actually produce.
+
+**Frontend.** Notice states; the chapter-triggered heading variant; cause line
+omitted on an empty ledger; badge asserted in **both** `library-grid` and
+`library-table`; `unmeasurable` marker present in the library; dismissal clears
+all surfaces.
 
 **E2E (Playwright).** One spec: a collapsed book badges in the library, banners
-in Cast, gates generation, and dismissal clears all three. It crosses
-router/redux/layout seams, so it is required rather than optional.
+in Cast, gates generation, and dismissal clears all three. Crosses
+router/redux/layout seams, so required.
 
-**Scripts.** Backfill pure helpers unit-tested in `scripts/tests/`.
+**Neutralisation proof — every assertion, not only thresholds.** Revision 1
+scoped this to "every threshold assertion", and the gate found two more placebos
+under that scope:
 
-**Neutralisation proof.** Every threshold assertion is mutated on its own line
-and observed to go red, and the proof is recorded in the PR body. Given how
-often a green-checking-nothing test has shipped in this repo, the plan makes
-this a step rather than a hope.
+- The `excludeFromSynthesis` test passes with the filter deleted, because import
+  residue is not quoted and `isSpokenLine` already excludes it. The fixture must
+  therefore contain an `excludeFromSynthesis` sentence that **is** quoted.
+- The cast-resolver test passes with `buildCastResolver` removed entirely unless
+  the retired id is **the narrator's own**. The fixture retires
+  `char-narrator` → `narrator`, not an ordinary character.
+
+Each assertion is mutated on its own line and observed to go red, and the proof
+is recorded in the PR body.
 
 ## On-box acceptance — owed
 
-Fixtures prove the metric. They cannot prove that on the real workspace exactly
-the two known books flag and the other ~74 stay quiet.
+Wave 1's script output **is** an acceptance artifact: it is the first honest
+measurement of the real library. Register row for Wave 1 — run
+`scripts/measure-attribution.mjs`, record the distribution, and confirm the two
+known-damaged books are the top two by share.
 
-Register row: run `scripts/backfill-attribution-health.mjs` against the live
-workspace, record which books flagged, and specifically confirm no first-person
-book in the library false-positives. The register, the per-feature run sheet,
-and the live view all move in the shipping PR.
+Wave 2 register row — run the backfill, confirm exactly the expected books badge
+and no first-person or dash-heavy book false-positives. Register, run sheet, and
+live view all move in the shipping PR.
 
 ## Out of scope
 
-- **Any change to the analyzer.** #1598's fix is confirmed good on real data;
-  this is visibility only.
-- **Automatic re-analysis.** The button is the only trigger; nothing re-runs on
-  its own.
+- **Any change to the analyzer**, including `isSpokenLine`. Visibility only.
+- **Automatic re-analysis.** The button is the only trigger.
 - **Threshold configurability.** No registry knob.
-- **A per-chapter warning state.** Per D2, chapters are detail, never a trigger.
-- **Live mid-run collapse warning.** Per D6.
+- **Live mid-run collapse warning** — the figure swings wildly over a novel's
+  opening chapters.
 
-## Acceptance criteria
+## Wave 2 acceptance criteria
 
-1. A book at ≥ 40% narrator-attributed spoken lines (≥ 20 spoken lines) shows a
-   badge in the library grid **and** table, and a full notice in Cast and at the
-   confirm step.
-2. Starting generation on such a book requires an explicit acknowledgement; it
-   is never permanently refused.
-3. Dismissing clears all four surfaces, and a subsequent analysis run re-arms
-   the warning.
+1. A book crossing the threshold book-wide **or** in any chapter with ≥ 20 spoken
+   lines badges in the library grid **and** table, and shows a notice in Cast and
+   at the confirm step, with the heading matching `triggeredBy`.
+2. Starting generation on such a book requires an acknowledgement, and that
+   acknowledgement does not bypass the voice-readiness, clone, or tier gates.
+3. Dismissing clears all surfaces; any subsequent change to the analysis cache
+   re-arms the warning.
 4. A re-analysis that drops the figure below the threshold clears the warning
-   with no user action.
-5. The analysing-view panel reports the run's cumulative drops across all its
-   batches, not the last batch.
-6. A book with an absent or corrupt analysis cache neither 500s nor silently
-   reads as healthy in the Cast view.
-7. The backfill script stamps every existing book; the two known damaged books
-   badge, and no book measured ≤ 15% in the original sweep does.
+   with no user action, including the library badge, in the same session.
+5. The analysing-view panel reports the ledger's cumulative drops across all
+   batches, labelled as analysis passes.
+6. A book with an absent or corrupt cache neither 500s nor reads as healthy —
+   **in the library as well as in the Cast view.**
+7. The backfill stamps every existing book; the books Wave 1 identified as
+   damaged badge, and books Wave 1 measured as healthy do not.
+
+## Review findings
+
+Revision 1 went through the Premium-tier adversarial gate. Findings, all
+re-verified against the tree before folding:
+
+| ID | Severity | Finding | Disposition |
+|---|---|---|---|
+| R-C1 | Critical | A run writes **one** batch; the `runId` fix was a placebo and its regression test unproducible | D6 rewritten — sum the whole ledger, `runId` deleted |
+| R-C2 | Critical | Numerator matched only `'narrator'`, missing `char-narrator` and the orphan class | D9 added |
+| R-C3 | Critical | 40% was calibrated against a sweep method not in the tree; the dash rule inflates the share | D8 added — Wave 1 measures first |
+| R-M1 | Major | `library-status-ui.tsx` exports a map, not a component; the "shared module" safeguard did not exist | New shared badge component, asserted in both files |
+| R-M2 | Major | The two-file split converted a lost write into an orphaned key | `analysedAt` derived from `cache.updatedAt` — no minted value to race over |
+| R-M3 | Major | Four `requestStartGeneration` dispatch sites; a fourth gate could skip three existing ones | Gate placed first; re-enters the thunk; composition test |
+| R-M4 | Major | Badge (stamp) and banner (live) disagree with no invalidation path | Detail fetch patches `library-slice` |
+| R-M5 | Major | `unmeasurable` rendered nothing in the library — #1984's silence, reproduced | Three-state value + a visible neutral marker |
+| R-M6 | Major | A crashed mid-Phase-1 run left a stale `analysedAt`, so a dismissal suppressed real damage | Fixed by `cache.updatedAt` |
+| R-M7 | Major | Client-supplied `analysedAt` could go stale, making dismiss silently no-op | Server resolves it; endpoint takes no body |
+| R-M8 | Major | Book-level-only trigger left partial damage silent | D2 revised — per-chapter trigger added |
+| R-Mi1 | Minor | Cast-view re-run is destructive on a generated book; confirm step already has the button | D10 added; button dropped from the confirm step |
+| R-Mi2 | Minor | Two specified tests could not fail | Fixtures respecified; neutralisation proof widened to every assertion |
+| R-Mi3 | Minor | A subset re-run re-arms the whole book's dismissal | Accepted and documented — correct under a per-chapter trigger |
+| R-Mi4 | Minor | mtime is not a stable identity across restore/move | `cache.updatedAt` used; mtime only as a legacy fallback |
