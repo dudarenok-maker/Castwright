@@ -252,10 +252,34 @@ history on open tickets rather than being silently dropped:
   `existsSync` guard around the delete is gone — `rm(…, { force: true })` is
   already a no-op on a missing file, so the guard only ever saved a lock
   acquisition while sourcing the *decision whether to delete at all* from a
-  read taken outside the lock. The three sibling arms (revisions, audio,
-  analysis-cache) keep their own `existsSync` guards: they gate an
+  read taken outside the lock. Of the three sibling arms, only the revisions
+  and audio arms keep their own `existsSync` guard: they gate an
   already-idempotent `rm` and acquire no lock, so no decision of theirs
-  crosses a lock boundary — only the cast arm's guard was gap B.
+  crosses a lock boundary. `clearAnalysisCache`'s `rm` (`server/src/store/
+  analysis-cache.ts`) has never had one — only the cast arm's guard was gap
+  B; this doc's earlier text wrongly said all three sibling arms kept a
+  guard.
+
+  **Behaviour change: a corrupt `cast.json` no longer aborts the reparse.**
+  `readJson`'s bare `JSON.parse` returns `null` for a *missing* file but
+  throws on a *corrupt* one. On `main` that throw ran before the
+  `Promise.all` was constructed, so it aborted before the sibling arms
+  existed. With the read moved inside one arm of the `Promise.all`, the
+  other three arms are already in flight by the time it would throw, and a
+  rejection there cannot stop them — measured: `main` returns
+  `status=500, revisionsExists=true`; this branch, unpatched, would return
+  `status=500, revisionsExists=false`. Fixed by wrapping the in-lock
+  `readJson(castJsonPath(bookDir))` call in `.catch(() => null)`
+  (precedented on this same file at `readPriorCastForMerge`,
+  `server/src/routes/analysis.ts:179-181`), which degrades a corrupt
+  `cast.json` to the same path as a missing one: empty `reuseRows`,
+  carryover removed, `cast.json` deleted, reparse succeeds. A corrupt cast
+  has nothing worth carrying over and reparse exists to discard the cast
+  regardless. **Residual, not closed here:** an EPERM/EBUSY from
+  `writeJsonAtomic(carryoverPath)` inside the same locked block still
+  reaches the "siblings already deleted" state — narrower than the
+  corrupt-read case, and closing it needs the `Promise.allSettled` reshape
+  this ticket deliberately doesn't take.
 
   **Honest residuals, not closed by #2099:**
   - The carryover has a **third** toucher this widened lock does not reach:

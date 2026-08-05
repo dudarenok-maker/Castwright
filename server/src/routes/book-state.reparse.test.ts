@@ -911,3 +911,72 @@ describe("reparse handler — #2099 gap A: concurrent cast-aliases write during 
     expect(resRacer!.status).toBe(409);
   });
 });
+
+/* #2099 code-review finding 1 — a corrupt (not missing) cast.json used to
+   abort the whole reparse. `readJson`'s bare `JSON.parse` returns `null` for
+   a missing file but THROWS for a corrupt one; before #2099 that throw ran
+   before the `Promise.all` below was constructed, so it aborted the whole
+   reparse before the sibling arms (revisions/audio/analysis-cache) ever
+   started. Since #2099 the read lives inside one arm of that `Promise.all`,
+   so by the time it throws the other three arms are already in flight and
+   can't be stopped by a rejection here — leaving revisions.json deleted (a
+   sibling arm completed) while cast.json survives (this arm never reached
+   its own delete). Fixed with `.catch(() => null)` on the in-lock
+   `readJson(castJsonPath(bookDir))` call, degrading a corrupt cast to the
+   same path as a missing one.
+
+   Own fresh bookDir, same rationale as the gap A/B describes above — the
+   earlier describes in this file are order-dependent and share `bookDir`. */
+describe('reparse handler — #2099 code-review finding 1: a corrupt cast.json no longer aborts the reparse', () => {
+  const CORRUPT_AUTHOR = 'Reparse Corrupt Author';
+  const CORRUPT_SERIES = 'Standalones';
+  const CORRUPT_TITLE = 'Reparse Corrupt Cast Book';
+  let corruptBookId: string;
+  let corruptBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    corruptBookId = makeBookId(CORRUPT_AUTHOR, CORRUPT_SERIES, CORRUPT_TITLE);
+    corruptBookDir = join(workspaceRoot, 'books', CORRUPT_AUTHOR, CORRUPT_SERIES, CORRUPT_TITLE);
+
+    mkdirSync(join(corruptBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(corruptBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(corruptBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: corruptBookId,
+        manuscriptId: 'm_reparse_corrupt',
+        title: CORRUPT_TITLE,
+        author: CORRUPT_AUTHOR,
+        series: CORRUPT_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('completes the reparse and deletes both cast.json and revisions.json when cast.json is corrupt', async () => {
+    const castPath = join(corruptBookDir, '.audiobook', 'cast.json');
+    const revisionsPath = join(corruptBookDir, '.audiobook', 'revisions.json');
+    // Truncated JSON — parses fine as a *file that exists* (existsSync true)
+    // but JSON.parse throws on read, which is the case readJson's `null`
+    // return for a MISSING file does not cover.
+    writeFileSync(castPath, '{"characters":');
+    writeFileSync(revisionsPath, JSON.stringify({ revisions: [{ id: 1 }] }));
+
+    const res = await request(app).post(`/api/books/${corruptBookId}/reparse`);
+
+    expect(res.status).toBe(200);
+    // cast.json degraded to the missing-file path: deleted, not left corrupt.
+    expect(existsSync(castPath)).toBe(false);
+    // The sibling arm actually ran to completion — proof the corrupt read
+    // did not abort the Promise.all before the other arms could finish.
+    expect(existsSync(revisionsPath)).toBe(false);
+  });
+});

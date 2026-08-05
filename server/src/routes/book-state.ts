@@ -970,13 +970,31 @@ async function applyReparse(
        today. This arm's rm(cast.json) is unguarded (no existsSync check):
        the read and the delete decision now live inside the lock together, so
        there is no longer an out-of-lock existsSync to desync from the
-       in-lock reality — the three sibling arms below keep their existsSync
-       guards because they gate an already-idempotent rm and acquire no
-       lock, so no decision of theirs crosses a lock boundary. */
+       in-lock reality — of the three sibling arms below, only the revisions
+       and audio arms keep an existsSync guard (they gate an already-
+       idempotent rm and acquire no lock, so no decision of theirs crosses a
+       lock boundary); clearAnalysisCache's rm is unguarded too, same as this
+       arm's.
+
+       Behaviour change vs. main: readJson's bare JSON.parse throws on a
+       corrupt (not just missing) cast.json. On main that throw happened
+       before this Promise.all was constructed, aborting the whole reparse
+       before the sibling arms started. Now the read is one arm among four
+       already in flight, so an unhandled throw here would leave the others
+       to complete while this arm never deletes cast.json — a worse partial
+       state than either succeeding or failing cleanly. The .catch(() =>
+       null) below degrades a corrupt cast.json to the same path as a
+       missing one: empty reuseRows, carryover removed, cast.json deleted,
+       reparse succeeds. A corrupt cast has nothing worth carrying over and
+       reparse exists to discard the cast anyway. Residual: an EPERM/EBUSY
+       from writeJsonAtomic(carryoverPath) inside this same block still
+       reaches the "siblings already deleted" state; closing that needs the
+       wider Promise.allSettled reshape this ticket deliberately doesn't
+       take. */
     withCastLock(bookDir, async () => {
       const existingCast = await readJson<{
         characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
-      }>(castJsonPath(bookDir));
+      }>(castJsonPath(bookDir)).catch(() => null);
       const reuseRows = (existingCast?.characters ?? [])
         .filter((c) => typeof c.id === 'string')
         .map((c) => {
