@@ -497,6 +497,22 @@ test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', (
   );
 });
 
+// ops-21 (#2152): pins BOTH halves of the routing decision at once, so
+// neither can be deleted alone. `shared` (computeShared) covers CI; the
+// test:hooks glob is what busts the LOCAL input-hash cache, since `shared`
+// only widens the scope filter (scopeShared, verify-cache.mjs:916) and does
+// not touch the per-step hash below it. Losing either half quietly re-opens
+// the #2146 hole for one of the two runners.
+test('.github/actions/** is covered by BOTH computeShared and the test:hooks glob', () => {
+  const path = '.github/actions/setup/action.yml';
+  assert.equal(computeShared([path]), true, 'computeShared must cover it (CI scope)');
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], [path]),
+    true,
+    'test:hooks globs must cover it (local cache-hash mechanics)',
+  );
+});
+
 // .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
 // (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
 // stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
@@ -832,9 +848,22 @@ test('computeShared is true for a root manifest/lockfile change', () => {
   assert.equal(computeShared(['package-lock.json']), true);
 });
 
+// ops-21 (#2152): .github/actions/** joined computeShared alongside the root
+// manifest. Matched by directory prefix, not exact filename — a second file
+// under the directory (not just today's setup/action.yml) must also match.
+test('computeShared is true for any .github/actions/** path', () => {
+  assert.equal(computeShared(['.github/actions/setup/action.yml']), true);
+  assert.equal(computeShared(['.github/actions/some-other-action/action.yml']), true);
+});
+
+// The false case is what stops a future widening from quietly making
+// computeShared return true for everything. .github/workflows/** is
+// deliberately `hooks`-scoped (via test:hooks's own glob), not `shared` —
+// it must stay false here.
 test('computeShared is false for a scoped-only change', () => {
   assert.equal(computeShared(['server/package-lock.json']), false);
   assert.equal(computeShared(['src/app.tsx']), false);
+  assert.equal(computeShared(['.github/workflows/verify.yml']), false);
 });
 
 // --- Contention guard (plan 156) ----------------------------------------

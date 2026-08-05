@@ -44,6 +44,21 @@ test('computeScopes sets shared for a root lockfile diff', () => {
   assert.equal(scopes.shared, true);
 });
 
+// ops-21 (#2152): .github/actions/** is a computeShared member, and `shared`
+// is a disjunct on EVERY step (ci-scope.mjs's computeScopes loop) — so an
+// actions-only diff must flip `shared` AND every single step_* key, not just
+// test:hooks's own glob match. Derived from STEPS so a future STEPS[]
+// addition can't silently exempt itself from this assertion.
+test('computeScopes routes an actions-only diff to shared and every step', () => {
+  const scopes = computeScopes(['.github/actions/setup/action.yml'], {
+    eventName: 'pull_request',
+  });
+  assert.equal(scopes.shared, true);
+  for (const step of STEPS) {
+    assert.equal(scopes[slugFor(step.name)], true, `${slugFor(step.name)} must be true`);
+  }
+});
+
 // workflow_dispatch has no PR base to diff. An empty file list is not an
 // error, so the fail-safe does not fire — without this branch the documented
 // clean-room full-battery run becomes a green no-op.

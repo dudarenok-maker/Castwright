@@ -89,14 +89,19 @@ export const STEPS = [
            prints [cached] and the assertion sits stale-green. Same #1847
            trap as fixtures/** above (defect D, #2119 review). */
         '.github/workflows/**',
-        /* .github/actions/** is defect D's other half (I1, #2146 review):
-           the composite setup action is consumed by all seven verify.yml
-           jobs (`uses: ./.github/actions/setup`) but matched no scope at
-           all, so an actions-only diff ran zero legs and printed [cached] —
-           the exact defect this PR exists to close, just for a different
-           path prefix. Whether this should instead live in the broader
-           `shared` scope is an open question left for the follow-up PR;
-           mirroring `.github/workflows/**` here is the minimal fix now. */
+        /* .github/actions/** is now ALSO a `computeShared` member (ops-21,
+           #2152, resolving the "open question" #2146 left here) — the
+           composite setup action needs every leg able to catch a soft
+           failure in it, not just this one. The glob stays here too, and
+           deliberately: `shared` only widens the pre-commit/pre-push SCOPE
+           FILTER (scopeShared, gating stepTouchedByDiff at :916); the
+           input-hash cache below that filter runs per step regardless of
+           scope. With no step's glob matching, a LOCAL actions-only diff
+           would move no step's input hash, so every step would print
+           [cached] and the run would gate nothing — `shared` alone would
+           quietly re-open the exact hole this glob was added to close. Do
+           NOT delete this glob because "shared covers it" — shared covers
+           CI; this glob is what makes the local cache notice the diff. */
         '.github/actions/**',
         /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
            matcher, which A2 deletes — and it is an input to no step, so
@@ -586,10 +591,19 @@ export function selectStepFiles({ fileList, step }) {
 // an out-of-scope suite to re-run. Mirrors the scope detection in
 // .github/workflows/verify.yml; the STEPS `inputs.globs` ARE the scope map.
 
-// A root manifest change is treated as global — a dep/lock bump can affect
-// every leg (mirrors verify.yml's `shared` scope).
+// Two things are treated as global, not just the one step whose glob happens
+// to match. A root manifest/lockfile change is the first — a dep/lock bump
+// can affect every leg. `.github/actions/**` is the second (ops-21, #2152):
+// its composite setup action is `uses:`-ed with no `if:` in every
+// verify.yml job, so a hard failure there already reddens everything
+// regardless of routing — but a *soft* failure (setup succeeds, environment
+// is wrong) needs every leg to be able to catch it, not just whichever one
+// step's glob matched.
 export function computeShared(diffFiles) {
-  return diffFiles.some((f) => f === 'package.json' || f === 'package-lock.json');
+  return diffFiles.some((f) => {
+    const p = toPosix(f);
+    return p === 'package.json' || p === 'package-lock.json' || p.startsWith('.github/actions/');
+  });
 }
 
 // Does any staged diff file fall inside this step's declared scope? Reuses the
