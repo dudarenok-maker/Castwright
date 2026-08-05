@@ -114,6 +114,7 @@ let saveAnalysisCache: (
 let clearAnalysisCache: (manuscriptId: string) => Promise<void>;
 let retireCharacterId: (bookDir: string, from: string, to: string) => Promise<void>;
 let rejectOrphanedId: (bookDir: string, id: string) => Promise<void>;
+let rejectOrphanedPair: (bookDir: string, from: string, to: string) => Promise<void>;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-castid-wiring-test-'));
@@ -143,6 +144,7 @@ beforeAll(async () => {
   clearAnalysisCache = cacheModule.clearAnalysisCache;
   retireCharacterId = historyModule.retireCharacterId;
   rejectOrphanedId = historyModule.rejectOrphanedId;
+  rejectOrphanedPair = historyModule.rejectOrphanedPair;
 
   app = express();
   app.use(express.json());
@@ -203,11 +205,14 @@ describe('#2040 castIdHistory route wiring — generation.ts', () => {
     });
     // A real writer call, not a hand-written history file. 'ghost-generation'
     // never appears in this book's cast or sentences — inert for resolution,
-    // pure wiring probe. Also seeds a `rejected` entry (fix round 1) so the
-    // assertion below proves THAT field survives the route → synthesiseChapter
-    // hop too, not just `supersededBy`.
+    // pure wiring probe. Also seeds a `rejected` entry (fix round 1) and a
+    // `rejectedPairs` entry (#2092/#2089 task 3) so the assertion below
+    // proves BOTH fields survive the route → synthesiseChapter hop, not just
+    // `supersededBy` — the same "one object, not a bare map" contract this
+    // file exists to pin, extended to the pair-scoped successor.
     await retireCharacterId(bookDir, 'ghost-generation', 'narrator');
     await rejectOrphanedId(bookDir, 'rejected-generation');
+    await rejectOrphanedPair(bookDir, 'rejected-pair-generation', 'narrator');
   });
 
   afterAll(async () => {
@@ -228,6 +233,7 @@ describe('#2040 castIdHistory route wiring — generation.ts', () => {
       schema: 1,
       supersededBy: { 'ghost-generation': 'narrator' },
       rejected: ['rejected-generation'],
+      rejectedPairs: [{ from: 'rejected-pair-generation', to: 'narrator' }],
     });
   });
 });

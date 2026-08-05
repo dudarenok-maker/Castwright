@@ -1,14 +1,22 @@
 /* #2040 Task 17 fix round 2 review finding 3 — the two id-history writes
    `POST /:bookId/cast/:characterId/reject-orphan-match` performs are NOT
    treated alike on failure, and this file pins the asymmetry directly by
-   mocking each primitive to fail independently:
+   mocking each primitive to fail independently. Updated for #2092/#2089
+   (pair-scoped reject): the fatal write is now `rejectOrphanedPair`, not the
+   legacy id-wide `rejectOrphanedId` (which the route no longer calls).
 
    - `forgetSupersededId` failing is NON-FATAL — the route still 200s. A
      stale `supersededBy` entry left behind is redundant-but-harmless once
-     `rejected` (written next) independently blocks resolution.
-   - `rejectOrphanedId` failing IS FATAL — the route 500s. For the two
+     `rejectedPairs` (written next) independently blocks resolution of THIS
+     pair. Only exercised when there's actually something to forget: the
+     route now only calls `forgetSupersededId` when the existing
+     `supersededBy[orphanedId]` entry targets the SAME `characterId` being
+     rejected (#2092/#2089's own pair-scope guard — an entry targeting a
+     DIFFERENT character is a live, unrelated alias and must not be
+     touched), so this test seeds a matching `supersededBy` entry first.
+   - `rejectOrphanedPair` failing IS FATAL — the route 500s. For the two
      normalised tiers (where all real orphaned segments in the workspace
-     live), `rejected` is the ONLY mechanism that enforces the reject; a
+     live), `rejectedPairs` is the ONLY mechanism that enforces the reject; a
      swallowed failure there would report success while the reject stayed
      purely cosmetic at render time.
 
@@ -32,15 +40,15 @@ let bookDir: string;
 let app: Express;
 let bookId: string;
 
-const rejectOrphanedIdMock = vi.fn();
+const rejectOrphanedPairMock = vi.fn();
 const forgetSupersededIdMock = vi.fn();
 
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return {
     ...actual,
-    rejectOrphanedId: (...args: Parameters<typeof actual.rejectOrphanedId>) =>
-      rejectOrphanedIdMock(...args) ?? actual.rejectOrphanedId(...args),
+    rejectOrphanedPair: (...args: Parameters<typeof actual.rejectOrphanedPair>) =>
+      rejectOrphanedPairMock(...args) ?? actual.rejectOrphanedPair(...args),
     forgetSupersededId: (...args: Parameters<typeof actual.forgetSupersededId>) =>
       forgetSupersededIdMock(...args) ?? actual.forgetSupersededId(...args),
   };
@@ -79,6 +87,16 @@ function readCast(): { characters: Array<Record<string, unknown>> } {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
 }
 
+/** Seeds a `supersededBy` entry targeting `mairin` so the route's pair-scope
+    forget-guard actually calls `forgetSupersededId` (it now no-ops when
+    there's nothing matching `characterId` to forget). */
+function seedMatchingSupersededByEntry() {
+  writeFileSync(
+    join(bookDir, '.audiobook', 'cast-id-history.json'),
+    JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
+  );
+}
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-reject-orphan-failure-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
@@ -97,12 +115,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   writeBookOnDisk(initialCast);
-  rejectOrphanedIdMock.mockReset();
+  rejectOrphanedPairMock.mockReset();
   forgetSupersededIdMock.mockReset();
   // Default: both no-op and fall through to the real implementation
   // (`?? actual...` in the mock factory above), so a test only needs to
   // override the ONE primitive it's exercising.
-  rejectOrphanedIdMock.mockReturnValue(undefined);
+  rejectOrphanedPairMock.mockReturnValue(undefined);
   forgetSupersededIdMock.mockReturnValue(undefined);
 });
 
@@ -118,14 +136,21 @@ function callReject(theBookId: string, characterId: string, body: object) {
     .send(body);
 }
 
-describe('POST reject-orphan-match — id-history write failure modes (#2040 Task 17 fix round 2)', () => {
+describe('POST reject-orphan-match — id-history write failure modes (#2040 Task 17 fix round 2; #2092/#2089 pair-scope)', () => {
   it('forgetSupersededId failing is non-fatal — the route still 200s', async () => {
+    seedMatchingSupersededByEntry();
     forgetSupersededIdMock.mockImplementation(() => {
       throw new Error('disk full');
     });
     const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ characterId: 'mairin', orphanedId: 'mayrin', alreadyPresent: false });
+    expect(res.body).toEqual({
+      characterId: 'mairin',
+      orphanedId: 'mayrin',
+      alreadyPresent: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+    });
 
     // The notLinkedTo edge still landed despite the forget failure.
     const cast = readCast();
@@ -133,8 +158,8 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(mairin?.notLinkedTo).toEqual([{ bookId, characterId: 'mayrin' }]);
   });
 
-  it('rejectOrphanedId failing IS fatal — the route 500s', async () => {
-    rejectOrphanedIdMock.mockImplementation(() => {
+  it('rejectOrphanedPair failing IS fatal — the route 500s', async () => {
+    rejectOrphanedPairMock.mockImplementation(() => {
       throw new Error('disk full');
     });
     const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
@@ -142,8 +167,8 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(res.body.error).toMatch(/failed to durably record/i);
   });
 
-  it('rejectOrphanedId failing still leaves the earlier notLinkedTo write in place (safe to retry)', async () => {
-    rejectOrphanedIdMock.mockImplementation(() => {
+  it('rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)', async () => {
+    rejectOrphanedPairMock.mockImplementation(() => {
       throw new Error('disk full');
     });
     await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
@@ -153,14 +178,14 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(mairin?.notLinkedTo).toEqual([{ bookId, characterId: 'mayrin' }]);
   });
 
-  it('a subsequent successful retry after a rejectOrphanedId failure returns 200', async () => {
-    rejectOrphanedIdMock.mockImplementationOnce(() => {
+  it('a subsequent successful retry after a rejectOrphanedPair failure returns 200', async () => {
+    rejectOrphanedPairMock.mockImplementationOnce(() => {
       throw new Error('disk full');
     });
     const first = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(first.status).toBe(500);
 
-    // Second call: rejectOrphanedIdMock's mockReturnValue(undefined) default
+    // Second call: rejectOrphanedPairMock's mockReturnValue(undefined) default
     // (set in beforeEach) is back in effect after the mockImplementationOnce
     // override is consumed — this call succeeds.
     const second = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
@@ -168,5 +193,19 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     // The notLinkedTo write is idempotent — already present from the first
     // (failed-only-at-history) attempt.
     expect(second.body.alreadyPresent).toBe(true);
+  });
+
+  it('#2092/#2089 pair-scope guard — forgetSupersededId is NOT called when the existing supersededBy entry targets a DIFFERENT character', async () => {
+    // 'mayrin' aliases to 'narrator', but this reject is against 'mairin' —
+    // the entry must be left alone, so forgetSupersededId must never even be
+    // invoked (proven directly on the mock, not just indirectly via its
+    // absence of a thrown error).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'narrator' } }),
+    );
+    const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(forgetSupersededIdMock).not.toHaveBeenCalled();
   });
 });

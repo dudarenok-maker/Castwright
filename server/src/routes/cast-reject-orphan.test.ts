@@ -1,17 +1,32 @@
-/* Integration tests for POST /:bookId/cast/:characterId/reject-orphan-match
-   (#2040 Task 17).
+/* Integration tests for POST + DELETE
+   /:bookId/cast/:characterId/reject-orphan-match (#2040 Task 17 shipped
+   id-wide; #2092/#2089 made it pair-scoped and added the DELETE undo).
 
    Seeds one book on disk with a live "mairin" cast row. Tests assert:
 
-   - 400 on missing fields.
+   POST:
+   - 400 on missing fields / self-pair.
    - 404 on unknown book / unknown character.
    - 409 when the book has no cast on disk yet.
    - Happy path: writes a one-sided notLinkedTo edge onto the live character
      (this book's own bookId, the orphaned id as `characterId`), AND records
-     the rejection in cast-id-history.json (`rejected` list) AND forgets any
-     stale `supersededBy` entry naming the orphaned id.
+     the rejection in cast-id-history.json's `rejectedPairs` AND forgets any
+     stale `supersededBy` entry naming the orphaned id (stashing what it
+     removed on the pair as `forgotSupersededTo`).
    - Idempotency: a second identical call doesn't duplicate the notLinkedTo
-     entry or the `rejected` list entry.
+     entry or the `rejectedPairs` entry.
+   - D1 pair scope: rejecting orphanedId against ONE character does not block
+     it against a DIFFERENT one.
+
+   DELETE (the undo):
+   - Same guards as POST.
+   - Removes the notLinkedTo edge, removes the rejectedPairs entry, and
+     restores any `forgotSupersededTo`.
+   - Idempotent.
+   - #2089's stated acceptance bar: after POST-then-DELETE,
+     `buildCastResolver(...).resolve(orphanedId)` returns the SAME result it
+     returned before the POST — asserted against the resolver directly, not
+     by checking cast-id-history.json no longer contains a string.
 
    Same lazy-import-after-WORKSPACE_DIR pattern as cast-not-linked-to.test.ts
    so paths.ts binds BOOKS_ROOT against the temp workspace. */
@@ -22,6 +37,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'Standalones';
@@ -71,6 +88,17 @@ function readHistory(): Record<string, unknown> | null {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+/** #2089 acceptance bar helper — resolves `characterId` against the LIVE
+    cast.json + the CURRENT cast-id-history.json on disk, through the same
+    `buildCastResolver` the render/QA/splice paths use. Returns the `via`
+    tier (or `undefined` on a miss) so a test can compare "before POST" vs
+    "after POST-then-DELETE" without inspecting file contents directly. */
+async function resolveOrphanedId(orphanedId: string) {
+  const cast = readCast();
+  const history = await loadCastIdHistory(bookDir);
+  return buildCastResolver(cast.characters as Array<{ id: string }>, history).resolve(orphanedId);
+}
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-reject-orphan-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
@@ -91,9 +119,9 @@ beforeEach(() => {
   writeBookOnDisk(initialCast);
   // #2040 Wave 3 round-2 review, MINOR finding 5: writeBookOnDisk rewrites
   // cast.json but never touched cast-id-history.json, so every case after
-  // the first successful reject started with `rejected: ['mayrin']` already
-  // on disk — order-coupled state a future "no rejection was recorded" case
-  // could pass vacuously against.
+  // the first successful reject started with a rejection already on disk —
+  // order-coupled state a future "no rejection was recorded" case could pass
+  // vacuously against.
   const historyPath = join(bookDir, '.audiobook', 'cast-id-history.json');
   if (existsSync(historyPath)) rmSync(historyPath, { force: true });
 });
@@ -106,6 +134,13 @@ afterAll(() => {
 function callReject(theBookId: string, characterId: string, body: object) {
   return request(app)
     .post(`/api/books/${theBookId}/cast/${characterId}/reject-orphan-match`)
+    .set('Content-Type', 'application/json')
+    .send(body);
+}
+
+function callUndoReject(theBookId: string, characterId: string, body: object) {
+  return request(app)
+    .delete(`/api/books/${theBookId}/cast/${characterId}/reject-orphan-match`)
     .set('Content-Type', 'application/json')
     .send(body);
 }
@@ -147,10 +182,18 @@ describe('POST /api/books/:bookId/cast/:characterId/reject-orphan-match', () => 
     expect(mairin?.notLinkedTo).toBeUndefined();
   });
 
-  it('writes a one-sided notLinkedTo edge naming the orphaned id, and echoes the pair', async () => {
+  it('writes a one-sided notLinkedTo edge naming the orphaned id, and echoes the pair with its resolution', async () => {
     const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ characterId: 'mairin', orphanedId: 'mayrin', alreadyPresent: false });
+    // 'mayrin' has no cast entry and no history entry — genuinely unresolved
+    // both before and after the reject.
+    expect(res.body).toEqual({
+      characterId: 'mairin',
+      orphanedId: 'mayrin',
+      alreadyPresent: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+    });
 
     const cast = readCast();
     const mairin = cast.characters.find((c) => c.id === 'mairin');
@@ -160,24 +203,30 @@ describe('POST /api/books/:bookId/cast/:characterId/reject-orphan-match', () => 
     expect(narrator?.notLinkedTo).toBeUndefined();
   });
 
-  it('records the rejection in cast-id-history.json', async () => {
+  it('records the rejection in cast-id-history.json as a pair, not the legacy id-wide list', async () => {
     await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     const history = readHistory();
-    expect(history?.rejected).toEqual(['mayrin']);
+    expect(history?.rejectedPairs).toEqual([{ from: 'mayrin', to: 'mairin' }]);
+    expect(history?.rejected).toBeUndefined();
   });
 
-  it('forgets a stale supersededBy entry naming the orphaned id', async () => {
+  it('forgets a stale supersededBy entry naming the orphaned id, and stashes it on the pair as forgotSupersededTo (D6)', async () => {
     writeFileSync(
       join(bookDir, '.audiobook', 'cast-id-history.json'),
       JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
     );
-    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    // The alias tier the reject just blocked would otherwise have resolved
+    // 'mayrin' — reported here so the response proves the reject took.
+    expect(res.body.resolution).toBeNull();
     const history = readHistory();
     expect(history?.supersededBy).toEqual({});
-    expect(history?.rejected).toEqual(['mayrin']);
+    expect(history?.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin' },
+    ]);
   });
 
-  it('is idempotent — a second identical call does not duplicate the notLinkedTo entry or the rejected entry', async () => {
+  it('is idempotent — a second identical call does not duplicate the notLinkedTo entry or the rejectedPairs entry', async () => {
     await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     const res2 = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res2.status).toBe(200);
@@ -188,7 +237,7 @@ describe('POST /api/books/:bookId/cast/:characterId/reject-orphan-match', () => 
     expect(mairin?.notLinkedTo).toEqual([{ bookId, characterId: 'mayrin' }]);
 
     const history = readHistory();
-    expect(history?.rejected).toEqual(['mayrin']);
+    expect(history?.rejectedPairs).toEqual([{ from: 'mayrin', to: 'mairin' }]);
   });
 
   it('rejecting a second, distinct orphaned id against the same character appends rather than replaces', async () => {
@@ -201,6 +250,143 @@ describe('POST /api/books/:bookId/cast/:characterId/reject-orphan-match', () => 
       { bookId, characterId: 'the-torment' },
     ]);
     const history = readHistory();
-    expect(history?.rejected).toEqual(['mayrin', 'the-torment']);
+    expect(history?.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'mairin' },
+      { from: 'the-torment', to: 'mairin' },
+    ]);
+  });
+
+  it('D1 pair scope — rejecting orphanedId against mairin does not block a DIFFERENT target for the same orphanedId', async () => {
+    // Seed narrator -> mayrin resolvable via a history entry so there's
+    // something concrete to prove stays unaffected.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'narrator' } }),
+    );
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    // 'mayrin' still resolves to 'narrator' — only the (mayrin, mairin) pair
+    // was rejected, not 'mayrin' against every candidate.
+    const r = await resolveOrphanedId('mayrin');
+    expect(r?.character.id).toBe('narrator');
+    expect(r?.via).toBe('history');
+  });
+});
+
+describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo, #2092/#2089)', () => {
+  it('rejects when orphanedId is missing', async () => {
+    const res = await callUndoReject(bookId, 'mairin', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+
+  it('returns 404 for an unknown book', async () => {
+    const res = await callUndoReject('nonexistent-book', 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for an unknown character', async () => {
+    const res = await callUndoReject(bookId, 'nonexistent', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 409 when the book has no cast on disk yet', async () => {
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [] }));
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects a self-pair', async () => {
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mairin' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/self-pair/i);
+  });
+
+  it('is idempotent — DELETE on a pair that was never rejected is a 200 no-op', async () => {
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(false);
+  });
+
+  it('removes the notLinkedTo edge and the rejectedPairs entry', async () => {
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(true);
+
+    const cast = readCast();
+    const mairin = cast.characters.find((c) => c.id === 'mairin');
+    expect(mairin?.notLinkedTo).toEqual([]);
+
+    const history = readHistory();
+    expect(history?.rejectedPairs).toEqual([]);
+  });
+
+  it('a second DELETE after a successful undo is idempotent', async () => {
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const res2 = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res2.status).toBe(200);
+    expect(res2.body.wasRejected).toBe(false);
+  });
+
+  it('leaves a DIFFERENT rejected pair for the same character untouched', async () => {
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    await callReject(bookId, 'mairin', { orphanedId: 'the-torment' });
+    await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const history = readHistory();
+    expect(history?.rejectedPairs).toEqual([{ from: 'the-torment', to: 'mairin' }]);
+  });
+
+  it('#2089 acceptance bar — after POST then DELETE, resolve(orphanedId) returns the SAME result it returned before the POST (no forgotSupersededTo case)', async () => {
+    // 'mayrin' has no cast entry and no history entry to begin with —
+    // genuinely unresolved before the POST.
+    const before = await resolveOrphanedId('mayrin');
+    expect(before).toBeUndefined();
+
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const during = await resolveOrphanedId('mayrin');
+    expect(during).toBeUndefined(); // still unresolved, now for a different reason (rejected)
+
+    await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const after = await resolveOrphanedId('mayrin');
+    expect(after).toEqual(before);
+  });
+
+  it('#2089 acceptance bar — lossless undo of an ALIAS-tier resolution (forgotSupersededTo case)', async () => {
+    // 'mayrin' resolves to 'mairin' via the history tier before anything
+    // happens — the exact case D6 exists for.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
+    );
+    const before = await resolveOrphanedId('mayrin');
+    expect(before?.character.id).toBe('mairin');
+    expect(before?.via).toBe('history');
+
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    const during = await resolveOrphanedId('mayrin');
+    expect(during).toBeUndefined(); // the pair-scoped reject blocks it
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(res.body.resolution).toBe('history');
+    expect(res.body.resolvedCharacterId).toBe('mairin');
+
+    const after = await resolveOrphanedId('mayrin');
+    // Same RESOLUTION as `before` — same character id, same tier, same
+    // viaAlias — not merely "some result": the whole point of stashing
+    // forgotSupersededTo (D6). Compared field-by-field rather than via a
+    // whole-object toEqual: the `character` object itself legitimately
+    // differs (mairin.notLinkedTo goes from undefined to `[]` across the
+    // reject/undo round trip — orthogonal bookkeeping, not an identity
+    // change) so a whole-object comparison would fail on a difference the
+    // #2089 acceptance bar doesn't care about.
+    expect(after?.character.id).toBe(before?.character.id);
+    expect(after?.via).toBe(before?.via);
+    expect(after?.viaAlias).toBe(before?.viaAlias);
+
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(history?.rejectedPairs).toEqual([]);
   });
 });
