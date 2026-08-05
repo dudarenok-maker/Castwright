@@ -568,6 +568,12 @@ castRejectOrphanRouter.delete(
           : ' (pair already absent)'),
     );
 
+    /* Round 4 review, cheap 6 — deduped like `removedFrom` above: two
+       skipped restores can legitimately land on the SAME newer alias (two
+       differently-spelled pairs both stashed the same forgotten target,
+       both since superseded by the same fresher one), and without this the
+       client would render that alias's name twice ("Narrator" / "Narrator"). */
+    const supersededByOther = [...new Set(supersededByOthers)];
     return res.json({
       characterId,
       orphanedId,
@@ -575,7 +581,7 @@ castRejectOrphanRouter.delete(
       resolution: resolution?.via ?? null,
       resolvedCharacterId: resolution?.character.id,
       removedFrom,
-      supersededByOther: supersededByOthers.length ? supersededByOthers : undefined,
+      supersededByOther: supersededByOther.length ? supersededByOther : undefined,
     });
   },
 );

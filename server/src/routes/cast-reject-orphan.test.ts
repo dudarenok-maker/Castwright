@@ -588,6 +588,55 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(theTorment?.notLinkedTo).toEqual([]);
   });
 
+  it('M-7 (review round 4) — a row governing TWO pairs that BOTH skip their restore reports BOTH aliases, not just the last one', async () => {
+    // Round 3's M-6 test above proves TWO pairs get removed together;
+    // round 3's M-2 test (below) proves ONE pair's skipped restore is
+    // attributed to the right key. Neither combines "two pairs" with "both
+    // skip" — the shape M-7 actually names, and the shape a last-wins
+    // `supersededByOthers.push → splice(0, len, x)` mutation cannot be
+    // told apart from `push` on, since a single-element array can't
+    // distinguish "all of them" from "the last one" (review round 4).
+    //
+    // Both governing pairs here are the NORMALISED-rule kind (rule 2):
+    // 'The-Torment' and 'THE_TORMENT' both normalise to 'the-torment', and
+    // neither is the row's own raw id ('the_torment', which must carry NO
+    // supersededBy entry of its own for rule 2 to apply at all — see
+    // rejectedPairsGoverning's own doc comment). That leaves each pair's
+    // OWN key (`pair.from`) completely free to carry an unrelated "newer
+    // alias" in `supersededBy`, so BOTH restores can genuinely skip.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [...initialCast, { id: 'the-torment', name: 'The Torment', role: 'character', color: 'unset' }],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { 'The-Torment': 'newer-target-1', THE_TORMENT: 'newer-target-2' },
+        rejectedPairs: [
+          { from: 'The-Torment', to: 'the-torment', forgotSupersededTo: 'alias-one' },
+          { from: 'THE_TORMENT', to: 'the-torment', forgotSupersededTo: 'alias-two' },
+        ],
+      }),
+    );
+
+    const res = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(true);
+    expect(res.body.removedFrom).toEqual(['The-Torment', 'THE_TORMENT']);
+    // THE ASSERTION THIS TEST EXISTS FOR: both skipped aliases, in order —
+    // a last-wins mutation would report only `['newer-target-2']` here.
+    expect(res.body.supersededByOther).toEqual(['newer-target-1', 'newer-target-2']);
+
+    // Neither newer alias was touched — both restores were correctly
+    // skipped, not overwritten.
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({ 'The-Torment': 'newer-target-1', THE_TORMENT: 'newer-target-2' });
+    expect(history?.rejectedPairs).toEqual([]);
+  });
+
   it('M-2 (review round 3) — restoring a cross-spelling pair\'s forgotSupersededTo uses the PAIR\'s own `from`, not the row\'s `orphanedId`', async () => {
     // Round 2's two cross-spelling tests (Important 1/2, below and above)
     // both happen to produce a pair with NO forgotSupersededTo to restore —
