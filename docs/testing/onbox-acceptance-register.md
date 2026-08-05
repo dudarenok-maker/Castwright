@@ -97,24 +97,33 @@ comparison, see the edge list above). The merge step that closes this, run
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
-2. Run `npm run check:onbox-register -- --against-published <saved-file>`. It
-   runs the identical row-ID/per-group-count/owed-total comparison
-   `check:onbox-register`'s no-flag run already uses for the tracked pair,
-   against this saved copy instead — the same comparator, reused, not a
-   second one.
-3. **If it fails**, the tracked `.html` you are about to publish is STALE
-   relative to what is live right now — do not publish. Pull the latest
-   `main`, confirm `npm run check:onbox-register` (no flag) is green there,
-   and repeat step 1 against the now-current live page.
+2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
+   Unlike `check:onbox-register`'s no-flag run, this comparison is
+   deliberately ONE-DIRECTIONAL: your register having rows the live page
+   doesn't have yet is the normal reason you're publishing, not a defect, so
+   it is never reported here. It fails ONLY when the live page has a row (or
+   group) your register does not — the signature of another lane having
+   already published ahead of you.
+3. **If it fails**, do NOT publish — your register is BEHIND what is already
+   live. Pull the latest `main` (the row that's already live should already
+   be merged there via its own PR), confirm `npm run check:onbox-register`
+   (no flag) is green, and re-run step 2 against the SAME saved copy from
+   step 1 to confirm it now passes. It should — main pulling in the missing
+   row is what resolves this, not another fetch of the live page.
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 
 This is deliberately a MANUAL procedure with mechanical support, not a fully
 automatic gate: CI cannot run it (no credentials to fetch the published
 artifact, and a network dependency inside a required status check is its own
-failure mode). `--against-published` exists so step 3's "does it disagree?"
-judgement is a command's exit code, not an eyeballed diff — it does not, and
-cannot, make the four steps happen on their own.
+failure mode). `--against-published` exists so step 3's "does the live page
+have something I don't?" judgement is a command's exit code, not an
+eyeballed diff — it does not, and cannot, make the four steps happen on
+their own. An early version of this check compared both directions
+symmetrically, which inverted the diagnosis (failed on every ordinary
+publish and told the operator to delete the rows they were about to ship) —
+fixed before this landed; see the `checkLiveView` function's own header
+comment in `scripts/check-onbox-register.mjs` for the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
