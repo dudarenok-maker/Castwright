@@ -251,13 +251,16 @@
  *                        `withheldForMissingBak` return field for the
  *                        per-book write-side consequence.
  *
- *                        #2097: a book whose `cast.json`/`state.json`
- *                        (found via `WORKSPACE_DIR`, above) is missing
- *                        entirely is `collectBooks`'s legitimate
- *                        `'not-yet-analysed'` case (a book mid-import) and
- *                        is merely logged. A book where either file EXISTS
- *                        but fails to parse or validate is
- *                        `'unreadable'` — evidence loss, not absence — and
+ *                        #2097: a book whose `cast.json` and/or `state.json`
+ *                        (found via `WORKSPACE_DIR`, above) are genuinely
+ *                        MISSING — including the ordinary "`state.json`
+ *                        present, `cast.json` not yet written" mid-import
+ *                        shape, judged per file, not "neither file exists at
+ *                        all" — is `collectBooks`'s legitimate
+ *                        `'not-yet-analysed'` case and is merely logged. A
+ *                        book where either file EXISTS but fails to parse or
+ *                        validate is `'unreadable'` — evidence loss, not
+ *                        absence — and
  *                        refuses `--apply` outright
  *                        (`shouldRefuseApplyForUnreadableBooks`): unlike the
  *                        cache/bak gates above, there is no config knob that
@@ -1431,17 +1434,34 @@ function readJsonTriState(p) {
  *  Distinguishes two reasons, per the design question the filed issue
  *  raised (option 3, "probably right"):
  *
- *    - **`'not-yet-analysed'`** — NEITHER `cast.json` nor `state.json`
- *      exists at all. Legitimate: a book mid-import genuinely has no
- *      analysis yet. Counted and logged (never vanishes), but does NOT
- *      contribute to any `--apply` refusal — the same "absence is normal"
- *      posture `collectBakNameEntries`'s `bakAvailable` takes for zero bak
- *      files (#2135's own policy, applied here to a sibling case).
- *    - **`'unreadable'`** — EITHER file exists but the pair still fails to
- *      validate (missing, fails to parse, or wrong-shaped — `!cast
- *      ?.characters || !state?.chapters`). This is evidence LOSS, not
- *      absence: something was written for this book and this pass could not
- *      read it. Counted, logged, AND refuses `--apply` for the whole run
+ *    - **`'not-yet-analysed'`** — every file that failed the shape check did
+ *      so because it is genuinely MISSING (ENOENT), not because it exists
+ *      and could not be read. Judged per file, not "neither file exists at
+ *      all": `state.json` is written at import time, before any analysis
+ *      (`server/src/routes/import.ts`), and `cast.json` is created only
+ *      later, during analysis stage 1 (`server/src/routes/analysis.ts`) —
+ *      so "`state.json` present, `cast.json` absent" is the ORDINARY shape
+ *      of every book between import and first analysis (and again after a
+ *      reparse, which `rm`s `cast.json` and keeps `state.json` —
+ *      `server/src/routes/book-state.ts`; the server's own workspace
+ *      scanner already treats that shape as a normal, scannable book —
+ *      `server/src/workspace/scan.ts`), not evidence loss. Counted and
+ *      logged (never vanishes), but does NOT contribute to any `--apply`
+ *      refusal — the same "absence is normal" posture
+ *      `collectBakNameEntries`'s `bakAvailable` takes for zero bak files
+ *      (#2135's own policy, applied here to a sibling case). An EARLIER
+ *      version of this discriminator (`castExists || stateExists`, cleared
+ *      by round 1's own review as "sound") required BOTH files to be
+ *      missing before granting this reason — which classified the ordinary
+ *      mid-import/post-reparse shape above as `'unreadable'` and refused
+ *      `--apply` for the entire workspace over one freshly-imported book.
+ *      Caught and fixed before ever reaching `main` (round 3 review).
+ *    - **`'unreadable'`** — at least one file is PRESENT but could not be
+ *      read/parsed (`readJsonTriState`'s `'unreadable'` status), or parsed
+ *      fine but failed the shape check anyway (missing/wrong-shaped
+ *      `characters`/`chapters`). This is evidence LOSS, not absence:
+ *      something was written for this book and this pass could not read
+ *      it. Counted, logged, AND refuses `--apply` for the whole run
  *      (`shouldRefuseApplyForUnreadableBooks`) — this pass cannot scan the
  *      book at all (no cast, no chapter list), so it categorically cannot
  *      rule out orphaned segments sitting unprotected in it; unlike the
@@ -1517,14 +1537,28 @@ export function collectBooks(workspaceDir) {
         const stateResult = readJsonTriState(path.join(audiobookDir, 'state.json'));
         const cast = castResult.status === 'ok' ? castResult.value : null;
         const state = stateResult.status === 'ok' ? stateResult.value : null;
-        if (!Array.isArray(cast?.characters) || !Array.isArray(state?.chapters)) {
-          // Legitimate absence ONLY when BOTH files are genuinely missing
-          // (ENOENT) — anything else (one present, one missing but the
-          // other unreadable/wrong-shaped, a permission error masquerading
-          // as "missing" pre-#2097-defect-10-fix, a parse failure) is
-          // evidence loss, not absence.
-          const bothMissing = castResult.status === 'missing' && stateResult.status === 'missing';
-          droppedBooks.push({ label, reason: bothMissing ? 'not-yet-analysed' : 'unreadable' });
+        const castShapeOk = Array.isArray(cast?.characters);
+        const stateShapeOk = Array.isArray(state?.chapters);
+        if (!castShapeOk || !stateShapeOk) {
+          // Judged PER FILE, not "either file present": a genuinely missing
+          // file (`'missing'`, ENOENT) is never evidence loss on its own —
+          // `state.json` is written at import time, before any analysis
+          // (`server/src/routes/import.ts`), and `cast.json` is created only
+          // later, during analysis stage 1 (`server/src/routes/analysis.ts`)
+          // — so "state.json present, cast.json absent" is the ORDINARY
+          // shape of every book between import and first analysis, not
+          // damage. Reparse deliberately re-creates that same shape (it
+          // `rm`s `cast.json` and keeps `state.json` —
+          // `server/src/routes/book-state.ts`), and the server's own
+          // workspace scanner already treats it as a normal, scannable book
+          // (`server/src/workspace/scan.ts`). Evidence is LOST only when a
+          // file is PRESENT but could not be read/parsed (`'unreadable'`)
+          // or parsed to the wrong shape (`'ok'` status, shape check
+          // failed) — either of those, for either file, makes the whole
+          // book `'unreadable'`.
+          const castLost = castResult.status === 'unreadable' || (castResult.status === 'ok' && !castShapeOk);
+          const stateLost = stateResult.status === 'unreadable' || (stateResult.status === 'ok' && !stateShapeOk);
+          droppedBooks.push({ label, reason: castLost || stateLost ? 'unreadable' : 'not-yet-analysed' });
           continue;
         }
         books.push({
@@ -2402,13 +2436,32 @@ async function main() {
           'be recorded for a matched id in them; informational only, does NOT by itself block --apply (see below)'
         : ''),
   );
+  // finding 4 (round 3 review, 2026-08-05): the "not blocked by X evidence"
+  // half of each line used to print unconditionally whenever ITS OWN count
+  // was 0 — but `refuseApply` can still be true from the OTHER field, or
+  // from a book whose withheld count was never provided at all (defect 7's
+  // absent-field case, above; latent today — main()'s one caller always
+  // supplies both fields as real numbers). That produced two summary lines
+  // both claiming "not blocked", immediately followed by a refusal message
+  // saying a book WAS withheld — the exact line A33's own precondition
+  // tells the operator to trust, printing false. The reassuring claim is
+  // now gated on the actual outcome (`refuseApply`), not on this field's
+  // own count in isolation — the counts themselves are unchanged.
   console.log(
     `books with an auto-record withheld for missing cache evidence: ${booksWithheldForMissingCache}` +
-      (booksWithheldForMissingCache ? ` — contributes to the --apply block below` : ' — --apply is not blocked by cache evidence'),
+      (booksWithheldForMissingCache
+        ? ` — contributes to the --apply block below`
+        : refuseApply
+          ? ''
+          : ' — --apply is not blocked by cache evidence'),
   );
   console.log(
     `books with an auto-record withheld for missing bak evidence: ${booksWithheldForMissingBak}` +
-      (booksWithheldForMissingBak ? ` — contributes to the --apply block below` : ' — --apply is not blocked by bak evidence'),
+      (booksWithheldForMissingBak
+        ? ` — contributes to the --apply block below`
+        : refuseApply
+          ? ''
+          : ' — --apply is not blocked by bak evidence'),
   );
 
   // Round-2 review, Important 1 (original): refuse --apply outright when a

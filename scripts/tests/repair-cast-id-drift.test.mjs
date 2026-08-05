@@ -1864,6 +1864,55 @@ describe('collectBooks (#2097) — real fs fixtures, no server/dist needed', () 
     }
   });
 
+  test("CRITICAL (finding 1, round 3 review, 2026-08-05): a book whose state.json exists and is VALID but cast.json is genuinely missing — the exact shape import.ts writes, before analysis stage 1 first creates cast.json — is 'not-yet-analysed', not 'unreadable', and does not refuse --apply", () => {
+    // Reproduces the ordinary mid-import shape byte-for-byte: import.ts
+    // (server/src/routes/import.ts) writes state.json (with a real
+    // `chapters` array) at import time and writes no cast.json at all;
+    // cast.json is first created during analysis stage 1
+    // (server/src/routes/analysis.ts). Reparse re-creates the identical
+    // shape (server/src/routes/book-state.ts rm's cast.json, keeps
+    // state.json). An earlier discriminator (`castExists || stateExists`,
+    // cleared by round 1's own review as "sound") required BOTH files to be
+    // missing before granting 'not-yet-analysed' — this exact fixture
+    // classified as 'unreadable' under that logic and refused --apply for
+    // the whole workspace over one freshly-imported, otherwise-healthy book.
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'FreshlyImported', {
+        state: { chapters: [{ id: 1, title: 'One', slug: '01-one' }], title: 'FreshlyImported' },
+        // cast deliberately omitted — cast.json does not exist yet.
+      });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'not-yet-analysed');
+      const unreadableCount = result.droppedBooks.filter((b) => b.reason === 'unreadable').length;
+      assert.equal(
+        shouldRefuseApplyForUnreadableBooks(true, unreadableCount),
+        false,
+        '--apply must not refuse over an ordinary freshly-imported book',
+      );
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("finding 1 symmetry: a book whose cast.json exists and is VALID but state.json is genuinely missing is ALSO 'not-yet-analysed' — the fix is per-file, not special-cased to cast.json alone", () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'StateMissing', {
+        cast: { characters: [{ id: 'timkin', name: 'Timkin' }] },
+        // state deliberately omitted entirely.
+      });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'not-yet-analysed');
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test("CRITICAL (#2097): a book whose cast.json exists but fails to PARSE is 'unreadable' — evidence LOST, not absent, counted and named", () => {
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
     try {
@@ -1959,12 +2008,13 @@ describe('collectBooks (#2097) — real fs fixtures, no server/dist needed', () 
     // without relying on OS-specific permission bits (chmod is a no-op for
     // directories on Windows, where this box runs). The `dirs()` helper is
     // the SAME function reused at all three walk levels (author/series/
-    // title), so this one repro proves the try/catch mechanism for all
-    // three call sites — the per-level label text at the author/series
-    // levels is verified by code inspection (see collectBooks's own doc
-    // comment), not independently repro'd, since a Windows-portable way to
-    // make ONE directory unreadable while its parent's listing still
-    // reports it as a directory was not found.
+    // title), so this one repro proves the try/catch mechanism for the
+    // books/ root call site. The author- and series-level call sites are
+    // independently pinned by the two `node:test` mock-based tests directly
+    // below this one (finding 3, round 3 review) — a real directory can't
+    // portably be made to throw ENOTDIR/EACCES on this box while its parent
+    // listing still reports it as a directory, so those two mock
+    // `fs.readdirSync` for one specific path instead of relying on OS state.
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
     try {
       // 'books' exists but is a FILE — fs.existsSync passes, but
@@ -1982,20 +2032,116 @@ describe('collectBooks (#2097) — real fs fixtures, no server/dist needed', () 
     }
   });
 
-  test("defect 10 (round 2 review, suspected — fixed defensively, not reproduced on this box): a book whose cast.json exists but fails to parse alongside a genuinely-missing state.json is 'unreadable', not 'not-yet-analysed'", () => {
-    // The 'not-yet-analysed' case requires BOTH files to be genuinely
-    // missing (ENOENT) — this fixture has cast.json present-but-corrupt
-    // and state.json genuinely absent, so it must classify as evidence
-    // loss, not legitimate absence. This exercises readJsonTriState's
-    // 'missing' vs 'unreadable' split directly (the fix for the suspected
-    // fs.existsSync/EACCES gap), even though the EACCES case itself isn't
-    // reproduced here.
+  test('finding 3 (round 3 review, 2026-08-05): an unreadable AUTHOR-level directory is counted and named, not thrown out of main() uncaught, and its sibling author is still scanned', (t) => {
+    // Round 2 review's own defect-5 fix guarded all three `dirs()` call
+    // sites with the same try/catch, but the only pinned repro was the
+    // books/ root — the author- and series-level branches (collectBooks
+    // ~:1500-1511) could regress to a bare, unguarded readdirSync (or have
+    // their `if (… === null)` check silently dropped to `?? []`, which
+    // reddens ZERO tests without this one — see this file's module doc
+    // comment) with the suite staying green. `fs.readdirSync` is mocked for
+    // exactly the poisoned author path; every other call (including the
+    // books/ root listing and the good author's own walk) goes through the
+    // real implementation, so this is a targeted fault injection, not a
+    // blanket fs stub.
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      const booksRoot = path.join(workspaceDir, 'books');
+      writeBook(booksRoot, 'GoodAuthor', 'Series', 'Title', {
+        cast: { characters: [{ id: 'timkin', name: 'Timkin' }] },
+        state: { chapters: [{ id: 1 }], title: 'Title' },
+      });
+      const poisonedPath = path.resolve(path.join(booksRoot, 'BadAuthor'));
+      fs.mkdirSync(poisonedPath, { recursive: true });
+      const realReaddirSync = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', (p, opts) => {
+        if (path.resolve(String(p)) === poisonedPath) {
+          throw Object.assign(new Error('simulated EACCES'), { code: 'EACCES' });
+        }
+        return realReaddirSync(p, opts);
+      });
+      assert.doesNotThrow(() => collectBooks(workspaceDir));
+      const result = collectBooks(workspaceDir);
+      assert.equal(result.books.length, 1, 'GoodAuthor must still be scanned despite BadAuthor throwing');
+      assert.match(result.books[0].label, /GoodAuthor/);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'unreadable');
+      assert.match(result.droppedBooks[0].label, /BadAuthor \(unreadable directory\)/);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('finding 3 (round 3 review, 2026-08-05): an unreadable SERIES-level directory is counted and named, not thrown out of main() uncaught, and its sibling series is still scanned', (t) => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      const booksRoot = path.join(workspaceDir, 'books');
+      writeBook(booksRoot, 'Author', 'GoodSeries', 'Title', {
+        cast: { characters: [{ id: 'timkin', name: 'Timkin' }] },
+        state: { chapters: [{ id: 1 }], title: 'Title' },
+      });
+      const poisonedPath = path.resolve(path.join(booksRoot, 'Author', 'BadSeries'));
+      fs.mkdirSync(poisonedPath, { recursive: true });
+      const realReaddirSync = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', (p, opts) => {
+        if (path.resolve(String(p)) === poisonedPath) {
+          throw Object.assign(new Error('simulated EACCES'), { code: 'EACCES' });
+        }
+        return realReaddirSync(p, opts);
+      });
+      assert.doesNotThrow(() => collectBooks(workspaceDir));
+      const result = collectBooks(workspaceDir);
+      assert.equal(result.books.length, 1, 'GoodSeries must still be scanned despite BadSeries throwing');
+      assert.match(result.books[0].label, /GoodSeries/);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'unreadable');
+      assert.match(result.droppedBooks[0].label, /Author \/ BadSeries \(unreadable directory\)/);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("defect 10 (round 2 review, suspected — fixed defensively, not reproduced on this box): a book whose cast.json exists but fails to PARSE alongside a genuinely-missing state.json is 'unreadable', not 'not-yet-analysed'", () => {
+    // A book present-but-corrupt on one side (a parse failure) must still
+    // classify as evidence loss even when the other file is genuinely
+    // absent. NOTE: this exercises readJsonTriState's JSON.parse-failure
+    // catch (line ~1415-1419), which round 1's plain `readJsonSync` +
+    // `existsSync` already handled identically — it does NOT distinguish
+    // readJsonTriState's 'missing' (ENOENT) vs 'unreadable' (any other
+    // readFileSync error, e.g. EACCES) split; the test directly below this
+    // one does that (finding 2, round 3 review).
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
     try {
       writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'HalfMissing', {
         cast: '{ not valid json',
         // state deliberately omitted entirely
       });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'unreadable');
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("finding 2 (round 3 review, 2026-08-05): a book whose cast.json is a DIRECTORY (not a file) is 'unreadable' — a portable repro of readFileSync failing with something OTHER than ENOENT and OTHER than a JSON.parse failure, genuinely distinguishing readJsonTriState's 'missing' branch from its 'unreadable' branch", () => {
+    // Unlike the parse-failure test above (cast.json IS a real file, its
+    // bytes just aren't valid JSON — readFileSync succeeds, only
+    // JSON.parse fails), this fixture never reaches JSON.parse at all:
+    // fs.readFileSync throws EISDIR on a directory, the same "present but
+    // unreadable" shape an EACCES permission failure takes (an error whose
+    // `code` is neither ENOENT nor a parse SyntaxError). Mutation-verified:
+    // collapsing readJsonTriState's read-error catch to unconditionally
+    // `return { status: 'missing' }` (deleting the ENOENT-vs-everything-else
+    // split this function exists for) turns this book's reason from
+    // 'unreadable' into 'not-yet-analysed' — this assertion catches that.
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      const audiobookDir = path.join(workspaceDir, 'books', 'Author', 'Series', 'CastIsADir', '.audiobook');
+      // cast.json is itself a DIRECTORY, not a file.
+      fs.mkdirSync(path.join(audiobookDir, 'cast.json'), { recursive: true });
+      fs.writeFileSync(path.join(audiobookDir, 'state.json'), JSON.stringify({ chapters: [{ id: 1 }] }));
       const result = collectBooks(workspaceDir);
       assert.deepEqual(result.books, []);
       assert.equal(result.droppedBooks.length, 1);
