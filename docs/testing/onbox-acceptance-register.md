@@ -61,9 +61,69 @@ them are wide:
   that prose in its own row bodies and will silently fall behind.
 - **The rest of the summary strip is unchecked** — oldest debt, and the
   group/blocked/unconfirmed tallies. Recompute those by hand.
-- **The published page is invisible to it.** It only ever reads the source file,
-  so "was it published at all, and was it the right file?" is procedure, not a
-  gate.
+- **The published page is invisible to `check:onbox-register`'s no-flag run.**
+  It only ever reads the two TRACKED files, so "was it published at all, and
+  was it the right file?" is procedure, not that gate — see the merge step
+  below, which gives the specific stale-snapshot race mechanical teeth via a
+  second, explicit mode, but still can't verify by itself that someone ran it.
+
+**The concurrency hazard this closes (#1931).** Before the live view was
+tracked here, on 2026-07-28 two concurrent sessions each correctly added a
+different row (A20, E8) and republished from their own hand-built snapshot —
+the second republish was built from a snapshot taken *before* the first
+session's row had landed, so the surviving page had one row present and the
+other silently gone, with nothing to notice. That was possible because the
+live view lived nowhere but a session's own build of it. Tracking both files
+in git and gating their agreement via `npm run check:onbox-register` on every
+PR closes the git-side half: the live view a PR merges is no longer a
+hand-built snapshot racing another session's, it is the file *inside* the
+merge, checked against this register before either can land.
+
+**The residual hazard, and the merge step that closes it.** Git-side safety
+does not by itself close the ORIGINAL incident, because publishing is a step
+that happens *after* merge, outside git — so the same race reopens one level
+up. Two lanes can each merge a correct, agreeing live-view edit: git resolves
+both rows into the tracked `.html`, and `check:onbox-register` is green on
+both PRs. Lane A publishes its merge. Lane B, having fetched/built its own
+copy of the *published* page before A's merge landed, publishes from a build
+that is now stale relative to what's live — and the artifact loses A's row
+again, invisibly, exactly like 2026-07-28, because the no-flag
+`check:onbox-register` run only ever compares the two TRACKED files; the
+published page itself is outside its reach (no network access from a required
+CI check — the same call this design already made for the tracked-pair
+comparison, see the edge list above). The merge step that closes this, run
+**immediately before every publish**, not only after a suspected race:
+
+1. Fetch the page currently live at the canonical URL above and save it to a
+   local file — this is the CURRENTLY-published register, which may be ahead
+   of what you are about to publish.
+2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
+   Unlike `check:onbox-register`'s no-flag run, this comparison is
+   deliberately ONE-DIRECTIONAL: your register having rows the live page
+   doesn't have yet is the normal reason you're publishing, not a defect, so
+   it is never reported here. It fails ONLY when the live page has a row (or
+   group) your register does not — the signature of another lane having
+   already published ahead of you.
+3. **If it fails**, do NOT publish — your register is BEHIND what is already
+   live. Pull the latest `main` (the row that's already live should already
+   be merged there via its own PR), confirm `npm run check:onbox-register`
+   (no flag) is green, and re-run step 2 against the SAME saved copy from
+   step 1 to confirm it now passes. It should — main pulling in the missing
+   row is what resolves this, not another fetch of the live page.
+4. Only once step 2 passes, publish the tracked `.html`, with the canonical
+   URL above as `url`.
+
+This is deliberately a MANUAL procedure with mechanical support, not a fully
+automatic gate: CI cannot run it (no credentials to fetch the published
+artifact, and a network dependency inside a required status check is its own
+failure mode). `--against-published` exists so step 3's "does the live page
+have something I don't?" judgement is a command's exit code, not an
+eyeballed diff — it does not, and cannot, make the four steps happen on
+their own. An early version of this check compared both directions
+symmetrically, which inverted the diagnosis (failed on every ordinary
+publish and told the operator to delete the rows they were about to ship) —
+fixed before this landed; see the `checkLiveView` function's own header
+comment in `scripts/check-onbox-register.mjs` for the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:

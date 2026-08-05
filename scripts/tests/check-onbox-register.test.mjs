@@ -3,8 +3,23 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { checkRegister, checkLiveView } from '../check-onbox-register.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI_PATH = join(HERE, '..', 'check-onbox-register.mjs');
+const REAL_LIVE_VIEW_PATH = join(
+  HERE,
+  '..',
+  '..',
+  'docs',
+  'testing',
+  'onbox-acceptance-register-live-view.html',
+);
 
 // A minimal but structurally complete register: an "At a glance" table with
 // two groups plus a Blocked row, and matching body sections. Coherent by
@@ -1178,4 +1193,153 @@ test('a markdown with no "At a glance" section reports that, and nothing else', 
   assert.deepEqual(checkLiveView(register, buildLiveView()), [
     'No "## At a glance" section in the markdown — cannot check the live view against it.',
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// `--against-published <file>` — #1931's "re-read immediately before
+// publishing" step, mechanised (2036 review round 2 / R3 amendment). CI has
+// no credentials to fetch the published artifact, so this mode takes a
+// LOCALLY SAVED COPY of the page fetched by hand right before a publish and
+// diffs it against the register with the exact same `checkLiveView` used for
+// the tracked live-view file — these tests spawn the real CLI (not the
+// imported functions) so the argument parsing and file-reading are actually
+// exercised, not just the comparator underneath them.
+//
+// The real, committed `docs/testing/onbox-acceptance-register.md` is what
+// the CLI's REGISTER path always reads (it is not overridable), so these
+// tests start from a byte-identical COPY of the real, currently-committed
+// live view — known-agreeing with the real register at the time these tests
+// run — and mutate the copy, never the checked-in files.
+const REAL_LIVE_VIEW_HTML = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+
+function withTempCopy(html, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-published-'));
+  const filePath = join(dir, 'published.html');
+  writeFileSync(filePath, html, 'utf8');
+  try {
+    return fn(filePath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runCli(args) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+}
+
+// #1931 review round 3: the FIRST version of this mode reported checkLiveView's
+// default, symmetric comparison — `missing` (register has, live page doesn't)
+// AND `extra` (live page has, register doesn't). `missing` is the NORMAL,
+// INTENDED pre-publish state: you are publishing precisely because the
+// register you are about to publish has rows the live page does not yet
+// have. Reporting it inverted the diagnosis (told the operator their OWN
+// tracked file was stale) and prescribed a destructive remedy ("update the
+// live view's summary strip" == delete the rows you were about to publish).
+// Only `extra` is real evidence of staleness — a fixture built by
+// DECREMENTING the published owed total models the benign lagging-page case
+// and must PASS, not fail; a fixture built by adding a row on the published
+// page that the register lacks is the one that must fail. Both are covered
+// below, plus a positive stdout signal on both the passing paths (`OK — …`)
+// so a broken `invokedAsCli` detection — the same symlink/junction hazard
+// #2036 review round 2 found in run-golden-audio.mjs — cannot hide behind an
+// assertion that only checks the exit code (a prior version of these tests
+// did exactly that, and stayed green with the entire CLI block deleted).
+
+test('--against-published exits 0, with the OK signal, when the saved copy agrees with the real register', () => {
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const r = runCli(['--against-published', filePath]);
+    assert.equal(r.status, 0, `expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+    assert.match(
+      r.stdout,
+      /check:onbox-register: OK/,
+      'a genuine pass must print something distinguishing it from the CLI block never ' +
+        `having run at all. stdout was: ${JSON.stringify(r.stdout)}`,
+    );
+  });
+});
+
+test('--against-published exits 0 when the saved copy LAGS the register (the normal pre-publish state)', () => {
+  // The register is about to gain rows the published page does not have yet
+  // — that is the entire reason a publish is happening. Modelled here by
+  // decrementing the published owed total, exactly the shape review round 3
+  // found being (wrongly) treated as a failure.
+  const lagging = REAL_LIVE_VIEW_HTML.replace(
+    /<div class="n owed">(\d+)<\/div>/,
+    (_, n) => `<div class="n owed">${Number(n) - 4}</div>`,
+  );
+  assert.notEqual(
+    lagging,
+    REAL_LIVE_VIEW_HTML,
+    'fixture setup: the owed-total span must have matched',
+  );
+  withTempCopy(lagging, (filePath) => {
+    const r = runCli(['--against-published', filePath]);
+    assert.equal(
+      r.status,
+      0,
+      `a register that is AHEAD of the published page must not block publishing; got ` +
+        `status=${r.status}, stdout=${r.stdout}, stderr=${r.stderr}`,
+    );
+  });
+});
+
+test('--against-published exits 1 and names the row when the published page is AHEAD (has a row the register lacks)', () => {
+  // Rename an existing row ID on the published copy so the page carries a row
+  // (B4) the register genuinely does not have — the real "lane A already
+  // published, lane B hasn't merged that row yet" signature.
+  const ahead = REAL_LIVE_VIEW_HTML.replace(
+    '<span class="num">B3</span>',
+    '<span class="num">B4</span>',
+  );
+  assert.notEqual(ahead, REAL_LIVE_VIEW_HTML, 'fixture setup: the B3 row ID must have matched');
+  withTempCopy(ahead, (filePath) => {
+    const r = runCli(['--against-published', filePath]);
+    assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+    assert.match(r.stderr, /BEHIND what is already live/);
+    assert.match(r.stderr, /Group B section has row B4/);
+    assert.match(
+      r.stderr,
+      /Do not publish\. Merge the rows named above/,
+      'a failing --against-published run must tell the operator to merge the LIVE rows ' +
+        'in, not to edit the tracked file down to match the stale page',
+    );
+    // The inverted-diagnosis shape this test replaces: a "missing" message
+    // must never appear, because "register has a row the page doesn't" is
+    // not a failure in this mode.
+    assert.doesNotMatch(r.stderr, /is missing row/);
+  });
+});
+
+test('--against-published exits 1 with a usage message when no file path is given', () => {
+  const r = runCli(['--against-published']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /requires a file path/);
+});
+
+test('--against-published exits 1 with "Not found" when the given file does not exist', () => {
+  withTempCopy('unused', (filePath) => {
+    const missingPath = filePath + '.does-not-exist';
+    const r = runCli(['--against-published', missingPath]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Not found:/);
+  });
+});
+
+// Belt-and-suspenders on the CLI entry point itself: nothing else here spawns
+// the real process, so a break in `invokedAsCli`'s own detection (the same
+// symlink/junction hazard #2036 review round 2 found in run-golden-audio.mjs)
+// would be invisible to every other test in this file, which only imports
+// the pure functions. Asserts on the OK signal, not just the exit code —
+// review round 3 found a status-only version of this exact test stayed
+// green with the entire CLI block deleted (`invokedAsCli` mutated to a
+// never-matching literal): a broken guard and a genuine pass both read as
+// "exit 0, no output".
+test('the CLI (no flags) exits 0, with the OK signal, against the real committed register + live view', () => {
+  const r = runCli([]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
+  assert.match(
+    r.stdout,
+    /check:onbox-register: OK/,
+    `a genuine pass must print something. stdout was: ${JSON.stringify(r.stdout)}`,
+  );
 });
