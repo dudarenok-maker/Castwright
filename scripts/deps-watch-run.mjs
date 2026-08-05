@@ -1,8 +1,9 @@
 // scripts/deps-watch-run.mjs
 // ops-17 deps-watch IO orchestrator (#790). Pure logic lives in
 // scripts/deps-watch.mjs (unit-tested); this file does only IO:
-// read pubspec + the pub-outdated JSON, fetch/refresh the sticky comment via
-// `gh api`, write the job summary, post the A2 transition comment, set exit code.
+// read pubspec + the pub-outdated JSON, fetch the existing sticky comment via
+// `gh api`, write the job summary, post the A2 transition comment, then
+// refresh the sticky comment, set exit code.
 // Exercised by the workflow_dispatch acceptance run, not by node --test.
 import { readFileSync, appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -15,7 +16,7 @@ import {
   extractState,
   computeTransitions,
   findSticky,
-  stickyRequest,
+  publish,
   renderSticky,
   renderSummary,
   renderTransitionComment,
@@ -61,16 +62,13 @@ try {
   const summary = renderSummary({ pluginStatus, behind, today });
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
 
-  // 5. Sticky comment — edit in place, or create once (decision is pure)
+  // 5. Publish: post the A2 transition comment (a NEW comment => a real
+  //    GitHub notification) FIRST, then the sticky comment — edit in place,
+  //    or create once (decision is pure). State is committed only after the
+  //    notification it implies has been delivered (ops-17c, #2113).
   const stickyBody = renderSticky({ pluginStatus, behind, today });
-  const req = stickyRequest(existing, repo, issue);
-  gh(['api', req.path, '--method', req.method, '-f', `body=${stickyBody}`]);
-
-  // 6. A2 transition notification (a NEW comment => a real GitHub notification)
   const transitionComment = renderTransitionComment(transitions, pluginStatus);
-  if (transitionComment) {
-    gh(['api', `repos/${repo}/issues/${issue}/comments`, '--method', 'POST', '-f', `body=${transitionComment}`]);
-  }
+  publish({ gh, repo, issue, existing, stickyBody, transitionComment });
 
   console.log(`deps-watch: ${behind.length} direct/dev behind; transitions: ${transitions.join(',') || 'none'}`);
   process.exit(exitCodeFor(behind)); // 0 or 1 — the clean path only
