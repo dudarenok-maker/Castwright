@@ -109,22 +109,42 @@ test('extractState parses the embedded JSON; empty/garbage -> {}', () => {
   assert.deepEqual(extractState('no marker here'), {});
 });
 
-test('computeTransitions: fires only on at-pin -> ahead', () => {
+test('computeTransitions: fires on at-pin -> ahead, and on first run for every currently-ahead plugin', () => {
   const status = [
-    { name: 'audio_session', ahead: true },
-    { name: 'mobile_scanner', ahead: true },
+    { name: 'audio_session', ahead: true, latest: '0.2.4' },
+    { name: 'mobile_scanner', ahead: true, latest: '7.3.0' },
   ];
-  // audio_session was already ahead last run; mobile_scanner just flipped.
-  const prior = { audio_session: { ahead: true }, mobile_scanner: { ahead: false } };
+  // audio_session was already ahead last run at the SAME latest; mobile_scanner just flipped.
+  const prior = { audio_session: { ahead: true, latest: '0.2.4' }, mobile_scanner: { ahead: false } };
   assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
   // empty prior (first run) -> every currently-ahead plugin transitions
   assert.deepEqual(computeTransitions(status, {}), ['audio_session', 'mobile_scanner']);
 });
 
-test('computeTransitions: ahead->ahead does NOT re-fire (transition fires once)', () => {
-  // The core A2 guarantee: a plugin already ahead last run must not re-spam #790.
-  const status = [{ name: 'audio_session', ahead: true }];
-  assert.deepEqual(computeTransitions(status, { audio_session: { ahead: true } }), []);
+test('computeTransitions: ahead->ahead with unchanged latest does NOT re-fire (no cron spam)', () => {
+  // The core no-re-spam guarantee (ops-17b, #2104): reshaped from an edge-detector
+  // on `ahead` to one on `latest` — same prior AND current latest -> [].
+  const status = [{ name: 'audio_session', ahead: true, latest: '0.3.0' }];
+  const prior = { audio_session: { ahead: true, latest: '0.3.0' } };
+  assert.deepEqual(computeTransitions(status, prior), []);
+});
+
+test('computeTransitions: fires on a genuine latest bump even though already ahead (ops-17b repro, #2104)', () => {
+  const status = [{ name: 'flutter_foreground_task', ahead: true, latest: '10.1.0' }];
+  const prior = { flutter_foreground_task: { ahead: true, latest: '10.0.0' } };
+  assert.deepEqual(computeTransitions(status, prior), ['flutter_foreground_task']);
+});
+
+test('computeTransitions: a downgrade (latest moves backwards) does not fire', () => {
+  const status = [{ name: 'mobile_scanner', ahead: true, latest: '10.0.0' }];
+  const prior = { mobile_scanner: { ahead: true, latest: '10.1.0' } };
+  assert.deepEqual(computeTransitions(status, prior), []);
+});
+
+test('computeTransitions: prior ahead:true with no usable latest fails loud (fires)', () => {
+  const status = [{ name: 'mobile_scanner', ahead: true, latest: '7.4.0' }];
+  const prior = { mobile_scanner: { ahead: true } }; // corrupt/legacy state: no `latest` recorded
+  assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
 });
 
 test('computeBehind: empty payload -> [] and exitCodeFor -> 0 (the green baseline)', () => {
@@ -192,6 +212,7 @@ import {
   renderSticky,
   renderSummary,
   renderTransitionComment,
+  publish,
 } from '../deps-watch.mjs';
 
 const STATUS_CLEAN = [
@@ -237,4 +258,109 @@ test('renderTransitionComment: null when no transitions; @mention + recipe other
   assert.ok(md.includes('audio_session'));
   assert.ok(md.includes('0.3.0'));
   assert.ok(/flutter build apk --release/.test(md));
+});
+
+test('renderTransitionComment: recipe covers BOTH outcomes, and says the pin no longer arms the notification', () => {
+  // ops-17b (#2104): the old copy only told the operator what to do on success
+  // (bump pin / close #790), which trained them to leave the pin alone on a
+  // rejected release — permanently disarming the watchdog for that plugin.
+  const md = renderTransitionComment(['audio_session'], STATUS_AHEAD);
+  // success path intact: bump pin, drop escape-hatch flags + Trip-B assertion, close #790.
+  assert.ok(/bump the pin/i.test(md));
+  assert.ok(/escape-hatch flags/i.test(md));
+  assert.ok(/app\.yml.* Trip-B/i.test(md) || /Trip-B.*app\.yml/i.test(md));
+  assert.ok(/close #790/i.test(md));
+  // rejected-release path is now covered too, and states the pin isn't what re-arms it.
+  assert.ok(/still (there|applies)|warning is still|not gone/i.test(md));
+  assert.ok(/no longer (what arms|arms)|not what arms/i.test(md));
+  // The advice must be bound to the rejected-release condition ON THE SAME LINE,
+  // not merely present somewhere in the body — otherwise a rewrite that attaches
+  // "leave the pin alone" to the WRONG bullet (e.g. the success path) would still
+  // pass every assertion above. `.` doesn't match `\n` by default, so this only
+  // matches if both phrases are on one line with nothing else between them.
+  assert.match(md, /warning is still there.*leave the pin alone/i);
+});
+
+// A fake `gh` that records each call's argv and can be told to throw on the
+// Nth call (1-indexed) — used to drive `publish` (ops-17c, #2113).
+function fakeGh({ throwOnCall } = {}) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (throwOnCall && calls.length === throwOnCall) {
+      throw new Error(`gh call ${calls.length} failed (fake)`);
+    }
+    return '';
+  };
+  gh.calls = calls;
+  return gh;
+}
+
+test('publish: transition present, both calls succeed -> transition POST is call 1, sticky write is call 2', () => {
+  const gh = fakeGh();
+  publish({
+    gh,
+    repo: 'o/r',
+    issue: '790',
+    existing: { id: 42 },
+    stickyBody: 'sticky-body',
+    transitionComment: 'transition-body',
+  });
+  assert.equal(gh.calls.length, 2);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
+  assert.deepEqual(gh.calls[1], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
+});
+
+test('publish: #2113 regression — the transition POST throws, and the sticky is NEVER called', () => {
+  const gh = fakeGh({ throwOnCall: 1 });
+  assert.throws(() =>
+    publish({
+      gh,
+      repo: 'o/r',
+      issue: '790',
+      existing: { id: 42 },
+      stickyBody: 'sticky-body',
+      transitionComment: 'transition-body',
+    }),
+  );
+  assert.equal(gh.calls.length, 1); // only the failed call — sticky never reached
+  // Must be the TRANSITION post that failed, not merely "some first call" — a
+  // sticky-first ordering would also stop at 1 call, just the wrong one.
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
+});
+
+test('publish: no transition -> exactly one call, and it is the sticky write (no spurious POST)', () => {
+  const gh = fakeGh();
+  publish({
+    gh,
+    repo: 'o/r',
+    issue: '790',
+    // existing is non-null so the sticky write is a PATCH to a comment-id
+    // path — structurally distinct from a transition POST to the issue's
+    // comments collection, not just distinguishable by payload (ops-17c
+    // review, #2115: with existing: null this test's own sticky POST hits
+    // the SAME path a transition POST would, so "it is the sticky write"
+    // was only provable by inspecting the body).
+    existing: { id: 42 },
+    stickyBody: 'sticky-body',
+    transitionComment: null,
+  });
+  assert.equal(gh.calls.length, 1);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
+});
+
+test('publish: the sticky write throws -> the transition POST already happened (accepted duplicate-risk trade)', () => {
+  const gh = fakeGh({ throwOnCall: 2 });
+  assert.throws(() =>
+    publish({
+      gh,
+      repo: 'o/r',
+      issue: '790',
+      existing: { id: 42 },
+      stickyBody: 'sticky-body',
+      transitionComment: 'transition-body',
+    }),
+  );
+  assert.equal(gh.calls.length, 2);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
 });

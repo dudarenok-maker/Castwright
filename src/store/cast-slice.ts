@@ -52,6 +52,20 @@ function overlaySnapshotEntry(existing: Character | undefined, inc: Character): 
   };
 }
 
+/** #2023, widened #2040 Wave 3 (Task 16) — one orphaned-characterId map
+    entry's resolution info. Exported (fix round 2 review finding 6) so
+    consumers — `src/views/cast.tsx`'s banner split, in particular — import
+    this instead of re-declaring the same shape by hand, which is exactly
+    the drift Task 16 left for Task 17 to repair (`EMPTY_ORPHANED_FALLBACK_MAP`
+    had gone stale at the OLD two-field shape). */
+export interface OrphanedCharacterFallback {
+  characterId?: string;
+  voiceName?: string;
+  resolution: 'alias' | 'normalised' | 'unresolved';
+  resolvedCharacterId?: string;
+  segments: number;
+}
+
 export interface CastState {
   characters: Character[];
   /** fe-16 — characterId → engine the character actually rendered in when it
@@ -60,13 +74,13 @@ export interface CastState {
       pill. Optional (absent on pre-fe-16 preloaded test stores) — selectors
       read it through a `?? {}` guard. */
   renderedFallbackByCharacter?: Record<string, string>;
-  /** #2023 — orphaned characterId → who actually rendered it. Hydrated from
-      the book-state GET alongside `renderedFallbackByCharacter` above, but
-      keyed by a manuscript id with NO cast entry at all (substituted with
-      the narrator) rather than a real cast id whose engine changed. Optional
-      for the same reason as its sibling — selectors read it through a
-      `?? {}` guard. */
-  orphanedCharacterFallbacks?: Record<string, { characterId: string; voiceName?: string }>;
+  /** #2023, widened #2040 Wave 3 — orphaned characterId → resolution info.
+      Hydrated from the book-state GET alongside `renderedFallbackByCharacter`
+      above, but keyed by a manuscript id that does NOT exactly match a live
+      cast id rather than a real cast id whose engine changed. Optional for
+      the same reason as its sibling — selectors read it through a `?? {}`
+      guard. */
+  orphanedCharacterFallbacks?: Record<string, OrphanedCharacterFallback>;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -94,11 +108,12 @@ export const castSlice = createSlice({
     setRenderedFallback: (s, a: PayloadAction<Record<string, string>>) => {
       s.renderedFallbackByCharacter = a.payload ?? {};
     },
-    /* #2023 — overwrite the orphaned-characterId fallback map from the
-       book-state GET, mirroring setRenderedFallback above. */
+    /* #2023, widened #2040 Wave 3 — overwrite the orphaned-characterId
+       fallback map from the book-state GET, mirroring setRenderedFallback
+       above. */
     setOrphanedCharacterFallbacks: (
       s,
-      a: PayloadAction<Record<string, { characterId: string; voiceName?: string }>>,
+      a: PayloadAction<Record<string, OrphanedCharacterFallback>>,
     ) => {
       s.orphanedCharacterFallbacks = a.payload ?? {};
     },
@@ -572,6 +587,27 @@ export const castSlice = createSlice({
       c.notLinkedTo = c.notLinkedTo.filter(
         (p) => !(p.bookId === otherBookId && p.characterId === otherCharacterId),
       );
+    },
+    /* From POST /api/books/:bookId/cast/:characterId/reject-orphan-match
+       (#2040 Task 17). The user has just declared "orphanedId is NOT the
+       same character as the one it resolved onto (or was compared
+       against)" via the orphaned-character-fallback banner's "not the same
+       character" action. The server has recorded the rejection durably
+       (cast-id-history.json's `rejected` list, honoured after the exact-id
+       tier but ahead of the history / normalised-id / normalised-history
+       tiers — fix round 1) — this mirrors that into the local orphan-fallback
+       map so the banner immediately reflects it as unresolved, matching
+       what the next book-state hydrate would report, rather than
+       continuing to show the auto-match the user just rejected. No-op for
+       an id no longer in the map (double-dispatch under network retry, or
+       already updated). The `notLinkedTo` mirror onto the live character
+       is a separate dispatch (`applyNotLinked`, same as the cross-book
+       "different variant" flow) — this reducer only owns the orphan map. */
+    applyOrphanRejection: (s, a: PayloadAction<{ orphanedId: string }>) => {
+      const entry = s.orphanedCharacterFallbacks?.[a.payload.orphanedId];
+      if (!entry) return;
+      entry.resolution = 'unresolved';
+      entry.resolvedCharacterId = undefined;
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a

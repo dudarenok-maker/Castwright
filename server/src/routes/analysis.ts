@@ -108,12 +108,20 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import {
   mergeAnalysisResultWithExistingCast,
+  overlayInterimCastForLiveView,
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
   dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
+  type Retirement,
 } from '../store/merge-analysis-cast.js';
+import {
+  retireCharacterId,
+  dropSupersededIdsReclaimedByLiveCast,
+  refuseRetirementsOfLiveIds,
+} from '../store/cast-id-history.js';
+import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
@@ -179,6 +187,48 @@ export async function readPriorCastForMerge(
     ).catch(() => null)
   )?.characters;
   return fromCarryover ?? [];
+}
+
+/* §4.4 — the choke point every id-retiring call site records through.
+   `applyRewriteToPriorCast`, `dedupePriorCastByName` and
+   `mergeAnalysisResultWithExistingCast` are pure/synchronous by design (unit-
+   testable, no file I/O); this is where their reported retirements actually
+   reach `cast-id-history.json`, at the route level where bookDir is in
+   scope. No-op when bookDir is absent (legacy non-workspace path) or the
+   list is empty.
+
+   `liveIds` is the roster that is actually persisted at this point — pass
+   `mergedFinal.characters`' ids at a final cast.json write. Anything naming
+   one of them as `from` is refused and logged (Wave 2 final-review finding
+   1(b); see `refuseRetirementsOfLiveIds` for why that shape is bogus by
+   definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
+   where no roster is final yet, and say why at the call site — the parameter
+   is deliberately required rather than optional so a new call site cannot
+   skip the filter by omission. */
+async function recordRetirements(
+  bookDir: string | null | undefined,
+  retirements: ReadonlyArray<Retirement>,
+  liveIds: ReadonlyArray<string> | null,
+  log: (phaseId: number, message: string) => void,
+): Promise<void> {
+  if (!bookDir || !retirements.length) return;
+  const { keep, refused } = liveIds
+    ? refuseRetirementsOfLiveIds(retirements, liveIds)
+    : { keep: retirements, refused: [] as Retirement[] };
+  /* Operator-visible, mirroring the "Dropped N history alias(es)…" line at
+     the final write: a silently-dropped retirement is exactly how this class
+     of bug hid for two waves. */
+  if (refused.length) {
+    log(
+      1,
+      `Refused ${refused.length} character-id retirement(s) naming a still-live cast id (${refused
+        .map((r) => `${r.from} -> ${r.to}`)
+        .join(', ')}) — recording one would repoint unrelated history onto the wrong character.`,
+    );
+  }
+  for (const { from, to } of keep) {
+    await retireCharacterId(bookDir, from, to);
+  }
 }
 
 /* srv-13 — when the merge re-adds voiced/reused characters the fresh roster
@@ -2830,6 +2880,23 @@ export async function runMainAnalyzerJob(
             .join(', ')}).`,
         );
       }
+      /* §4.4 / Task 8 fix round 1 (item 1) — a throwing history write
+         (EPERM/ENOSPC on cast-id-history.json) must never fail the analysis
+         persist. Mirrors writeFoldJournal/writeDedupJournal below. */
+      /* `liveIds: null` — this runs at the single prior-cast LOAD point,
+         before the analyzer has produced anything, so no roster is final and
+         there is none to force (Wave 2 final-review finding 1(b) explicitly
+         calls this site out). It needs none: every `from` here is a prior row
+         `dedupePriorCastByName` just removed from `priorCastForMerge`, which
+         is the only roster in hand, and the one case where a `from` could
+         come back live — this run's fresh roster re-minting it — is handled
+         at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
+         against the roster that actually got persisted. */
+      try {
+        await recordRetirements(recordRef.bookDir, reconciled.retirements, null, log);
+      } catch (historyErr) {
+        console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
+      }
     }
 
     if (requestedFresh) {
@@ -3567,8 +3634,17 @@ export async function runMainAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              /* §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) — this
+                 write persists a PROVISIONAL roster (no sentence counts yet;
+                 the authoritative end-of-run write below clobbers it).
+                 `overlayInterimCastForLiveView` has no id-drift name-fallback
+                 and produces no retirements — a prior id that looks dropped
+                 here may simply not have been reached yet, so it must not be
+                 able to swap a persisted id. Only §4.4's five listed sites
+                 record retirements, and none of them is this one. */
+              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+                characters: mergedInterim,
               });
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
@@ -3772,8 +3848,15 @@ export async function runMainAnalyzerJob(
               assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
               [],
             );
+            // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
+            // preview-folded roster, no sentence counts yet; the
+            // authoritative write below clobbers it.
+            // `overlayInterimCastForLiveView` has no name-fallback and
+            // produces no retirements — see the interim-write comment above
+            // for the full rationale.
+            const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
             await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast),
+              characters: mergedStage1,
             });
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
@@ -4642,10 +4725,35 @@ export async function runMainAnalyzerJob(
       );
     }
 
-    const characters = applyNarratorIdentity(
+    const characters0 = applyNarratorIdentity(
       attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
       bookLanguage,
     );
+
+    /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
+       re-slugged, before anything derives from the fresh ids. Roster and sentences
+       move together: phase1ValidIds (below) is built from the roster, and
+       reconcileSentenceCharacterIds would otherwise demote every renamed
+       character's lines to the narrator.
+
+       §11 Q2 — composed against the SAME dedup→fold cumulative rewrite table
+       Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
+       later applies to the prior cast, so a prior row already headed
+       elsewhere via THIS run's own dedup is recognised as already-converged
+       instead of being matched here first and rewritten backwards. Recomputed
+       here (composeRewrites is pure and dd/folded are already in scope) —
+       the later computation at the cast.json persist point (currently
+       :4834, feeding applyRewriteToPriorCast at :4835) is left as written,
+       not hoisted, so this never touches its own retirement bookkeeping. */
+    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+    const remappedToPrior = remapFreshToPriorIds(
+      characters0,
+      folded.sentences,
+      priorCastForMerge,
+      cumulativeForRemap,
+    );
+    const characters = remappedToPrior.characters;
+    folded.sentences = remappedToPrior.sentences;
 
     /* Phase 1 character-id reconciliation (see reconcileSentenceCharacterIds
        comment for motivation). Demote orphan ids to narrator before the
@@ -4762,7 +4870,10 @@ export async function runMainAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters));
+          // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
+          // §4.4) — prune against characters0, not the remapped `characters`,
+          // or every suggestion fails both id checks and the list empties.
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
@@ -4783,9 +4894,67 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, characters),
+            characters: mergedFinal.characters,
           });
+          /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
+             authoritative cast.json write, and never let a throwing history
+             write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
+             state.json. Mirrors writeFoldJournal/writeDedupJournal above. */
+          try {
+            /* Wave 2 final-review finding 1(b) — every retirement recorded
+               at this final write is filtered against the roster that was
+               just persisted (`mergedFinal.characters`, the same binding the
+               drop below uses, so "live" means the same thing to both). A
+               retirement naming a live id is bogus by construction here; the
+               filter is defence in depth for a future producer that stops
+               guaranteeing that, not a fix for a reachable case today. */
+            const liveIds = mergedFinal.characters.map((c) => c.id);
+            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            /* §4.4 call site 4 — the early remap (Task 10) also retires an
+               id, one entry per `remappedToPrior.rewrites` key. The fresh id
+               it retires never lands on disk, but the analysis cache is
+               written BEFORE the remap runs (§11 Q3) and keeps the pre-remap
+               fresh ids, so without this the resolver has no way to map a
+               later cache/segment reference back onto the live prior id. */
+            const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
+              ([from, to]) => ({ from, to }),
+            );
+            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
+               exact-id-first, so a history entry keyed to an id this write
+               just reintroduced as live would silently lose to it (no tie,
+               no warning). Drop it here, last, so it can't survive past the
+               same write cycle that reintroduced the live row — whether the
+               entry predates this run or one of the three recordRetirements
+               calls above just (re)wrote it. `mergedFinal.characters` is the
+               exact roster this write just persisted, not an intermediate
+               (fresh `characters` or `remapped.priorCast`), so "live" here
+               means "actually on disk after this write". The dropped
+               entries are reported so a future banner can flag their
+               segments as needs-your-decision (§4.6, Wave 3) — this call
+               only drops and returns, it does not surface anything itself. */
+            const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
+              record.bookDir,
+              liveIds,
+            );
+            /* #2040 Task 14 review item 2a — operator-visible, mirrors the
+               "Dedup collapsed N prior voiced row(s)..." log above. The
+               dropped pairs are also persisted (item 2b, cast-id-history.ts's
+               `displaced`), so this line is a heads-up, not the only record. */
+            if (displacedByReclaim.length) {
+              log(
+                1,
+                `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+          } catch (historyErr) {
+            console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+          }
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, characters),
@@ -5232,6 +5401,7 @@ export async function runSubsetAnalyzerJob(
 
   /* Fix 2 — same-name prior-cast collapse (see streaming path). Applied here so
      the subset re-analysis path's writes + seed also see one prior row per name. */
+  let dedupRetirements: Retirement[] = [];
   if (priorCastForMerge.length > 1) {
     const reconciled = dedupePriorCastByName(priorCastForMerge);
     priorCastForMerge = reconciled.cast;
@@ -5243,6 +5413,7 @@ export async function runSubsetAnalyzerJob(
           .join(', ')}).`,
       );
     }
+    dedupRetirements = reconciled.retirements;
   }
 
   /* Used inside the persist guards below in place of the old `clientGone`
@@ -5253,6 +5424,21 @@ export async function runSubsetAnalyzerJob(
   const isAborted = (): boolean => abortController.signal.aborted;
 
   try {
+    /* §4.4 / Task 8 fix round 1 (items 1 + 2) — the DEDUP call above computes
+       `dedupRetirements` synchronously (can't throw), but recording them is
+       async I/O — moved inside this try so a throw can't reject before the
+       try starts (runSubsetAnalyzerJob is fire-and-forget with no outer
+       catch; a rejection there would skip `endJob`, leaving the SSE response
+       open and the job stuck in `inFlightSubsetByManuscript` forever). Also
+       wrapped in its own try/catch so a throwing history write still can't
+       fail the analysis persist — mirrors writeFoldJournal/writeDedupJournal. */
+    /* `liveIds: null` — same reasoning as the main route's dedup site: no
+       roster is final here. See that call site's comment. */
+    try {
+      await recordRetirements(record.bookDir, dedupRetirements, null, log);
+    } catch (historyErr) {
+      console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
+    }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
@@ -5431,8 +5617,14 @@ export async function runSubsetAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
+              // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
+              // provisional roster, no sentence counts yet; the authoritative
+              // write below clobbers it. `overlayInterimCastForLiveView` has
+              // no name-fallback and produces no retirements — see the main
+              // route's interim-write comment for the full rationale.
+              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
               await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+                characters: mergedInterim,
               });
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
@@ -5776,7 +5968,7 @@ export async function runSubsetAnalyzerJob(
         `Dropped ${folded.summary.droppedSilent} non-speaking character${folded.summary.droppedSilent === 1 ? '' : 's'} from the cast (${sample}${more}) — no attributed dialogue, narrator covers them.`,
       );
     }
-    const enriched = applyNarratorIdentity(
+    const enriched0 = applyNarratorIdentity(
       attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences),
       bookLanguage,
     );
@@ -5787,15 +5979,15 @@ export async function runSubsetAnalyzerJob(
        Mirrors the main route's pass; failure is non-fatal. */
     if (record.bookId) {
       try {
-        seedReuseGuardsFromPriorCast(priorCastForMerge, enriched);
-        const staleDropped = await pruneStaleReuseLinks(record.bookId, enriched);
+        seedReuseGuardsFromPriorCast(priorCastForMerge, enriched0);
+        const staleDropped = await pruneStaleReuseLinks(record.bookId, enriched0);
         if (staleDropped > 0) {
           log(
             0,
             `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`,
           );
         }
-        const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched);
+        const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched0);
         if (linked > 0) {
           log(
             0,
@@ -5806,6 +5998,32 @@ export async function runSubsetAnalyzerJob(
         console.warn('[analysis] subset series reuse-link pass failed', linkErr);
       }
     }
+
+    /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
+       re-slugged, before anything derives from the fresh ids. Mirrors the main
+       route's same-named block (currently :4678-4701) — the subset path's
+       second (and last) call site from spec §4.4's five-entry list. Runs AFTER
+       the reuse-link block above (§11 — keeps the two paths symmetric: the main
+       route's own reuse-link pass, seedReuseGuardsFromPriorCast at :3737, also
+       runs long before its remap). Roster and sentences move together:
+       subsetValidIds (below) is built from the roster, and
+       reconcileSentenceCharacterIds would otherwise demote every renamed
+       character's lines to the narrator.
+
+       §11 Q2 — composed against the SAME dedup→fold cumulative rewrite table
+       Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
+       later applies to the prior cast, so a prior row already headed
+       elsewhere via THIS run's own dedup is recognised as already-converged
+       instead of being matched here first and rewritten backwards. */
+    const cumulativeForRemap = composeRewrites(dd.rewrites, folded.rewrites);
+    const remappedToPrior = remapFreshToPriorIds(
+      enriched0,
+      folded.sentences,
+      priorCastForMerge,
+      cumulativeForRemap,
+    );
+    const enriched = remappedToPrior.characters;
+    folded.sentences = remappedToPrior.sentences;
 
     /* Phase 1 character-id reconciliation — see the main route's same
        block plus the comment on reconcileSentenceCharacterIds. The
@@ -5916,7 +6134,10 @@ export async function runSubsetAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched));
+          // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
+          // §4.4) — prune against enriched0, not the remapped `enriched`, or
+          // every suggestion fails both id checks and the list empties.
+          await writeSuggestions(record.bookDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
         } catch (dedupErr) {
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
         }
@@ -5936,9 +6157,57 @@ export async function runSubsetAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
           await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched),
+            characters: mergedFinal.characters,
           });
+          /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
+             authoritative cast.json write; wrapped so a throwing history
+             write can't skip cast.json / state.json. */
+          try {
+            /* Wave 2 final-review finding 1(b) — every retirement recorded
+               at this final write is filtered against the roster that was
+               just persisted (`mergedFinal.characters`, the same binding the
+               drop below uses, so "live" means the same thing to both). A
+               retirement naming a live id is bogus by construction here; the
+               filter is defence in depth for a future producer that stops
+               guaranteeing that, not a fix for a reachable case today. */
+            const liveIds = mergedFinal.characters.map((c) => c.id);
+            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            /* §4.4 call site 4 — the early remap (Task 11) also retires an
+               id, one entry per `remappedToPrior.rewrites` key. The fresh id
+               it retires never lands on disk, but the analysis cache is
+               written BEFORE the remap runs (§11 Q3) and keeps the pre-remap
+               fresh ids, so without this the resolver has no way to map a
+               later cache/segment reference back onto the live prior id. */
+            const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
+              ([from, to]) => ({ from, to }),
+            );
+            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
+               path's same-named block above; see its comment for the
+               ordering (last, so a same-run retirement that happened to
+               (re)write an entry whose key is live still gets cleaned up)
+               and the live-id binding (`mergedFinal.characters`, the exact
+               roster this write just persisted). */
+            const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
+              record.bookDir,
+              liveIds,
+            );
+            // #2040 Task 14 review item 2a — mirrors the main path's same-
+            // named block above.
+            if (displacedByReclaim.length) {
+              log(
+                1,
+                `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+          } catch (historyErr) {
+            console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+          }
           await logCarriedForwardCharacters(
             record.bookDir,
             voicedSurvivorsDropped(remapped.priorCast, enriched),

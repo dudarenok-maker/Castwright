@@ -35,6 +35,7 @@ import { pcmDurationSec } from '../tts/pcm.js';
 import { applyGainToPcm } from '../tts/gain-pcm.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter } from '../tts/synthesise-chapter.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
@@ -187,6 +188,26 @@ chapterSpliceRouter.post(
       }
     }
 
+    /* Cast (hydrated like generation) so the rewritten segments file carries
+       accurate drift snapshots. Loaded here — before the M2 divergence check
+       below — rather than its old spot after it, because #2040's
+       `findDivergentSentences` now needs the cast (+ history) too, to
+       resolve a superseded characterId on either side of the comparison
+       before treating it as a genuine reattribution. */
+    const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
+    if (!cast?.characters?.length) return fail('Cast not confirmed yet — open the cast view first.');
+    cast.characters = await hydrateCastReusedVoices(cast.characters);
+
+    /* #2040 — resolve a sentence group's characterId through the book's
+       retired-id history before treating it as orphaned, and honour a "not
+       the same character" rejection (#2040 Task 17). Loaded once for this
+       splice operation (reused below by `findDivergentSentences` AND, for a
+       rerecord, by every `synthesiseChapter` call inside the synth loop
+       further down) — not per segment. Never throws (see loadCastIdHistory's
+       own doc comment). Passed through WHOLE (fix round 1), not just
+       `.supersededBy`. */
+    const castIdHistory = await loadCastIdHistory(bookDir);
+
     /* M2 (#1972 follow-up) — resolve + validate a re-record against the
        CURRENT analysis BEFORE any side effect: displacing a concurrent
        in-flight generation of this chapter (abortInFlightChapterJob,
@@ -232,7 +253,13 @@ chapterSpliceRouter.post(
          by default can just as easily destroy correct data. The user
          decides — by re-running analysis or doing a full chapter
          generation — instead of the splice guessing for them. */
-      const divergent = findDivergentSentences(segFile.segments, targetIndices, sentences);
+      const divergent = findDivergentSentences(
+        segFile.segments,
+        targetIndices,
+        sentences,
+        cast.characters,
+        castIdHistory,
+      );
       if (divergent.length > 0) {
         const divergentSegmentCount = new Set(divergent.map((d) => d.segmentIndex)).size;
         // n1 — name a few of the actual sentenceId → newOwner pairs so the
@@ -252,12 +279,6 @@ chapterSpliceRouter.post(
       }
       rerecordSentences = sentences;
     }
-
-    /* Cast (hydrated like generation) so the rewritten segments file carries
-       accurate drift snapshots. */
-    const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) return fail('Cast not confirmed yet — open the cast view first.');
-    cast.characters = await hydrateCastReusedVoices(cast.characters);
 
     /* Concurrency: displace any in-flight regen of this chapter, and register
        so a later regen displaces us — the two never race the same files. */
@@ -352,6 +373,10 @@ chapterSpliceRouter.post(
         // abort/register/decode side effects.
         const sentences = rerecordSentences;
 
+        // #2040 — castIdHistory is loaded once above (before the M2
+        // divergence check), reused here so the synth loop's
+        // synthesiseChapter calls resolve orphaned ids through the same
+        // history map.
         replacements = await buildSynthReplacements({
           segments: segFile.segments,
           targetIndices,
@@ -365,6 +390,7 @@ chapterSpliceRouter.post(
             const r = await synthesiseChapter({
               sentences: subset,
               cast: cast.characters,
+              castIdHistory,
               provider,
               modelKey,
               engine,

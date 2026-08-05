@@ -391,6 +391,10 @@ export function stickyRequest(existing, repo, issue) {
 
 (`STICKY_MARKER` is exported from the Task 1 block; `findSticky` references it as the default arg.)
 
+(`computeTransitions` above is the code as originally shipped. Its semantics were
+superseded by ops-17b (#2104) — see the current doc-comment on `computeTransitions`
+in `scripts/deps-watch.mjs` for what it does now.)
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm run test:hooks`

@@ -17,6 +17,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -93,16 +94,36 @@ export interface SegmentsFile {
   }>;
 }
 
-/** #2023 Piece 1 — the render-time record of an orphaned-characterId
-    substitution: which cast character actually spoke the line, and (when
-    known) which voice they spoke it in. */
+/** #2023 Piece 1, widened #2040 Wave 3 (task 16) — the render-time record of
+    an orphaned characterId: one whose value does not exactly match a live
+    cast id. Reported for EVERY such segment, not only the ones #2023 stamped
+    (measured: 188 orphaned segments across 20 books, 0 carrying the stamp —
+    every affected render predates it; see spec §4.6). */
 export interface OrphanedCharacterFallback {
   /** The cast character id that rendered the line instead (usually the book's
-      narrator — see `resolveNarratorChar` in tts/synthesise-chapter.ts). */
-  characterId: string;
+      narrator — see `resolveNarratorChar` in tts/synthesise-chapter.ts).
+      Present only when the render stamped `renderedFallbackCharacterId`
+      (post-#2023); absent on every pre-#2023 render, which is most of the
+      affected segments as of Wave 3. */
+  characterId?: string;
   /** The voice name actually sent to the provider, when the render recorded
       one. Absent on a pre-#2023 render whose segments predate this stamp. */
   voiceName?: string;
+  /** How this record's key (the orphaned id) resolves against the live cast
+      + id history: `'alias'` when it matches through the id-history
+      side-table (`cast-id-history.ts`), `'normalised'` when it matches a
+      live cast id only after separator/case normalisation
+      (`normaliseIdKey`), `'unresolved'` when neither applies — a genuine
+      miss. An id that matches a live cast id EXACTLY is never reported here
+      at all (see the collector below), so `'exact'` never appears. */
+  resolution: 'alias' | 'normalised' | 'unresolved';
+  /** The live cast id this orphaned id resolves onto, when `resolution` is
+      `'alias'` or `'normalised'`. Absent when `resolution` is
+      `'unresolved'`. */
+  resolvedCharacterId?: string;
+  /** How many rendered segments (summed across every rendered chapter) carry
+      this orphaned id. */
+  segments: number;
 }
 
 /* #1105 — djb2 base-36 hash of a sentence's RAW text. Byte-identical to
@@ -277,36 +298,87 @@ export async function collectRenderedFallbackEngines(
   return out;
 }
 
-/* #2023 Piece 1 — per-orphaned-id render-time substitution, aggregated across
-   a book's rendered chapters. Today's `characterId` values live only in an
-   error log line (once per orphan id per render); nothing on the wire ever
-   named the substitution, so `renderedFallbackByCharacter` stayed `{}` even
-   for a render that substituted dozens of segments. Keyed by the ORPHANED id
-   itself (never a real cast id, so it can't collide with
-   `collectRenderedFallbackEngines`'s cast-id keyspace above) — mirrors that
-   sibling aggregator's shape and "any rendered chapter" semantics, but reads
-   `renderedFallbackCharacterId` off the per-SEGMENT record (stamped in
-   `synthesise-chapter.ts`'s `resolveGroup`) rather than a per-character
-   snapshot, since an orphaned id is never itself a cast member and so never
-   gets a `characterSnapshots` entry. */
+/* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-id render-time
+   substitution, aggregated across a book's rendered chapters. Keyed by the
+   ORPHANED id itself (never a live cast id, so it can't collide with
+   `collectRenderedFallbackEngines`'s cast-id keyspace above).
+
+   Originally gated on `renderedFallbackCharacterId`, the stamp #2023
+   introduced — but measured across all 20 books, that stamp covers 0 of 188
+   orphaned segments, because every affected render predates it. And an id
+   resolved through an alias never takes `resolveGroup`'s orphan/stamp branch
+   at all, so gating on the stamp made the "auto-reconciled" half of the
+   banner empty by construction (spec §4.6). The gate is now "does
+   `characterId` fail to match a live cast id EXACTLY", using the same
+   resolver the render path and the drift detector already use
+   (`buildCastResolver`) — not a second matcher — so a segment is reported
+   whether or not it happens to carry the #2023 stamp.
+
+   `rejectedIds` (#2040 Task 17) is threaded straight into `buildCastResolver`
+   so a user-rejected reconciliation reports as `'unresolved'` here on the very
+   next hydrate, rather than continuing to show the auto-match the user just
+   said was wrong — the banner's own idempotence depends on this collector
+   seeing the same rejection the resolver enforces everywhere else. */
 export async function collectOrphanedCharacterFallbacks(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
+  cast: ReadonlyArray<{ id: string }>,
+  castIdHistory: Readonly<Record<string, string>>,
+  rejectedIds: ReadonlyArray<string> = [],
 ): Promise<Record<string, OrphanedCharacterFallback>> {
   const out: Record<string, OrphanedCharacterFallback> = {};
   const segs = await loadSegmentsFiles(bookDir, chapters);
+  /* #2040 Task 17 fix round 1 — buildCastResolver now takes ONE history
+     object (`{ supersededBy, rejected }`) rather than two independent
+     parameters, so a caller can't pass one without the other. This
+     collector still keeps its own two params (`castIdHistory`/`rejectedIds`)
+     since book-state.ts loads them separately — bundled here at the single
+     internal call site instead. */
+  const resolver = buildCastResolver(cast, { supersededBy: castIdHistory, rejected: [...rejectedIds] });
+
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {
-      if (!s.characterId || !s.renderedFallbackCharacterId) continue;
+      if (!s.characterId) continue;
+      const resolution = resolver.resolve(s.characterId);
+      /* An exact live cast id is not an orphan at all — never reported. */
+      if (resolution?.via === 'exact') continue;
+
+      /* #2040 Wave 3 review round 1 CRITICAL — read WHICH tier matched
+         straight off `resolution.via`, the resolver's own precedence-ordered
+         record, rather than recomputing "does this look like history" here.
+         A recomputation that only checks history-key membership can disagree
+         with the resolver: a normalised id can simultaneously collide with a
+         live cast id (tier 3, `'normalised-id'`) AND an unrelated history
+         entry that happens to normalise to the same key (tier 4,
+         `'normalised-history'`) — only the resolver's own tier order knows
+         tier 3 won. See cast-resolve.ts's `via` field and
+         cast-resolve.test.ts's "tier 3 beats tier 4" regression. `'history'`
+         and `'normalised-history'` both surface as `'alias'` (resolved
+         through the id-history side-table, exact or normalised key);
+         `'normalised-id'` surfaces as `'normalised'` (resolved against a
+         live cast id with no history involved). `'exact'` already `continue`d
+         above, so it can't reach here. */
+      const resolutionTag: OrphanedCharacterFallback['resolution'] = !resolution
+        ? 'unresolved'
+        : resolution.via === 'normalised-id'
+          ? 'normalised'
+          : 'alias';
+
+      const existing = out[s.characterId];
       out[s.characterId] = {
-        characterId: s.renderedFallbackCharacterId,
         /* GATE 1 review — `resolveGroup` (synthesise-chapter.ts) stamps
            `baseVoiceName` unconditionally on every segment, so a `?? s.voiceName`
            fallback here was dead in production (and untested — both existing
            test cases set the two fields to the same string). Only a pre-#1972
            segments.json predates the field at all, which `?? undefined` still
-           covers. */
-        voiceName: s.baseVoiceName ?? undefined,
+           covers. Falls back to a PRIOR occurrence's value across chapters
+           so a later, unstamped segment for the same orphaned id doesn't
+           blank out what an earlier one recorded. */
+        characterId: s.renderedFallbackCharacterId ?? existing?.characterId,
+        voiceName: s.baseVoiceName ?? existing?.voiceName,
+        resolution: resolutionTag,
+        resolvedCharacterId: resolution?.character.id,
+        segments: (existing?.segments ?? 0) + 1,
       };
     }
   }

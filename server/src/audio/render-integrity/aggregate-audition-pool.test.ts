@@ -21,6 +21,7 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
 
 import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
+import { retireCharacterId } from '../../store/cast-id-history.js';
 
 // A unit vector in a given axis direction, dim=8, tiny deterministic jitter.
 function axisVec(axis: number, i: number, dim = 8): number[] {
@@ -60,6 +61,32 @@ function writeThuridFixture(dir: string, anchorCount: number) {
 function writeCastJson(dir: string, characters: Array<Record<string, unknown>>) {
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+}
+
+/* Same shape as writeThuridFixture, but the segments/embeddings/snapshot key
+   is caller-supplied — used to write a fixture whose characterSnapshots key
+   is a SUPERSEDED id (#2040), distinct from cast.json's live id. */
+function writeFixtureWithId(dir: string, characterId: string, anchorCount: number) {
+  mkdirSync(join(dir, 'audio'), { recursive: true });
+  const rows = Array.from({ length: anchorCount }, (_, i) => ({
+    characterId,
+    sentenceIds: [i],
+    vec: vec(0, i),
+  }));
+  writeFileSync(
+    join(dir, 'audio', 'ch1.segments.json'),
+    JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-1.7b',
+      segments: rows.map((r) => ({
+        characterId,
+        sentenceIds: r.sentenceIds,
+        renderedFallbackEngine: null,
+      })),
+      characterSnapshots: { [characterId]: { voiceEngine: 'qwen', resolvedVoiceName: `qwen-${characterId}` } },
+    }),
+  );
+  return writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
 }
 
 describe('scoreBook — cast.json evidence threading + anchor blending (srv-36 redesign)', () => {
@@ -148,5 +175,34 @@ describe('scoreBook — cast.json evidence threading + anchor blending (srv-36 r
     expect(auditionSpy).toHaveBeenCalledTimes(1);
     const [, opts] = auditionSpy.mock.calls[0] as unknown as [unknown, { existingAnchors?: Float32Array[] }];
     expect(opts?.existingAnchors ?? []).toEqual([]);
+  });
+});
+
+describe('scoreBook — resolves a snapshot keyed by a SUPERSEDED characterId (#2040)', () => {
+  beforeEach(() => auditionSpy.mockClear());
+
+  it('threads buildHintFromCast onto the AuditionCharacter when the snapshot key is a renamed/retired id, via the real cast-id-history.json', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-pool-hint-alias-'));
+    // The chapter's segments/embeddings/characterSnapshots key is the OLD id;
+    // cast.json only knows the NEW (live) id — same shape retirement leaves
+    // behind in production.
+    await writeFixtureWithId(dir, 'old-thurid', 3); // below CENTROID_MIN_N=10 → too-thin
+    writeCastJson(dir, [
+      { id: 'thurid', evidence: [{ quote: 'A real line Thurid actually says.' }] },
+    ]);
+    // `retireCharacterId` is the real writer (store/cast-id-history.ts), not
+    // a hand-rolled fixture — exercises the same on-disk shape production
+    // retirement produces.
+    await retireCharacterId(dir, 'old-thurid', 'thurid');
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    const [character] = auditionSpy.mock.calls[0] as unknown as [{ hint?: { evidence?: string[] } }];
+    // Without resolving 'old-thurid' through the history, castById.get (pre-
+    // #2040) or a resolver built on the default `{}` history finds nothing,
+    // and `hint` stays undefined — the evidence quote silently never reaches
+    // the audition. This asserts it DOES.
+    expect(character.hint?.evidence).toEqual(['A real line Thurid actually says.']);
   });
 });

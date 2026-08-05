@@ -346,12 +346,64 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
         ],
       }),
     );
+    // #2040 Wave 3 — 'narrator' must be a live cast id so it does NOT itself
+    // read as orphaned (it's the character the substitution rendered AS,
+    // not the orphaned id); 'mayrin' has no cast entry and no history entry,
+    // so it resolves as a genuine miss.
+    const castJsonFile = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castJsonFile,
+      JSON.stringify({ characters: [{ id: 'narrator', name: 'Narrator' }] }),
+    );
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(res.body.orphanedCharacterFallbacks).toEqual({
-      mayrin: { characterId: 'narrator', voiceName: 'qwen-oduvan' },
+      mayrin: {
+        characterId: 'narrator',
+        voiceName: 'qwen-oduvan',
+        resolution: 'unresolved',
+        segments: 1,
+      },
     });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+    rmSync(castJsonFile, { force: true });
+  });
+
+  it('reports a rejected reconciliation as unresolved (#2040 Task 17)', async () => {
+    // 'mayrin' has a history entry pointing at the live 'mairin' — would tag
+    // 'alias' — but the user has rejected this exact reconciliation via
+    // cast-id-history.json's `rejected` list, so the GET must report it
+    // unresolved on this very hydrate.
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'mayrin', sentenceIds: [1] }],
+      }),
+    );
+    const castJsonFile = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castJsonFile,
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin' }] }),
+    );
+    const historyFile = join(bookDir, '.audiobook', 'cast-id-history.json');
+    writeFileSync(
+      historyFile,
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' }, rejected: ['mayrin'] }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.orphanedCharacterFallbacks).toEqual({
+      mayrin: {
+        resolution: 'unresolved',
+        segments: 1,
+      },
+    });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+    rmSync(castJsonFile, { force: true });
+    rmSync(historyFile, { force: true });
   });
 });
 

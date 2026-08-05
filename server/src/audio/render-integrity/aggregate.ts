@@ -45,6 +45,8 @@ import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io
 import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
+import { buildCastResolver } from '../../store/cast-resolve.js';
+import { loadCastIdHistory } from '../../store/cast-id-history.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -474,7 +476,15 @@ export async function scoreBook(
   // auditionCentroid build a per-render pool of distinct evidence quotes
   // instead of one repeated canned line.
   const castChars = await readCastJson(bookDir);
-  const castById = new Map((castChars ?? []).map((c) => [c.id, c] as const));
+  /* #2040 — resolve a snapshot's characterId through the cast + the book's
+     retired-id history, so a since-renamed character still gets its evidence
+     quote (`hint`) and cloned-provenance check below instead of silently
+     falling back to an undefined hint / `cloned: false` for a character that
+     really does have both, just under its OLD id. */
+  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
+     `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability
   // reason the render TIER is (see the renderKey comment further down).
@@ -498,7 +508,7 @@ export async function scoreBook(
         // modelKey, then 0.6B for legacy segments with neither stamp.
         const renderKey: TtsModelKey = snap.modelKey ?? cd.modelKey ?? 'qwen3-tts-0.6b';
         const modelKey = canonicalModelKeyForEngine(engine, renderKey);
-        const castChar = castById.get(charId);
+        const castChar = castResolver.resolve(charId)?.character;
         voiceInfoByChar.set(charId, {
           voiceName: snap.resolvedVoiceName,
           modelKey,

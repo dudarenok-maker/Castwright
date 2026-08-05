@@ -19,6 +19,8 @@ import { resolveCharacterEngine, resolveCharacterQwenTier } from './per-characte
 import { normaliseForTts, stripAudioTags } from './text-normalize.js';
 import { normaliseBookLanguage } from './language.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 import { pcmDurationSec } from './pcm.js';
 import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
@@ -560,6 +562,21 @@ export async function collectGroupEmbeddings(
 export interface SynthesiseChapterOpts {
   sentences: SentenceOutput[];
   cast: CastCharacter[];
+  /** #2040 — the book's `cast-id-history.json` content (`{ supersededBy,
+      rejected, ... }`), used to resolve a sentence group's characterId
+      through a retired/aliased id before treating it as orphaned, and to
+      honour a user's "not the same character" rejection (#2040 Task 17).
+      `synthesiseChapter` has no book-directory parameter, so it cannot load
+      `cast-id-history.json` itself — the caller loads it once (via
+      `loadCastIdHistory(bookDir)`, `store/cast-id-history.ts`) and passes
+      the WHOLE returned object through here (fix round 1: this used to be
+      `.supersededBy` alone with `rejected` threaded separately into
+      `buildCastResolver`, which let this exact call site — the real render
+      path — resolve a rejected id anyway; passing one object makes that
+      unrepresentable). Absent → `{ supersededBy: {} }`, which still
+      recovers the normalised-id tier (case/separator drift) but not a true
+      cross-letter alias or a rejection. */
+  castIdHistory?: Pick<CastIdHistory, 'supersededBy' | 'rejected'>;
   provider: TtsProvider;
   modelKey: TtsModelKey;
   /** The run's DEFAULT engine — used for any character that doesn't carry its
@@ -1269,6 +1286,7 @@ export async function synthesiseChapter(
   const {
     sentences,
     cast,
+    castIdHistory = { supersededBy: {} },
     provider,
     modelKey,
     engine,
@@ -1473,6 +1491,19 @@ export async function synthesiseChapter(
 
   const castById = new Map(cast.map((c) => [c.id, c]));
 
+  /* #2040 — resolve a group's characterId through superseded ids before
+     treating it as orphaned. castById stays for the exact-id fast paths that
+     legitimately want strict identity. synthesiseChapter has no book-dir
+     parameter, so it cannot load cast-id-history.json itself — callers that
+     have a bookDir (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
+     load it once and pass the WHOLE object through as `castIdHistory`
+     (#2040 Task 17 fix round 1 — passing only `.supersededBy` here, the
+     real render path, is what let a "not the same character" rejection go
+     unenforced at synth time); absent, it defaults to `{ supersededBy: {} }`,
+     which still recovers the normalised-id tier (case/separator drift) but
+     not a true cross-letter alias or a rejection. */
+  const castResolver = buildCastResolver(cast, castIdHistory);
+
   /* fs-38 Wave 3c, Task 23 — resolve the narrator's REAL cast row when one
      exists, instead of trusting the caller's `narratorCharacterId` blindly.
      Every route (generation.ts, chapter-splice.ts, chapter-qa-repair.ts)
@@ -1516,14 +1547,21 @@ export async function synthesiseChapter(
   if (signal?.aborted) {
     throw new DOMException('synthesiseChapter aborted', 'AbortError');
   }
-  const inChapterCharacterIds = new Set(groups.map((g) => g.characterId));
+  const inChapterCharacterIds = new Set(
+    groups.map((g) => castResolver.resolve(g.characterId)?.character.id ?? g.characterId),
+  );
   /* IMPORTANT-1 (Task 6 review) — the title beat isn't the only way the
      narrator renders unvalidated: `resolveGroup` below ALSO substitutes
      `resolveNarratorChar()` for any group whose `characterId` isn't in
      `cast` (the "orphaned characterId safety net"). Without this, a chapter
      with an orphaned-characterId sentence and no title narration would let a
-     cloned-but-stale narrator voice render past the gate untouched. */
-  const rendersNarrator = Boolean(titleText) || groups.some((g) => !castById.has(g.characterId));
+     cloned-but-stale narrator voice render past the gate untouched. #2040
+     narrows this to a TRUE miss: a group that resolves through the cast
+     resolver (alias/normalised-id) now contributes its RESOLVED character's
+     id above instead of its raw id, and must not silently drop out of the
+     pre-pass just because that raw id isn't a live cast id. */
+  const rendersNarrator =
+    Boolean(titleText) || groups.some((g) => !castResolver.resolve(g.characterId));
   if (rendersNarrator) inChapterCharacterIds.add(resolvedNarratorCharacterId);
   /* fs-38 Wave 3c, Task 20 [ADV-C1] — per-engine "is this clone-capable
      engine unavailable this run" signal, generalising the qwen-only
@@ -2003,8 +2041,13 @@ export async function synthesiseChapter(
      whenever either qwen-subset request list is non-empty, in addition to
      any qwen body group. */
   const chapterHasQwenGroups = groups.some((g) => {
+    /* #2040 — resolve through castResolver for the id, then read the live
+       object off castById (see the identical comment in resolveGroup below):
+       this runs AFTER the designedCoquiRequests self-heal above, which can
+       have already mutated castById for this chapter. */
+    const resolvedId = castResolver.resolve(g.characterId)?.character.id;
     const character =
-      castById.get(g.characterId) ??
+      (resolvedId !== undefined ? castById.get(resolvedId) : undefined) ??
       castById.get(resolvedNarratorCharacterId) ?? {
         id: resolvedNarratorCharacterId,
         name: 'Narrator',
@@ -2253,7 +2296,19 @@ export async function synthesiseChapter(
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
     if (cached) return cached;
-    let character = castById.get(group.characterId);
+    /* #2040 — resolve the group's raw id to the CANONICAL cast id via the
+       resolver (exact / alias / normalised), then do the actual character
+       lookup through `castById`, not `castResolver`'s own cached object.
+       `applyDesignedSoftFailures` above (Task 20a self-heal) MUTATES
+       `castById` per-chapter (castById.set) to strip a soft-failed coqui
+       slot; `castResolver` was built once from the ORIGINAL `cast` array and
+       never sees that update, so resolving straight to its `.character`
+       would keep re-deriving the failed slot every group. `castById` always
+       has an entry for any id `castResolver` can resolve to, since it's
+       seeded from the same array and only ever has values replaced, never
+       removed. */
+    const resolvedCharacterId = castResolver.resolve(group.characterId)?.character.id;
+    let character = resolvedCharacterId !== undefined ? castById.get(resolvedCharacterId) : undefined;
     let orphanedFromId: string | undefined;
     if (!character) {
       if (!warnedUnknownCharacterIds.has(group.characterId)) {

@@ -23,6 +23,8 @@ import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
 import { loadSegmentsFiles, type CharacterSnapshot } from '../audio/segments-io.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 
 /* CastCharacter is imported from synthesise-chapter.ts (plan 108 R5) so the
    resolved-voice drift comparison below can reuse toVoiceLike +
@@ -131,7 +133,17 @@ export async function computeRevisionsForBook(
     // No cast confirmed yet — nothing to compare against.
     return { pending: [], drift: [] };
   }
-  const castById = new Map(cast.map((c) => [c.id, c]));
+  /* #2040 — resolve a snapshot's characterId through the cast + the book's
+     retired-id history, so a chapter rendered under a since-superseded id
+     still gets compared against its (renamed) live cast row instead of
+     reading as "character removed from cast" — which would silently drop
+     any real drift for that character rather than surfacing it. */
+  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
+     `.supersededBy`) so `buildCastResolver` also honours `rejected`;
+     splitting the two apart is what let a rejection go unenforced at every
+     call site but the banner's own collector. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  const castResolver = buildCastResolver(cast, castIdHistory);
 
   const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
   const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
@@ -151,7 +163,7 @@ export async function computeRevisionsForBook(
       `Chapter ${seg.chapterId}`;
     const snapshots = seg.characterSnapshots ?? {};
     for (const [characterId, snapshot] of Object.entries(snapshots)) {
-      const current = castById.get(characterId);
+      const current = castResolver.resolve(characterId)?.character;
       if (!current) continue; // character removed from cast — nothing actionable here
       const detectedAt = seg.synthesizedAt ?? new Date().toISOString();
       const ctx = {

@@ -215,6 +215,20 @@ not-currently-broken build.
     - Editing a comment in place sends **no** notification — that's by design:
       the sticky is the durable *current-state* record; the **A2 transition
       comment** and the **A1 red email** are the active pings.
+    - > **Correction (ops-17c, [#2113](https://github.com/dudarenok-maker/Castwright/issues/2113), 2026-08-05):**
+      > this section originally left the write order between the sticky refresh
+      > and the A2 transition comment unspecified. That is a hazard: the sticky
+      > body embeds the new `latest` for every plugin, so if it is written FIRST
+      > and the transition POST that follows throws (rate limit, transient
+      > `gh`/network fault), the next run computes `prior.latest === s.latest` →
+      > no transition, and that release's `@mention` is silently dropped forever
+      > — nothing records it was ever owed. **The invariant: state is committed
+      > only after the notification it implies has been delivered.** The
+      > exported `publish` helper in `scripts/deps-watch.mjs` now posts the A2
+      > transition comment first, then writes the sticky; `deps-watch-run.mjs`
+      > calls it instead of doing the two `gh api` calls inline. A duplicate
+      > `@mention` on a failed sticky write is accepted — cheap and
+      > self-announcing on a monthly cron — where permanent silence is not.
 
 ### 2. Trip B — escape-hatch + pin assertions in `app.yml`
 
@@ -268,8 +282,21 @@ not-currently-broken build.
   - only a **transitive** dep behind → A1 exit 0 (+ listed in summary).
   - a KGP plugin's `latest` now exceeds its pin, prior state at-pin → A2 banner
     + transition flagged + honest "verify KGP" wording (not "migrated").
-  - same plugin still ahead, prior state already-ahead → A2 banner, **no**
-    repeat transition comment (transition fires once).
+  - same plugin still ahead, prior state already-ahead, `latest` UNCHANGED →
+    A2 banner, **no** repeat transition comment (no cron spam).
+  - > **Correction (ops-17b, [#2104](https://github.com/dudarenok-maker/Castwright/issues/2104), 2026-08-05):**
+    > the line above originally read "same plugin still ahead → no repeat
+    > transition comment (transition fires once)" — i.e. an edge detector on
+    > the `ahead` flag. That is wrong: once a plugin is ahead of its pin, every
+    > *subsequent* release re-fires this same "still ahead" branch, so a
+    > flag-edge detector goes silent forever after the first newer release —
+    > exactly the evaluated-and-rejected-release case the recipe below tells an
+    > operator to leave the pin alone for. `computeTransitions` now edge-detects
+    > on the **observed `latest` changing** (strictly increasing vs. the prior
+    > recorded `latest`), not on the `ahead` flag; a prior `ahead: true` record
+    > with no usable `latest` fails loud (fires) instead of silently trusting
+    > it. See `scripts/deps-watch.mjs`'s `computeTransitions` doc-comment for
+    > the exact rule.
   - a KGP plugin **absent** from the payload (current) → treated as at-pin.
   - the `kind` field present (asserts we filter on `kind`, never on a
     non-existent `isDirect`).

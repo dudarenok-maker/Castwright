@@ -426,6 +426,13 @@ Design rationale:
   call-graph-blind by design — a new *unlocked* caller of an already-locked
   helper adds no occurrence text and passes; its header lists that and the
   other blind spots.
+- **`cast.json` is the identity of record; an analyzer/cache `characterId` is
+  only an alias into it** (#2040) — any path that changes a persisted character
+  id calls `retireCharacterId` (`server/src/store/cast-id-history.ts`), which
+  records the old id before the new one takes over; any path that joins on a
+  `characterId` from manuscript attribution or a frozen render resolves it
+  through `buildCastResolver` (`server/src/store/cast-resolve.ts`) rather than
+  a raw `.get()`. Don't add a second id matcher or a second id-history field.
 
 ## Testing discipline (REQUIRED for every change)
 

@@ -79,6 +79,7 @@ import {
   type CastCharacter,
 } from '../tts/synthesise-chapter.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import {
@@ -1618,9 +1619,19 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           totalLines,
         });
       };
+      /* #2040 — resolve a sentence group's characterId through the book's
+         retired-id history (cast-id-history.json) before treating it as
+         orphaned, and honour a "not the same character" rejection (#2040
+         Task 17). Loaded once per chapter render, not per group — never
+         throws (see loadCastIdHistory's own doc comment). Passed through
+         WHOLE (fix round 1), not just `.supersededBy` — this is the real
+         render path, so it's the one call site where a dropped `rejected`
+         mattered most. */
+      const castIdHistory = await loadCastIdHistory(bookDir);
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
+        castIdHistory,
         provider,
         modelKey,
         engine,

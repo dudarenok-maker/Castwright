@@ -100,8 +100,8 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**48 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**52 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1326,13 +1326,299 @@ master clip. *Criteria:* the run sheet
 walkthrough steps 1-7 in plan 276. *Cost:* short if it rides along with A1's
 cloning session, which already stages a real clone on this card.
 
+### A32 · Cast/analysis `characterId` drift — Wave 1 resolver ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **single 8 GB card, Qwen resident**
+
+Wave 1 ships a **read-time** fix only: `buildCastResolver` resolves a frozen
+segment's `characterId` through a separator/case normaliser before the code
+falls back to the narrator. It is fully unit- and route-tested against
+synthetic fixtures. What no automated suite proves is the thing the feature
+is *for* — that re-rendering an already-drifted chapter on the real workspace
+now puts the character's own voice on their lines rather than the
+narrator's. A read-only, dry-run resolver check already ran against the real
+20-book workspace (design spec §6: 68 of 188 orphaned segments recover via
+the normalised-id tier alone, with an empty history) — **that measured id
+resolution, not a render.** This row is the render.
+
+Real, already-affected fixture (confirmed 2026-08-02, not synthetic):
+*Playing with Fire* (Derek Landy) at `C:\AudiobookWorkspace\books\Derek
+Landy\Skulduggery Pleasant\Playing with Fire`. `the-torment` (67 segments,
+cast id `the_torment`, a **tuned Qwen 1.7B voice**) and `lightning-dave` (1
+segment, cast id `lightning_dave`) both recover under the normalised-id
+tier — RC2's underscore-vs-hyphen split. `pool-player-2` (6 segments, cast id
+`pool_player`) shares chapter 16 with `lightning-dave` and is the row's
+built-in **negative control**: its `-2` collision suffix must still defeat
+resolution, unchanged, since that needs Wave 2/3.
+
+- Re-render chapter 19 (`the-torment`, 37 of its 67 segments) and chapter 16
+  (`lightning-dave` + `pool-player-2` together). Confirm the fresh
+  `segments.json` gains a `characterSnapshots` entry for `the-torment` /
+  `lightning-dave` naming their own voice (Torment's tuned
+  `qwen-YaC5ot82IqTLpeDbHd77F`, not `qwen-narrator`), and that
+  `renderedFallbackEngine: "kokoro"` — present on every affected segment
+  today — is gone from those two.
+- **Listen.** Torment's line at chapter 19 `groupIndex: 25` ("Kill the
+  child.") must be audibly a different voice from the narrator, not merely a
+  different id in the JSON.
+- Confirm `pool-player-2` is unchanged: still `renderedFallbackEngine:
+  "kokoro"`, no snapshot entry. A resolution here would mean the resolver is
+  matching more aggressively than designed.
+- Cross-check the Cast screen's orphaned-id banner (#2023) no longer names
+  `the-torment` / `lightning-dave` for this book after the two re-renders,
+  while still naming `pool-player-2`.
+
+*Needs:* the 8 GB card, a real sidecar with Qwen resident, and the real
+workspace book above (back up its two affected chapter files before
+re-rendering). *Criteria:* the run sheet
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md).
+*Cost:* short — two single-chapter re-renders on an already-imported,
+already-analysed book.
+
+---
+
+### A33 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
+
+Wave 1 (A32) and Wave 2 (B3) are proven or pending against a single already-drifted
+chapter/book each. Wave 3's `scripts/repair-cast-id-drift.mjs` is the pass meant
+to sweep the **whole** 20-book workspace at once.
+
+> **PARTIALLY DISCHARGED — `--apply` was run 2026-08-05** (Claude Code session on
+> the dev box, dudarenok-maker), against `main` @ `f3d6ae0f`. The write path is
+> now proven; **§8.7 (does the fix reach actual audio — re-render *Заказ
+> Коалфолла* ch2 and listen) and §8.8 (Cast-screen banner cross-check) are still
+> owed**, so this row stays open for those two.
+>
+> **What was observed.** The liveness rail refused first, against a *real*
+> `npm run dev` — which bound **LAN HTTPS 8443 only, never 8080**, so it was the
+> `LAN_HTTPS_PORT` half of the probe that caught it (exit 1, nothing written; a
+> probe covering only the default 8080 would have missed this server). With the
+> server stopped, `--apply` recorded exactly the 3 predicted aliases across
+> **2** books — `mayrin → mairin`, `coalfall → coalfall-dragon` (*Заказ
+> Коалфолла*), `lady-alina → dame-alina` (*Everblaze*). No other book gained a
+> `cast-id-history.json` (0 → 2 workspace-wide). All **20** `cast.json` files
+> byte-unchanged (md5 before/after). The immediate dry re-run showed auto-records
+> **3 → 0**, skipped **0 → 3**, report-only **93 / 161 unchanged** — the write is
+> durable.
+>
+> **Two defects filed from the run, neither blocking the write itself:**
+> [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) — the
+> re-render list dropped **17 rows / 120 segments → 13 / 93** afterwards, losing
+> exactly the 27 segments the new aliases cover, whose audio is still
+> narrator-substituted on disk (the list is documented as unconditional on
+> auto-record status, and `120` is this row's own stated damage figure).
+> [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) — a wrong
+> `WORKSPACE_DIR` scans **0** books and still prints `books missing
+> analysis-cache evidence: 0` and exits **0** from `--apply`; the script does not
+> read `server/.env`, so the bare command hits an empty `<home>/AudiobookWorkspace`.
+> That one bites this row directly, because the precondition below tells you to
+> trust that line.
+>
+> **Revision-sensitive:** the numbers above are against the **pre-#2102** global
+> cache gate. Once #2102 lands, `books missing analysis-cache evidence` is
+> expected to read **1** (*Unlocked* has a cache that parses and names nobody) and
+> a new `books with an auto-record withheld: 0` becomes the line that actually
+> gates `--apply`. Note for the record that *Unlocked* is not "nothing to
+> repair" — it carries **34 orphaned segments** across ch63/ch67 under
+> `unknown-male`; what makes withholding safe there is that a reserved
+> fold-bucket **source** is never auto-recorded regardless of evidence, which
+> fires before the ambiguity veto matters at all.
+
+Every number below comes from the pass's dry-run mode, which writes
+nothing. No automated test can substitute for the real run: the pure helpers
+(candidate ranking, ambiguity/reserved-source guards, the re-render list shape)
+are unit-tested against synthetic fixtures, and the liveness probe was verified
+live against dummy listeners (see `task-18-report.md`) — but nothing has ever
+exercised the actual `--apply` write path against the real
+`C:\AudiobookWorkspace\books` tree.
+
+**Dry-run result (independent-review Critical C1 fix applied, re-measured
+2026-08-05 with `CACHE_DIR` correctly pointed at the checkout that ran this
+workspace's analysis):**
+
+- **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
+  and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
+  `lady-alina` → `dame-alina` (6 segments) in *Everblaze*. Each is an
+  unambiguous, non-reserved exact name or id match with real rendered damage
+  behind it. Unchanged by the round-2 fixes below.
+- **93 ids reported for a human decision, 161 segments** (was misreported as
+  93 segments before the round-2 fix — see below) — includes the three
+  reserved fold-bucket rows a pre-review-round-1 version of the script would
+  have wrongly auto-recorded: *Exile*'s `unknown-male` (21 segments, spanning
+  chapters 7/33/60 — the analysis cache separately names that bucket Timkin,
+  Brant, Dwarf, Rex **and** Lord Cassius across the book) and `unknown-female`
+  (14 segments), plus *Unlocked*'s `unknown-male` (34 segments). The remaining
+  24 (`pool-player-2` 6, `sir-harding` 1, `silveny` 17) have no usable name
+  signal anywhere in the cache or a `cast.json.bak.*`. Also includes *Playing
+  with Fire*'s `the-torment` (67 segments) and `lightning-dave` (1 segment) —
+  A32's own already-affected fixture (above): both already auto-reconcile live
+  via the normalised-id tier, so a round-2 review fix corrected their reported
+  reason from the misleading "zero rendered segments — no damage to repair"
+  (which contradicted the Cast banner's own auto-reconciled section for the
+  same ids) to "already auto-reconciles … already fixed, no separate alias
+  needed" — this is the 68-segment (67+1) delta between the old 93 and the
+  corrected 161. Neither is itself damage — both already render under their
+  live id today — which is why the re-render/damage total below is unchanged
+  at 120: the 161 report-only figure now mixes genuinely-orphaned segments
+  with a couple of already-fine ones the script merely name-matched, and is
+  no longer a proxy for "segments still needing repair".
+- **17 re-render rows, 120 segments** — unconditional on auto-record status;
+  writing an alias fixes metadata attribution, not the audio bytes already on
+  disk. This, not the report-only total above, is the actual damage figure.
+- **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
+  a workspace-wide file search before and after every dry run.
+- **1 book missing analysis-cache evidence, 0 books with an auto-record
+  withheld because of it** — these are now two DIFFERENT numbers (owner-
+  decided policy, review round 2, 2026-08-05), and **only the second one
+  gates `--apply`**. *Unlocked*'s cache file
+  (`server/handoff/cache/mns_dLurz4I544.json`) exists and parses as valid
+  JSON, but names **zero** characters (neither `stage1.characters` nor any
+  `chapterCast` entry — both are optional per the schema, and this file
+  happens to have neither populated) — found by independent review (Critical
+  C1) after the #2093 residual-1 fix first shipped gating only on "exists and
+  parses": the cross-source ambiguity veto doesn't consume "did it parse", it
+  consumes the cache's actual name/id entries, so a validly-parsing,
+  evidence-free file is exactly as blind to the veto as a missing one.
+  `isCacheAvailable` now also requires at least one name/id entry that
+  `buildNameIndex` itself would keep, not merely one `cacheEntriesOf` treats
+  as string-shaped (pre-merge review I1 closed a further gap — an entry
+  like `{id:"sandor", name:""}` used to pass the raw `cacheEntriesOf` check
+  while `buildNameIndex`, what guard 2 actually reads, silently drops it;
+  zero of the real workspace's 80 cache files exhibit this shape today).
+  Re-measuring the SAME real cache directory (76 files parse, 0 unparseable,
+  10 parse with zero character entries) surfaces this one book. **This is
+  expected and does NOT block `--apply`** — but **not because *Unlocked* has
+  nothing orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed both by a live pre-merge-review scan and by the real `--apply`
+  run above). The reason it doesn't block: `unknown-male` is a **reserved
+  fold-bucket SOURCE id**, and guard 1 refuses to auto-record from a
+  reserved source unconditionally, firing *before* the cache-availability
+  gate is ever reached — so *Unlocked*'s blind ambiguity veto never actually
+  stood between the pass and a real candidate. `--apply` refuses only when a
+  book's blind veto DID withhold a real candidate — that count is separately
+  reported and currently reads `0`. The trigger that WOULD change this: a
+  **non-reserved** orphaned id in *Unlocked* with a real Tier A/B name/id
+  match (from a future re-render or re-analysis) — and, per pre-merge review
+  I2, a match with **zero rendered segments** would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached). Re-check before trusting the `0` if *Unlocked* changes.
+
+- **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
+  fresh worktree's own (git-ignored, per-checkout — see the script's module
+  doc comment). Run the dry run first and confirm the summary reads `books
+  with an auto-record withheld for missing cache evidence: 0` — `--apply`
+  now refuses outright otherwise (round-2 review fail-closed fix for the
+  cross-source ambiguity veto's blind spot when cache evidence is absent;
+  #2093 residual 1, strengthened by independent-review Critical C1,
+  tightened `isCacheAvailable` to require the file exist, parse, AND name at
+  least one character; then re-scoped by owner-decided policy, review round
+  2, so the refusal gates on an actual withheld candidate, not merely a book
+  whose cache happens to be unusable). **A nonzero `books missing
+  analysis-cache evidence` count is expected and does NOT by itself block
+  `--apply`** — as measured today it reads `1` (*Unlocked*, see above), while
+  the gating `books with an auto-record withheld…` line reads `0`, so this
+  precondition IS currently satisfied. Don't stop just because the first
+  number is nonzero — check the second one.
+- **Precondition (#2108): `WORKSPACE_DIR` must actually point at the real
+  20-book workspace.** Confirm the summary reads `books scanned: 20`
+  alongside the cache-evidence lines above — a wrong `WORKSPACE_DIR` (the
+  script defaults to `<home>/AudiobookWorkspace`, which does not exist)
+  scans **0** books and, before this fix, printed a clean-looking `books
+  missing analysis-cache evidence: 0` and exited `--apply` with code `0`
+  having written nothing — an empty tree reading as a healthy one, on
+  exactly the line this precondition told the operator to trust. `--apply`
+  now refuses outright when `books scanned` is `0`, and the dry-run summary
+  calls out a zero-book scan explicitly instead of rendering a row of clean
+  zeros.
+- Stop any real server bound to the configured probe port(s) (default `8080`
+  and the LAN HTTPS `8443`) **or their auto-rebind range** (up to 19 ports
+  above each default, matching `listenWithAutoRebind` — #2090) — `--apply`
+  refuses outright while any of them answers, since the write is
+  out-of-process and no in-process lock covers it. Confirm
+  the refusal fires first, against the *real* dev server (not only a dummy
+  listener): start `cd server && npm run dev`, run `--apply`, confirm it exits
+  1 naming the reachable port and writes nothing, then stop the server.
+- Run `cd server && npm run build`, then
+  `node scripts/repair-cast-id-drift.mjs --apply` against the real workspace
+  with the same `WORKSPACE_DIR`/`CACHE_DIR` as every prior dry run.
+- Confirm `.audiobook/cast-id-history.json` now exists for *Заказ Коалфолла*
+  with `supersededBy` containing `mayrin: "mairin"` and
+  `coalfall: "coalfall-dragon"`, and for *Everblaze* with `supersededBy`
+  containing `"lady-alina": "dame-alina"` — and that **no other book** in the
+  workspace gained a `cast-id-history.json` file.
+- Confirm every book's `cast.json` is byte-unchanged (mtime + diff) — the pass
+  writes only the history side-table, never the cast itself.
+- Re-run the script in dry-run mode immediately after. Confirm the three
+  now-recorded aliases no longer appear in the auto-record list (already
+  resolved through the history) and the 93 report-only ids are unchanged —
+  proving the write was durable, not merely printed once.
+- Re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall` orphaned
+  chapter) and confirm the same shape A32 pins: the fresh `segments.json`
+  gains `characterSnapshots` entries for `mayrin`/`coalfall` naming Мэйрин's
+  and Коалфолл's own live voices, not the narrator — **listen** to confirm
+  audibly, not only from the JSON.
+- Cross-check the Cast screen for both affected books: the auto-reconciled
+  section now names `mayrin`/`coalfall`/`lady-alina`; the needs-your-decision
+  section still names the 93 remaining ids untouched by this run (spot-check
+  `unknown-male` in *Exile* as the negative control — a reserved-bucket source
+  must still refuse to auto-record, unchanged).
+
+*Needs:* no GPU or TTS engine — the pass itself only reads the analysis cache
+and any `cast.json.bak.*` files and writes `cast-id-history.json`. Needs the
+real 20-book workspace, a completed `server` build, and the ability to stop any
+locally-running Castwright server for the duration of the `--apply` call.
+Re-rendering the confirmation chapter needs the 8 GB card + Qwen resident, same
+as A32. *Criteria:* the run sheet
+[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §8
+(Wave 3). *Cost:* short — one script invocation against an already-imported,
+already-analysed workspace, then one chapter re-render.
+
+### A34 · Supervisor respawn survives a refused spawn attempt ([#2037](https://github.com/dudarenok-maker/Castwright/issues/2037)) · **single 8 GB card, live sidecar**
+
+Unit tests (`server/src/tts/sidecar-supervisor.test.ts`,
+`server/src/tts/spawn-sidecar.test.ts`) fully pin the fix's logic: a refused
+spawn attempt — a foreign-looking listener on the port, most commonly the
+just-exited child's own socket still in TCP teardown — now feeds the same
+backoff/cap budget an ordinary child exit already uses, instead of the old
+unconditional `isRecycling = false` that silently ended supervision. What no
+unit test can reach is the *real* race: whether a real OS socket actually
+stays bound for a real window after the child process exits, and whether the
+fix's backoff schedule (`[2s, 5s, 15s]`, capped at 5 attempts ≈ 52s total)
+outlasts that window on real hardware — the reported incident measured the
+port still held 4s after exit and free only "minutes later," and the
+implementation brief deliberately declined to widen the backoff without a
+real measurement behind it (D1).
+
+- With a chapter actively rendering, kill the sidecar's OS process directly —
+  **not** via `POST /api/sidecar/restart` (see the note below) — e.g.
+  `taskkill /PID <pid> /T /F` against the pid in `.run/tts.pid`, or end the
+  process from Task Manager.
+- Grep the running server's own log for a fresh `[sidecar] spawned pid=` line
+  appearing on its own, with no operator action, within the backoff window.
+  Confirm the pid differs from the one killed.
+- While recovery is in flight, poll `GET /api/models/status` and confirm it
+  never reports the TTS engine ready while no sidecar is listening on
+  `:9000` — that silent "reports healthy while nothing is there" gap is
+  exactly what #2037 shipped.
+- Confirm the in-flight chapter either rides out the respawn (existing retry
+  behaviour) or fails cleanly and is resumable — not stuck forever.
+- If the box's real teardown-to-free window turns out to exceed the ~52s
+  backoff budget, that is a follow-up issue with a real measurement behind
+  it, not a reason to widen the backoff on the strength of this run alone.
+
+**Do not use `POST /api/sidecar/restart` to check this** — it restarts the
+sidecar itself rather than passively observing it, which is the same
+operational trap that produced the #2037 outage in the first place.
+
+*Needs:* a live sidecar, a book mid-render, and OS-level process-kill access.
+*Criteria:* the acceptance bullets above; the code-level contract is
+`scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` and
+`onSpawnRefused` in `server/src/tts/spawn-sidecar.ts`. *Cost:* short — one
+kill, one log grep, one status poll.
+
 ---
 
 ## Group B — local Ollama analyzer only
 
-A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. Both
-rows have a **CPU-only sub-case** — the only checks here that want the analyzer
-*off* the GPU. Run those two together, and consider folding in E4.
+A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a **CPU-only sub-case** — the only checks here that want the analyzer *off* the GPU. Run those two together, and consider folding in E4. B3 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
 
 ### B1 · Analysing view honesty for local analyzers (plan 216)
 
@@ -1357,6 +1643,20 @@ rather than appearing to do nothing. `-1` keeps it resident indefinitely; the re
 model and no override keeps persona keep-alive at `300`, unregressed by the per-model
 resolver. **CPU-only:** a `RAM_HEAVY_MODELS` clamp overrides a configured positive
 keep-alive back to `0`.
+
+### B3 · Cast/analysis `characterId` drift — Wave 2 stops new drift ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md))
+
+Wave 1 (A32 above, in Group A) resolves drift that already exists, at render time. Wave 2 stops a re-analysis from **creating** new drift in the first place — the row above proves nothing about it, since Wave 1's own gate scan found the whole session left `cast.json` and `cast-id-history.json` untouched (no book was modified, no history file written). Six changes ship together: every id-retiring code path now funnels through a single `retireCharacterId` choke point, so `.audiobook/cast-id-history.json` is actually populated in production for the first time (it was always empty before Wave 2); a new early remap pass on both analyzer paths makes a fresh roster **adopt** the existing cast's id for a character it already holds under a different id, before anything is persisted; the merge's name-fallback now also matches an unvoiced character whose analyzer id drifted, not only a voiced or reused one; `cast-create.ts` mints ids with the shared `safeId` instead of a private underscore slugifier, closing RC2; and a fresh roster that reclaims an id the history covers drops that entry rather than silently rerouting it. None of it can be proven without a real analyzer minting a genuinely non-deterministic id across two runs of the same manuscript — the exact behaviour `merge-analysis-cast.ts:136-140`'s own comment names (the dragon relabelled `coalfall` → `coalfall-dragon` between two analyses of the same book) and that the design's evidence table (§1.1) reproduces letter-for-letter.
+
+**Real, already-affected fixture:** *Заказ Коалфолла* at `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`. Its `cast.json` holds `mairin` (Мэйрин), `coalfall-dragon` (Коалфолл) and `brann-weir` (Бранн) today (confirmed 2026-08-04, 13 characters total) — while a chapter rendered off an earlier analysis-cache pass already carries the letter-level variants `mayrin` (8 segments) and `coalfall` (13 segments), part of the 188-segment corpus and, per design §6, **not** recoverable by Wave 1's normalised-id tier (`mayrin` vs `mairin` differ by more than separator/case). No `.audiobook/cast-id-history.json` exists for this book yet (confirmed 2026-08-04) — Wave 2 has never run against it.
+
+- Record, before re-analysing: `cast.json`'s id for Мэйрин (`mairin`) and Коалфолл (`coalfall-dragon`), and that `cast-id-history.json` is absent.
+- Re-analyse the book (a full re-analysis, not a subset pass — the early remap ships on both paths, but only the full path is exercised by simply re-running analysis on an unedited manuscript).
+- After: `cast.json`'s ids for Мэйрин and Коалфолл are still `mairin` / `coalfall-dragon` — **unchanged**, even though the analyzer is free to mint a different string this run, exactly as it minted `mayrin` / `coalfall` on the run that produced the already-orphaned segments. That is the proof the id was *kept*, not merely re-minted and left to drift again.
+- If the analyzer's fresh id for either character genuinely differs from the cast's this run (it may not — the model is non-deterministic in both directions), `.audiobook/cast-id-history.json` now exists and its `supersededBy` map records `<fresh id>: "mairin"` (or `"coalfall-dragon"`) — proving the retirement went through `retireCharacterId` rather than being silently dropped, the exact failure mode design §4.1's table catalogues five instances of.
+- Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.
+
+*Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
 
 ---
 
