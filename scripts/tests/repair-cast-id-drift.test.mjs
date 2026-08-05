@@ -468,6 +468,36 @@ describe('planBookRepairs', () => {
     assert.equal(plan.skipped[0].reason, 'already-recorded');
   });
 
+  test('I2 (independent review, 2026-08-05): an id whose NORMALISED form matches a supersededBy key — not an exact key — is ALSO skipped as already-recorded, not auto-recorded', () => {
+    // #2107's widened fix (only 'exact' skips the orphan bucket) means an id
+    // resolving via the resolver's 'normalised-history' tier now reaches
+    // this loop with real rendered segments. The already-recorded guard
+    // used to be `id in supersededBy` — a raw string test — so an id whose
+    // raw spelling differs from the recorded `from` key, but normalises the
+    // same, slipped past it and could reach the Tier A/B matching pipeline
+    // and auto-record a second, redundant alias for an id supersededBy
+    // already covers. `mayrin-old` normalises the same as the recorded
+    // `Mayrin_Old` key (via this test file's idKey stand-in), but is not an
+    // exact string match against it.
+    const orphans = new Map([['mayrin-old', renderedOrphan(3)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { supersededBy: { Mayrin_Old: 'mairin' } },
+        cacheNameIndex: new Map(),
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].id, 'mayrin-old');
+    assert.equal(plan.skipped[0].reason, 'already-recorded');
+    assert.match(plan.skipped[0].detail, /normalised-spelling match/);
+  });
+
   test('a rejected id is skipped even though a name match exists', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const plan = planBookRepairs(
@@ -610,36 +640,31 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /zero rendered segments/);
   });
 
-  test('MINOR (round 2, finding 4): a name match on an id that already auto-reconciles via the normalised-id tier gets an accurate reason, not the misleading "zero rendered segments" one', () => {
-    // 'The_Torment' is never added to `orphans` (collectSegmentOrphans only
-    // records ids the resolver FAILS on) because it already resolves live
-    // through the normalised-id tier — exactly what the Cast banner shows
-    // under "auto-reconciled", with real rendered segments behind it. The
-    // OLD code fell back to `orphans.get(id) ?? { segments: 0, ... }` here
-    // and reported "zero rendered segments — no damage to repair", which is
-    // FALSE (it has 9) and contradicts the banner. `autoReconciled` (built
-    // alongside `orphans` in the real collectSegmentOrphans) carries the
-    // true count and target for this case.
+  test("I2 / #2107 widened fix: a name match on an id carrying real orphaned segments via the resolver's normalised-id tier now auto-records like any other orphan — the write-set change", () => {
+    // Register row A32's real shape: 'The_Torment' resolves live through
+    // the resolver's 'normalised-id' tier, but #2107's widened fix (owner
+    // decision, 2026-08-05) means collectSegmentOrphans now lists it in
+    // `orphans` with its real rendered segment count (9) instead of
+    // silently reconciling it away — the `autoReconciled` bucket this test
+    // used to exercise no longer exists. This id now reaches the SAME
+    // guard chain a genuine miss would: a Tier A name match, real segments
+    // (guard 3 passes), consistent snapshots (guard 4 passes, none
+    // recorded here), cache available — so it reaches `autoRecord`, not
+    // `reportOnly`. This is exactly the "the widening changes what --apply
+    // WRITES" consequence I2 requires this test to pin.
     const cacheNameIndex = buildNameIndex([{ id: 'The_Torment', name: 'Timkin' }], lc);
-    const autoReconciled = new Map([['The_Torment', { segments: 9, resolvedTo: 'timkin' }]]);
-    const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled, cacheAvailable: true },
-      deps,
-    );
-    assert.equal(plan.autoRecord.length, 0);
-    assert.equal(plan.reportOnly.length, 1);
-    assert.equal(plan.reportOnly[0].id, 'The_Torment');
-    assert.equal(plan.reportOnly[0].segments, 9);
-    assert.match(plan.reportOnly[0].reason, /already auto-reconciles to "timkin"/);
-    assert.doesNotMatch(plan.reportOnly[0].reason, /zero rendered segments/);
+    const orphans = new Map([['The_Torment', renderedOrphan(9)]]);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
+    assert.equal(plan.reportOnly.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'The_Torment');
+    assert.equal(plan.autoRecord[0].to, 'timkin');
+    assert.equal(plan.autoRecord[0].segments, 9);
   });
 
-  test('MINOR (round 2, finding 4): a genuinely never-rendered id (absent from BOTH orphans and autoReconciled) still gets the original "zero rendered segments" reason', () => {
+  test('MINOR (round 2, finding 4): a genuinely never-rendered id (absent from orphans) still gets the "zero rendered segments" reason', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'never-rendered-guy', name: 'Timkin' }], lc);
-    const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), autoReconciled: new Map(), cacheAvailable: true },
-      deps,
-    );
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), cacheAvailable: true }, deps);
     assert.equal(plan.reportOnly[0].segments, 0);
     assert.match(plan.reportOnly[0].reason, /zero rendered segments/);
   });
@@ -957,14 +982,15 @@ describe('formatReportRowSummary (#2093 residual 5, cosmetic)', () => {
     );
   });
 
-  test('an auto-reconciled report row (real segments, no chapter breakdown) omits the self-contradicting "0 chapter(s)"', () => {
-    // This is exactly the shape planBookRepairs's autoReconciled branch
-    // pushes: real rendered segments, but `chapters: []` because no
-    // per-chapter breakdown is tracked for that tier. The OLD unconditional
-    // suffix printed "the-torment (67 segment(s) across 0 chapter(s))" —
-    // self-contradicting, since a real segment count can never span zero
-    // chapters.
-    assert.equal(formatReportRowSummary({ id: 'the-torment', segments: 67, chapters: [] }), 'the-torment (67 segment(s))');
+  test('a report row with a nonzero segment count but no per-chapter breakdown omits the "0 chapter(s)" clause', () => {
+    // Pure-function contract test: whatever produces {segments > 0, chapters:
+    // []} (nothing currently does, after #2107's widened fix removed the
+    // autoReconciled branch that used to be this row's real-world source —
+    // kept as a pure-function pin rather than tied to a live producer), the
+    // OLD unconditional suffix would have printed the self-contradicting
+    // "silveny (17 segment(s) across 0 chapter(s))" — a real segment count
+    // can never span zero chapters.
+    assert.equal(formatReportRowSummary({ id: 'silveny', segments: 17, chapters: [] }), 'silveny (17 segment(s))');
   });
 
   test('zero segments and zero chapters (a genuinely never-rendered id) also omits the chapter clause', () => {
@@ -1348,7 +1374,7 @@ describe('probePortRangeRefused (#2090)', () => {
   });
 });
 
-describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-reconciled map)', () => {
+describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner decision, 2026-08-05, to list every non-'exact' tier as an orphan)", () => {
   const seg = (chapterId, chapterTitle, segments, characterSnapshots) => ({ chapterId, chapterTitle, segments, characterSnapshots });
 
   test('an id the resolver misses entirely becomes an orphan carrying segment count, per-chapter breakdown, duration, and snapshots', () => {
@@ -1364,8 +1390,7 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
         { ghost: { gender: 'male' } },
       ),
     ];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
-    assert.equal(autoReconciled.size, 0);
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
     const entry = orphans.get('ghost');
     assert.equal(entry.segments, 2);
     assert.equal(entry.chapters.length, 1);
@@ -1374,33 +1399,7 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
     assert.deepEqual(entry.snapshots, [{ gender: 'male' }]);
   });
 
-  test("an id resolving via 'normalised-id' is counted in autoReconciled, never reaches orphans", () => {
-    const resolver = { resolve: (id) => (id === 'drifted' ? { character: { id: 'live' }, via: 'normalised-id' } : undefined) };
-    const segs = [seg(1, 'One', [{ characterId: 'drifted' }, { characterId: 'drifted' }])];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
-    assert.equal(orphans.size, 0);
-    assert.deepEqual(autoReconciled.get('drifted'), { segments: 2, resolvedTo: 'live' });
-  });
-
-  test("#2107 REVERSES residual 5 (#2093): an id resolving via 'normalised-history' is an orphan, NOT counted in autoReconciled", () => {
-    // #2093 residual 5 originally counted 'normalised-history' here too,
-    // reasoning "already resolves live, nothing to repair". That shared
-    // #2107's exact reasoning gap: 'normalised-history', like 'history',
-    // depends on history.supersededBy — a table that can gain an entry
-    // AFTER the segment's audio was already rendered (this script's own
-    // --apply, or retireCharacterId elsewhere). A match through it does not
-    // prove the rendered bytes are current, only that SOME alias exists
-    // today — so it belongs in `orphans` (stale, needs re-render), not
-    // `autoReconciled` (proven fine). See buildOrphansFromSegments's own
-    // doc comment for the full per-tier reasoning.
-    const resolver = { resolve: (id) => (id === 'old-alias' ? { character: { id: 'live' }, via: 'normalised-history' } : undefined) };
-    const segs = [seg(1, 'One', [{ characterId: 'old-alias' }, { characterId: 'old-alias' }, { characterId: 'old-alias' }])];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
-    assert.equal(autoReconciled.size, 0);
-    assert.equal(orphans.get('old-alias')?.segments, 3);
-  });
-
-  test("an id resolving via 'exact' is neither an orphan nor counted in autoReconciled (no alias table involved, always fine)", () => {
+  test("an id resolving via 'exact' is the ONLY tier that skips — no alias table involved, always fine", () => {
     const resolver = {
       resolve(id) {
         if (id === 'live-id') return { character: { id: 'live-id' }, via: 'exact' };
@@ -1408,9 +1407,31 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
       },
     };
     const segs = [seg(1, 'One', [{ characterId: 'live-id' }])];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
-    assert.equal(autoReconciled.size, 0);
+  });
+
+  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A32's the-torment/lightning-dave real-workspace counter-example", () => {
+    // A narrower first version of this fix kept 'normalised-id' out of
+    // orphans, reasoning it can't depend on the mutable supersededBy table
+    // so it can't post-date the render. Independent review found that
+    // proves only that no RENAME happened, not that the rendered bytes are
+    // correct — register row A32 records a real case where a
+    // 'normalised-id' match was rendered BEFORE Wave 1's resolver existed
+    // at all, substituting the narrator regardless of tier. The owner
+    // decided: over-reporting is the safe failure direction for a one-shot
+    // repair tool, so ONLY 'exact' counts as "audio is fine" now.
+    const resolver = { resolve: (id) => (id === 'drifted' ? { character: { id: 'live' }, via: 'normalised-id' } : undefined) };
+    const segs = [seg(1, 'One', [{ characterId: 'drifted' }, { characterId: 'drifted' }])];
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.get('drifted')?.segments, 2);
+  });
+
+  test("an id resolving via 'normalised-history' is an orphan (unchanged from the #2107 fix's first round)", () => {
+    const resolver = { resolve: (id) => (id === 'old-alias' ? { character: { id: 'live' }, via: 'normalised-history' } : undefined) };
+    const segs = [seg(1, 'One', [{ characterId: 'old-alias' }, { characterId: 'old-alias' }, { characterId: 'old-alias' }])];
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(orphans.get('old-alias')?.segments, 3);
   });
 
   test("CRITICAL (#2107): an id resolving via 'history' is an orphan, NOT silently dropped as already-live", () => {
@@ -1419,10 +1440,9 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
     // the 'history' tier today, but that says nothing about whether the
     // rendered audio on disk predates the alias — it does not (#2107's
     // real-workspace incident). Before this fix, ANY successful resolution
-    // hit a blanket `continue` and this id vanished from `orphans` (and was
-    // never added to `autoReconciled` either, since only the two
-    // normalised tiers were tracked there) — genuinely rendered damage
-    // silently disappeared from the collector's output.
+    // hit a blanket `continue` and this id vanished from `orphans` entirely
+    // — genuinely rendered damage silently disappeared from the collector's
+    // output.
     const resolver = {
       resolve(id) {
         if (id === 'aliased') return { character: { id: 'live-id' }, viaAlias: 'aliased', via: 'history' };
@@ -1430,24 +1450,35 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
       },
     };
     const segs = [seg(2, 'Two', [{ characterId: 'aliased', startSec: 0, endSec: 4 }, { characterId: 'aliased', startSec: 4, endSec: 6 }])];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
-    assert.equal(autoReconciled.size, 0);
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
     const entry = orphans.get('aliased');
     assert.equal(entry.segments, 2);
     assert.equal(entry.chapters[0].chapterId, 2);
   });
 
   test('CRITICAL (#2107): the cross-run case — an id auto-recorded on run 1 still lands on the re-render list on run 2, even though run 2 resolves it via history', () => {
-    // The same-run case (above) would NOT have caught #2107: within a
-    // single run, pendingWrites are only written to cast-id-history.json
+    // The same-run case (above) would NOT have caught #2107 either: within
+    // a single run, pendingWrites are only written to cast-id-history.json
     // AFTER segmentOrphans is computed, so a same-run resolver never sees
-    // its own pass's new alias. The bug only bites on the NEXT run, which
-    // reads the alias back off disk — exactly the "re-run to get my work
-    // list" flow the real-workspace incident hit. This test drives two
-    // separate buildOrphansFromSegments calls over the SAME fixture to pin
-    // that specifically, mirroring the real numbers from A33's `--apply`
-    // run: `mayrin` ch2, 8 rendered segments, still narrator-substituted on
-    // disk after the alias was recorded.
+    // its own pass's new alias. What "already passed" before this fix
+    // actually refers to is the PRE-EXISTING test that ENCODED the bug (a
+    // resolver stub that returned any successful resolution as
+    // not-an-orphan) and had to be rewritten in this diff, not a same-run
+    // case that would have caught it on its own — that test alone would
+    // still pass today, since 'history' genuinely isn't an orphan WITHIN
+    // one run either way. The bug only bites on the NEXT run, reading the
+    // alias back off disk — exactly the "re-run to get my work list" flow
+    // the real-workspace incident hit. This drives two independent
+    // buildOrphansFromSegments calls with hand-written fake resolvers over
+    // the SAME fixture to pin that specific before/after-alias sequence —
+    // it does NOT call collectSegmentOrphans, build a real
+    // buildCastResolver, or read a cast-id-history.json, so the actual
+    // cross-run coupling (collectSegmentOrphans threading
+    // history.supersededBy into the resolver on each call) remains
+    // untested by this file; verified only by the on-box acceptance dry
+    // run. Numbers mirror A33's real `--apply` run: `mayrin` ch2, 8
+    // rendered segments, still narrator-substituted on disk after the
+    // alias was recorded.
     const mayrinSegs = [
       seg(
         2,
@@ -1479,7 +1510,6 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
       8,
       'the audio on disk is still narrator-substituted — recording the alias must not drop it off the re-render list',
     );
-    assert.equal(run2.autoReconciled.size, 0, "'history' is not an id-shape auto-reconcile tier — must not be marked already-fixed either");
     const run2Rows = buildRerenderRows('Coalfall', run2.orphans);
     assert.equal(run2Rows.length, 1);
     assert.equal(run2Rows[0].id, 'mayrin');
@@ -1489,9 +1519,8 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
   test('non-string characterIds are ignored', () => {
     const resolver = { resolve: () => undefined };
     const segs = [seg(1, 'One', [{ characterId: 42 }, { characterId: null }, { characterId: undefined }])];
-    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
-    assert.equal(autoReconciled.size, 0);
   });
 });
 

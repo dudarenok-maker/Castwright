@@ -34,12 +34,18 @@
  *            `normaliseIdKey` comparison; see `resolveTierBId`'s doc
  *            comment for why a second matcher with its own tie rule was a
  *            real bug caught in review round 1.
- * A segment orphan that Tier A/B-matches a LIVE cast id would already have
- * resolved through `buildCastResolver`'s own normalised-id tier and so
- * never reaches this script's orphan set at all — Tier B only has
- * theoretical bite here for a cache-only orphan that was never rendered,
- * and even then (review round 1, Important 2 below) a cache-only match
- * never auto-records anyway. Anything else (including every book's
+ * #2107 (widened by owner decision, 2026-08-05): a segment orphan whose raw
+ * characterId normalised-matches a LIVE cast id DOES still resolve through
+ * `buildCastResolver`'s own `'normalised-id'` tier at collection time — but
+ * that only proves no RENAME happened, not that the rendered bytes are
+ * correct (`buildOrphansFromSegments`'s doc comment has the full argument
+ * and the real counter-example, register row A32), so it lands in this
+ * script's orphan set anyway rather than being silently excluded. Tier B
+ * re-runs the same id-shape match with an EMPTY history and re-confirms the
+ * same target, so it is this script's live path for auto-recording that
+ * exact case — not merely theoretical bite for a cache-only orphan that was
+ * never rendered, which (review round 1, Important 2 below) still never
+ * auto-records regardless of tier. Anything else (including every book's
  * `cast.json.bak.*` name and the frozen `characterSnapshots`
  * tone/gender/ageRange/attributes signal) is a RANKING signal only,
  * surfaced for a human decision, never auto-applied.
@@ -481,7 +487,7 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  and the module doc comment's `CACHE_DIR` entry) — this default is a
  *  safety net for any future caller that forgets to. */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false, autoReconciled } = input;
+  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false } = input;
   const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
@@ -499,6 +505,28 @@ export function planBookRepairs(input, deps) {
   // comparator (that would reintroduce the exact "two independent matchers"
   // hazard `resolveTierBId`'s own doc comment already fixed once).
   const normalisedReservedIds = new Set([...reservedIds].map((r) => normaliseIdKey(r)));
+
+  // I2 (independent review, 2026-08-05, on the #2107 widened fix): the
+  // "already recorded" skip just below used to compare `id in supersededBy`
+  // — a RAW string test — while `cast-resolve.ts`'s own resolver ALSO
+  // matches `supersededBy` on a NORMALISED key (the `'normalised-history'`
+  // tier). Widening #2107 to list a `'normalised-history'` match as an
+  // orphan (rather than silently reconciling it) means such an id can now
+  // reach this loop with real rendered segments, and the raw-string skip
+  // cannot recognise it as already covered — it would fall through to the
+  // matching pipeline and could auto-record a SECOND, redundant alias for
+  // an id `supersededBy` already resolves (via a different spelling of the
+  // same `from`). Built once per book, not once per id, on the same
+  // `normaliseIdKey` the resolver itself uses — not a second, hand-rolled
+  // comparator (the exact hazard `resolveTierBId`'s own doc comment already
+  // fixed once for a different guard). This gap is LATENT, not live: all
+  // three real-workspace aliases recorded so far (`mayrin`, `coalfall`,
+  // `lady-alina`) are already normalised fixed points, so none can reach it
+  // today.
+  const supersededByNormKey = new Map(); // normaliseIdKey(from) -> to
+  for (const [from, to] of Object.entries(supersededBy)) {
+    supersededByNormKey.set(normaliseIdKey(from), to);
+  }
 
   const allIds = new Set([...cacheNameIndex.keys(), ...bakNameIndex.keys(), ...orphans.keys()]);
 
@@ -525,8 +553,15 @@ export function planBookRepairs(input, deps) {
       skipped.push({ id, reason: 'rejected', detail: 'user explicitly rejected this reconciliation (Task 17 banner)' });
       continue;
     }
-    if (id in supersededBy) {
-      skipped.push({ id, reason: 'already-recorded', detail: `cast-id-history.json already maps this to "${supersededBy[id]}"` });
+    const supersededTarget = id in supersededBy ? supersededBy[id] : supersededByNormKey.get(normaliseIdKey(id));
+    if (supersededTarget !== undefined) {
+      skipped.push({
+        id,
+        reason: 'already-recorded',
+        detail:
+          `cast-id-history.json already maps this to "${supersededTarget}"` +
+          (id in supersededBy ? '' : ' (via a normalised-spelling match, not an exact key)'),
+      });
       continue;
     }
 
@@ -650,48 +685,24 @@ export function planBookRepairs(input, deps) {
       // rendered line in this book, with no wrong audio on disk to
       // justify it and no reviewer in the loop (spec §4.7 scopes this
       // pass to REPAIR, not pre-emptive cache-only aliasing).
+      //
+      // #2107, widened by owner decision (2026-08-05): this used to also
+      // need to special-case an id that HAD real rendered segments but
+      // wasn't in `orphans` because it "already auto-reconciled" through
+      // the resolver's normalised-id tier — that bucket (`autoReconciled`)
+      // no longer exists. Only `'exact'` skips `orphans` now (see
+      // `buildOrphansFromSegments`'s doc comment), so `orphan.segments ===
+      // 0` here can only mean one thing: this id genuinely has zero
+      // rendered segments anywhere in the book.
       if (orphan.segments === 0) {
-        // --- round-2 review, MINOR finding 4: `orphan.segments === 0` also
-        // covers an id that DOES have real rendered segments but was never
-        // added to `orphans` because it already auto-reconciles through the
-        // resolver's own normalised-id tier (the Cast banner already shows
-        // it under "auto-reconciled", not "needs your decision"). Reporting
-        // that case with the same "zero rendered segments / no damage to
-        // repair" wording is FALSE — it contradicts the banner and inflates
-        // the reported segment total with a phantom zero. `autoReconciled`
-        // (built alongside `orphans` in `collectSegmentOrphans`) carries the
-        // real count and target for exactly this case; only ids genuinely
-        // absent from BOTH maps (truly never rendered) get the original
-        // reason.
-        const reconciled = autoReconciled?.get(id);
-        if (reconciled) {
-          // #2107: `autoReconciled` only ever captures the `'normalised-id'`
-          // tier now — `'history'`/`'normalised-history'` moved to `orphans`
-          // instead (see `buildOrphansFromSegments`'s doc comment for why:
-          // both depend on the mutable `supersededBy` table, so a match
-          // through either can post-date the render and must not read as
-          // "no damage"). Worded generically rather than hardcoding the tier
-          // name, since this branch only ever sees the one tier now.
-          reportOnly.push({
-            id,
-            segments: reconciled.segments,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id already auto-reconciles to ` +
-              `"${reconciled.resolvedTo}" via a normalised-match tier at render time (${reconciled.segments} real ` +
-              `rendered segment(s) already carry the reconciled voice, per the Cast banner's auto-reconciled ` +
-              `section) — already fixed, no separate alias needed`,
-            candidates: [],
-          });
-        } else {
-          reportOnly.push({
-            id,
-            segments: 0,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
-              `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
-            candidates: [],
-          });
-        }
+        reportOnly.push({
+          id,
+          segments: 0,
+          chapters: [],
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
+            `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
+          candidates: [],
+        });
         continue;
       }
       // --- round-2 review, Important 1: fail-closed cache-availability
@@ -867,14 +878,12 @@ export function planApplyRefusal(apply, bookWithholds) {
 
 /** Formats one `reportOnly` row for the console listing (main()). Extracted
  *  as a pure function so its "(N segment(s) across M chapter(s))" suffix is
- *  directly testable — #2093 residual 5 (cosmetic): the auto-reconciled
- *  report branch (`planBookRepairs`'s `autoReconciled` case) has real
- *  rendered segments but an empty `chapters` array (no per-chapter
- *  breakdown is tracked for that tier), so the OLD unconditional suffix
- *  printed the self-contradicting "N segment(s) across 0 chapter(s))" —
- *  a real segment count can never be split across zero chapters. The
- *  chapter-count clause is omitted entirely when `chapters` is empty,
- *  rather than guessing a count. */
+ *  directly testable — #2093 residual 5 (cosmetic): a matched id with zero
+ *  rendered segments (`planBookRepairs`'s "never rendered, no damage to
+ *  repair" branch) reports `chapters: []` by construction — no chapter can
+ *  carry a segment that was never rendered. The chapter-count clause is
+ *  omitted entirely when `chapters` is empty, rather than printing the
+ *  vacuous "across 0 chapter(s))" every such row would otherwise get. */
 export function formatReportRowSummary(r) {
   return r.chapters.length > 0
     ? `${r.id} (${r.segments} segment(s) across ${r.chapters.length} chapter(s))`
@@ -1276,61 +1285,56 @@ async function loadServerModules() {
  *  loaded segments-file records (`segs`, the shape `mods.loadSegmentsFiles`
  *  returns) and a resolver (the real `buildCastResolver` result in
  *  production, a fake with the same `.resolve()` contract in tests), walks
- *  every rendered segment and buckets it into `orphans` (the rendered
+ *  every rendered segment and buckets it into `orphans` — the rendered
  *  bytes on disk may be stale — per-chapter breakdown, approximate affected
  *  duration from each segment's own startSec/endSec, every non-empty
- *  characterSnapshot) or `autoReconciled` (the resolver hits via a tier that
- *  proves the rendered bytes are fine — round-2 review, MINOR finding 4).
+ *  characterSnapshot.
  *
- *  Exported so the producer half of the auto-reconciled map — previously
- *  proven only by a live dry run against the real workspace, since
- *  `planBookRepairs`'s own tests only ever injected a fake `autoReconciled`
- *  map — has a direct unit test with no fs/`server/dist` dependency (see
- *  the module doc comment's Tests section). `collectSegmentOrphans` itself
- *  stays the thin I/O wrapper that loads `segs` and calls this.
+ *  Exported so the collector's pure core — previously proven only by a live
+ *  dry run against the real workspace, since `planBookRepairs`'s own tests
+ *  only ever injected a fake `orphans` map — has a direct unit test with no
+ *  fs/`server/dist` dependency (see the module doc comment's Tests
+ *  section). `collectSegmentOrphans` itself stays the thin I/O wrapper that
+ *  loads `segs` and calls this.
  *
- *  #2107: the question this function answers per segment is NOT "does
- *  `resolver.resolve(id)` succeed" — it's "is the audio already on disk
- *  stale". Those used to be treated as the same question (any successful
- *  resolution, whatever the tier, hit a blanket `continue`); they aren't.
- *  Reasoned per tier, against `cast-resolve.ts`'s own four:
- *    - `'exact'`: the segment's raw `characterId`, frozen to disk at render
- *      time, literally IS a live cast id today. No alias table involved —
- *      fine, not orphaned.
- *    - `'normalised-id'`: matches a LIVE cast id after normalising, with NO
- *      history/alias lookup at all — a pure function of the CURRENT cast
- *      list, independent of when the render happened. This codebase's own
- *      invariant (see this repo's CLAUDE.md "Conventions worth preserving")
- *      is that any path that changes a persisted character id calls
- *      `retireCharacterId`, i.e. a real rename always leaves a history
- *      entry — so an id that STILL normalised-matches a live id with no
- *      history entry for it has always had this normalised spelling, and
- *      the real render pipeline (`synthesise-chapter.ts` builds the same
- *      resolver) would have resolved it exactly the same way at render
- *      time. Fine, not orphaned — matches #2093 residual 5's original call
- *      for this tier, unchanged here.
- *    - `'history'` / `'normalised-history'`: BOTH depend on
- *      `history.supersededBy`, a table that gains entries over time (this
- *      script's own `--apply`, or `retireCharacterId` elsewhere). There is
- *      no timestamp proving a given alias predates the render that froze
- *      this segment's `characterId` to disk — the #2107 incident IS exactly
- *      that ordering: `mayrin -> mairin` got written by an `--apply` run,
- *      and the VERY NEXT dry run resolved `mayrin` via `'history'` and
- *      dropped it from the re-render list, even though the frozen audio
- *      predates the alias and is still narrator-substituted. Conservatively
- *      STALE for both tiers — belongs in `orphans`, not `autoReconciled`.
- *      This REVERSES #2093 residual 5's treatment of `'normalised-history'`
- *      as "no damage" — that call shared #2107's exact reasoning gap (it
- *      asked "does this resolve" instead of "is the alias older than the
- *      render"), just never hit in practice before this incident.
+ *  #2107, widened by an explicit owner decision after independent review
+ *  (2026-08-05): a frozen `characterId` that is not literally a live cast
+ *  id today — via `cast-resolve.ts`'s `'exact'` tier — may have been
+ *  rendered against a different resolution than the one it resolves to
+ *  now, so it is listed as an orphan. That covers a genuine miss AND every
+ *  one of the other three resolver tiers (`'normalised-id'`, `'history'`,
+ *  `'normalised-history'`) alike — ONLY `'exact'` means the rendered bytes
+ *  are fine.
+ *
+ *  This replaces a narrower first version of this fix that kept
+ *  `'normalised-id'` out of `orphans`, reasoned as: an id that still
+ *  normalised-matches a live id with no history entry for it can't depend
+ *  on the mutable `history.supersededBy` table, so it can't have started
+ *  resolving after the render. True as far as it goes, but a non-sequitur
+ *  — it proves only that no RENAME happened, not that the bytes are
+ *  correct. Register row A32 (`docs/testing/onbox-acceptance-register.md`)
+ *  records the counter-example: *Playing with Fire*'s `the-torment` (67
+ *  segments, cast id `the_torment`) and `lightning-dave` (1 segment, cast
+ *  id `lightning_dave`) both recover under the `'normalised-id'` tier
+ *  today, but their audio was rendered BEFORE Wave 1's resolver existed at
+ *  all — `resolveGroup` did a bare `castById.get()` and substituted the
+ *  narrator regardless of tier, so a normalised-id match today says
+ *  nothing about what voice rendered the frozen bytes. There is no
+ *  per-segment evidence on the real workspace to discriminate a genuinely
+ *  fine `'normalised-id'` match from a stale one either way —
+ *  `renderedFallbackCharacterId` and `characterSnapshots` are absent from
+ *  all 84,642 real segments (only `renderedFallbackEngine`, 77 segments,
+ *  exists) — so this is a policy call, not something detectable from the
+ *  data: over-reporting is the safe failure direction for a one-shot
+ *  repair tool, under-reporting tells an operator the workspace is clean
+ *  when it might not be.
+ *
  *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
- *  being empty for an id must mean "resolves via a tier that CANNOT have
- *  been written after the render" (`exact`/`normalised-id`), never merely
+ *  being empty for an id must mean "resolves via `'exact'`", never merely
  *  "resolver.resolve() returned something" — that laxer reading is the bug
  *  this comment exists to prevent from coming back. */
 export function buildOrphansFromSegments(segs, resolver) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
-  const autoReconciled = new Map(); // id -> { segments, resolvedTo }
   for (const seg of segs) {
     const perChapterCount = new Map(); // id -> count
     const perChapterDuration = new Map(); // id -> seconds
@@ -1338,22 +1342,10 @@ export function buildOrphansFromSegments(segs, resolver) {
       const id = s.characterId;
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
-      if (resolution) {
-        if (resolution.via === 'exact') continue; // fine — no alias table involved, not orphaned
-        if (resolution.via === 'normalised-id') {
-          // fine — depends only on the CURRENT live cast list, not on
-          // history/supersededBy, so it can't have been written after this
-          // segment's audio was rendered (see the doc comment above).
-          const entry = autoReconciled.get(id) ?? { segments: 0, resolvedTo: resolution.character.id };
-          entry.segments += 1;
-          autoReconciled.set(id, entry);
-          continue;
-        }
-        // 'history' / 'normalised-history': depends on history.supersededBy,
-        // which can gain entries AFTER this segment's audio was rendered
-        // (#2107) — falls through to the orphan bucket below, same as an
-        // unresolved id, rather than being silently dropped.
-      }
+      if (resolution?.via === 'exact') continue; // fine — literally the live cast id today, not orphaned
+      // Everything else — a genuine miss, or a match via 'normalised-id' /
+      // 'history' / 'normalised-history' — is listed (see the doc comment
+      // above for why only 'exact' is exempt).
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
         perChapterDuration.set(id, (perChapterDuration.get(id) ?? 0) + Math.max(0, s.endSec - s.startSec));
@@ -1373,7 +1365,7 @@ export function buildOrphansFromSegments(segs, resolver) {
       if (snapshot) entry.snapshots.push(snapshot);
     }
   }
-  return { orphans, autoReconciled };
+  return { orphans };
 }
 
 async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
@@ -1508,7 +1500,7 @@ async function main() {
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const { orphans: segmentOrphans, autoReconciled } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -1553,7 +1545,6 @@ async function main() {
         bakNameIndex,
         orphans: segmentOrphans,
         cacheAvailable,
-        autoReconciled,
       },
       {
         normaliseForMatch: mods.normaliseForMatch,
