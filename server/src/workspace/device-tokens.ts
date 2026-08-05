@@ -23,7 +23,7 @@ export interface DeviceTokenRecord {
   /** SHA-256 hex of the raw token. The raw token is never stored. */
   tokenHash: string;
   createdAt: string;
-  expiresAt?: string;        // ISO; absent on legacy schema-1 records → rejected
+  expiresAt?: string;        // ISO; absent (legacy schema-1) OR unparseable → rejected (#2144)
   lastSeenAt?: string;
   revoked?: boolean;
 }
