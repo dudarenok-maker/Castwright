@@ -290,17 +290,28 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
   consume "did it parse", it consumes the cache's actual character-name
   entries, and a validly-parsing cache that names nobody is exactly as
   blind to it as a missing file. The gate now also requires at least one
-  name/id entry, and against the real cache directory this surfaces exactly
-  one book: *Unlocked*'s cache file (`mns_dLurz4I544.json`) parses fine but
-  names zero characters (no `stage1.characters`, no populated
-  `chapterCast`) — real, not a `CACHE_DIR` misconfiguration. **This no
-  longer blocks the run**, because *Unlocked* currently has zero orphaned
-  characterIds — nothing this pass would ever have auto-recorded for it, so
-  its blind ambiguity veto never actually stood between the pass and a real
-  candidate. `--apply` refuses only when a book's blind veto DID withhold a
-  real candidate; that count is reported separately and currently reads
-  `0`. **Do not stop just because "books missing analysis-cache evidence"
-  reads nonzero** — check the withheld-count line instead.
+  name/id entry that `buildNameIndex` itself would keep, not merely one
+  `cacheEntriesOf` treats as string-shaped (pre-merge review I1 closed a
+  further gap — see below), and against the real cache directory this
+  surfaces exactly one book: *Unlocked*'s cache file (`mns_dLurz4I544.json`)
+  parses fine but names zero characters (no `stage1.characters`, no
+  populated `chapterCast`) — real, not a `CACHE_DIR` misconfiguration.
+  **This no longer blocks the run — but not because *Unlocked* has nothing
+  orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed by a live pre-merge-review scan, and independently by the real
+  `--apply` run — see §8.6). The reason it doesn't block: `unknown-male` is
+  a **reserved fold-bucket SOURCE id**, and guard 1 refuses to auto-record
+  from a reserved source unconditionally, firing *before* the
+  cache-availability gate is ever reached — so *Unlocked*'s blind ambiguity
+  veto never actually stood between the pass and a real candidate. `--apply`
+  refuses only when a book's blind veto DID withhold a real candidate; that
+  count is reported separately and currently reads `0`. **Do not stop just
+  because "books missing analysis-cache evidence" reads nonzero** — check
+  the withheld-count line instead. The trigger that WOULD change this: a
+  non-reserved orphaned id in *Unlocked* with a real Tier A/B match — and,
+  per pre-merge review I2, a zero-segment match would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached).
 
 ### 8.2 Fixture
 
@@ -335,23 +346,42 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
       "unknown"; #2093 residual 1 strengthened the underlying gate to ALSO
       refuse a present-but-corrupt/unparseable cache file, and
       independent-review Critical C1 strengthened it once more to ALSO
-      refuse a validly-parsing cache file that names zero characters — all
-      three used to slip past as "available"). **Owner-decided policy,
-      review round 2 (2026-08-05): this precondition is about WITHHELD
-      candidates, not the raw missing-cache count** — a nonzero `books
-      missing analysis-cache evidence` line is EXPECTED and does NOT block
-      `--apply` by itself; only a nonzero `books with an auto-record
+      refuse a validly-parsing cache file that names zero characters, and a
+      later pre-merge review pass (I1) closed a further gap in that same
+      check — all used to slip past as "available"). **Owner-decided
+      policy, review round 2 (2026-08-05): this precondition is about
+      WITHHELD candidates, not the raw missing-cache count** — a nonzero
+      `books missing analysis-cache evidence` line is EXPECTED and does NOT
+      block `--apply` by itself; only a nonzero `books with an auto-record
       withheld…` line does. **As measured 2026-08-05, this precondition IS
       satisfied**: `books missing analysis-cache evidence` reads `1`
-      (*Unlocked* — see §8.1 for why this is expected and harmless: it has
-      zero orphaned characterIds, so nothing was ever withheld for it), and
-      `books with an auto-record withheld…` reads `0`. Don't stop at the
-      first number.
+      (*Unlocked* — see §8.1: it DOES have an orphaned id, `unknown-male`
+      with 34 segments, but guard 1 refuses to auto-record from it as a
+      reserved fold-bucket source before the cache gate is ever reached, so
+      nothing was ever withheld for it), and `books with an auto-record
+      withheld…` reads `0`. Don't stop at the first number.
+- [ ] `WORKSPACE_DIR` must actually point at the real 20-book workspace
+      (#2108) — confirm the summary reads `books scanned: 20` alongside the
+      cache-evidence lines above. A wrong `WORKSPACE_DIR` (the script's
+      default, `<home>/AudiobookWorkspace`, does not exist) scans **0**
+      books and, before this fix, printed a clean-looking `books missing
+      analysis-cache evidence: 0` and exited `--apply` with code `0` having
+      written nothing — an empty tree read as a healthy one, on exactly the
+      line this precondition told the operator to trust. `--apply` now
+      refuses outright when `books scanned` is `0`.
 - [ ] No Castwright server reachable on the configured probe port(s) — default
       `8080` and the LAN HTTPS `8443` — **or their auto-rebind range** (up to
       19 ports above each, matching `listenWithAutoRebind` — #2090). `--apply`
       refuses outright otherwise (it writes out-of-process; no in-process lock
-      covers the write).
+      covers the write). The probe is a plain "is anything listening" TCP
+      connect, not a Castwright health check — it refuses on **any**
+      listener in `8080`–`8099` or `8443`–`8462`, including an unrelated dev
+      service that happens to be bound in that range. A refusal is not proof
+      the Castwright server itself is still up — confirmed live on the
+      2026-08-05 run below: a plain `npm run dev` bound LAN HTTPS `8443`
+      only and never opened `8080`, and it was the `LAN_HTTPS_PORT` half of
+      the widened probe that caught it — a probe covering only the default
+      `8080` would have missed it entirely.
 - [ ] The real workspace is present and untouched since the last dry run.
 - [ ] SHA and a clean tree recorded below.
 
@@ -367,7 +397,7 @@ Expected: refuses immediately, naming the reachable port(s), exit code 1, no
 `cast-id-history.json` written anywhere (confirm via a workspace-wide file
 search before and after).
 
-Result: _______________________________________________________________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** `cd server && npm run dev` bound **LAN HTTPS 8443 only** — it never opened 8080 — so this exercised the `LAN_HTTPS_PORT` half of the probe rather than the `PORT` half. `--apply` refused immediately: `Refusing --apply: port(s) 8443 did not return a clear ECONNREFUSED — treating as possibly-live`, exit code **1**. Workspace-wide search for `cast-id-history.json` returned **0** files both before and after. Worth noting for anyone repeating this: had the probe covered only the default 8080, this real server would have been invisible to it.
 
 3. Stop the server before continuing.
 
@@ -387,33 +417,39 @@ trusting anything below; if the WITHHELD-count line is nonzero, `--apply`
 refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
 first; a nonzero missing-cache-evidence line alone does NOT refuse). **As
 measured 2026-08-05, this precondition IS satisfied — this step can be run**
-(the repo owner's decision, review round 2: *Unlocked*'s empty-but-parsing
-cache has nothing at stake, since it currently has zero orphaned
-characterIds, so it no longer blocks the workspace run).
+(the repo owner's decision, review round 2: *Unlocked* DOES have an
+orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
+auto-record from it as a reserved fold-bucket source before the cache gate
+is ever reached, so it has nothing at stake and no longer blocks the
+workspace run).
 
-Result (console summary matches §8.1): ______________
+Result (console summary matches §8.1): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exact match.** `mode: APPLY (writing cast-id-history.json)`; books scanned **20**; auto-recordable aliases **3 (27 segment(s))**; reported for human decision **93 id(s) / 161 segment(s)**; re-render candidates **17**; books missing analysis-cache evidence **0**.
+
+> **Read that last figure against the right revision.** This run was made against `main` @ `f3d6ae0f`, i.e. the **pre-#2102** gate, where the cache-evidence count was global and `0` was the go/no-go. #2102 makes the gate honest and scopes the refusal per book, after which the expected output is `books missing analysis-cache evidence: 1` (*Unlocked* parses but names nobody) **plus a new `books with an auto-record withheld: 0`** — and it is that second line, not the first, that gates `--apply`. Do not read this PASS as "the first line must be 0" once #2102 lands.
+
+Invocation: `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="C:/Claude/Projects/Audiobook-Generator/server/handoff/cache" node scripts/repair-cast-id-drift.mjs --apply`. **`WORKSPACE_DIR` must be passed explicitly** — the script does not read `server/.env`, and its `<home>/AudiobookWorkspace` default is empty on this box (see [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108)).
 
 ### 8.6 After `--apply` — confirm what was and wasn't written
 
 5. Read `.audiobook/cast-id-history.json` for *Заказ Коалфолла*.
 
 Result (`supersededBy` contains `mayrin: "mairin"` and
-`coalfall: "coalfall-dragon"`): ______________
+`coalfall: "coalfall-dragon"`): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** File reads `{"schema": 1, "supersededBy": {"mayrin": "mairin", "coalfall": "coalfall-dragon"}}`.
 
 6. Read `.audiobook/cast-id-history.json` for *Everblaze*.
 
-Result (`supersededBy` contains `"lady-alina": "dame-alina"`): ______________
+Result (`supersededBy` contains `"lady-alina": "dame-alina"`): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** File reads `{"schema": 1, "supersededBy": {"lady-alina": "dame-alina"}}`.
 
 7. Search the whole workspace for `cast-id-history.json`. Expected: **exactly
    two** files — the two above. No other book gained one.
 
-Result (file count and locations): ______________
+Result (file count and locations): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exactly two.** `Castwright/Standalones/Заказ Коалфолла/.audiobook/cast-id-history.json` and `Shannon Messenger/Keeper of the Lost Cities/Everblaze/.audiobook/cast-id-history.json`. No other book gained one (workspace-wide `find`, 0 before → 2 after).
 
 8. Diff every book's `cast.json` against its pre-run state (mtime, then
    content). Expected: byte-unchanged everywhere — the pass never touches
    `cast.json`.
 
-Result: ______________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** md5 of all **20** `cast.json` files captured before the run and re-captured after — the two sorted digest lists are identical, so every book's cast is byte-unchanged.
 
 9. Re-run the script in **dry-run** mode (no `--apply`) immediately after.
    Expected: the three now-recorded aliases no longer appear in the
@@ -421,7 +457,7 @@ Result: ______________
    report-only ids are unchanged from §8.1 — proving the write was durable,
    not merely printed once.
 
-Result: ______________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
 ### 8.7 Confirm the fix reaches actual audio
 
@@ -432,12 +468,12 @@ Result: ______________
 Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
 now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
 
-Result: ______________
+Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A33 stays open for this and §8.8.
 
 12. **Listen.** Confirm both characters' lines are audibly distinct from the
     narrator, not merely a different id in the JSON.
 
-Result (by ear): ______________
+Result (by ear): **NOT RUN as of 2026-08-05** — depends on step 10/11 above.
 
 ### 8.8 Cast-screen banner cross-check
 
@@ -448,12 +484,13 @@ Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
 still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
 negative control (a reserved-bucket source must still refuse to auto-record).
 
-Result: ______________
+Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the post-`--apply` dry run still reports *Exile*'s `unknown-male` as report-only with the reserved-fold-bucket refusal reason intact, so the negative control holds at the script level. The Cast-screen rendering of both sections has not been checked.
 
 ### 8.9 Outcome
 
-- [ ] §§8.4-8.8 run
-- [ ] Defects filed: ____________________________________
+- [x] §§8.4-8.6 run — **2026-08-05**, all PASS
+- [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply`), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

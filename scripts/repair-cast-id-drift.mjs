@@ -95,7 +95,21 @@
  *
  * Env:
  *   BASE                 workspace root (overrides everything)
- *   WORKSPACE_DIR        workspace root (same var the server's .env uses)
+ *   WORKSPACE_DIR        workspace root (same var the server's .env uses —
+ *                        but this script does NOT read server/.env itself,
+ *                        deliberately: it must be pointed at the workspace
+ *                        explicitly, the same way CACHE_DIR is. #2108: a
+ *                        bare invocation on a box whose real workspace is
+ *                        configured only in server/.env silently falls
+ *                        through to the <home>/AudiobookWorkspace default
+ *                        below, scanning ZERO books — `--apply` now refuses
+ *                        outright on a zero-book scan rather than reading
+ *                        that as a clean, fully-examined workspace (see
+ *                        `shouldRefuseApplyForEmptyScan`). Resolving
+ *                        WORKSPACE_DIR from server/.env automatically was
+ *                        considered and deliberately deferred — a design
+ *                        call about where this script's own configuration
+ *                        comes from, not a safety fix.
  *   AUDIOBOOK_WORKSPACE  workspace root
  *   default              <home>/AudiobookWorkspace
  *   CACHE_DIR            analysis-cache root — default `<repo>/server/handoff/cache`.
@@ -815,6 +829,44 @@ export function formatReportRowSummary(r) {
     : `${r.id} (${r.segments} segment(s))`;
 }
 
+/** #2108: `--apply` must refuse outright when nothing was scanned. A wrong
+ *  `WORKSPACE_DIR` (this script does not read `server/.env`, so a bare
+ *  invocation defaults to `<home>/AudiobookWorkspace`, not necessarily
+ *  where the real books live) scans ZERO books — and absent this check,
+ *  that reads as "clean" rather than "unknown": `booksMissingCache` stays
+ *  `0` (nothing to be missing evidence when nothing was scanned), so the
+ *  round-2 fail-closed guard can never fire, and `--apply` would exit `0`
+ *  having written nothing, reporting an empty tree as a healthy workspace
+ *  on the exact summary line A33's precondition tells an operator to
+ *  trust. There is no legitimate `--apply` against an empty workspace.
+ *  Extracted as a pure decision, matching
+ *  `shouldRefuseApplyForWithheldAutoRecord`'s own shape — same caveat: this
+ *  covers the DECISION only, not `main()`'s wiring of it (untestable
+ *  without `server/dist`; verified only by the live dry run). */
+export function shouldRefuseApplyForEmptyScan(apply, booksScanned) {
+  return apply === true && booksScanned === 0;
+}
+
+/** #2108: formats the `--- Summary ---` block's "books scanned" line,
+ *  calling out a zero-book scan explicitly instead of letting it render as
+ *  a plain "books scanned: 0" indistinguishable from any other count in the
+ *  summary — every OTHER line in that block would also read `0`, which
+ *  looks exactly like "a fully-scanned, perfectly clean workspace" unless
+ *  something says otherwise. Dry-run only in practice: `--apply` refuses
+ *  before ever reaching the summary when `booksScanned === 0` (see
+ *  `shouldRefuseApplyForEmptyScan`), so an operator only ever sees this
+ *  callout in dry-run output — exactly where they need to see it, before
+ *  trusting any other zero in the same block. */
+export function formatBooksScannedLine(booksScanned) {
+  return (
+    `books scanned: ${booksScanned}` +
+    (booksScanned === 0
+      ? ' — WARNING: nothing was examined; every count below is a row of clean zeros because NOTHING WAS ' +
+        'SCANNED, not because the workspace is healthy. Check WORKSPACE_DIR before trusting anything else here.'
+      : '')
+  );
+}
+
 // ---------------------------------------------------------------------------
 // I/O — everything below touches the filesystem or the network.
 // ---------------------------------------------------------------------------
@@ -1263,6 +1315,30 @@ async function main() {
   const books = collectBooks(workspaceDir);
   console.log(`books scanned: ${books.length}\n`);
 
+  // #2108: a wrong WORKSPACE_DIR (the script does not read server/.env, so a
+  // bare invocation defaults to <home>/AudiobookWorkspace, not necessarily
+  // where the real books live) scans ZERO books — and without this check,
+  // that reads as "clean" rather than "unknown": booksMissingCache stays 0
+  // (there is nothing to be missing evidence when nothing was scanned), so
+  // the round-2 fail-closed guard can never fire, and --apply would run to
+  // completion, exit 0, and write nothing — reporting an empty tree as a
+  // healthy workspace on the exact summary line A33's precondition tells an
+  // operator to trust. There is no legitimate --apply against an empty
+  // workspace, so this refuses outright; a dry run still completes (so the
+  // operator can see WHERE it looked), but the summary below calls the zero
+  // out explicitly instead of rendering a row of clean zeros that reads as
+  // "nothing needs fixing".
+  if (shouldRefuseApplyForEmptyScan(apply, books.length)) {
+    console.error(
+      `\nRefusing --apply: 0 books found at workspace (${workspaceDir}). This usually means ` +
+        `WORKSPACE_DIR is wrong — this script does not read server/.env, so a bare invocation ` +
+        `defaults to <home>/AudiobookWorkspace, which may not be where the real workspace lives. ` +
+        `Point WORKSPACE_DIR (or BASE/AUDIOBOOK_WORKSPACE) at the real workspace root and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   let totalAuto = 0;
   let totalAutoSegments = 0;
   let totalReport = 0;
@@ -1422,7 +1498,7 @@ async function main() {
   }
 
   console.log('--- Summary ---');
-  console.log(`books scanned: ${books.length}`);
+  console.log(formatBooksScannedLine(books.length));
   console.log(`auto-recordable aliases: ${totalAuto} (${totalAutoSegments} segment(s))${apply ? '' : ' — dry run, nothing written'}`);
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);

@@ -32,6 +32,8 @@ import {
   probePortRangeRefused,
   buildOrphansFromSegments,
   AUTO_REBIND_RANGE,
+  shouldRefuseApplyForEmptyScan,
+  formatBooksScannedLine,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -1250,5 +1252,48 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
     const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
     assert.equal(autoReconciled.size, 0);
+  });
+});
+
+describe('shouldRefuseApplyForEmptyScan (#2108)', () => {
+  test('dry run never refuses, whatever booksScanned is', () => {
+    assert.equal(shouldRefuseApplyForEmptyScan(false, 0), false);
+    assert.equal(shouldRefuseApplyForEmptyScan(false, 20), false);
+  });
+
+  test('--apply with a nonzero scan does not refuse', () => {
+    assert.equal(shouldRefuseApplyForEmptyScan(true, 1), false);
+    assert.equal(shouldRefuseApplyForEmptyScan(true, 20), false);
+  });
+
+  test('CRITICAL (#2108): --apply with a ZERO-book scan refuses — a wrong WORKSPACE_DIR must not exit 0 having examined nothing', () => {
+    // Before this fix, a zero-book scan (a wrong WORKSPACE_DIR — the script
+    // does not read server/.env) sailed through --apply: booksMissingCache
+    // stays 0 because there is nothing to be missing evidence when nothing
+    // was scanned, so the round-2 fail-closed guard could never fire, and
+    // the script exited 0 having written nothing — reporting an empty tree
+    // as a clean, healthy workspace on the exact line A33's precondition
+    // tells an operator to trust.
+    assert.equal(shouldRefuseApplyForEmptyScan(true, 0), true);
+  });
+});
+
+describe('formatBooksScannedLine (#2108)', () => {
+  test('a normal nonzero scan prints a plain count, no warning', () => {
+    assert.equal(formatBooksScannedLine(20), 'books scanned: 20');
+  });
+
+  test('CRITICAL (#2108): a ZERO-book scan gets an explicit warning, not a bare "books scanned: 0" indistinguishable from a healthy summary', () => {
+    // Every OTHER line in the --- Summary --- block also reads 0 for a
+    // zero-book scan (0 auto-recordable, 0 reported, 0 re-render rows, 0
+    // books missing cache evidence) — exactly what a genuinely clean,
+    // fully-examined workspace would also print. Without a distinguishing
+    // callout on THIS line, an operator has no way to tell "nothing needed
+    // fixing" apart from "nothing was examined" by reading the summary
+    // alone.
+    const line = formatBooksScannedLine(0);
+    assert.match(line, /^books scanned: 0 — WARNING:/);
+    assert.match(line, /nothing was examined/i);
+    assert.match(line, /WORKSPACE_DIR/);
   });
 });
