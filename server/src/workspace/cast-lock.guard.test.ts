@@ -19,84 +19,174 @@
 
      1. Every `withCastLock(` / `withCastLocks(` token becomes a "lock
         range": walk forward from its opening `(`, tracking paren depth
-        (skipping string/template literals and comments so a stray `(`/`)`
-        inside one can't desync the count), until the matching `)`. Everything
-        between the token and that matching paren — the whole call, including
-        an inline block-bodied or expression-bodied callback — counts as
-        locked.
-     2. One deliberate extension on top of pure textual nesting: if the
-        callback passed to the lock is a BARE call to a same-file named
-        function (`() => someHelper(...)`, not a block body, and not a call to
-        `writeJsonAtomic`/`rm` directly), the scan also resolves `someHelper`'s
-        own `function` declaration in the file and folds its body's brace
-        range into the same lock range. This exists because
-        `voice-override-linked.ts`'s `applyToBook` is
-        `withCastLock(bookDir, () => applyToBookLocked(...))` — the actual
-        read-modify-write lives in `applyToBookLocked`, a private function one
-        call away, not lexically inside `withCastLock`'s own parens. Without
-        this extension the scan would flag that site as unlocked even though
-        `applyToBookLocked` is a non-exported helper with exactly one caller,
-        always invoked through the lock. The resolution is intentionally
-        narrow: ONE level (it does not chase a second hop of indirection),
-        same-file only, and only for a `function name(...)` declaration (not
-        a `const name = (...) => ...` expression). Nothing else in this
-        branch needs a second level, per cast-lock.ts rule 1 ("a locked
-        function must not call another locked function on the same book") —
-        a helper delegated to like this is by construction NOT itself locked,
-        so there is nothing further to chase.
+        (skipping string/template literals and comments — via the same
+        `skipOpaqueToken` predicate the occurrence scan uses, see step 3 —
+        so a stray `(`/`)` inside one can't desync the count), until the
+        matching `)`. Everything between the token and that matching paren —
+        the whole call, including an inline block-bodied or
+        expression-bodied callback — counts as locked. Pure textual nesting,
+        nothing more: this scan does NOT chase a callback that only
+        delegates to a same-file helper (see "Removed" below).
+     2. REMOVED (this task, #1981 Task 12 hardening): an earlier draft folded
+        a same-file `function name(...)` declaration's body into the lock
+        range whenever a lock's callback was a bare call to that name — meant
+        to cover `voice-override-linked.ts`'s `applyToBook`, which is
+        `withCastLock(bookDir, () => applyToBookLocked(...))` with the actual
+        read-modify-write one call away in `applyToBookLocked`. Independent
+        review found it unsound two ways, either alone fatal: (a) it resolved
+        by NAME with no caller check, so a second, genuinely unlocked caller
+        of the same-named function stayed folded-as-locked and the guard
+        stayed green on a real unserialised write; (b) `findFunctionBodyRange`
+        took the first textual match of the name anywhere in the file with no
+        scope awareness, so a second, inner declaration of the same name
+        would silently fold the WRONG body. Deleted outright rather than
+        patched — a resolver that has to reason about caller identity and
+        lexical scope to be sound is no longer a "raw source text" scan, it's
+        a hand-rolled partial parser with the bugs to match. The one real site
+        it existed for is now on the pinned allowlist below instead, with an
+        honest "can't prove it, human-verified" `why`.
      3. Each `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence
-        (word-boundary literal match — deliberately narrow, see blind spots
-        below) is "locked" iff its start index falls inside some lock range
-        for that file.
+        is a match of `/\bwriteJsonAtomic\(\s*castJsonPath\(/` /
+        `/\brm\(\s*castJsonPath\(/` (whitespace-tolerant between the two
+        opening parens — see "Prettier-wrap" in the false-negatives list
+        below for why the earlier exact-adjacency version was itself a hole)
+        whose start index (a) falls inside some lock range for that file, per
+        step 1, AND (b) is not itself inside a string/template literal or a
+        comment, per the same `skipOpaqueToken` predicate step 1 uses for its
+        own paren/brace balancing — this task extracted that predicate into
+        a standalone function and wired it into the occurrence scan too,
+        which it previously bypassed entirely (see "Fixed" in the
+        false-positives list below).
 
    ACCEPTANCE TARGET (pinned literally, not derived): `routes/analysis.ts` is
    the one allowed exception — its five merge-base `writeJsonAtomic` calls are
    deferred to #2015 (four rejected designs are recorded in cast-lock.ts's own
    header; this guard is not the place to attempt a fifth). Its one `rm` (the
-   "Start fresh" delete, Task 11) IS locked. The allowlist below is keyed on
-   FILE **AND** COUNT, never file alone — a file-level exemption would also
+   "Start fresh" delete, Task 11) IS locked. `routes/voice-override-linked.ts`
+   is the second allowed exception, added by this hardening pass — its one
+   `writeJsonAtomic` (inside `applyToBookLocked`) IS genuinely locked, via
+   `applyToBook`'s `withCastLock(bookDir, () => applyToBookLocked(...))`, but
+   this scan is deliberately syntactic-only (see "Removed" above) and cannot
+   prove a call crosses a function boundary, so it reports the site as
+   unlocked; an unsound fold that pretended otherwise was worse. The allowlist
+   below is keyed on FILE **AND** COUNT, never file alone, and the count is
+   asserted in BOTH directions — a fix that makes a file's unlocked count go
+   DOWN must shrink or remove its entry just as much as a regression that
+   makes it go UP must fail the guard; drifting either way without updating
+   the entry means the allowlist is stale, not that the file is clean. For
+   `analysis.ts` specifically that means a file-level exemption would also
    blind the guard to the one `rm` that Task 11 correctly locked, which is
-   exactly spec §5 class 6's hole. A sixth unlocked write in that file, or a
-   fewer/greater count anywhere else, fails the guard rather than silently
-   passing under a stale exemption.
+   exactly spec §5 class 6's hole — a sixth unlocked write in that file, or a
+   fewer/greater count anywhere else (including `voice-override-linked.ts`),
+   fails the guard rather than silently passing under a stale exemption.
 
-   KNOWN BLIND SPOTS — this guard sees ONE syntactic form per occurrence type,
-   plus the one narrow delegate extension above. It does NOT catch:
+   FALSE NEGATIVES (unlocked writes the guard does NOT catch — it stays
+   green when it should not):
      - An extracted path variable: `const p = castJsonPath(dir); await
        writeJsonAtomic(p, …)` — the literal `writeJsonAtomic(castJsonPath(`
        substring never appears, so the occurrence regex never fires.
+     - An aliased writer import: `import { writeJsonAtomic as saveJson }
+       from '../workspace/state-io.js'` — the occurrence regex matches the
+       literal name `writeJsonAtomic`, not the binding, so a call written as
+       `saveJson(castJsonPath(dir), …)` is invisible.
+     - An aliased path import: `import { castJsonPath as castPath } from
+       '../workspace/paths.js'` — same gap, mirrored on the other name.
+     - A hand-built path: `writeJsonAtomic(join(d, 'cast.json'), c)` — no
+       `castJsonPath(` call at all, so the occurrence never fires even though
+       the file written is the same one.
+     - Lock IDENTITY is never checked, only lock PRESENCE: a site shaped
+       `withCastLock('/unrelated/book', () => { … writeJsonAtomic(
+       castJsonPath(bookDir), … ) })` passes, because the scan only asks
+       "is this write's index inside *some* `withCastLock(...)` call's
+       parens", never "does that call's first argument match the `bookDir`
+       the write itself resolves against". Out of scope for the guard's
+       stated spec ("lockedness only"), but on THIS branch, which has four
+       cross-book routes (`voice-override-linked.ts`,
+       `cast-not-linked-to.ts`, `cast-link-prior.ts`, `library-cast-override.ts`),
+       a mismatched-book lock is a realistic regression shape, not a
+       hypothetical one, so it is named here rather than left implicit.
+     - ANY function-call indirection between a lock's callback and the write
+       it actually guards — including the single-hop case the deleted
+       extension used to resolve (see "Removed" above) and, further out, a
+       genuinely new caller that reaches an already-locked private helper by
+       a path that adds no new `writeJsonAtomic(castJsonPath(`/
+       `rm(castJsonPath(` text of its own. The scan is entirely call-graph
+       blind now: it only reacts to a change if that change also changes
+       what OCCURRENCE TEXT exists in the file. A second, unlocked caller of
+       `applyToBookLocked` that calls it directly (no new write text) would
+       not move the count and so would not be caught — this is now an
+       accepted, documented gap rather than an unsound attempt to close it.
      - A writer routed through `workspace/schema-migrate.ts`'s cast.json
-       migration seam, which does not call `writeJsonAtomic`/`castJsonPath`
-       directly by these names.
-     - A second (or deeper) hop of function-call indirection beyond the one
-       level the delegate extension resolves.
-     - A callback assigned to a `const` and referenced by name, rather than
-       either an inline body or a bare call expression.
-     - Code hidden inside a template-literal `${...}` expression — template
-       literals are treated as opaque text (skipped whole, like any other
-       string) for the purposes of paren/brace balancing, so a lock or write
-       token that only exists inside one would be invisible.
-     - The occurrence search itself (step 3 above) is a plain text match, NOT
-       comment/string-aware the way the lock-range balancer is — a comment or
-       string literal that happens to spell out the exact substring
-       `writeJsonAtomic(castJsonPath(` or `rm(castJsonPath(` would be counted
-       as a real site. Found live while proving this guard can fail (see
-       below): an early draft of this file's own header spelled out that
-       literal in prose and the guard flagged ITSELF. Reworded here to avoid
-       it; no file in this branch's real `server/src` source (as opposed to
-       this guard's own prose) currently contains either substring inside a
-       comment or string, so this is a latent gap, not a live false positive
-       — but a future comment quoting the pattern verbatim would trip it.
+       migration seam. **Latent, not live**: `migrateSeamDoc` is a pure
+       transform (input document in, migrated document out) and does not
+       call `writeJsonAtomic`/`castJsonPath` itself today — nothing currently
+       writes through it unlocked. Named here so it is not forgotten if a
+       future caller starts persisting its output directly, at which point
+       this becomes a live gap rather than a latent one.
+     - `scripts/*.mjs` cast.json writers are outside the scan entirely — it
+       only walks `server/src`. Four exist today: `recover-missing-character`,
+       `rekey-qwen-voices-to-uuid`, `relink-stripped-qwen-voices`,
+       `backfill-qwen-voicestyle`. These are one-shot operator scripts, not
+       request-serving code, so they cannot race a concurrent HTTP write the
+       way the routes this guard covers can — but the guard cannot see them
+       either way.
+     - Code hidden inside a template-literal `${...}` expression — a
+       template literal is skipped whole (open backtick to close backtick,
+       via `skipOpaqueToken`) for BOTH the lock-range balancer and (since
+       this task) the occurrence scan, so a lock or write token that only
+       exists inside one is invisible on both sides equally. Unlike a plain
+       string or a comment, a template literal's `${...}` holds real,
+       executable code — but this guard does not special-case it, so a write
+       hidden there is a false negative just like the ones above, not merely
+       a formatting curiosity.
+
+   FALSE POSITIVES (correct, genuinely-locked code the guard MAY redden —
+   verified empirically for this task; only the shapes confirmed still to
+   redden are listed):
+     - A lock whose callback delegates through a SECOND hop reached from
+       INSIDE an inline block body — e.g. `withCastLock(dir, async () => {
+       await helper(dir); })` where `helper`'s own body (elsewhere in the
+       file) holds the actual `writeJsonAtomic(castJsonPath(` call. This was
+       never covered by the deleted extension either (which only resolved a
+       BARE call expression callback, never a block body that calls out) —
+       removing that extension changes nothing here; it was already a false
+       positive and stays one. Confirmed still reddens.
+     - A callback assigned to a `const` and referenced by name rather than
+       written inline: `const doIt = async () => { await writeJsonAtomic(
+       castJsonPath(dir), c); }; withCastLock(dir, doIt);` — the write's
+       index sits inside `doIt`'s own declaration, not inside the
+       `withCastLock(...)` call's parens, so it is reported unlocked even
+       though `doIt` is only ever invoked through the lock. Confirmed still
+       reddens.
+     - FIXED by this task, no longer live: a comment or string literal that
+       happens to spell out `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(`
+       verbatim used to be counted as a real occurrence regardless of where it
+       sat — the occurrence scan was plain text matching, not comment/string
+       aware the way the lock-range balancer already was. A comment quoting
+       the pattern OUTSIDE any lock range used to redden the guard on
+       unchanged, correct code (the false positive that motivated this fix —
+       an early draft of this very header did exactly that to itself); a
+       comment quoting it INSIDE a lock range used to be silently absorbed as
+       a "locked" site with no real write behind it at all, which is the
+       opposite failure — a fabricated pass. Both are closed now: occurrence
+       matching is comment/string-aware via the same `skipOpaqueToken`
+       predicate as step 1, so prose that quotes the pattern is invisible to
+       the scan in either position. Verified both directions for this task.
    An honest guard with stated limits beats one that implies total coverage.
 
    MUTATION-PROOF (see task-12-brief.md Step 2, and the report this task
-   returns): this guard was verified able to fail two different ways —
-   unwrapping a converted site so it reddens naming that exact file, and
-   widening the allowlist's own target count so a 6th unlocked write in
-   analysis.ts is NOT silently absorbed — and verified able to correctly
-   NOT accept `withLibraryVoiceLock` as a substitute lock. Every mutation was
-   reverted exactly (`git diff` empty) before this file was finalised; the
-   guard's own test run is the read-only, permanent check that ships. */
+   returns): this guard was verified able to fail every way listed above that
+   it is claimed to catch — unwrapping a converted site (in two different
+   files, in separate runs) so each reddens naming its own file; a
+   Prettier-wrapped unlocked write still reddening despite the whitespace;
+   widening `analysis.ts`'s own target count so a 6th unlocked write there is
+   NOT silently absorbed; a second unlocked write in `voice-override-linked.ts`
+   on top of its own allowlisted one, likewise not absorbed;
+   `withLibraryVoiceLock` correctly rejected as a substitute for
+   `withCastLock` — and verified able to correctly stay green on a prose
+   comment naming `applyToBookLocked` with zero code change. Every mutation
+   was reverted exactly (`git diff` empty) before this file was finalised;
+   the guard's own test run is the read-only, permanent check that ships. */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -118,43 +208,65 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** If `src[i]` opens a string/template literal (`"`, `'`, `` ` ``) or a
+    comment (`//`, `/* … *​/`), return the index just past its end (handling
+    backslash escapes inside quotes, and the unterminated-comment case by
+    running to EOF). Otherwise return -1 — `i` is not the start of an opaque
+    token. This is the single source of truth for "is this raw text actually
+    executable code", shared by the paren/brace balancer (`findMatchingClose`,
+    which needs it to avoid desyncing on a stray bracket inside a string) and
+    the occurrence scan (`scanFile`, which needs it so a comment or string
+    that happens to quote the write pattern verbatim isn't counted as a real
+    site — see the false-positives list in the file header). */
+function skipOpaqueToken(src: string, i: number): number {
+  const n = src.length;
+  const ch = src[i];
+  if (ch === '"' || ch === "'" || ch === '`') {
+    const quote = ch;
+    let j = i + 1;
+    while (j < n) {
+      if (src[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (src[j] === quote) {
+        j++;
+        break;
+      }
+      j++;
+    }
+    return j;
+  }
+  if (ch === '/' && src[i + 1] === '/') {
+    let j = i + 2;
+    while (j < n && src[j] !== '\n') j++;
+    return j;
+  }
+  if (ch === '/' && src[i + 1] === '*') {
+    let j = i + 2;
+    while (j < n && !(src[j] === '*' && src[j + 1] === '/')) j++;
+    j += 2;
+    return j;
+  }
+  return -1;
+}
+
 /** Scan forward from `openIndex` (which must hold `openChar`) for the
     matching `closeChar`, tracking nesting depth. String/template literals and
-    comments are skipped whole so a bracket character inside one can't desync
-    the count. Returns -1 if unmatched (malformed source). */
+    comments are skipped whole (via `skipOpaqueToken`) so a bracket character
+    inside one can't desync the count. Returns -1 if unmatched (malformed
+    source). */
 function findMatchingClose(src: string, openIndex: number, openChar: string, closeChar: string): number {
   let depth = 0;
   let i = openIndex;
   const n = src.length;
   while (i < n) {
+    const skip = skipOpaqueToken(src, i);
+    if (skip !== -1) {
+      i = skip;
+      continue;
+    }
     const ch = src[i];
-    if (ch === '"' || ch === "'" || ch === '`') {
-      const quote = ch;
-      i++;
-      while (i < n) {
-        if (src[i] === '\\') {
-          i += 2;
-          continue;
-        }
-        if (src[i] === quote) {
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (ch === '/' && src[i + 1] === '/') {
-      i += 2;
-      while (i < n && src[i] !== '\n') i++;
-      continue;
-    }
-    if (ch === '/' && src[i + 1] === '*') {
-      i += 2;
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
     if (ch === openChar) {
       depth++;
       i++;
@@ -171,23 +283,29 @@ function findMatchingClose(src: string, openIndex: number, openChar: string, clo
   return -1;
 }
 
-/** Locate a same-file `function <name>(...) { ... }` (optionally `async`)
-    declaration and return its body's `[openBraceIndex, closeBraceIndex]`, or
-    null if not found / malformed. */
-function findFunctionBodyRange(content: string, fnName: string): [number, number] | null {
-  const escaped = fnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const declRe = new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`);
-  const declMatch = declRe.exec(content);
-  if (!declMatch) return null;
-  const paramsOpen = content.indexOf('(', declMatch.index);
-  const paramsClose = findMatchingClose(content, paramsOpen, '(', ')');
-  if (paramsClose === -1) return null;
-  let i = paramsClose + 1;
-  while (i < content.length && content[i] !== '{') i++;
-  if (i >= content.length) return null;
-  const bodyClose = findMatchingClose(content, i, '{', '}');
-  if (bodyClose === -1) return null;
-  return [i, bodyClose];
+/** Every [start, end) span in `content` that is a string/template literal or
+    a comment, per `skipOpaqueToken`. Used so the occurrence scan can ignore a
+    match that only exists in prose or a string, not real code. */
+function computeOpaqueRanges(content: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const n = content.length;
+  let i = 0;
+  while (i < n) {
+    const skip = skipOpaqueToken(content, i);
+    if (skip !== -1) {
+      ranges.push({ start: i, end: skip });
+      i = skip;
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+/** True iff `index` falls inside one of `ranges` — i.e. inside a
+    string/template literal or a comment, not real code. */
+function isOpaque(ranges: Array<{ start: number; end: number }>, index: number): boolean {
+  return ranges.some((r) => index >= r.start && index < r.end);
 }
 
 interface LockRange {
@@ -195,9 +313,9 @@ interface LockRange {
   end: number;
 }
 
-/** Every `withCastLock(...)` / `withCastLocks(...)` call's span in `content`,
-    plus (see file header, extension 2) the resolved body range of a bare
-    same-file function the callback delegates to in one hop. */
+/** Every `withCastLock(...)` / `withCastLocks(...)` call's span in `content`.
+    Pure textual nesting — see file header "Removed" note for why this no
+    longer chases a callback that delegates to a same-file helper. */
 function collectLockRanges(content: string): LockRange[] {
   const ranges: LockRange[] = [];
   const tokenRe = /\bwithCastLocks?\(/g;
@@ -208,24 +326,6 @@ function collectLockRanges(content: string): LockRange[] {
     const closeParen = findMatchingClose(content, openParen, '(', ')');
     if (closeParen === -1) continue; // malformed source; nothing to do
     ranges.push({ start: tokenStart, end: closeParen });
-
-    // Extension 2 — resolve a one-hop bare-call delegate (see file header).
-    const arrowIdx = content.indexOf('=>', openParen);
-    if (arrowIdx !== -1 && arrowIdx < closeParen) {
-      let j = arrowIdx + 2;
-      while (j < closeParen && /\s/.test(content[j])) j++;
-      if (content[j] !== '{') {
-        const rest = content.slice(j, closeParen);
-        const callMatch = /^([A-Za-z_$][\w$]*)\(/.exec(rest);
-        if (callMatch) {
-          const calleeName = callMatch[1];
-          if (calleeName !== 'writeJsonAtomic' && calleeName !== 'rm') {
-            const bodyRange = findFunctionBodyRange(content, calleeName);
-            if (bodyRange) ranges.push({ start: bodyRange[0], end: bodyRange[1] });
-          }
-        }
-      }
-    }
   }
   return ranges;
 }
@@ -242,8 +342,12 @@ function lineOf(content: string, index: number): number {
   return line;
 }
 
-const WRITE_RE = /\bwriteJsonAtomic\(castJsonPath\(/g;
-const RM_RE = /\brm\(castJsonPath\(/g;
+// Whitespace-tolerant between the two opening parens — Prettier's
+// printWidth:100 wraps a long argument onto its own line, which would
+// otherwise silently drop a real occurrence out of coverage (see file
+// header, false negatives).
+const WRITE_RE = /\bwriteJsonAtomic\(\s*castJsonPath\(/g;
+const RM_RE = /\brm\(\s*castJsonPath\(/g;
 
 interface ScanResult {
   writes: number;
@@ -254,6 +358,7 @@ interface ScanResult {
 function scanFile(content: string): ScanResult | null {
   if (!content.includes('castJsonPath')) return null;
   const ranges = collectLockRanges(content);
+  const opaque = computeOpaqueRanges(content);
   const details: string[] = [];
   let writes = 0;
   let rms = 0;
@@ -261,6 +366,7 @@ function scanFile(content: string): ScanResult | null {
   WRITE_RE.lastIndex = 0;
   let wm: RegExpExecArray | null;
   while ((wm = WRITE_RE.exec(content))) {
+    if (isOpaque(opaque, wm.index)) continue; // comment/string quoting the pattern, not real code
     if (!isLocked(ranges, wm.index)) {
       writes++;
       details.push(`unlocked write @ line ${lineOf(content, wm.index)}`);
@@ -270,6 +376,7 @@ function scanFile(content: string): ScanResult | null {
   RM_RE.lastIndex = 0;
   let rmMatch: RegExpExecArray | null;
   while ((rmMatch = RM_RE.exec(content))) {
+    if (isOpaque(opaque, rmMatch.index)) continue; // comment/string quoting the pattern, not real code
     if (!isLocked(ranges, rmMatch.index)) {
       rms++;
       details.push(`unlocked rm @ line ${lineOf(content, rmMatch.index)}`);
@@ -280,18 +387,33 @@ function scanFile(content: string): ScanResult | null {
   return { writes, rms, details };
 }
 
-/* One entry by design: analysis.ts's five merge-base writes are deferred to
-   #2015 and stay unlocked in this PR.
+/* Two entries by design.
 
-   Keyed on file AND expected count, never on file alone. A file-level
-   exemption for analysis.ts would also blind the guard to the one rm that IS
-   locked (Task 11) — the exact hole spec §5 class 6 exists to close. A sixth
-   unlocked write in that file must fail the guard, not inherit the
-   exemption. */
+   Keyed on file AND expected count, never on file alone, and the count check
+   below fires on a mismatch in EITHER direction — a fix that removes an
+   unlocked write must shrink or delete its entry, exactly as a regression
+   that adds one must fail the guard. A file-level exemption for analysis.ts
+   would also blind the guard to the one rm that IS locked (Task 11) — the
+   exact hole spec §5 class 6 exists to close. A sixth unlocked write in that
+   file, or any drift in voice-override-linked.ts's count, must fail the
+   guard, not inherit a stale exemption. */
 const ALLOWED_UNLOCKED = new Map<string, { writes: number; rms: number; why: string }>([
   [
     'routes/analysis.ts',
     { writes: 5, rms: 0, why: 'merge-base writes deferred to #2015; the rm IS locked (Task 11)' },
+  ],
+  [
+    'routes/voice-override-linked.ts',
+    {
+      writes: 1,
+      rms: 0,
+      why:
+        "the write IS locked — applyToBook wraps it in withCastLock(bookDir, () => " +
+        'applyToBookLocked(...)), one call away — but this scan is deliberately syntactic ' +
+        "and can't prove a call crosses a function boundary. An earlier version tried to " +
+        'resolve that one hop by name and was unsound (see file header, "Removed"); this ' +
+        'allowlist entry is the honest replacement — human-verified, not guard-verified.',
+    },
   ],
 ]);
 
