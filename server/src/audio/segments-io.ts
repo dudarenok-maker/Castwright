@@ -19,6 +19,7 @@ import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import type { CastIdHistory } from '../store/cast-id-history.js';
+import { normaliseIdKey } from '../util/character-id.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -335,6 +336,20 @@ export async function collectRenderedFallbackEngines(
    `buildCastResolver` itself, and the SAME hazard this task exists to close
    here structurally: a caller that forgets to thread `rejectedPairs` no
    longer CAN, because there's only one parameter to pass. */
+/** I3 (review round 1) — combine the raw-keyed and normalised-keyed
+ *  `rejectedAgainst` lookups for one raw `characterId` into the single list
+ *  the field actually publishes, deduped and order-preserving (raw entries
+ *  first, since they are typically the literal id the user rejected under).
+ *  Returns `undefined` (not `[]`) when both are empty/absent, matching the
+ *  field's own "absent when never rejected against anything" contract. */
+function unionRejectedAgainst(
+  raw: string[] | undefined,
+  normalised: string[] | undefined,
+): string[] | undefined {
+  if (!raw?.length && !normalised?.length) return undefined;
+  return [...new Set([...(raw ?? []), ...(normalised ?? [])])];
+}
+
 export async function collectOrphanedCharacterFallbacks(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
@@ -345,20 +360,39 @@ export async function collectOrphanedCharacterFallbacks(
   const segs = await loadSegmentsFiles(bookDir, chapters);
   const resolver = buildCastResolver(cast, castIdHistory);
 
-  /* #2092/#2089 D4 — `from -> [to, ...]` for the "Not <Name> · Undo" chip,
-     keyed RAW rather than normalised. This function's own aggregation map
-     (`out`) is keyed by the untouched raw `s.characterId` straight off the
-     segment — never normalised anywhere in this function — so the lookup
-     below has to agree with THAT keyspace, not with any one resolver tier's
-     (cast-resolve.ts's tier-3/4 checks normalise instead, because those
-     tiers themselves match by normalised key; there is no such tier here,
-     only this collector's own raw-keyed `out` map). A pair therefore only
-     surfaces a chip against the exact raw id it was rejected under. */
-  const rejectedAgainstByFrom = new Map<string, string[]>();
+  /* #2092/#2089 D4 — `from -> [to, ...]` for the "Not <Name> · Undo" chip.
+     I3 (review round 1): a first version of this keyed and looked this up
+     RAW only, reasoning that `out`'s own aggregation map is keyed by the
+     untouched raw `s.characterId` — true, but beside the point. This map
+     doesn't describe `out`'s key; it describes WHICH rejection explains why
+     THIS particular raw id is currently blocked, and `resolver.resolve()`
+     (below) decides that using BOTH keyspaces depending on which tier a
+     given raw id lands in: tier 2 (history) is raw-keyed
+     (`rejectedTargetsByRawFrom` in cast-resolve.ts), but tiers 3/4
+     (normalised-id / normalised-history) are normalised-keyed
+     (`rejectedTargetsByNormFrom`) — a raw id that only COLLIDES with a
+     rejected `from` after normalisation (two spellings of the same
+     orphaned id, e.g. the repo's own `the_torment`/`The-Torment`) is
+     blocked by the resolver through the normalised tier even though its
+     OWN raw string never appears as a literal `pair.from`. Missing that
+     case here left the row `resolution: 'unresolved'` (genuinely blocked)
+     but `rejectedAgainst: undefined` (no chip, no Undo button) — a row
+     that reads as a fresh, un-rejected miss when it is in fact durably
+     blocked, with the only recovery being hand-editing
+     `cast-id-history.json`. Union of both keyspaces per raw id below is
+     strictly safe (never narrower than either alone) and mirrors exactly
+     what the resolver itself already does. */
+  const rejectedAgainstByRawFrom = new Map<string, string[]>();
+  const rejectedAgainstByNormFrom = new Map<string, string[]>();
   for (const pair of castIdHistory.rejectedPairs ?? []) {
-    const list = rejectedAgainstByFrom.get(pair.from) ?? [];
-    list.push(pair.to);
-    rejectedAgainstByFrom.set(pair.from, list);
+    const rawList = rejectedAgainstByRawFrom.get(pair.from) ?? [];
+    rawList.push(pair.to);
+    rejectedAgainstByRawFrom.set(pair.from, rawList);
+
+    const normFrom = normaliseIdKey(pair.from);
+    const normList = rejectedAgainstByNormFrom.get(normFrom) ?? [];
+    normList.push(pair.to);
+    rejectedAgainstByNormFrom.set(normFrom, normList);
   }
 
   for (const seg of segs) {
@@ -407,8 +441,15 @@ export async function collectOrphanedCharacterFallbacks(
         /* #2092/#2089 D4 — trap: never filtered out of this map even when
            `resolutionTag` is 'unresolved' (which it always is for a
            rejected id, per D2's no-fall-through). Doing so would delete the
-           row and orphan the frontend's Undo control. */
-        rejectedAgainst: rejectedAgainstByFrom.get(s.characterId),
+           row and orphan the frontend's Undo control. I3 (review round 1):
+           union of the raw and normalised lookups — see the maps' own doc
+           comment above for why a raw-only lookup can miss a rejection that
+           blocked this exact raw id only via the resolver's normalised
+           tier. */
+        rejectedAgainst: unionRejectedAgainst(
+          rejectedAgainstByRawFrom.get(s.characterId),
+          rejectedAgainstByNormFrom.get(normaliseIdKey(s.characterId)),
+        ),
       };
     }
   }

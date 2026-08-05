@@ -455,6 +455,38 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
       );
       expect(result.mayrin.rejectedAgainst).toEqual(['mairin', 'narrator']);
     });
+
+    it('I3 (review round 1): a DIFFERENT raw spelling that normalises the same as the rejected `from` still carries rejectedAgainst', async () => {
+      // The repo's own real drift shape: 'the_torment'/'The-Torment' both
+      // normalise to 'the-torment'. Rejecting the hyphen/capitalised
+      // spelling must still populate rejectedAgainst for the underscore
+      // spelling, since the REAL resolver blocks it too (via the
+      // normalised-id tier) — a raw-only lookup here would silently
+      // disagree with what `resolution` already reports.
+      const cast = [{ id: 'the-torment' }];
+      writeSegmentsArray('01-one', [{ characterId: 'the_torment', sentenceIds: [1] }]);
+      const result = await collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        cast,
+        h({}, { rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }] }),
+      );
+      expect(result.the_torment.resolution).toBe('unresolved');
+      expect(result.the_torment.rejectedAgainst).toEqual(['the-torment']);
+    });
+
+    it('I3: an id that normalises DIFFERENTLY from the rejected `from` is unaffected', async () => {
+      const cast = [{ id: 'the-torment' }];
+      writeSegmentsArray('01-one', [{ characterId: 'the_torment', sentenceIds: [1] }]);
+      const result = await collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        cast,
+        h({}, { rejectedPairs: [{ from: 'unrelated-id', to: 'the-torment' }] }),
+      );
+      expect(result.the_torment.resolution).toBe('normalised');
+      expect(result.the_torment.rejectedAgainst).toBeUndefined();
+    });
   });
 
   it('accumulates the segment count across multiple rendered chapters for the same orphaned id', async () => {
