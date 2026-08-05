@@ -3058,124 +3058,150 @@ export async function synthesiseChapter(
   const segmentAsrByIndex = new Map<number, AsrClassification>();
   const asrRetryCountByIndex = new Map<number, number>();
   if (asr) {
+    const sampleEvery = Math.max(1, Math.floor(asr.sampleEvery ?? 1));
+    const maxAsrRerecords = Math.max(0, Math.floor(asr.maxRerecords ?? 0));
+    /* ok < inconclusive < drift; among equal verdicts, lower WER wins. */
+    const rank = (c: AsrClassification): number =>
+      c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
+    const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
+      rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
+    /* fs-53: the QA expected text MUST be the same fs-53-normalised string the
+       synth path spoke — otherwise an expanded number ("$1,200" → "one thousand
+       two hundred dollars") would word-error-rate against the raw "$1,200" and
+       false-flag a perfectly faithful render as `drift`. Normalise with the
+       resolved `langCode` so the comparison stays aligned with the audio. fs-57
+       takes the whole `group` so the vocalization carve-out below can read it. */
+    /* srv-50: wrapped in the same withCallTimeout + withRecycleRecovery
+       protection every synth call site already has — an unwrapped ASR call
+       was the exact hang the 2026-07-03 wedged-sidecar incident exposed
+       (it never threw, so nothing downstream ever got a chance to recover).
+       Wrapping the closure (not either call site) covers BOTH call sites
+       below automatically. */
+    const verify = (pcm: Buffer, rate: number, group: SentenceGroup): Promise<AsrClassification> =>
+      withRecycleRecovery(resolveGroup(group).route.engine, () =>
+        withCallTimeout('asr-verify', (sig) =>
+          verifySegmentTranscript(pcm, rate, normaliseForTts(group.text, langCode), {
+            language: asr.language,
+            nameAllowlist: asr.nameAllowlist,
+            thresholds: asr.thresholds,
+            transcribeFn: asr.transcribeFn,
+            sidecarUrl: asr.sidecarUrl,
+            signal: sig,
+            /* fs-57 / srv-31: when Stage 3 prepended a vocalization, tolerate its
+               leading token(s) so the gasp doesn't count as content drift. */
+            ...(group.vocalization ? { vocalizationAllowlist: leadingVocalizationTokens(group.text) } : {}),
+          }),
+        ),
+      );
     /* #2011 — a transcribe/ASR failure (e.g. a misconfigured qa.asr.model
        triggering an unresolvable-repo error, or a wedged sidecar) must not
        abort a chapter that has already spent real GPU time on synthesis.
        Mirrors the SPK embed pass just below: non-fatal, logged and skipped.
-       Any group not verified before the failure simply has no entry in
-       `segmentAsrByIndex`, so its segment's `asr` field comes out undefined —
-       the same "gate did not run" shape the embed pass and a legacy
-       pre-ASR chapter already produce; the rest of the render (and any
-       verdicts already recorded before the failure) proceeds unaffected. A
-       genuine abort (caller cancellation) still propagates — only the ASR
-       failure itself is swallowed. */
-    try {
-      const sampleEvery = Math.max(1, Math.floor(asr.sampleEvery ?? 1));
-      const maxAsrRerecords = Math.max(0, Math.floor(asr.maxRerecords ?? 0));
-      /* ok < inconclusive < drift; among equal verdicts, lower WER wins. */
-      const rank = (c: AsrClassification): number =>
-        c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
-      const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
-        rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
-      /* fs-53: the QA expected text MUST be the same fs-53-normalised string the
-         synth path spoke — otherwise an expanded number ("$1,200" → "one thousand
-         two hundred dollars") would word-error-rate against the raw "$1,200" and
-         false-flag a perfectly faithful render as `drift`. Normalise with the
-         resolved `langCode` so the comparison stays aligned with the audio. fs-57
-         takes the whole `group` so the vocalization carve-out below can read it. */
-      /* srv-50: wrapped in the same withCallTimeout + withRecycleRecovery
-         protection every synth call site already has — an unwrapped ASR call
-         was the exact hang the 2026-07-03 wedged-sidecar incident exposed
-         (it never threw, so nothing downstream ever got a chance to recover).
-         Wrapping the closure (not either call site) covers BOTH call sites
-         below automatically. */
-      const verify = (pcm: Buffer, rate: number, group: SentenceGroup): Promise<AsrClassification> =>
-        withRecycleRecovery(resolveGroup(group).route.engine, () =>
-          withCallTimeout('asr-verify', (sig) =>
-            verifySegmentTranscript(pcm, rate, normaliseForTts(group.text, langCode), {
-              language: asr.language,
-              nameAllowlist: asr.nameAllowlist,
-              thresholds: asr.thresholds,
-              transcribeFn: asr.transcribeFn,
-              sidecarUrl: asr.sidecarUrl,
-              signal: sig,
-              /* fs-57 / srv-31: when Stage 3 prepended a vocalization, tolerate its
-                 leading token(s) so the gasp doesn't count as content drift. */
-              ...(group.vocalization ? { vocalizationAllowlist: leadingVocalizationTokens(group.text) } : {}),
-            }),
-          ),
+       R2 review fix (independent review of #2011/#2088's PR) — narrowed to
+       wrap ONLY this transcribe/classify call, not the surrounding re-synth
+       (`synthGroupsSerialized`) or any other step in this pass. Every OTHER
+       failure this pass can throw (`NoCapacityError`, `UnresolvableClonedVoiceError`,
+       `MissingDesignedVoiceError`, a sidecar 500 from a re-record's synth
+       call) stays fatal, exactly like the structurally identical signal-QA
+       re-record loop above (no catch at all) — an unresolvable cloned voice
+       must not degrade to a console.warn merely because it fired inside
+       this pass instead of that one. A genuine cancellation and the C3
+       `RecycleStormError` sidecar-thrashing signal are re-thrown
+       unconditionally (whole-chapter stop signals, not "this gate didn't
+       run"); every other `verify()` failure returns `null` — "verification
+       unavailable" — instead of throwing. */
+    const safeVerify = async (
+      pcm: Buffer,
+      rate: number,
+      group: SentenceGroup,
+    ): Promise<AsrClassification | null> => {
+      try {
+        return await verify(pcm, rate, group);
+      } catch (err) {
+        const name = (err as { name?: string })?.name;
+        if (name === 'AbortError' || signal?.aborted || name === 'RecycleStormError') throw err;
+        console.warn(
+          `[synthesiseChapter] ASR verify failed for group ${group.index}: ${String(err)}`,
         );
-      /* Sample the groups to verify (have a result + pass the stride). The stride
-         walks groups-with-results in order, so `total` mirrors that ordering. */
-      let sampleCounter = 0;
-      const sampled: SentenceGroup[] = [];
-      for (const group of groups) {
-        if (!results[group.index]) continue;
-        /* Stride sampling — default every sentence (sampleEvery=1). */
-        if (sampleEvery > 1 && sampleCounter++ % sampleEvery !== 0) continue;
-        sampled.push(group);
+        return null;
       }
-      const totalToVerify = sampled.length;
-      /* Transcribe + classify every sampled group once (the best-of-N seed). */
-      const best = new Map<number, GroupResult>();
-      let verifiedCount = 0;
-      for (const group of sampled) {
-        if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
-        asr.onProgress?.({ verified: verifiedCount, total: totalToVerify });
-        verifiedCount += 1;
-        const r = results[group.index]!;
-        best.set(group.index, r);
-        const { value: verdict, ms: tMs } = await timed(() => verify(r.pcm, r.sampleRate, group));
-        segmentAsrByIndex.set(group.index, verdict);
-        transcribeMs += tMs;
+    };
+    /* Sample the groups to verify (have a result + pass the stride). The stride
+       walks groups-with-results in order, so `total` mirrors that ordering. */
+    let sampleCounter = 0;
+    const sampled: SentenceGroup[] = [];
+    for (const group of groups) {
+      if (!results[group.index]) continue;
+      /* Stride sampling — default every sentence (sampleEvery=1). */
+      if (sampleEvery > 1 && sampleCounter++ % sampleEvery !== 0) continue;
+      sampled.push(group);
+    }
+    const totalToVerify = sampled.length;
+    /* Transcribe + classify every sampled group once (the best-of-N seed). A
+       null verdict (safeVerify failed) leaves the group with NO entry in
+       segmentAsrByIndex — the same "gate did not run" shape a chapter
+       synthesised without ASR already produces — and `results[]` untouched
+       (`r` here already IS `results[group.index]`), so the group's original
+       PCM ships exactly as it already stood. No separate `best` map is kept
+       (R1 review fix, above) — `results[]` IS the running best-of-N state. */
+    let verifiedCount = 0;
+    for (const group of sampled) {
+      if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      asr.onProgress?.({ verified: verifiedCount, total: totalToVerify });
+      verifiedCount += 1;
+      const r = results[group.index]!;
+      const { value: verdict, ms: tMs } = await timed(() => safeVerify(r.pcm, r.sampleRate, group));
+      transcribeMs += tMs;
+      if (verdict) segmentAsrByIndex.set(group.index, verdict);
+    }
+    /* Round-based re-records: each round re-synths ALL still-drift groups in one
+       batched dispatch, re-verifies, and keeps the better take per group. Each
+       drift group gets at most `maxAsrRerecords` re-synths (one per round) — same
+       budget as the old per-group loop, batched so a round costs one call, not N.
+
+       R1 review fix (independent review of #2011/#2088's PR) — `results[group.index]`
+       is now written in the SAME step as `best`/`segmentAsrByIndex`, not
+       deferred to a separate commit pass run after every round. The deferred
+       form was safe pre-#2011 (any throw aborted the whole chapter before the
+       deferred pass ever ran), but #2011's narrower catch (now safeVerify,
+       above) can let the round loop carry on past a failed verify for one
+       group while other groups in the SAME round already advanced — a
+       deferred, batch-at-the-end commit would then be able to ship a group's
+       stale PCM stamped with a DIFFERENT (already-advanced) group's-worth of
+       bookkeeping correctness assumptions violated, or, more directly, leave
+       a group's shipped `results[]` PCM and its `segmentAsrByIndex` verdict
+       referring to two different takes if a later step in the same pass
+       failed after this group had already been updated. Committing inline
+       makes that structurally impossible: at every point after this line,
+       `results[group.index]` and `segmentAsrByIndex.get(group.index)`
+       describe the SAME take. */
+    for (let attempt = 1; attempt <= maxAsrRerecords; attempt++) {
+      if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)?.verdict === 'drift');
+      if (pending.length === 0) break;
+      for (const group of pending) {
+        asrRetryCountByIndex.set(group.index, (asrRetryCountByIndex.get(group.index) ?? 0) + 1);
+        const c = segmentAsrByIndex.get(group.index)!;
+        asr.onRerecord?.({
+          group,
+          attempt,
+          maxRerecords: maxAsrRerecords,
+          wer: c.wer,
+          reasons: c.reasons,
+        });
       }
-      /* Round-based re-records: each round re-synths ALL still-drift groups in one
-         batched dispatch, re-verifies, and keeps the better take per group. Each
-         drift group gets at most `maxAsrRerecords` re-synths (one per round) — same
-         budget as the old per-group loop, batched so a round costs one call, not N. */
-      for (let attempt = 1; attempt <= maxAsrRerecords; attempt++) {
-        if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
-        const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)!.verdict === 'drift');
-        if (pending.length === 0) break;
-        for (const group of pending) {
-          asrRetryCountByIndex.set(group.index, (asrRetryCountByIndex.get(group.index) ?? 0) + 1);
-          const c = segmentAsrByIndex.get(group.index)!;
-          asr.onRerecord?.({
-            group,
-            attempt,
-            maxRerecords: maxAsrRerecords,
-            wer: c.wer,
-            reasons: c.reasons,
-          });
+      const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsSerialized(pending));
+      rerecordMs += asrReMs;
+      for (const group of pending) {
+        const f = fresh.get(group.index);
+        if (!f) continue;
+        const { value: freshClass, ms: revMs } = await timed(() => safeVerify(f.pcm, f.sampleRate, group));
+        transcribeMs += revMs;
+        if (freshClass && asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
+          segmentAsrByIndex.set(group.index, freshClass);
+          results[group.index] = f;
         }
-        const { value: fresh, ms: asrReMs } = await timed(() => synthGroupsSerialized(pending));
-        rerecordMs += asrReMs;
-        for (const group of pending) {
-          const f = fresh.get(group.index);
-          if (!f) continue;
-          const { value: freshClass, ms: revMs } = await timed(() => verify(f.pcm, f.sampleRate, group));
-          transcribeMs += revMs;
-          if (asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
-            best.set(group.index, f);
-            segmentAsrByIndex.set(group.index, freshClass);
-          }
-        }
       }
-      /* Commit the best take per sampled group. */
-      for (const group of sampled) {
-        results[group.index] = best.get(group.index)!;
-      }
-    } catch (err) {
-      const name = (err as { name?: string })?.name;
-      /* A genuine cancellation, and the named C3 sidecar-thrashing signal
-         (RecycleStormError — see its own class doc), both stay fatal: they
-         are deliberate whole-chapter stop signals the render loop is meant
-         to surface, not a "this one gate didn't run" outcome. Everything
-         else (a /transcribe rejection, a classification bug, a one-off
-         timeout with no recovery hook wired) is exactly the ASR-pass-only
-         failure #2011 is about — logged and skipped. */
-      if (name === 'AbortError' || signal?.aborted || name === 'RecycleStormError') throw err;
-      console.warn(`[synthesiseChapter] ASR content-QA pass failed: ${String(err)}`);
     }
   }
 

@@ -346,8 +346,95 @@ describe('synthesiseChapter ASR content-QA pass', () => {
       expect(seg.asrSuspect).toBeUndefined();
     }
     // Matches the SPK embed pass's documented behaviour: logged, not silent.
+    // (R2 review fix — the warning now names the specific failing group,
+    // narrowed from a whole-pass-level message.)
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('ASR content-QA pass failed'),
+      expect.stringContaining('ASR verify failed for group'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('R1: a sibling group verify failure cannot make a group ship a take that disagrees with its stamped verdict', async () => {
+    // Independent review finding (R1, PR #2126): the round-based re-record
+    // loop used to defer `results[group.index] = best.get(...)` to a single
+    // pass run AFTER every group in the round finished. That was safe pre-
+    // #2011 (any throw killed the whole chapter before the deferred pass
+    // ever ran), but #2011's narrower catch let the loop carry on past a
+    // failed verify for ONE group while a SIBLING group in the same round
+    // had already been committed to `segmentAsrByIndex` — with the commit
+    // to `results[]` still pending. This proves that can no longer happen:
+    // group A (index 0) improves in round 1 and must ship the FRESH,
+    // verified-ok take; group B (index 1)'s round-1 verify THROWS, and B
+    // must ship its original seed take (still stamped `drift`, from the
+    // seed verify) — never the fresh-but-unverified round-1 retake, and
+    // never a mismatch between B's shipped bytes and B's stamped verdict.
+    //
+    // Each synth call returns a 2-byte PCM buffer carrying its own call
+    // index as a marker (`Buffer.alloc(2)` with the index written in), and
+    // transcribeFn keys its behaviour off THAT marker (not call order),
+    // so the assertions below can identify exactly which take shipped.
+    //   idx 0 = A's pool/seed synth   -> seed verify: WRONG text -> drift
+    //   idx 1 = B's pool/seed synth   -> seed verify: WRONG text -> drift
+    //   idx 2 = A's round-1 re-synth  -> re-verify: CORRECT text -> ok (ships)
+    //   idx 3 = B's round-1 re-synth  -> re-verify: THROWS (never ships)
+    const calls: SynthesizeInput[] = [];
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        const idx = calls.length;
+        calls.push(input);
+        const buf = Buffer.alloc(2);
+        buf.writeUInt16LE(idx, 0);
+        return { pcm: buf, sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+    const A_TEXT = 'Alpha spoke first in the quiet hall.';
+    const B_TEXT = 'Beta answered from the far corner.';
+    const WRONG = 'totally unrelated nonsense words appear here instead now';
+    const transcribeFn = async (pcm: Buffer): Promise<TranscribeResult> => {
+      const idx = pcm.readUInt16LE(0);
+      if (idx === 0 || idx === 1) return { text: WRONG, ...CLEAN }; // both seeds drift
+      if (idx === 2) return { text: A_TEXT, ...CLEAN }; // A's re-record verifies clean
+      if (idx === 3) throw new Error('TTS sidecar /transcribe returned 500: simulated'); // B's re-record verify fails
+      throw new Error(`unexpected pcm marker ${idx}`);
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await synthesiseChapter({
+      sentences: [sentence(1, A_TEXT), sentence(2, B_TEXT)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      // poolWidth defaults to 1 (DEFAULT_SENTENCE_CONCURRENCY) — a serial
+      // walk in narrative order, which is what makes the call-index markers
+      // above deterministic.
+      asr: { maxRerecords: 1, transcribeFn },
+    });
+
+    // Non-fatal: the chapter completes (B's re-verify failure is logged and
+    // skipped, not thrown out of synthesiseChapter).
+    expect(res.pcm.length).toBeGreaterThan(0);
+    expect(calls).toHaveLength(4); // A seed, B seed, A re-record, B re-record
+
+    const segA = res.segments.find((s) => s.sentenceIds.includes(1));
+    const segB = res.segments.find((s) => s.sentenceIds.includes(2));
+    expect(segA).toBeDefined();
+    expect(segB).toBeDefined();
+
+    // The core R1 assertion: each group's SHIPPED PCM marker must match what
+    // its OWN stamped verdict was actually computed from.
+    // A: verified idx-2 as 'ok' -> idx-2 must be what shipped.
+    expect(res.pcm.readUInt16LE(0)).toBe(2);
+    expect(segA?.asr?.verdict).toBe('ok');
+    // B: idx-3 (the round-1 retake) was NEVER successfully verified (its
+    // verify threw) -> it must NOT ship. idx-1 (the seed take, stamped
+    // 'drift' by the seed verify) must still be what shipped.
+    expect(res.pcm.readUInt16LE(2)).toBe(1);
+    expect(segB?.asr?.verdict).toBe('drift');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ASR verify failed for group 1'),
     );
 
     warnSpy.mockRestore();
