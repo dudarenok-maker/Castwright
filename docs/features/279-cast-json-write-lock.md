@@ -269,17 +269,29 @@ history on open tickets rather than being silently dropped:
   rejection there cannot stop them — measured: `main` returns
   `status=500, revisionsExists=true`; this branch, unpatched, would return
   `status=500, revisionsExists=false`. Fixed by wrapping the in-lock
-  `readJson(castJsonPath(bookDir))` call in `.catch(() => null)`
-  (precedented on this same file at `readPriorCastForMerge`,
-  `server/src/routes/analysis.ts:179-181`), which degrades a corrupt
-  `cast.json` to the same path as a missing one: empty `reuseRows`,
-  carryover removed, `cast.json` deleted, reparse succeeds. A corrupt cast
-  has nothing worth carrying over and reparse exists to discard the cast
-  regardless. **Residual, not closed here:** an EPERM/EBUSY from
-  `writeJsonAtomic(carryoverPath)` inside the same locked block still
-  reaches the "siblings already deleted" state — narrower than the
-  corrupt-read case, and closing it needs the `Promise.allSettled` reshape
-  this ticket deliberately doesn't take.
+  `readJson(castJsonPath(bookDir))` call in a **narrowed** `.catch` that
+  only degrades to `null` for a JSON parse failure (checked via `instanceof
+  SyntaxError`, with a `.name === 'SyntaxError'` fallback for
+  realm-sensitivity) — precedented on the same file being read, at
+  `readPriorCastForMerge`'s unguarded parse (`server/src/routes/
+  analysis.ts:179-181`), though that precedent is weaker justification now
+  that this catch is narrower than a blanket swallow. A parse failure
+  degrades a corrupt `cast.json` to the same path as a missing one: empty
+  `reuseRows`, carryover removed, `cast.json` deleted, reparse succeeds. A
+  corrupt cast has nothing worth carrying over and reparse exists to
+  discard the cast regardless. Any *other* read failure
+  (EBUSY/EPERM/EACCES/EMFILE, etc., on an otherwise-intact `cast.json`) is
+  logged and re-thrown instead: a blanket `.catch(() => null)` would treat
+  a transient error on an intact cast identically to "no cast", silently
+  deleting the intact file and its carryover on a 200 response — worse than
+  `main`, which 500s and loses nothing. Re-throwing means a 500 with
+  `cast.json` left intact and the (already in-flight, uncancellable) sibling
+  arms gone — the same trade `main` makes, minus the sibling loss that is
+  now structurally unavoidable. **Residual, not closed here:** an
+  EPERM/EBUSY from `writeJsonAtomic(carryoverPath)` inside the same locked
+  block still reaches the "siblings already deleted" state — narrower than
+  the corrupt-read case, and closing it needs the `Promise.allSettled`
+  reshape this ticket deliberately doesn't take.
 
   **Honest residuals, not closed by #2099:**
   - The carryover has a **third** toucher this widened lock does not reach:

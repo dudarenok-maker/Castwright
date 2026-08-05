@@ -975,8 +975,87 @@ describe('reparse handler — #2099 code-review finding 1: a corrupt cast.json n
     expect(res.status).toBe(200);
     // cast.json degraded to the missing-file path: deleted, not left corrupt.
     expect(existsSync(castPath)).toBe(false);
-    // The sibling arm actually ran to completion — proof the corrupt read
-    // did not abort the Promise.all before the other arms could finish.
+    // Cleanup-completeness check, not evidence about the cast arm: the
+    // revisions arm's rm() is invoked synchronously while the Promise.all
+    // array literal is built, before the cast arm's first await, so
+    // revisions.json is gone either way — this passes whether or not the
+    // corrupt-read handling above is correct. It would catch a future
+    // Promise.allSettled reshape that stopped sibling arms from running to
+    // completion.
     expect(existsSync(revisionsPath)).toBe(false);
+  });
+});
+
+describe('reparse handler — #2099 round-2 finding 1: a non-parse cast.json read failure refuses to discard the cast', () => {
+  const BUSY_AUTHOR = 'Reparse Busy Author';
+  const BUSY_SERIES = 'Standalones';
+  const BUSY_TITLE = 'Reparse Busy Cast Book';
+  let busyBookId: string;
+  let busyBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    busyBookId = makeBookId(BUSY_AUTHOR, BUSY_SERIES, BUSY_TITLE);
+    busyBookDir = join(workspaceRoot, 'books', BUSY_AUTHOR, BUSY_SERIES, BUSY_TITLE);
+
+    mkdirSync(join(busyBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(busyBookDir, 'manuscript.md'), MANUSCRIPT_BODY);
+    writeFileSync(
+      join(busyBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: busyBookId,
+        manuscriptId: 'm_reparse_busy',
+        title: BUSY_TITLE,
+        author: BUSY_AUTHOR,
+        series: BUSY_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('500s and leaves an intact cast.json on disk when the in-lock read hits a transient error', async () => {
+    const castPath = join(busyBookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+      }),
+    );
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const busyCastPath = castJsonPath(busyBookDir);
+    let rejectedOnce = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!rejectedOnce && path === busyCastPath) {
+        rejectedOnce = true;
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      return actual.readJson(path);
+    });
+
+    try {
+      const res = await request(app).post(`/api/books/${busyBookId}/reparse`);
+      expect(res.status).toBe(500);
+      // The intact cast was NOT discarded — this is the round-2 defect: a
+      // blanket `.catch(() => null)` would have treated this transient
+      // EBUSY identically to "no cast" and deleted it anyway, on a 200.
+      expect(existsSync(castPath)).toBe(true);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
   });
 });

@@ -982,19 +982,32 @@ async function applyReparse(
        before the sibling arms started. Now the read is one arm among four
        already in flight, so an unhandled throw here would leave the others
        to complete while this arm never deletes cast.json — a worse partial
-       state than either succeeding or failing cleanly. The .catch(() =>
-       null) below degrades a corrupt cast.json to the same path as a
-       missing one: empty reuseRows, carryover removed, cast.json deleted,
-       reparse succeeds. A corrupt cast has nothing worth carrying over and
-       reparse exists to discard the cast anyway. Residual: an EPERM/EBUSY
-       from writeJsonAtomic(carryoverPath) inside this same block still
-       reaches the "siblings already deleted" state; closing that needs the
-       wider Promise.allSettled reshape this ticket deliberately doesn't
-       take. */
+       state than either succeeding or failing cleanly. The .catch below is
+       narrowed to that one case: a JSON parse failure degrades to the same
+       path as a missing cast.json (empty reuseRows, carryover removed,
+       cast.json deleted, reparse succeeds) — a corrupt cast has nothing
+       worth carrying over and reparse exists to discard the cast anyway.
+       Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
+       otherwise-intact cast.json) is logged and re-thrown instead of being
+       silently treated as "no cast": the sibling arms have already started
+       and cannot be recalled, so the result is a 500 with cast.json left
+       intact and the siblings gone — worse than main only by the
+       already-unavoidable sibling loss, and far better than discarding an
+       intact cast because of a transient read error. Residual: an
+       EPERM/EBUSY from writeJsonAtomic(carryoverPath) inside this same
+       block still reaches the "siblings already deleted" state; closing
+       that needs the wider Promise.allSettled reshape this ticket
+       deliberately doesn't take. */
     withCastLock(bookDir, async () => {
       const existingCast = await readJson<{
         characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
-      }>(castJsonPath(bookDir)).catch(() => null);
+      }>(castJsonPath(bookDir)).catch((err) => {
+        if (err instanceof SyntaxError || (err as { name?: string })?.name === 'SyntaxError') {
+          return null;
+        }
+        console.error('[book-state] reparse: cast.json unreadable, refusing to discard it', err);
+        throw err;
+      });
       const reuseRows = (existingCast?.characters ?? [])
         .filter((c) => typeof c.id === 'string')
         .map((c) => {
