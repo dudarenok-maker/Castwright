@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">52</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">55</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">1</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -193,7 +193,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>34</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>37</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>3</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>3</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
@@ -209,7 +209,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">37 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -693,6 +693,41 @@
         <p class="src">A live sidecar, a book mid-render, and OS-level process-kill access · <a href="https://github.com/dudarenok-maker/Castwright/issues/2037">#2037</a> · criteria above; code-level contract is <code>scheduleRespawnAttempt</code> in <code>server/src/tts/sidecar-supervisor.ts</code> and <code>onSpawnRefused</code> in <code>server/src/tts/spawn-sidecar.ts</code> · short — one kill, one log grep, one status poll</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A35</span><span class="iname">Design-wins VRAM contention timeout sized against a REAL 0.6B cold load</span><span class="risk">150s bound sized off a documented budget, not a fresh on-box measurement</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Unit tests (<code>server/tts-sidecar/tests/test_design_contention.py</code>) fully pin the logic with a simulated <code>_design_in_flight</code> claim: <code>unload_design()</code> now waits (bounded, 150s) for an in-flight design to clear instead of nulling it, and raises a typed <code>DesignContentionTimeoutError</code> if the wait expires. What no unit test can reach is whether 150s is actually the right bound against a REAL cold 0.6B Base load plus a real VoiceDesign forward on this box — the figure was sized off the design path's own documented ~120s server budget, not a fresh on-box measurement of the specific race window #2064's review flagged.</p>
+        <ul>
+          <li>Start a voice design (cast review → Design a new voice), and — timed to land mid-design, before the design's own forward completes — trigger an ordinary chapter render on a <em>different</em> voice from another tab/session. Confirm the render's synth call <b>waits</b> for the design to finish (no error, just a delayed start) rather than the design failing with "VoiceDesign model was unloaded before this design could render."</li>
+          <li>Confirm the design itself completes normally and its audition plays.</li>
+          <li>If practical, force a genuinely wedged design and confirm the waiting synth times out into the new <code>design_in_flight</code> 503 rather than hanging forever — and that it does so somewhere in the 150s neighbourhood, not immediately and not never.</li>
+        </ul>
+        <p class="src">A live sidecar with Qwen VoiceDesign installed, and a way to trigger two overlapping requests (a second browser tab/session is enough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2070">#2070</a> · criteria: <code>unload_design</code>'s docstring in <code>server/tts-sidecar/main.py</code>; sizing rationale is the <code>_DESIGN_CONTENTION_WAIT_S_DEFAULT</code> comment immediately above <code>class QwenEngine</code> · short — one overlapped request pair</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A36</span><span class="iname">ASR warm-reservation figure vs. a real resident /transcribe peak</span><span class="risk">128 MB seed is an unmeasured conservative prior; contamination guard is ledger-only</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Unit tests (<code>test_footprints.py</code>, <code>test_transcribe_embed_admission.py</code>, <code>test_asr_footprint_measurement.py</code>) pin that a resident ASR reservation books the separate <code>asr.warm</code> key (128 MB seed), that <code>admit()</code>/<code>reservation()</code> agree, and that the MEASUREMENT mechanism itself — a device-wide free-memory delta (<code>PlacementController._device_free_mb</code>), not the torch-allocator peak CTranslate2 sits outside of — is real and correctly guarded against contamination, all proven with a scripted sequence, no real allocator. Not yet observed: whether 128 MB is enough headroom for a real resident Whisper forward on a contended card, and whether the learned <code>asr.warm</code> p95 converges to something sane on a box the ledger-based contamination guard can't fully protect (a foreign, non-sidecar process on the same card is still invisible to it).</p>
+        <ul>
+          <li>With <code>ASR_DEVICE=cuda</code> and content-QA enabled (<code>SEG_ASR_ENABLED=1</code>), render a chapter so ASR loads and goes resident, then trigger several more <code>/transcribe</code> calls back-to-back (a re-record round is the natural trigger). Confirm none of them 503 <code>noCapacity</code> on a card that has genuine room.</li>
+          <li>Watch <code>FootprintTable</code>'s learned <code>asr.warm</code> p95 settle after ≥5 real observations — record what it converges to. A sane figure (double digits to low hundreds of MB) confirms real signal; a suspiciously large one points at contamination the ledger guard couldn't see.</li>
+          <li>The device-wide contamination question #2094's own filing raised is now PARTIALLY addressed (discards a reading when another SIDECAR engine holds a concurrent reservation) but not fully closed — a foreign process is still invisible to it. This row is where that residual gets its first real evidence.</li>
+        </ul>
+        <p class="src"><code>ASR_DEVICE=cuda</code>, <code>SEG_ASR_ENABLED=1</code>, a real book render with content-QA on, ideally on an UNCONTENDED card · <a href="https://github.com/dudarenok-maker/Castwright/issues/2094">#2094</a> · criteria: the <code>asr.warm</code> seed comment + <code>_device_free_mb</code>'s docstring in <code>server/tts-sidecar/main.py</code> and <code>docs/local-llm.md</code>'s footprint table · short — rides along with any other GPU-ASR session (batch with <a href="#ga">A20</a>)</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A37</span><span class="iname">Catastrophic-WER override actually catches a real Coqui language-collapse</span><span class="risk">Intermittent repro; thresholds are judgement calls, now a live-tunable knob</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>classifyTranscript</code>'s logic is fully pinned in <code>server/src/tts/segment-asr-qa.test.ts</code> with injected transcripts/signals — a FLUENT, full-length, catastrophically-wrong-content transcript (WER ≥ <code>Math.max(catastrophicWer, maxWer)</code>) now overrides the "untrustworthy → inconclusive" backstop into <code>drift</code>, while a near-empty/filler-padded transcript (including a Russian near-silence hallucination invisible to the English-only hallucination-pattern list), a short (&lt;6-word) reference, and a merely-imperfect transcript are all unaffected — each independently mutation-verified. Not yet observed: whether this actually fires on a REAL #2026-style Coqui language-collapse without a real false-positive rate that starts re-recording perfectly good lines — <code>CATASTROPHIC_WER</code> (default 0.85, now the live registry knob <code>qa.asr.catastrophicWer</code> — retunable from this row's findings with no release needed), the 6-word reference floor, and the 0.5 heard/expected ratio floor are all judgement calls, not on-box-measured constants.</p>
+        <ul>
+          <li>With ASR content-QA on (<code>SEG_ASR_ENABLED=1</code>) and a Russian (or French/Spanish) book on the Coqui engine, reproduce #2026's language-collapse per its own repro recipe (short Russian lines, repeated synthesis — intermittent, not every run). Confirm a genuine collapse now gets caught and re-recorded (segment carries <code>asr.verdict: drift</code>, reason mentioning "catastrophically wrong"), where before this fix it would have read <code>inconclusive</code> and shipped unflagged.</li>
+          <li>Across the same render (or a longer, healthy-content one), confirm the new override does <b>not</b> fire on ordinary hard-to-transcribe-but-correct lines — an invented character name, a foreign phrase, background noise — i.e. no new false-positive re-record rate versus the pre-#2055 baseline.</li>
+        </ul>
+        <p class="src">A Coqui-capable sidecar, ASR content-QA enabled, a non-English book (Russian ideal — matches #2026's own repro) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2055">#2055</a> · criteria: the <code>CATASTROPHIC_WER</code> comment in <code>server/src/tts/segment-asr-qa.ts</code>; #2026's own repro recipe · short-to-medium — the collapse is intermittent, budget a few repeated renders of the same short lines, not one pass</p>
+      </div>
+    </details>
 
 </section>
 
@@ -984,7 +1019,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-05</b> against branch <code>fix/server-2037-supervisor-respawn</code> — added <b>A34</b> (supervisor respawn survives a refused spawn attempt, #2037). Owed count moves 51 → 52; Group A moves 33 → 34 rows. Prior sync (2026-08-05, branch <code>feat/server-2040-wave3</code>): added <b>A33</b> (cast/analysis <code>characterId</code> drift, Wave 3 repair pass <code>--apply</code> run, #2040). Owed count moves 50 → 51; Group A moves 32 → 33 rows. Prior sync (2026-08-04, branch <code>feat/server-2040-wave2</code>): added <b>B3</b> (cast/analysis <code>characterId</code> drift, Wave 2 stops new drift, #2040). Owed count moved 49 → 50; Group B moved 2 → 3 rows. Prior to that (2026-08-02, branch <code>docs/docs-2040-cast-identity</code>): added <b>A32</b> (cast/analysis <code>characterId</code> drift, Wave 1 resolver, #2040). Owed count moved 48 → 49; Group A moved 31 → 32 rows. Prior to that (2026-08-01, <code>main</code> @ <code>c2e03c4a</code>): added <b>A30</b> (golden-audio bless guards, PR #2032) and <b>A31</b> (cast-time clone-readiness gate, #1980 / plan 276). Owed count moved 46 → 48; Group A moved 29 → 31 rows. <b>A19's 2026-07-31 datapoint is retracted</b> — it measured a foreign worktree's pytest suite holding ~5.4 GB, not an 8 GB card's limit; Qwen + Coqui together are 3.7 GB, so that row's question is fully open again, and the box's new <code>cuda:1</code> render pins must be undone before it runs. A1 amended twice: E-04 is unblocked by #2017/PR #2039, and C-05 gains sub-observations C-05a/C-05b (#2023 / PR #2041) without changing the Section C headcount.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-05</b> against branch <code>fix/sidecar-main-residuals</code> — added <b>A35</b> (design-wins VRAM contention timeout, #2070), <b>A36</b> (ASR warm-reservation figure, #2094) and <b>A37</b> (catastrophic-WER language-collapse override, #2055). Owed count moves 52 → 55; Group A moves 34 → 37 rows. Prior sync (2026-08-05, branch <code>fix/server-2037-supervisor-respawn</code>): added <b>A34</b> (supervisor respawn survives a refused spawn attempt, #2037). Owed count moves 51 → 52; Group A moves 33 → 34 rows. Prior sync (2026-08-05, branch <code>feat/server-2040-wave3</code>): added <b>A33</b> (cast/analysis <code>characterId</code> drift, Wave 3 repair pass <code>--apply</code> run, #2040). Owed count moves 50 → 51; Group A moves 32 → 33 rows. Prior sync (2026-08-04, branch <code>feat/server-2040-wave2</code>): added <b>B3</b> (cast/analysis <code>characterId</code> drift, Wave 2 stops new drift, #2040). Owed count moved 49 → 50; Group B moved 2 → 3 rows. Prior to that (2026-08-02, branch <code>docs/docs-2040-cast-identity</code>): added <b>A32</b> (cast/analysis <code>characterId</code> drift, Wave 1 resolver, #2040). Owed count moved 48 → 49; Group A moved 31 → 32 rows. Prior to that (2026-08-01, <code>main</code> @ <code>c2e03c4a</code>): added <b>A30</b> (golden-audio bless guards, PR #2032) and <b>A31</b> (cast-time clone-readiness gate, #1980 / plan 276). Owed count moved 46 → 48; Group A moved 29 → 31 rows. <b>A19's 2026-07-31 datapoint is retracted</b> — it measured a foreign worktree's pytest suite holding ~5.4 GB, not an 8 GB card's limit; Qwen + Coqui together are 3.7 GB, so that row's question is fully open again, and the box's new <code>cuda:1</code> render pins must be undone before it runs. A1 amended twice: E-04 is unblocked by #2017/PR #2039, and C-05 gains sub-observations C-05a/C-05b (#2023 / PR #2041) without changing the Section C headcount.</p>
     <p><b>Formatting note.</b> Between 2026-07-31 22:09 UTC and 2026-08-01 03:09 UTC this page was published four times straight from the raw <code>.md</code> source instead of this styled twin, which replaced it with default markdown rendering. Publish the twin — this file — not the repo markdown.</p>
   </footer>
 

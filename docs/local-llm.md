@@ -162,6 +162,34 @@ Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
 so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 8 GB card before either window warms.
 
+`asr` similarly splits by residency, not model (#2094): a COLD `/transcribe`
+(no Whisper model loaded yet) books the full `asr` cold-load peak (400 MB —
+weights materialisation + first-call warmup); an ALREADY-RESIDENT one books
+the separate `asr.warm` key instead — the forward-only activation cost, not
+the weight load a resident model has already paid. `asr.warm`'s 128 MB is a
+conservative, UNMEASURED cold-start prior (no on-box observation exists yet
+for this specific incremental figure) rather than a measured value like the
+design-family pair above.
+
+Unlike the other seeds on this page, `asr.warm` previously had no real path
+to being *learned* from: the peak-observation mechanism reads torch's own
+caching-allocator peak (`torch.cuda.max_memory_allocated`), but faster-
+whisper's CTranslate2 backend allocates entirely outside it, so a warm
+forward measured that way read ~0 MB (silently dropped by the `<= 0`
+observation guard) and never accumulated real samples. `reservation()`
+measures ASR specifically via a device-wide free-memory DELTA instead
+(`PlacementController._device_free_mb`, `torch.cuda.mem_get_info`), which
+DOES see CTranslate2's allocations. Two guards keep that delta honest rather
+than optimistic: a reading is discarded outright when any other engine holds
+a concurrent reservation on the same device (the ledger's own contamination
+signal), and a WARM reading above the `asr` cold seed is discarded as
+implausible (a resident forward should never need more than a cold load
+would). With those in place, `asr.warm` genuinely does learn its own p95 the
+same way every other key here does, once real observations accumulate — the
+residual: a foreign, non-sidecar process holding VRAM on the same card is
+still invisible to the ledger-based contamination guard, so an isolated,
+uncontended box is what makes a learned `asr.warm` figure trustworthy.
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
@@ -169,6 +197,7 @@ so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 <!-- footprint:qwen.1.7b.design=6144 -->
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
+<!-- footprint:asr.warm=128 -->
 <!-- footprint:spk=200 -->
 
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy

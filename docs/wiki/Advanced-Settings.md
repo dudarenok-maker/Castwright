@@ -252,6 +252,7 @@ voice mismatches) — the table's risk column shows each correctly.
 | ASR max compression ratio | Whisper compression_ratio above = loop/hallucination | 2.4 | 1–10, step 0.1 | live | low |
 | ASR min avg log-prob | Below this, transcript untrustworthy | -1.0 | -5–0, step 0.1 | live | low |
 | ASR max no-speech prob | Above this, transcript untrustworthy | 0.6 | 0–1, step 0.05 | live | low |
+| ASR catastrophic WER override | An untrustworthy transcript's WER at/above this (always ≥ max WER) + a real-collapse shape check → drift instead of inconclusive | 0.85 | 0–2, step 0.05 | live | low |
 
 ## 8. Audio loudness targets
 

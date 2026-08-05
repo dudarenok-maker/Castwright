@@ -126,12 +126,21 @@ function runCapture(python, pyArgs, env) {
  * installed. spacy is reached only via this same opt-in Coqui/XTTS path — never
  * by Qwen or Kokoro — so it belongs here, not in the shared manifest (measured
  * 22.3 MB / 16 packages the CPU-only and Kokoro-only installs would otherwise pay
- * for a library they never import). Plain `spacy`, NOT `spacy[ja]` — 22.3 MB / 16
- * packages vs. 92.5 MB / 18, of which 68.9 MB is `sudachidict-core` alone (needed
- * only for Japanese). Plain spacy covers ar/en/es/hi/zh (zh confirmed working
- * here, despite the upstream error message naming `spacy[ja]` generically);
- * Japanese stays broken on purpose — tracked as #2038 (fs-59's call). No torch
- * pin either, so it shares the phonemizers' `-c constraints` install.
+ * for a library they never import). Plain spacy covers ar/en/es/hi/zh (zh confirmed
+ * working here, despite the upstream error message naming `spacy[ja]` generically).
+ *
+ * #2038 — `sudachipy` + `sudachidict-core` (the `spacy[ja]` extra) are ALSO
+ * installed here, closing the one language plain spacy left broken. Cost,
+ * paid on every Coqui install (opt-in, not the shared manifest — see above):
+ * +2 packages, **+68.9 MB**, `sudachidict-core` alone. Measured in the sidecar
+ * venv: plain spacy install = 16 packages / 22.3 MB; with these two added =
+ * 18 packages / 92.5 MB. Not gated behind a separate opt-in of its own — the
+ * whole Coqui/XTTS install this step belongs to is ALREADY opt-in (a CPU-only
+ * or Kokoro-only setup pays neither figure), and splitting Japanese out
+ * further was judged not worth a second install toggle for 68.9 MB. Verified:
+ * `get_spacy_lang('ja')` resolves with these installed (previously
+ * `ImportError`, per `main.py`'s `_infer_from_latents` catch, which still
+ * logs the #2038 explanation if a stale/broken venv somehow lacks them).
  */
 export function coquiPipInstallSteps(constraints) {
   return [
@@ -147,7 +156,9 @@ export function coquiPipInstallSteps(constraints) {
         'FAIL: pip install torchcodec failed. coqui-tts import needs it present on torch>=2.9.',
     },
     {
-      label: 'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite) + spacy (text splitting, #2017)...',
+      label:
+        'Installing XTTS CJK phonemizers (pypinyin/cutlet/unidic-lite) + spacy + '
+        + 'SudachiPy (text splitting, #2017/#2038)...',
       args: [
         '-m',
         'pip',
@@ -156,11 +167,15 @@ export function coquiPipInstallSteps(constraints) {
         'cutlet',
         'unidic-lite',
         'spacy>=3.8,<4.0',
+        'sudachipy',
+        'sudachidict-core',
         '-c',
         constraints,
       ],
       failMsg:
-        'FAIL: pip install XTTS CJK phonemizers/spacy failed. zh needs pypinyin; ja needs cutlet + a MeCab dict (unidic-lite); cloned-voice text-splitting needs spacy.',
+        'FAIL: pip install XTTS CJK phonemizers/spacy/SudachiPy failed. zh needs pypinyin; '
+        + 'ja needs cutlet + a MeCab dict (unidic-lite) + SudachiPy/sudachidict-core; '
+        + 'cloned-voice text-splitting needs spacy.',
     },
   ];
 }
