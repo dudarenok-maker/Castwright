@@ -3110,19 +3110,43 @@ export async function synthesiseChapter(
        unconditionally (whole-chapter stop signals, not "this gate didn't
        run"); every other `verify()` failure returns `null` — "verification
        unavailable" — instead of throwing. */
+    /* A non-transient failure (e.g. #2011's misconfigured qa.asr.model) fails
+       every call the same way, so without a cheap guard the loop below would
+       attempt a doomed round-trip for EVERY sampled group in the chapter —
+       hundreds of identical `/transcribe` calls and warn lines for an 800-
+       sentence chapter, where the pre-#2011 code bailed after the first.
+       Give up on the ASR pass for the rest of THIS chapter once
+       `safeVerify` has failed this many times in a row (a success resets the
+       count, so a transient blip that recovers never trips it); the shared
+       `recycleRecoveries` budget above still terminates the transient/hang
+       shapes on its own schedule regardless. */
+    const ASR_ABANDON_AFTER_CONSECUTIVE_FAILURES = 3;
+    let consecutiveAsrFailures = 0;
+    let asrAbandoned = false;
     const safeVerify = async (
       pcm: Buffer,
       rate: number,
       group: SentenceGroup,
     ): Promise<AsrClassification | null> => {
+      if (asrAbandoned) return null;
       try {
-        return await verify(pcm, rate, group);
+        const result = await verify(pcm, rate, group);
+        consecutiveAsrFailures = 0;
+        return result;
       } catch (err) {
         const name = (err as { name?: string })?.name;
         if (name === 'AbortError' || signal?.aborted || name === 'RecycleStormError') throw err;
+        consecutiveAsrFailures += 1;
         console.warn(
           `[synthesiseChapter] ASR verify failed for group ${group.index}: ${String(err)}`,
         );
+        if (consecutiveAsrFailures >= ASR_ABANDON_AFTER_CONSECUTIVE_FAILURES) {
+          asrAbandoned = true;
+          console.warn(
+            `[synthesiseChapter] ASR verify failed ${consecutiveAsrFailures} times in a row — ` +
+              `abandoning the ASR content-QA pass for the rest of this chapter (remaining groups ship unverified).`,
+          );
+        }
         return null;
       }
     };

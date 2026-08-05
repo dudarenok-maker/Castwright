@@ -20,7 +20,13 @@ import {
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
-describe('withDesignLock', () => {
+/* retry: 0 — ops-46/#2028's documented hazard: the R5 tests below assert on
+   `_designChainsSizeForTests()`, module-level mutable state keyed by a fixed
+   bookDir string. Under the suite-wide retry:1, an attempt-1 failure leaks
+   its mutation (a chain entry left over) and attempt 2 reads that leftover
+   state and passes for the wrong reason — the exact shape the file-lock.ts
+   `withKeyLock` suite already guards against with this same idiom. */
+describe('withDesignLock', { retry: 0 }, () => {
   it('serializes overlapping designs for the SAME book', async () => {
     const order: string[] = [];
     const a = withDesignLock('bookA', async () => {
@@ -94,6 +100,78 @@ describe('withDesignLock', () => {
     /* Both waiters have settled — the chain tail must clean up, leaving no
        trace of this bookDir in the map. */
     expect(_designChainsSizeForTests()).toBe(before);
+  });
+
+  it('a non-tail cleanup can never let a later arrival run concurrently with the still-holding waiter it queued behind (F2, PR #2126 review)', async () => {
+    /* Guards the OTHER way the tail check in the `finally` block can go
+       wrong: an eager, unconditional delete (`if (designChains.get(bookDir))
+       designChains.delete(bookDir)`, dropping the `=== chained` comparison
+       entirely) leaves all 8 OTHER tests in this file green — none of them
+       assert on mutual exclusion once a THIRD caller arrives after the
+       first of two queued waiters settles — yet it genuinely breaks the
+       lock: A holds and releases while B is still queued behind it; A's
+       cleanup wrongly deletes the chain entry anyway (it is not the tail);
+       a later arrival C then reads an empty map and starts immediately,
+       overlapping B's still-in-flight critical section. */
+    const bookDir = 'design-lock-eager-delete-guard-F2';
+    let active = 0;
+    let maxActive = 0;
+    const enter = () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+    };
+    const leave = () => {
+      active -= 1;
+    };
+
+    let releaseA!: () => void;
+    const aGate = new Promise<void>((r) => {
+      releaseA = r;
+    });
+    let releaseB!: () => void;
+    const bGate = new Promise<void>((r) => {
+      releaseB = r;
+    });
+
+    const a = withDesignLock(bookDir, async () => {
+      enter();
+      await aGate;
+      leave();
+    });
+    const b = withDesignLock(bookDir, async () => {
+      enter();
+      await bGate;
+      leave();
+    });
+
+    releaseA();
+    await a;
+    /* Flush a real macrotask so B's chained wait resolves and B actually
+       enters its critical section (and parks on bGate) before C shows up —
+       B must be genuinely mid-flight, not merely queued, for the next check
+       to be meaningful. A plain microtask race here would be timing-
+       sensitive in the wrong way; a real setTimeout tick isn't. */
+    await tick();
+    expect(active).toBe(1); // sanity: B alone is holding at this point
+
+    const c = withDesignLock(bookDir, async () => {
+      enter();
+      await tick();
+      leave();
+    });
+    /* Give C's own chained wait a real macrotask to resolve BEFORE B
+       releases. Under the correct tail-only cleanup C is still queued
+       behind B's still-live chain entry and must not have entered yet;
+       under the eager-delete mutation the entry was already gone (deleted
+       by A even though it wasn't the tail), so C starts immediately. */
+    await tick();
+    const activeWhileBStillHolds = active;
+
+    releaseB();
+    await Promise.all([b, c]);
+
+    expect(activeWhileBStillHolds).toBe(1);
+    expect(maxActive).toBe(1);
   });
 });
 

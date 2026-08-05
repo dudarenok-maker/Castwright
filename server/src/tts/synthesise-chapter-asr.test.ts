@@ -323,36 +323,41 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     };
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const res = await synthesiseChapter({
-      sentences: [sentence(1), sentence(2)],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-      asr: { maxRerecords: 2, transcribeFn: failingTranscribe },
-    });
+    try {
+      const res = await synthesiseChapter({
+        sentences: [sentence(1), sentence(2)],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        asr: { maxRerecords: 2, transcribeFn: failingTranscribe },
+      });
 
-    // Non-fatal: the chapter completes with real audio for both sentences,
-    // it does not abort mid-render.
-    expect(res.pcm.length).toBeGreaterThan(0);
-    const bodySegments = res.segments.filter((s) => s.kind !== 'title');
-    expect(bodySegments).toHaveLength(2);
-    // The QA verdict comes out "unavailable" — the segment's `asr` field is
-    // undefined, the same shape a chapter synthesised without ASR produces
-    // (see the 'is a no-op when asr is absent' test above) — not a fatal
-    // rejection out of synthesiseChapter.
-    for (const seg of bodySegments) {
-      expect(seg.asr).toBeUndefined();
-      expect(seg.asrSuspect).toBeUndefined();
+      // Non-fatal: the chapter completes with real audio for both sentences,
+      // it does not abort mid-render.
+      expect(res.pcm.length).toBeGreaterThan(0);
+      const bodySegments = res.segments.filter((s) => s.kind !== 'title');
+      expect(bodySegments).toHaveLength(2);
+      // The QA verdict comes out "unavailable" — the segment's `asr` field is
+      // undefined, the same shape a chapter synthesised without ASR produces
+      // (see the 'is a no-op when asr is absent' test above) — not a fatal
+      // rejection out of synthesiseChapter.
+      for (const seg of bodySegments) {
+        expect(seg.asr).toBeUndefined();
+        expect(seg.asrSuspect).toBeUndefined();
+      }
+      // Matches the SPK embed pass's documented behaviour: logged, not silent.
+      // (R2 review fix — the warning now names the specific failing group,
+      // narrowed from a whole-pass-level message.)
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ASR verify failed for group'),
+      );
+    } finally {
+      // F5 review fix (PR #2126) — moved into `finally` so an assertion
+      // failure above can't leave `console.warn` mocked for the rest of the
+      // file (it previously ran only on the success path).
+      warnSpy.mockRestore();
     }
-    // Matches the SPK embed pass's documented behaviour: logged, not silent.
-    // (R2 review fix — the warning now names the specific failing group,
-    // narrowed from a whole-pass-level message.)
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('ASR verify failed for group'),
-    );
-
-    warnSpy.mockRestore();
   });
 
   it('R1: a sibling group verify failure cannot make a group ship a take that disagrees with its stamped verdict', async () => {
@@ -400,44 +405,98 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     };
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const res = await synthesiseChapter({
-      sentences: [sentence(1, A_TEXT), sentence(2, B_TEXT)],
-      cast,
-      provider,
-      modelKey: 'gemini-2.5-flash',
-      engine: 'gemini',
-      // poolWidth defaults to 1 (DEFAULT_SENTENCE_CONCURRENCY) — a serial
-      // walk in narrative order, which is what makes the call-index markers
-      // above deterministic.
-      asr: { maxRerecords: 1, transcribeFn },
-    });
+    try {
+      const res = await synthesiseChapter({
+        sentences: [sentence(1, A_TEXT), sentence(2, B_TEXT)],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        // poolWidth defaults to 1 (DEFAULT_SENTENCE_CONCURRENCY) — a serial
+        // walk in narrative order, which is what makes the call-index markers
+        // above deterministic.
+        asr: { maxRerecords: 1, transcribeFn },
+      });
 
-    // Non-fatal: the chapter completes (B's re-verify failure is logged and
-    // skipped, not thrown out of synthesiseChapter).
-    expect(res.pcm.length).toBeGreaterThan(0);
-    expect(calls).toHaveLength(4); // A seed, B seed, A re-record, B re-record
+      // Non-fatal: the chapter completes (B's re-verify failure is logged and
+      // skipped, not thrown out of synthesiseChapter).
+      expect(res.pcm.length).toBeGreaterThan(0);
+      expect(calls).toHaveLength(4); // A seed, B seed, A re-record, B re-record
 
-    const segA = res.segments.find((s) => s.sentenceIds.includes(1));
-    const segB = res.segments.find((s) => s.sentenceIds.includes(2));
-    expect(segA).toBeDefined();
-    expect(segB).toBeDefined();
+      const segA = res.segments.find((s) => s.sentenceIds.includes(1));
+      const segB = res.segments.find((s) => s.sentenceIds.includes(2));
+      expect(segA).toBeDefined();
+      expect(segB).toBeDefined();
 
-    // The core R1 assertion: each group's SHIPPED PCM marker must match what
-    // its OWN stamped verdict was actually computed from.
-    // A: verified idx-2 as 'ok' -> idx-2 must be what shipped.
-    expect(res.pcm.readUInt16LE(0)).toBe(2);
-    expect(segA?.asr?.verdict).toBe('ok');
-    // B: idx-3 (the round-1 retake) was NEVER successfully verified (its
-    // verify threw) -> it must NOT ship. idx-1 (the seed take, stamped
-    // 'drift' by the seed verify) must still be what shipped.
-    expect(res.pcm.readUInt16LE(2)).toBe(1);
-    expect(segB?.asr?.verdict).toBe('drift');
+      // The core R1 assertion: each group's SHIPPED PCM marker must match what
+      // its OWN stamped verdict was actually computed from.
+      // A: verified idx-2 as 'ok' -> idx-2 must be what shipped.
+      expect(res.pcm.readUInt16LE(0)).toBe(2);
+      expect(segA?.asr?.verdict).toBe('ok');
+      // B: idx-3 (the round-1 retake) was NEVER successfully verified (its
+      // verify threw) -> it must NOT ship. idx-1 (the seed take, stamped
+      // 'drift' by the seed verify) must still be what shipped.
+      expect(res.pcm.readUInt16LE(2)).toBe(1);
+      expect(segB?.asr?.verdict).toBe('drift');
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('ASR verify failed for group 1'),
-    );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ASR verify failed for group 1'),
+      );
+    } finally {
+      // F5 review fix (PR #2126) — moved into `finally`, same rationale as
+      // the #2011 test above.
+      warnSpy.mockRestore();
+    }
+  });
 
-    warnSpy.mockRestore();
+  it('F3: abandons the ASR pass after 3 consecutive verify failures instead of attempting every sampled group', async () => {
+    // A non-transient failure (#2011's literal repro: a misconfigured
+    // qa.asr.model) fails identically on every call. Without a guard, the
+    // pass would attempt a doomed round-trip for every sampled group — for
+    // an 800-sentence chapter that is 800 identical failed /transcribe calls
+    // and 800 identical warn lines, where the pre-#2011 code bailed after
+    // one. This pins the cheap fix: give up after 3 consecutive failures,
+    // logging one summary warning instead of one per remaining group.
+    const provider = makeProvider();
+    let transcribeCalls = 0;
+    const alwaysFailingTranscribe = async (): Promise<TranscribeResult> => {
+      transcribeCalls += 1;
+      throw new Error('TTS sidecar /transcribe returned 500: unresolvable ASR_MODEL repo');
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const res = await synthesiseChapter({
+        sentences: [sentence(1), sentence(2), sentence(3), sentence(4), sentence(5)],
+        cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        asr: { maxRerecords: 0, transcribeFn: alwaysFailingTranscribe },
+      });
+
+      // Still non-fatal: every sentence ships real audio.
+      const bodySegments = res.segments.filter((s) => s.kind !== 'title');
+      expect(bodySegments).toHaveLength(5);
+      for (const seg of bodySegments) {
+        expect(seg.asr).toBeUndefined();
+      }
+
+      // Only 3 doomed round-trips were attempted, not 5 — groups 4 and 5
+      // never call transcribeFn at all once the pass abandons itself.
+      expect(transcribeCalls).toBe(3);
+
+      // Exactly one "abandoning" summary warning...
+      const abandonWarnings = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes('abandoning the ASR content-QA pass'),
+      );
+      expect(abandonWarnings).toHaveLength(1);
+      // ...on top of the 3 per-failure warnings — bounded at 4 total, not
+      // one per sentence in the chapter.
+      expect(warnSpy.mock.calls).toHaveLength(4);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
