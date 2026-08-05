@@ -3,12 +3,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
 
 def test_design_voice_reports_phases_in_order(monkeypatch):
+    # design_voice() -> _ensure_device_resolved() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     import main
 
     qeng = main.QwenEngine()
@@ -45,6 +51,10 @@ def test_design_voice_reports_phases_in_order(monkeypatch):
 
 
 def test_mint_variant_reports_phases_in_order(monkeypatch):
+    # mint_variant() -> _ensure_base17_for_mint() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     import main
     import numpy as np
 

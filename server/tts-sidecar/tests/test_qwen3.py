@@ -1672,6 +1672,11 @@ def test_legacy_migration_skipped_when_target_already_populated(monkeypatch, tmp
 def test_import_missing_qwen_tts_raises_with_pip_hint(monkeypatch) -> None:
     """A missing qwen-tts package surfaces the install command, not a bare
     ImportError."""
+    # This test deliberately blocks only `qwen_tts` (not torch) to pin the
+    # qwen_tts-specific error branch in `_load_qwen_model` — it needs the
+    # real `torch` import ahead of that branch to succeed, or it exercises
+    # the OTHER (torch-missing) branch instead and its assertions misfire.
+    pytest.importorskip("torch")
     sys.modules.pop("qwen_tts", None)
 
     class _BlockFinder:
@@ -1892,6 +1897,10 @@ def test_qwen_tts_pinned_for_raw_bypass() -> None:
     method signatures (_build_assistant_text, _prompt_items_to_voice_clone_prompt,
     etc.) that a major bump could break silently. Pin to 0.1.x and fail loudly
     so a future upgrade is a conscious decision with re-verification (fs-55)."""
+    # This reads the REAL installed qwen-tts package's own distribution
+    # metadata — qwen-tts itself (not just torch) is absent from the lean
+    # CI venv (it lives in the vendor overlay, pulling torch/transformers).
+    pytest.importorskip("qwen_tts")
     from importlib.metadata import version
 
     assert version("qwen-tts").startswith("0.1."), (
