@@ -10,11 +10,10 @@ import {
   mkdirSync,
   writeFileSync,
   existsSync,
-  readFileSync,
   readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
