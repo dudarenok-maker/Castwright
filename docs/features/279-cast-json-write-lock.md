@@ -315,6 +315,65 @@ clearing CLAUDE.md's fix-now bar:
   same-tick microtask with no seam to hold open, so AB/BA tests use a
   deterministic barrier (a hoisted `vi.mock` holding both requests at a
   common point, released together) instead.
+  `cast-not-linked-to.test.ts` shipped with only the AB/BA test until
+  `#2123`: its lock-existence detectors race a genuine `withCastLocks`
+  writer (an orthogonal field on the SAME book) against the route's own
+  in-lock `readJson`, gated via the same barrier idiom — proven red both
+  when `withCastLocks` is neutralised (`return fn();`, bypassing its
+  `reduceRight` chain — mutation-verified against that primitive, not
+  `withCastLock`, which this two-book site never calls) and when
+  `sourceCast`'s read is hoisted back outside the still-present lock (a
+  rule-2 regression — the same stale-snapshot clobber outcome as the
+  `library-cast-override.ts` defect above, though that one was a same-book
+  aliasing bug with zero concurrency involved). This route has TWO locked
+  handlers, POST (mark) and DELETE (unmark), with a structurally identical
+  read-through-write span; an independent review found the original
+  `#2123` detector covered POST only, so hoisting DELETE's read left the
+  file green 16/16 with the static guard blind to it too (it checks the
+  write site, not the read). A second detector, sharing the same
+  `runLockDetector` construction, now covers DELETE as well. Both
+  detectors also assert a `racerEntered` flag set on entry to the racer's
+  critical section (not just that its write survived) — the survival-only
+  assertion depends on the racer's full read+write losing outright against
+  an 80ms head start, which a slow-enough unlocked write can still beat.
+  `#2123` also re-measured two single-book sites, `cast-add-from-roster.ts`
+  and `voice-library-usage.ts`'s `clearLibraryVoiceReferences`. Both had
+  been read as detector-less by neutralising `withCastLocks` (plural) and
+  finding their specs green — but both actually call `withCastLock`
+  (singular; `cast-add-from-roster.ts` locks only the source book it
+  writes, and `clearLibraryVoiceReferences` holds at most one book's lock
+  at a time), which that mutation never touches. **A sweep-wide mutation of
+  ONE primitive silently exempts every site built on the OTHER**, and a
+  spec staying green under a mutation is evidence of a gap only once you
+  have confirmed the site actually calls the thing you broke. Confirm the
+  primitive by reading the module; don't infer it from the site's shape.
+  Re-measured against the correct primitive the two sites differ:
+  `voice-library-usage.test.ts` was genuinely detector-less (green under
+  `withCastLock` → `return fn();`), while `cast-add-from-roster.test.ts`
+  was already covered — its pre-existing `#1981` self-race test goes red
+  under both that mutation and a rule-2 read-hoist. Its new detector is
+  kept nonetheless because a self-race cannot catch a **divergent lock
+  key**: keying the site's `withCastLock` off a different derivation of
+  the same book (verified by mutating the call site to
+  `sourceLocated.bookDir.toUpperCase()`) leaves the lock fully intact and
+  the self-race green — both callers queue on the same wrong key — while
+  the external-writer detector is the only test that fails. That is the
+  exact failure `cast-lock.ts`'s header warns of ("a site that derived the
+  key slightly differently would get a second mutex that never contends
+  with the first, and every test would still pass"), and it is
+  structurally invisible to any same-site race. Each site now carries its
+  own `runLockDetector`-style test racing a genuine `withCastLock` writer
+  from outside the site: `cast-add-from-roster.test.ts`
+  against the route's in-lock `sourceCast` read (no separate unlocked
+  pre-lock read of that path to confuse the gate with — `findBookByBookId`
+  only reads state.json); `voice-library-usage.test.ts` against
+  `clearLibraryVoiceReferences`'s in-lock read, which is genuinely the
+  SECOND read of that book's cast.json (`walkConfirmedCasts()`'s own
+  unlocked scan reads it first), so that gate intercepts by occurrence
+  count rather than first-match, to avoid gating the wrong one. Three
+  modules now carry behavioural lock-existence detectors from this sweep:
+  `cast-not-linked-to.ts` (POST + DELETE), `cast-add-from-roster.ts`, and
+  `voice-library-usage.ts`.
 - `server/src/routes/analysis.fresh-cast-lock.test.ts` and
   `server/src/routes/book-state.reparse.test.ts` — race the two delete
   sites against `cast-aliases`, which re-reads inside its own lock and
@@ -322,9 +381,14 @@ clearing CLAUDE.md's fix-now bar:
   once serialised.
 
 Every race/outcome test in this sweep is proven able to fail, not merely
-read as correct: mutating `withCastLock`'s primitive body to a
-pass-through (`return fn();`) across multiple separate process runs, per
-CLAUDE.md's "a test that passes in the red phase is a harness problem."
+read as correct: mutating to a pass-through (`return fn();`) the primitive
+body of **whichever entry point the site under test actually calls** —
+`withCastLock` OR `withCastLocks`, confirmed by reading the module —
+across multiple separate process runs, per CLAUDE.md's "a test that passes
+in the red phase is a harness problem." Mutating only one of the two is
+NOT a completeness check: it silently exempts every site built on the
+other, and a spec that stays green under it is evidence of nothing (see
+the `#2123` note above, which is what that mistake cost).
 Two shapes were rejected after being measured, not assumed: a bare
 `Promise.all` for AB/BA ordering (proven a placebo — see above), and a
 multi-trial retry loop for a probabilistic race (repeating inside one
