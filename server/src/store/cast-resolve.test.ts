@@ -338,4 +338,32 @@ describe('rejectedPairsGoverning (#2092/#2089 review round 3, M-4)', () => {
     const history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = { supersededBy: {} };
     expect(rejectedPairsGoverning('ghost', c, history)).toEqual([]);
   });
+
+  it('F1 (fix round 5) — the normalised-history half of rule 2 pins directly: a pair applies when the id resolves via tier 4, not just tier 3', () => {
+    // `normalisedTierRelevant` (cast-resolve.ts) is `via === 'normalised-id'
+    // || via === 'normalised-history'` — an OR the whole server suite (6580
+    // tests) plus test:server-slow stayed green with the second disjunct
+    // deleted, because every existing scenario that reaches a normalised
+    // tier at all happens to land on 'normalised-id' (a live cast row whose
+    // id normalises to match), never 'normalised-history' (a supersededBy
+    // KEY that normalises to match, with no live cast row and no raw
+    // supersededBy entry of its own). This scenario reaches tier 4
+    // specifically: 'x' is the only live cast id (so tier 1/3 can't match
+    // 'foo-bar'), and the only supersededBy entry is keyed 'foo_bar' (an
+    // UNDERSCORE spelling — raw tier 2 can't match the query's HYPHEN
+    // spelling 'foo-bar' either). Only the normalised-history tier (4)
+    // reaches across that underscore/hyphen gap.
+    const c = [{ id: 'x', name: 'X' }];
+    const history = hp({ foo_bar: 'x' }, [{ from: 'foo_bar', to: 'x' }]);
+
+    // Confirm the premise: this query resolves via tier 4, not tier 3 or
+    // tier 2 — otherwise this test would not actually exercise the deleted
+    // disjunct.
+    const ignoringResolver = buildCastResolver(c, { supersededBy: { foo_bar: 'x' } });
+    expect(ignoringResolver.resolve('foo-bar')?.via).toBe('normalised-history');
+
+    // The load-bearing assertion: the pair governs 'foo-bar' even though its
+    // own `from` is the raw-different 'foo_bar' spelling.
+    expect(rejectedPairsGoverning('foo-bar', c, history)).toEqual([{ from: 'foo_bar', to: 'x' }]);
+  });
 });

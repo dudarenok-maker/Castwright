@@ -637,6 +637,46 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(history?.rejectedPairs).toEqual([]);
   });
 
+  it('F3 (fix round 5) — two governing pairs whose skipped restores land on the SAME newer alias report ONE entry, not a duplicate', async () => {
+    // M-7 above proves the array survives two DISTINCT targets
+    // (['newer-target-1', 'newer-target-2']) — it never exercises the dedup
+    // clause itself (`[...new Set(supersededByOthers)]`), since two distinct
+    // strings can't tell a Set from a plain array apart. This test collapses
+    // both skipped restores onto the SAME newer alias, so a mutation that
+    // drops the Set/dedup (`supersededByOthers` unwrapped) would report
+    // `['newer-target', 'newer-target']` here instead of one entry — the
+    // shape the comment above the real code says it exists to prevent
+    // ("Narrator" / "Narrator" rendered twice).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [...initialCast, { id: 'the-torment', name: 'The Torment', role: 'character', color: 'unset' }],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { 'The-Torment': 'newer-target', THE_TORMENT: 'newer-target' },
+        rejectedPairs: [
+          { from: 'The-Torment', to: 'the-torment', forgotSupersededTo: 'alias-one' },
+          { from: 'THE_TORMENT', to: 'the-torment', forgotSupersededTo: 'alias-two' },
+        ],
+      }),
+    );
+
+    const res = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(true);
+    expect(res.body.removedFrom).toEqual(['The-Torment', 'THE_TORMENT']);
+    // THE ASSERTION THIS TEST EXISTS FOR: one entry, not a duplicate.
+    expect(res.body.supersededByOther).toEqual(['newer-target']);
+
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({ 'The-Torment': 'newer-target', THE_TORMENT: 'newer-target' });
+    expect(history?.rejectedPairs).toEqual([]);
+  });
+
   it('M-2 (review round 3) — restoring a cross-spelling pair\'s forgotSupersededTo uses the PAIR\'s own `from`, not the row\'s `orphanedId`', async () => {
     // Round 2's two cross-spelling tests (Important 1/2, below and above)
     // both happen to produce a pair with NO forgotSupersededTo to restore —

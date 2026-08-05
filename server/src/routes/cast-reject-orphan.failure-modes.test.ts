@@ -268,6 +268,22 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(res.status).toBe(200);
     expect(forgetSupersededIdMock).not.toHaveBeenCalled();
   });
+
+  it('F2 (fix round 5) — the route passes forgotSupersededTo as forgetSupersededId\'s expectedTarget, so a concurrent repoint is not silently discarded', async () => {
+    // `forgetSupersededId`'s own `expectedTarget` semantics have five
+    // dedicated tests in cast-id-history.test.ts — that the CALL SITE here
+    // actually passes the value it read (`forgotSupersededTo`) had none.
+    // Without the third argument, `forgetSupersededId` deletes
+    // unconditionally: a concurrent `retireCharacterId` landing between this
+    // route's own read and this call would have its fresh alias discarded
+    // instead of the stale one the read actually saw. Asserting the mock's
+    // call args pins the call site directly, independent of the primitive's
+    // own (already-covered) internal behaviour.
+    seedMatchingSupersededByEntry(); // supersededBy: { mayrin: 'mairin' }
+    const res = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(forgetSupersededIdMock).toHaveBeenCalledWith(bookDir, 'mayrin', 'mairin');
+  });
 });
 
 describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLinkedTo removal already landed before any fatal id-history step can fail', () => {
