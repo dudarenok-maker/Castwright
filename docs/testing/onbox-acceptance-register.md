@@ -1584,6 +1584,53 @@ to sweep the **whole** 20-book workspace at once.
 > `unknown-male`; what makes withholding safe there is that a reserved
 > fold-bucket **source** is never auto-recorded regardless of evidence, which
 > fires before the ambiguity veto matters at all.
+>
+> **Four more filed issues fixed 2026-08-05
+> ([#2097](https://github.com/dudarenok-maker/Castwright/issues/2097),
+> [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135),
+> [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130),
+> [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134)),
+> one of which MOVES the headline numbers again:**
+>
+> - **#2134 (guard 4/ranker inert on drifted ids) — the auto-recordable
+>   figure drops from 2/68 to 0/0.** `characterSnapshots` is a file-level map
+>   keyed by the id that was LIVE at render time — for `the-torment` and
+>   `lightning-dave` (both drifted ids), the lookup under their OWN key finds
+>   nothing, so `orphan.snapshots` was `[]` and `snapshotsConsistent([])`
+>   passed guard 4 VACUOUSLY (0/1 snapshots reads as "checked, agrees").
+>   `classifySnapshotEvidence` now distinguishes that from a genuine
+>   "checked, agrees" and this pass withholds (report-only) rather than
+>   trusting an unverifiable match. **Measured via a fresh dry run against
+>   the real workspace (read-only, never `--apply`):** auto-recordable
+>   aliases move from **2 / 68 segments to 0 / 0**; report-only moves from
+>   **91 ids / 93 segments to 93 ids / 161 segments** (both deltas are
+>   exactly `the-torment` (67 seg) + `lightning-dave` (1 seg) moving into
+>   report-only); re-render candidates stay unchanged at **23 rows / 188
+>   segments** (unconditional on auto-record status, as before). Neither
+>   alias was ever wrong (both are id-shape-identical repoints), so this is
+>   not a live-data-corruption fix — it is the guard chain no longer
+>   claiming a protection it wasn't providing.
+> - **#2097 + #2135 (evidence that can't be read must count as UNKNOWN, not
+>   CLEAN) — NOT live on the real workspace today, no figure change.**
+>   `collectBooks` now counts and names any dropped book (`'not-yet-analysed'`
+>   vs `'unreadable'`, the latter refusing `--apply`); `collectBakNameEntries`
+>   now returns `bakAvailable`, gating a per-book `withheldForMissingBak`
+>   auto-record guard the same way `cacheAvailable` already gates cache. The
+>   fresh dry run reports **books scanned: 20** (no drops — every book's
+>   `cast.json`/`state.json` is readable), **books with unreadable
+>   cast.json.bak.* evidence: 0**, and **books with an auto-record withheld
+>   for missing bak evidence: 0** — matching #2135's own real-workspace scan
+>   (41 bak files, 0 unparseable).
+> - **#2130 (a resolver tier rename would go undetected) — test-only, no
+>   script behaviour change, no figure change.** A new test drives
+>   `buildOrphansFromSegments` against the REAL compiled
+>   `buildCastResolver` (not a hand-written fake) — proven by actually
+>   renaming `'exact'` to `'exact-id'` in `cast-resolve.ts`, rebuilding, and
+>   confirming the new test goes red, then reverting.
+>
+> Dry run command: `WORKSPACE_DIR=C:/AudiobookWorkspace
+> CACHE_DIR=<primary-checkout>/server/handoff/cache node
+> scripts/repair-cast-id-drift.mjs` (no `--apply`).
 
 Every number below comes from the pass's dry-run mode, which writes
 nothing. No automated test can substitute for the real run: the pure helpers

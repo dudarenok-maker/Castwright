@@ -632,7 +632,17 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
 - [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
+- [x] Step 9d run — **2026-08-05**, PASS against a REVISED expectation (#2134
+  changes the numbers, deliberately): a fresh dry run after the #2097 / #2135 /
+  #2130 / #2134 fixes reports re-render **23 rows / 188 segments unchanged**;
+  auto-recordable **2/68 → 0/0** (`the-torment`/`lightning-dave` withheld —
+  guard 4 was passing vacuously for exactly these two ids, see #2134's own
+  writeup); report-only **91/93 → 93/161** (the same 68-segment delta moving
+  the other way); skipped **3, unchanged**; books with unreadable bak
+  evidence **0**; books withheld for missing bak evidence **0** (#2135's gap
+  is not live on this workspace today). See register row A33 for the full
+  writeup.
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, test-only), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed**, moves the auto-recordable/report-only figures — see step 9d)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real
