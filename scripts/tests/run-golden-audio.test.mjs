@@ -149,7 +149,7 @@ test('a junction/symlink earlier in the invoked path does not silently no-op the
       r.stdout,
       /assembly \(Suite B\)/,
       'the real Suite B run must have happened through the junction — empty stdout ' +
-        `means the guard silently no-op\'d. stdout was: ${JSON.stringify(r.stdout)}`,
+        `means the guard silently no-op'd. stdout was: ${JSON.stringify(r.stdout)}`,
     );
   } finally {
     // Remove the link FIRST, and only proceed to the recursive delete once
