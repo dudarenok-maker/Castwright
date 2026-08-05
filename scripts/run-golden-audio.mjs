@@ -26,15 +26,24 @@
 //                          GOLDEN_REBLESS_THRESHOLDS=1 is also set, so an
 //                          unrelated Kokoro-content bless can't silently
 //                          loosen it. The same file's `identity`/
-//                          `loudness_dbfs` are guarded too, but noise-
-//                          tolerantly: they're raw stochastic measurements
-//                          (unlike the quantised `tolerances`), so a
-//                          within-epsilon re-bless move is WRITTEN and
-//                          echoed to stdout ("[golden-bless] identity moved
-//                          ...") rather than refused — only a move large
-//                          enough to meaningfully re-centre the window it
-//                          feeds needs the same GOLDEN_REBLESS_THRESHOLDS=1
-//                          flag — see compare.bless_guard_thresholds and
+//                          `loudness_dbfs` are guarded too, but by a
+//                          SEPARATE flag, GOLDEN_REBLESS_MEASUREMENTS=1 —
+//                          NOT the same GOLDEN_REBLESS_THRESHOLDS=1 above
+//                          (split by #2060, root-caused to the shared flag
+//                          letting a legitimate identity re-bless silently
+//                          re-authorise the rtf_max ceiling too). They're
+//                          also noise-tolerant, unlike the quantised
+//                          `tolerances`: a within-epsilon move (raw
+//                          stochastic measurement noise) is ACCEPTED
+//                          WITHOUT REWRITING the committed reference — the
+//                          existing block is kept as-is, so repeated noise-
+//                          sized re-blesses can't walk it — and echoed to
+//                          stdout ("[golden-bless] identity moved ..."); a
+//                          move large enough to meaningfully re-centre the
+//                          window it feeds still needs GOLDEN_REBLESS_
+//                          MEASUREMENTS=1, and DOES get written under the
+//                          flag — see compare.bless_guard_thresholds,
+//                          compare.should_rewrite_reference, and
 //                          compare.describe_measurement_move.
 //                          To re-capture the Suite B INPUT fixture (not its
 //                          baseline), run
