@@ -149,7 +149,13 @@ jobs:
           # preflight parser so the two cannot drift (ops-35). Without it here, a
           # fixture-only diff fires the `scripts` leg (CJS side) but not `server`,
           # so the TS parser is never re-checked against the case just added.
-          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$|scripts/tests/fixtures/)' && server=true
+          # scripts/repair-cast-id-drift.mjs: server/src/store/
+          # cast-resolve.repair-pass-contract.test.ts imports this script directly
+          # (#2130) to prove a cast-resolve.ts tier rename can't silently pass with
+          # the script's own suite green. Without it here, a scripts/-only diff to
+          # THIS file sets `scripts=true` alone, never `server=true` — the one test
+          # that guards it never runs in CI on a change to the exact file it covers.
+          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$|scripts/tests/fixtures/|scripts/repair-cast-id-drift\.mjs$)' && server=true
           match '^server/tts-sidecar/' && sidecar=true
           match '^(e2e/|playwright\.config\.ts$)' && e2e=true
           match '^scripts/' && scripts=true
