@@ -112,20 +112,34 @@
  *                        book with no cache evidence can auto-record on
  *                        bak-only evidence alone even if the (unseen) cache
  *                        would have vetoed it. Round-2 review made this
- *                        fail-closed: the script now counts every scanned
- *                        book whose cache file is missing, fails to parse,
- *                        OR parses but names zero characters (#2093 residual
- *                        1, widened by independent-review Critical C1 — a
+ *                        fail-closed: the script counts every scanned book
+ *                        whose cache file is missing, fails to parse, OR
+ *                        parses but names zero characters (#2093 residual 1,
+ *                        widened by independent-review Critical C1 — a
  *                        present-but-corrupt file, or one that validly
  *                        parses but names nobody, both used to read as
  *                        "available"; it now requires the file to exist,
  *                        parse, AND supply at least one name/id entry, via
- *                        `isCacheAvailable`), prints the count in the
- *                        summary every run, and
- *                        refuses `--apply` outright whenever that count is
- *                        nonzero (dry run still runs and reports it) — see
- *                        `main()`'s `booksMissingCache` and
- *                        `planBookRepairs`'s `cacheAvailable` gate.
+ *                        `isCacheAvailable`) and prints that count
+ *                        (`booksMissingCache`) in the summary every run —
+ *                        but (owner-decided policy, review round 2,
+ *                        2026-08-05) that count no longer by itself refuses
+ *                        `--apply`. Per-book, `planBookRepairs`'s
+ *                        `cacheAvailable` gate still withholds every
+ *                        auto-record for a book with unusable cache
+ *                        evidence, unconditionally — that safety property
+ *                        is unchanged. What DOES refuse the whole `--apply`
+ *                        run is `booksWithheldForMissingCache`: the count of
+ *                        books where that per-book gate actually withheld a
+ *                        REAL auto-record candidate, not merely "this book's
+ *                        cache happens to be unusable" — a book with no
+ *                        cache evidence and nothing that would have
+ *                        auto-recorded anyway (e.g. zero orphaned ids) has
+ *                        nothing at stake and must not veto every other
+ *                        book's run. See `main()`'s `booksMissingCache` /
+ *                        `booksWithheldForMissingCache` and
+ *                        `planBookRepairs`'s `cacheAvailable` gate /
+ *                        `withheldForMissingCache` return field.
  *   PORT                 loopback port the --apply liveness probe checks (default
  *                        8080, matches server/src/index.ts's own default).
  *                        #2090: the probe also covers this port's own
@@ -398,7 +412,20 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  plain data, decides for every orphaned id whether to auto-record a
  *  `cast-id-history.json` alias, or report it for a human, or skip it
  *  (already recorded, or explicitly rejected by the user — #2040 Task 17's
- *  `rejected` list).
+ *  `rejected` list). Returns `{ autoRecord, reportOnly, skipped,
+ *  withheldForMissingCache }` — the last is a COUNT (owner-decided policy,
+ *  review round 2, 2026-08-05), not a boolean or a re-derivation of
+ *  `!cacheAvailable`: it only increments when an id actually reached and
+ *  passed guards 1/2 (a real Tier A/B match, not reserved, not
+ *  cross-source-ambiguous) and was THEN withheld solely because
+ *  `cacheAvailable` was false. A book can have `cacheAvailable: false` and
+ *  `withheldForMissingCache === 0` at the same time — e.g. a book whose
+ *  cache parses but names nobody, and which simply has no orphaned id that
+ *  would have matched anything anyway; that book has nothing at stake and
+ *  `main()` must not let it veto every other book's `--apply` run. This is
+ *  the signal `main()` gates the global `--apply` refusal on, not the
+ *  broader "this book's cache is unusable" fact (which stays reported, via
+ *  `booksMissingCache`, but no longer gates).
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
  *  reserved id (guard 1), neither source is ambiguous for this id (guard
@@ -456,6 +483,18 @@ export function planBookRepairs(input, deps) {
   const autoRecord = [];
   const reportOnly = [];
   const skipped = [];
+  // Owner-decided policy (2026-08-05, review round 2): a book with NO cache
+  // evidence is safe to leave entirely alone if it has nothing this pass
+  // would otherwise have auto-recorded — the missing-cache gate right below
+  // (`!cacheAvailable`) only ever fires for an id that ALREADY passed guard
+  // 1/2 and found a Tier A/B match, i.e. a real would-be auto-record this
+  // book's blind ambiguity veto can't vouch for. Counting THAT event
+  // specifically (not merely "this book's cacheAvailable is false") is what
+  // lets `main()` refuse `--apply` only for a book with something at stake,
+  // instead of one blind-but-empty book (e.g. a real *Unlocked* cache that
+  // parses but names nobody, and which currently has zero orphaned ids to
+  // begin with) vetoing every other book in the workspace.
+  let withheldForMissingCache = 0;
 
   for (const id of allIds) {
     if (liveIds.has(id)) continue; // not an orphan at all
@@ -583,6 +622,7 @@ export function planBookRepairs(input, deps) {
       // see `main()`'s own comment on this), not from whether this
       // PARTICULAR id happens to appear in it.
       if (!cacheAvailable) {
+        withheldForMissingCache += 1;
         reportOnly.push({
           id,
           segments: orphan.segments,
@@ -676,7 +716,7 @@ export function planBookRepairs(input, deps) {
     });
   }
 
-  return { autoRecord, reportOnly, skipped };
+  return { autoRecord, reportOnly, skipped, withheldForMissingCache };
 }
 
 /** Flatten one book's orphan-id -> chapter map into the re-render list's
@@ -703,23 +743,36 @@ export function buildRerenderRows(bookLabel, orphans) {
   return rows;
 }
 
-/** #2093 residual 2: `main()`'s global `--apply` refusal for "any scanned
- *  book had unavailable analysis-cache evidence" (round-2 review, Important
- *  1's "explicit and visible" refusal), extracted to a pure decision.
- *  **Scope correction (independent review I3, 2026-08-05):** this makes the
- *  DECISION itself — `apply && booksMissingCache > 0` — directly unit
- *  testable; it does NOT make main()'s WIRING of that decision (that it's
- *  actually called with the right arguments, and that main() actually exits
- *  1 on `true`) testable, and that wiring remains untested by anything
- *  short of the live dry run — `main` isn't exported (it needs `server/dist`
- *  built; see the module doc comment's Tests section), so there is no
- *  automated regression net on the call site itself. A regression there
- *  would still be safe per-book (`planBookRepairs`'s own `cacheAvailable`
- *  gate never lets a book with missing evidence auto-record), just silent
- *  at the whole-run level rather than "explicit and visible" per the
- *  design. */
-export function shouldRefuseApplyForMissingCache(apply, booksMissingCache) {
-  return apply === true && booksMissingCache > 0;
+/** #2093 residual 2: `main()`'s global `--apply` refusal — extracted to a
+ *  pure decision. **Renamed and re-scoped (owner-decided policy, review
+ *  round 2, 2026-08-05):** originally `shouldRefuseApplyForMissingCache`,
+ *  gated on ANY scanned book lacking cache evidence (`booksMissingCache >
+ *  0`) — but that let one book with unusable cache evidence and NOTHING to
+ *  repair (e.g. a real book whose cache validly parses but names nobody,
+ *  and which has zero orphaned ids to begin with) veto `--apply` for every
+ *  OTHER book in the workspace too, which inverted the point of this pass:
+ *  it exists to unblock a real repair run, not add a new way to block one
+ *  that was never at risk. Gated instead on `booksWithheldForMissingCache`
+ *  — the count of books where `planBookRepairs` actually withheld a real
+ *  auto-record candidate specifically because `cacheAvailable` was false
+ *  (see `planBookRepairs`'s own `withheldForMissingCache` doc comment). The
+ *  safety property is unchanged: `planBookRepairs`'s per-book
+ *  `cacheAvailable` gate already guarantees no alias is EVER auto-recorded
+ *  for a book whose ambiguity veto is blind, whether or not this global
+ *  refusal fires — this function only decides whether the WHOLE run stops
+ *  dead or merely proceeds around a book with genuinely nothing at stake.
+ *  `booksMissingCache` stays reported in the summary (an operator-visible
+ *  fact worth knowing), it just no longer gates.
+ *
+ *  Scope correction (independent review I3, 2026-08-05, carried over):
+ *  this makes the DECISION itself directly unit testable; it does NOT make
+ *  `main()`'s WIRING of that decision (that it's actually called with the
+ *  right arguments, and that `main()` actually exits 1 on `true`)
+ *  testable — `main` isn't exported (it needs `server/dist` built; see the
+ *  module doc comment's Tests section), so that wiring remains verified
+ *  only by the live dry run. */
+export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache) {
+  return apply === true && booksWithheldForMissingCache > 0;
 }
 
 /** Formats one `reportOnly` row for the console listing (main()). Extracted
@@ -1172,6 +1225,14 @@ async function main() {
   let totalReportSegments = 0;
   let totalSkipped = 0;
   let booksMissingCache = 0;
+  // Owner-decided policy, review round 2: the count that actually gates
+  // `--apply` (see shouldRefuseApplyForWithheldAutoRecord's doc comment) —
+  // books where planBookRepairs withheld a REAL auto-record candidate for
+  // the missing-cache reason, not merely books whose cache happens to be
+  // unusable. `withheldBookLabels` makes the refusal message name the
+  // specific book(s) an operator needs to act on, rather than just a count.
+  let booksWithheldForMissingCache = 0;
+  const withheldBookLabels = [];
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -1225,6 +1286,11 @@ async function main() {
         normaliseIdKey: mods.normaliseIdKey,
       },
     );
+
+    if (plan.withheldForMissingCache > 0) {
+      booksWithheldForMissingCache += 1;
+      withheldBookLabels.push(`${book.label} (${plan.withheldForMissingCache} id(s))`);
+    }
 
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
     allRerenderRows.push(...rerenderRows);
@@ -1313,30 +1379,48 @@ async function main() {
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);
   console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s)`);
+  // Owner-decided policy, review round 2 (2026-08-05): these are now TWO
+  // distinct numbers, only one of which gates --apply — printed together,
+  // explicitly labelled, so neither reads as the other.
   console.log(
     `books missing analysis-cache evidence: ${booksMissingCache}` +
       (booksMissingCache
-        ? ' — the cross-source ambiguity veto cannot see cache evidence for these books; auto-record was withheld for every matched id in them (see CACHE_DIR)'
+        ? ' — the cross-source ambiguity veto cannot see cache evidence for these books, so no auto-record can ' +
+          'be recorded for a matched id in them; informational only, does NOT by itself block --apply (see below)'
         : ''),
   );
+  console.log(
+    `books with an auto-record withheld for missing cache evidence: ${booksWithheldForMissingCache}` +
+      (booksWithheldForMissingCache
+        ? ` — THIS is what blocks --apply: ${withheldBookLabels.join('; ')}`
+        : ' — --apply is not blocked by cache evidence'),
+  );
 
-  // Round-2 review, Important 1: refuse --apply outright when ANY scanned
-  // book had no analysis-cache file. planBookRepairs already withholds
-  // auto-record per-book for exactly this reason (see its cacheAvailable
-  // gate), so nothing unsafe would be written even without this check — but
-  // the refusal must be explicit and visible, not merely a smaller number
-  // silently produced by the algorithm, per the review finding. A single
-  // missing-cache book blocks the WHOLE apply run, matching the same
-  // conservative "ambiguous means refuse" posture as the liveness probe
-  // above (spec §10) rather than writing a partial, cache-blind result.
-  if (shouldRefuseApplyForMissingCache(apply, booksMissingCache)) {
+  // Round-2 review, Important 1 (original): refuse --apply outright when a
+  // scanned book's blind ambiguity veto actually had something at stake.
+  // Re-scoped by owner-decided policy, review round 2 (2026-08-05): the
+  // ORIGINAL version of this refusal fired on ANY book missing cache
+  // evidence (booksMissingCache > 0), which let one book with unusable
+  // cache evidence and NOTHING to repair veto every other book's --apply
+  // run — inverting the point of this pass. planBookRepairs's per-book
+  // cacheAvailable gate already guarantees no alias is EVER auto-recorded
+  // for a book whose ambiguity veto is blind (see its own doc comment) —
+  // that safety property does not depend on this global refusal at all.
+  // This refusal now fires only when withholding actually happened
+  // (booksWithheldForMissingCache > 0), so a blind-but-empty book no longer
+  // blocks a run it was never going to affect.
+  if (shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache)) {
     console.error(
-      `\nRefusing --apply: ${booksMissingCache} scanned book(s) had no analysis-cache file at CACHE_DIR (${cacheDir}). ` +
-        `The cross-source ambiguity veto (guard 2) can only see an id as ambiguous through the cache — a missing ` +
-        `cache file makes every id in that book look unambiguous whether or not it actually is, silently re-opening ` +
-        `the exact bak-unambiguous x cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. ` +
-        `Point CACHE_DIR at the checkout that actually ran these books' analysis (see the module doc comment) and ` +
-        `re-run — the dry run above must report "books missing analysis-cache evidence: 0" before --apply is safe.`,
+      `\nRefusing --apply: ${booksWithheldForMissingCache} scanned book(s) had a real auto-record candidate ` +
+        `withheld because their analysis-cache evidence is unusable at CACHE_DIR (${cacheDir}): ` +
+        `${withheldBookLabels.join('; ')}. The cross-source ambiguity veto (guard 2) can only see an id as ` +
+        `ambiguous through the cache — unusable cache evidence makes every matched id in that book look ` +
+        `unambiguous whether or not it actually is, silently re-opening the exact bak-unambiguous x ` +
+        `cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. Point CACHE_DIR at the ` +
+        `checkout that actually ran these books' analysis (see the module doc comment) and re-run — the dry run ` +
+        `above must report "books with an auto-record withheld for missing cache evidence: 0" before --apply is ` +
+        `safe. (A nonzero "books missing analysis-cache evidence" count alone does NOT block --apply — only a ` +
+        `book with a real withheld candidate does.)`,
     );
     process.exitCode = 1;
     return;

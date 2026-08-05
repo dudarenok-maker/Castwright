@@ -25,7 +25,7 @@ import {
   rankSnapshotCandidates,
   planBookRepairs,
   buildRerenderRows,
-  shouldRefuseApplyForMissingCache,
+  shouldRefuseApplyForWithheldAutoRecord,
   formatReportRowSummary,
   readAnalysisCache,
   isCacheAvailable,
@@ -658,6 +658,40 @@ describe('planBookRepairs', () => {
     assert.equal(plan.reportOnly[0].id, 'mayrin');
     assert.equal(plan.reportOnly[0].segments, 8);
     assert.match(plan.reportOnly[0].reason, /analysis-cache file was not found/);
+    // Owner-decided policy, review round 2: this is the "≥1 withheld
+    // candidate" shape shouldRefuseApplyForWithheldAutoRecord gates on.
+    assert.equal(plan.withheldForMissingCache, 1);
+  });
+
+  test('OWNER-DECIDED POLICY (review round 2, 2026-08-05): a book with cacheAvailable=false but NO Tier A/B candidate withholds NOTHING — withheldForMissingCache stays 0', () => {
+    // This is the exact *Unlocked* real-world shape the policy exists for:
+    // a book whose cache is unusable (cacheAvailable: false) but which has
+    // no orphaned id that would have matched anything anyway (no name/id
+    // signal at all — 'silveny' matches neither Tier A name nor Tier B
+    // id-shape against any live cast row here). Such a book has NOTHING at
+    // stake — no auto-record was ever going to happen for it, cache or no
+    // cache — so it must not count toward the signal that blocks --apply
+    // for the WHOLE workspace, even though `booksMissingCache` (main()'s
+    // separate, still-reported count) is unaffected by this distinction.
+    const orphans = new Map([
+      [
+        'silveny',
+        {
+          segments: 17,
+          chapters: [{ chapterId: 50, chapterTitle: 'Forty-Eight', segments: 6, durationSec: 12 }],
+          snapshots: [],
+        },
+      ],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans, cacheAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'silveny');
+    assert.match(plan.reportOnly[0].reason, /no display name found/); // NOT the cacheAvailable reason — never reached it
+    assert.equal(plan.withheldForMissingCache, 0);
   });
 
   test('RESIDUAL 3 (#2093, inverted): cacheAvailable now defaults to FALSE when omitted — the safe default for an otherwise fail-closed guard', () => {
@@ -749,19 +783,25 @@ describe('buildRerenderRows', () => {
   });
 });
 
-describe('shouldRefuseApplyForMissingCache (#2093 residual 2)', () => {
-  test('dry run never refuses, whatever booksMissingCache is', () => {
-    assert.equal(shouldRefuseApplyForMissingCache(false, 0), false);
-    assert.equal(shouldRefuseApplyForMissingCache(false, 5), false);
+describe('shouldRefuseApplyForWithheldAutoRecord (#2093 residual 2, re-scoped by owner-decided policy, review round 2)', () => {
+  // Renamed from shouldRefuseApplyForMissingCache: the predicate now reads
+  // booksWithheldForMissingCache (a book with a REAL auto-record candidate
+  // actually withheld), not booksMissingCache (any book with unusable cache
+  // evidence, whether or not it had anything to repair) — a book with no
+  // cache evidence and nothing that would have auto-recorded anyway must
+  // not veto every other book's --apply run.
+  test('dry run never refuses, whatever booksWithheldForMissingCache is', () => {
+    assert.equal(shouldRefuseApplyForWithheldAutoRecord(false, 0), false);
+    assert.equal(shouldRefuseApplyForWithheldAutoRecord(false, 5), false);
   });
 
-  test('--apply with 0 books missing cache does not refuse', () => {
-    assert.equal(shouldRefuseApplyForMissingCache(true, 0), false);
+  test('--apply with 0 books withheld does not refuse', () => {
+    assert.equal(shouldRefuseApplyForWithheldAutoRecord(true, 0), false);
   });
 
-  test('--apply with >=1 book missing cache refuses', () => {
-    assert.equal(shouldRefuseApplyForMissingCache(true, 1), true);
-    assert.equal(shouldRefuseApplyForMissingCache(true, 20), true);
+  test('--apply with >=1 book withheld refuses', () => {
+    assert.equal(shouldRefuseApplyForWithheldAutoRecord(true, 1), true);
+    assert.equal(shouldRefuseApplyForWithheldAutoRecord(true, 20), true);
   });
 });
 
