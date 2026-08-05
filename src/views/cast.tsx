@@ -1319,11 +1319,7 @@ export function CastView({
                           </span>
                           <button
                             type="button"
-                            disabled={
-                              orphanRejectBusyId === orphanedId ||
-                              !info.resolvedCharacterId ||
-                              (info.rejectedAgainst?.includes(info.resolvedCharacterId) ?? false)
-                            }
+                            disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}
                             onClick={() =>
                               info.resolvedCharacterId &&
                               handleRejectOrphanMatch(orphanedId, info.resolvedCharacterId)
