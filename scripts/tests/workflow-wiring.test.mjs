@@ -256,21 +256,11 @@ const ACCEPTED_NARROWINGS = [
   ],
   [
     'E2E (chromium)',
-    'index.html',
-    "index.html changes are vanishingly rare in isolation and are, in practice, always bundled with other src/** changes in the same PR (which independently trigger this leg); accepted per the branch owner's 'the rest of G2 is correct as-is' ruling",
-  ],
-  [
-    'E2E (chromium)',
     'tailwind.config.ts',
     'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
   ],
   ['E2E (chromium)', 'tsconfig.json', 'same reasoning as Lint/tsconfig.json above'],
   ['E2E (chromium)', 'eslint.config.mjs', 'same reasoning as Typecheck/eslint.config.mjs above'],
-  [
-    'E2E visual baselines (chromium)',
-    'index.html',
-    'same reasoning as E2E (chromium)/index.html above -- test:e2e:visual and test:e2e share byte-identical STEPS definitions today',
-  ],
   [
     'E2E visual baselines (chromium)',
     'tailwind.config.ts',

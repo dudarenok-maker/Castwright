@@ -314,7 +314,13 @@ export const STEPS = [
     name: 'test:e2e',
     inputs: {
       globs: ['src/**', 'e2e/**'],
-      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e'],
+      /* index.html: same gap/fix as `build`'s extraFiles entry below — it
+         carries the self-hosted webfonts <link>, the body's Tailwind
+         classes, and the #root mount div, all three of which determine what
+         Playwright mounts and what the visual baselines render. Without this,
+         an index.html-only diff ran zero e2e shards (workflow-wiring review
+         Finding 1). */
+      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e', 'index.html'],
       includeLockfiles: ['root'],
     },
   },
@@ -326,7 +332,9 @@ export const STEPS = [
     name: 'test:e2e:visual',
     inputs: {
       globs: ['src/**', 'e2e/**'],
-      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e'],
+      // index.html: same reasoning as test:e2e's extraFiles entry above —
+      // it directly determines what the visual baselines screenshot.
+      extraFiles: ['playwright.config.ts', 'vite.config.ts', '.env.e2e', 'index.html'],
       includeLockfiles: ['root'],
     },
   },

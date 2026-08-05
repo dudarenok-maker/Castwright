@@ -518,6 +518,20 @@ test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
 });
 
+// index.html carries the self-hosted webfonts <link>, the body's Tailwind
+// classes, and the #root mount div — all three determine what Playwright
+// mounts and what the visual baselines screenshot. Without this extraFiles
+// entry, an index.html-only diff ran zero e2e shards and zero visual
+// baselines (workflow-wiring review Finding 1). Reverting either extraFiles
+// entry reddens its own assertion.
+test('stepTouchedByDiff: index.html is in scope for test:e2e', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e'], ['index.html']), true);
+});
+
+test('stepTouchedByDiff: index.html is in scope for test:e2e:visual', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e:visual'], ['index.html']), true);
+});
+
 test('stepTouchedByDiff: editing the prebuild doc-sync script invalidates the build cache (issue #1223)', () => {
   const diff = ['scripts/sync-docs-to-public.mjs'];
   assert.equal(stepTouchedByDiff(stepByName['build'], diff), true);
@@ -599,9 +613,7 @@ test('stepTouchedByDiff: a non-.py file anywhere under server/tts-sidecar/ is in
     true,
   );
   assert.equal(
-    stepTouchedByDiff(stepByName['test:sidecar'], [
-      'server/tts-sidecar/scripts/install-qwen3.mjs',
-    ]),
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/scripts/install-qwen3.mjs']),
     true,
   );
 });
