@@ -706,6 +706,60 @@ test('test:hooks completeness guard: every producer a hooks test depends on is a
   );
 });
 
+// --- Acceptance through the real cached/run decision (#2120) -------------
+// #2120 explicitly rejects stepTouchedByDiff as sufficient proof: PR #2117
+// showed it and the real [cached]/[run] decision are different code paths.
+// These two tests drive selectStepFiles -> composeInputHash -> decide — the
+// actual decision runPipeline makes — rather than modeling it against the
+// unit seam.
+
+// Shared harness: builds a real input hash for a step from a file list,
+// letting the caller perturb one file's content hash.
+function hashFor(step, fileList, bump = () => 'h0') {
+  const entries = selectStepFiles({ fileList, step }).map((rel) => [rel, bump(rel)]);
+  return composeInputHash({
+    stepName: step.name,
+    sortedFileEntries: entries,
+    lockHashes: {},
+    nodeVer: 'v20.0.0',
+    schemaVer: 1,
+    toolFingerprint: 'test',
+  });
+}
+
+test('acceptance #2120a: editing menu.js makes test:hooks RUN, not [cached]', () => {
+  const step = stepByName['test:hooks'];
+  const fileList = ['scripts/tests/pinokio-entry.test.mjs', 'pinokio-scripts/lib/menu.js'];
+
+  assert.ok(
+    selectStepFiles({ fileList, step }).includes('pinokio-scripts/lib/menu.js'),
+    'menu.js must be among the files whose content feeds the hash',
+  );
+
+  const base = hashFor(step, fileList);
+  const edited = hashFor(step, fileList, (rel) => (rel.endsWith('menu.js') ? 'h1' : 'h0'));
+  assert.notEqual(base, edited, 'a menu.js edit must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: edited, cache }), 'run');
+  assert.equal(decide({ stepName: step.name, currentHash: base, cache }), 'skip');
+});
+
+test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () => {
+  const step = stepByName['check:budget-poll'];
+  const withoutTest = ['scripts/check-no-budget-poll.mjs'];
+  const withTest = ['scripts/check-no-budget-poll.mjs', 'server/src/tts/new.test.ts'];
+
+  assert.ok(selectStepFiles({ fileList: withTest, step }).includes('server/src/tts/new.test.ts'));
+
+  const base = hashFor(step, withoutTest);
+  const added = hashFor(step, withTest);
+  assert.notEqual(base, added, 'adding a server test must change the input hash');
+
+  const cache = { steps: { [step.name]: { inputHash: base } } };
+  assert.equal(decide({ stepName: step.name, currentHash: added, cache }), 'run');
+});
+
 test('computeShared is true for a root manifest/lockfile change', () => {
   assert.equal(computeShared(['package.json']), true);
   assert.equal(computeShared(['package-lock.json']), true);
