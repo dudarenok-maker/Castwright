@@ -1351,22 +1351,45 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(nopersonaQwen.qwen.variants).toBeUndefined();
   });
 
-  /* C1 — the teardown's sidecar `fetch` (inside tearDownEmotionVariant) has no
-     AbortSignal/timeout, so holding the cast lock across it would let a
-     blocked-but-listening sidecar pin this book's cast lock for the length of
-     that hang — the same defect class promote-voice's own "Narrow by design"
-     comment (above, on its withCastLock call) already fixes for its teardown.
-     Proves the fix the same way voice-style.test.ts's own #1981 lock-
-     narrowing races do (`/generate-all no longer holds the book lock across
-     the whole batch`, `/generate no longer holds the book lock across the
-     LLM call`): delay the sidecar call artificially and assert a concurrent
-     cast write on the SAME book (add-alias) lands quickly rather than
-     waiting for it. */
+  /* C1 — the teardown's sidecar `fetch` (inside tearDownEmotionVariant) has
+     no reason to hold the cast lock across it: it's a best-effort network
+     call (#2127 bounds it with EVICT_FETCH_TIMEOUT_MS, but even that bounded
+     wait shouldn't pin the lock) — the same defect class promote-voice's own
+     "Narrow by design" comment (above, on its withCastLock call) already
+     fixes for its teardown. Proves the fix the same way voice-style.test.ts's
+     own #1981 lock-narrowing races do (`/generate-all no longer holds the
+     book lock across the whole batch`, `/generate no longer holds the book
+     lock across the LLM call`): delay the sidecar call artificially and
+     assert a concurrent cast write on the SAME book (add-alias) lands
+     quickly rather than waiting for it.
+
+     Re-review (2026-08) found the original fixed 50ms warm-up sleep could
+     lie: the evict actually starts at ~20ms, a ~2.5x margin, and with the
+     defect reintroduced plus the warm-up shrunk to 0ms, 1 of 6 runs still
+     passed — a silent false green under load (this box regularly runs
+     several concurrent worktree batteries). Replaced with a deferred that
+     the evict's own `mockImplementation` resolves the instant it's invoked,
+     so the concurrent add-alias fires exactly when the evict has genuinely
+     started — no guessed margin, no flake window. */
   it('C1 — releases the cast lock before the sidecar evict, so a concurrent add-alias on the same book lands quickly', async () => {
     seedVariants();
     const EVICT_DELAY_MS = 300;
+    /* #2127 composition check — this test's whole point is a DELAYED but
+       SUCCESSFUL evict (the lock-release timing), not one that gets aborted
+       by the new EVICT_FETCH_TIMEOUT_MS bound. Assert the artificial delay
+       stays well under it; the mocked `fetch` below doesn't honor the real
+       AbortSignal anyway (it ignores `init` entirely), so this is a guard
+       against the two constants drifting into each other, not a behavioural
+       dependency. */
+    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
+    expect(EVICT_DELAY_MS).toBeLessThan(EVICT_FETCH_TIMEOUT_MS);
+    let resolveEvictStarted: () => void;
+    const evictStarted = new Promise<void>((resolve) => {
+      resolveEvictStarted = resolve;
+    });
     fetchMock.mockImplementation(async (url: unknown) => {
       if (String(url).endsWith('/qwen/evict-voice')) {
+        resolveEvictStarted();
         await new Promise((r) => setTimeout(r, EVICT_DELAY_MS));
       }
       return { ok: true };
@@ -1377,9 +1400,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     );
     deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
 
-    // Let the DELETE handler acquire + release the cast lock and reach (and
-    // start waiting on) its slow sidecar evict.
-    await new Promise((r) => setTimeout(r, 50));
+    // Deterministic warm-up: wait for the evict fetch to actually have been
+    // invoked (whether the lock is still held at that point, pre-fix, or
+    // already released, post-fix) rather than guessing a fixed delay is
+    // enough for the DELETE handler to get there.
+    await evictStarted;
 
     const start = Date.now();
     const addAliasRes = await request(app)
@@ -1396,6 +1421,57 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
 
     const deleteRes = await deletePromise;
     expect(deleteRes.status).toBe(200);
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+  });
+
+  /* #2127 — the evict fetches (inside tearDownEmotionVariant, and
+     promote-voice's own direct evict) had no AbortSignal, so a sidecar that
+     accepts the TCP connection but never responds (blocked mid model
+     load/recycle — routine on this box) hung the triggering request for up
+     to undici's ~300s default, even though cast.json had already been
+     written successfully before the teardown ran. Proves the fix directly: a
+     sidecar mock that never resolves (and never rejects) on its own must
+     still let the DELETE respond, bounded by EVICT_FETCH_TIMEOUT_MS rather
+     than that ~300s hang. The mock only settles via the real `AbortSignal`
+     the route passes — exactly how undici itself behaves — so this only
+     passes if the signal is genuinely wired through, not just present. */
+  it('#2127 — a sidecar evict that never responds does not hang the DELETE past the eviction timeout', async () => {
+    seedVariants();
+    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
+    fetchMock.mockImplementation((url: unknown, init?: unknown) => {
+      if (String(url).endsWith('/qwen/evict-voice')) {
+        return new Promise((_resolve, reject) => {
+          const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
+          signal?.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted.');
+            err.name = 'AbortError';
+            reject(err);
+          });
+          // Deliberately never settles on its own — mimics a sidecar that
+          // accepted the connection but is blocked.
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const start = Date.now();
+    const res = await request(app).delete(
+      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
+    );
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, removed: 'angry' });
+    /* Bounded by the timeout, not by undici's ~300s default. Generous
+       headroom above EVICT_FETCH_TIMEOUT_MS for the abort machinery + route
+       handling itself; nowhere near the untimed-out hang this closes. */
+    expect(elapsed).toBeGreaterThanOrEqual(EVICT_FETCH_TIMEOUT_MS - 200);
+    expect(elapsed).toBeLessThan(EVICT_FETCH_TIMEOUT_MS + 2_000);
+
+    /* cast.json was still written successfully — a timed-out best-effort
+       evict must never turn a successful write into an error response. */
     const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
     expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });

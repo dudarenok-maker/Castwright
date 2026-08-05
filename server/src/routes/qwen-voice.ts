@@ -695,11 +695,22 @@ qwenVoiceRouter.post(
   },
 );
 
+/* #2127 — bound for the sidecar cache-evict fetches below. Node's undici
+   defaults to a 300s fetch timeout; a sidecar that accepts the TCP connection
+   but is blocked (mid model load or recycle — routine on this box) would
+   otherwise hang the caller for up to five minutes even though eviction is
+   purely best-effort (a cheap in-memory dict pop on the sidecar side — see
+   `evictSidecarVoice` in workspace/purge-clone-artifacts.ts for the same
+   endpoint's cost analysis). Single-digit seconds is generous for that. */
+export const EVICT_FETCH_TIMEOUT_MS = 3_000;
+
 /* Tear down a designed emotion variant: delete its `.pt`/`.json` embedding +
    persona sidecar and evict it from the sidecar's in-memory prompt cache.
-   Best-effort throughout — a missing file or unreachable sidecar is non-fatal.
-   Does NOT touch cast.json; the caller owns the slot mutation + atomic write so
-   it can batch multiple removals into a single write. Shared by the per-emotion
+   Best-effort throughout — a missing file, unreachable sidecar, or timed-out
+   evict (see EVICT_FETCH_TIMEOUT_MS) is non-fatal: `fetch` rejecting with an
+   AbortError lands in the same bare `catch` as a network failure. Does NOT
+   touch cast.json; the caller owns the slot mutation + atomic write so it can
+   batch multiple removals into a single write. Shared by the per-emotion
    DELETE route and the redesign-invalidation in promote-voice. */
 async function tearDownEmotionVariant(designedId: string): Promise<void> {
   await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
@@ -709,9 +720,10 @@ async function tearDownEmotionVariant(designedId: string): Promise<void> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voiceId: designedId }),
+      signal: AbortSignal.timeout(EVICT_FETCH_TIMEOUT_MS),
     });
   } catch {
-    /* sidecar unreachable — non-fatal */
+    /* sidecar unreachable, or the evict timed out (AbortError) — non-fatal */
   }
 }
 
@@ -810,15 +822,19 @@ qwenVoiceRouter.post(
 
     /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
        a down/empty sidecar has nothing cached, and generation reads the fresh
-       `.pt` from disk regardless. */
+       `.pt` from disk regardless. #2127 — bounded by EVICT_FETCH_TIMEOUT_MS
+       (see tearDownEmotionVariant above), so a blocked-but-listening sidecar
+       can't hold this open for undici's 300s default; AbortError lands in the
+       same bare `catch` as a network failure. */
     try {
       await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ voiceId: realVoiceId }),
+        signal: AbortSignal.timeout(EVICT_FETCH_TIMEOUT_MS),
       });
     } catch {
-      /* sidecar unreachable — non-fatal */
+      /* sidecar unreachable, or the evict timed out (AbortError) — non-fatal */
     }
 
     /* A redesign replaces the base embedding in place, so every emotion variant
@@ -833,9 +849,11 @@ qwenVoiceRouter.post(
        user still wants from the new base. */
     let staleVariantIds: string[] = [];
     /* Narrow by design. The artifact moves and the sidecar evict above stay OUTSIDE
-       this lock: that fetch has no AbortSignal, so a hung sidecar would otherwise
-       stall every cast write for this book. Global order: no other lock is held
-       here (cast is last — see cast-lock.ts rule 4). */
+       this lock: those fetches are best-effort network calls (#2127 — now bounded
+       by EVICT_FETCH_TIMEOUT_MS, but still no reason to pin the lock for even that
+       bounded worst case) that would otherwise stall every cast write for this
+       book. Global order: no other lock is held here (cast is last — see
+       cast-lock.ts rule 4). */
     await withCastLock(located.bookDir, async () => {
       const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
       const freshChar = fresh?.characters?.find((c) => c.id === characterId);
@@ -947,13 +965,14 @@ qwenVoiceRouter.delete(
        "Narrow by design" comment on its own withCastLock call): the read is
        inside the lock, and the 404 + the variant-map mutation are both
        decisions derived from it (rule 2), but `tearDownEmotionVariant`'s
-       sidecar `fetch` has no AbortSignal/timeout, so holding the lock across
-       it would let a blocked-but-listening sidecar pin this book's cast lock
-       for up to Node's undici default (~300s) — and, per cast-lock.ts rule 4,
-       stall a request queued behind it for `library-voice:<uuid>` too.
-       Compute the designed id from the locked read, close the lock, then run
-       the teardown after — filesystem work + a best-effort network call,
-       nothing that needs the lock. */
+       sidecar `fetch` is a best-effort network call (#2127 — now bounded by
+       EVICT_FETCH_TIMEOUT_MS rather than Node's undici ~300s default), so
+       holding the lock across it would still needlessly pin this book's cast
+       lock for that bounded worst case — and, per cast-lock.ts rule 4, stall
+       a request queued behind it for `library-voice:<uuid>` too. Compute the
+       designed id from the locked read, close the lock, then run the
+       teardown after — filesystem work + a best-effort network call, nothing
+       that needs the lock. */
     const designedId = await withCastLock(located.bookDir, async (): Promise<string | undefined> => {
       const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = cast?.characters?.find((c) => c.id === characterId);
