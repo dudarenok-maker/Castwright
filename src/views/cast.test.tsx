@@ -871,6 +871,49 @@ describe('CastView Qwen status pill (plan 117)', () => {
       });
     });
 
+    it('review round 2 "Also fix" — supersededByOther names the superseding character in the Undo toast, instead of the same unqualified "Undid…" message', async () => {
+      // C1 (fix round 1) shipped the server half: a since-superseded alias
+      // is left alone rather than overwritten, and the response says so via
+      // supersededByOther. This pins the OTHER half — the toast actually
+      // reading it, rather than firing the same message whether the alias
+      // was restored or (correctly) skipped.
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        supersededByOther: 'narrator',
+      });
+      const store = makeSplitStore();
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const row = within(screen.getByTestId('orphaned-auto-reconciled')).getByText(/mayrin/).closest('li')!;
+      fireEvent.click(within(row).getByRole('button', { name: /not the same character/i }));
+
+      const movedRow = await waitFor(() =>
+        within(screen.getByTestId('orphaned-needs-decision'))
+          .getByText(/mayrin/)
+          .closest('li'),
+      );
+      const undoButton = within(movedRow!).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(store.getState().notifications.toasts.length).toBeGreaterThanOrEqual(2);
+      });
+      // Toast [0] is the initial reject's own toast; the Undo toast is the
+      // last one pushed.
+      const toasts = store.getState().notifications.toasts;
+      const undoToast = toasts[toasts.length - 1];
+      // Names the LIVE character's display name ("Narrator"), not the raw id.
+      expect(undoToast).toMatchObject({
+        kind: 'info',
+        message: expect.stringMatching(/Narrator/),
+      });
+      expect(undoToast.message).not.toMatch(/^Undid "not the same character" for "mayrin"\.$/);
+    });
+
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);

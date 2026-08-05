@@ -410,11 +410,22 @@ export function CastView({
           otherCharacterId: orphanedId,
         }),
       );
+      /* C1 (fix round 1) shipped the server half of supersededByOther;
+         review round 2's "Also fix" is this half — the toast fired the same
+         unqualified "Undid…" message whether the forgotten alias was
+         actually restored or (C1) correctly skipped because a newer,
+         unrelated re-analysis has since recorded a different one. Name
+         that alias's target so the user understands why the row didn't
+         visibly change, instead of Undo reading as a silent no-op. */
+      const message = res.supersededByOther
+        ? `Undid "not the same character" for "${orphanedId}" — its previous alias now points to ` +
+          `"${characters.find((c) => c.id === res.supersededByOther)?.name ?? res.supersededByOther}", so that was left as-is.`
+        : `Undid "not the same character" for "${orphanedId}".`;
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-undo-${orphanedId}-${targetCharacterId}`,
           kind: 'info',
-          message: `Undid "not the same character" for "${orphanedId}".`,
+          message,
         }),
       );
     } catch (err) {
