@@ -88,6 +88,39 @@ function makeFakeResolver(idKeyFn) {
   };
 }
 
+/** A SEPARATE, history-aware resolver builder — used ONLY by the two I-A
+ *  regression tests below (independent review, 2026-08-05). `makeFakeResolver`
+ *  above deliberately ignores its `history` argument (see its own doc
+ *  comment: "exact-id lookup and the normalised-id tier" only), which means
+ *  it cannot demonstrate `planBookRepairs`'s fail-closed `historyResolver`
+ *  default on its own — with it, an omitted resolver and a REAL history-
+ *  aware one are indistinguishable in every OTHER test in this file, simply
+ *  because `deps.buildCastResolver` here never reads `history` regardless.
+ *  This one does (`'exact'`, `'history'`, `'normalised-id'` — the three
+ *  tiers those two tests need; `'normalised-history'` omitted, unneeded by
+ *  either probe). Not a general-purpose fourth resolver stand-in: scoped
+ *  narrowly to prove the default itself, not to replace `makeFakeResolver`
+ *  anywhere else. */
+function makeHistoryAwareFakeResolver(idKeyFn) {
+  return function buildHistoryAwareFakeResolver(cast, history = {}) {
+    const byId = new Map(cast.map((c) => [c.id, c]));
+    const byNormId = new Map(cast.map((c) => [idKeyFn(c.id), c]));
+    const supersededBy = history.supersededBy ?? {};
+    return {
+      resolve(id) {
+        if (byId.has(id)) return { character: byId.get(id), via: 'exact' };
+        if (id in supersededBy) {
+          const target = byId.get(supersededBy[id]);
+          if (target) return { character: target, viaAlias: id, via: 'history' };
+        }
+        const normId = byNormId.get(idKeyFn(id));
+        if (normId) return { character: normId, viaAlias: id, via: 'normalised-id' };
+        return undefined;
+      },
+    };
+  };
+}
+
 describe('parseArgs', () => {
   test('no args -> apply false', () => {
     assert.deepEqual(parseArgs([]), { apply: false });
@@ -469,6 +502,46 @@ describe('planBookRepairs', () => {
     assert.equal(plan.skipped[0].reason, 'already-recorded');
   });
 
+  test('I-A (independent review, 2026-08-05): omitting historyResolver is fail-CLOSED — the default catches a Tier A / live-id-shape conflict, not "nothing resolves"', () => {
+    // The exact regression probe from the finding: live `the_torment` +
+    // `timkin`, orphan `the-torment` (67 real segments), cache names it
+    // "Timkin". `historyResolver` is deliberately OMITTED from `input`.
+    // Before I-A, the default was `{ resolve: () => undefined }` — this
+    // would have silently auto-recorded a 67-segment durable repoint onto
+    // "timkin". A fully history-aware `deps.buildCastResolver` is injected
+    // for THIS test only (`makeHistoryAwareFakeResolver` — the shared
+    // `makeFakeResolver`/`deps` ignore `history` entirely, so they can't
+    // demonstrate this on their own).
+    const localLiveCast = [...liveCast, { id: 'the_torment', name: 'The Torment' }];
+    const localDeps = { ...deps, buildCastResolver: makeHistoryAwareFakeResolver(idKey) };
+    const cacheNameIndex = buildNameIndex([{ id: 'the-torment', name: 'Timkin' }], lc);
+    const orphans = new Map([['the-torment', renderedOrphan(67)]]);
+    const plan = planBookRepairs(
+      { liveCast: localLiveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true },
+      localDeps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'the-torment');
+  });
+
+  test('I-A: omitting historyResolver with a POPULATED history still catches an already-recorded id — fail-closed, not "nothing resolves"', () => {
+    // Second probe from the finding: omit the resolver, but populate
+    // `history.supersededBy` — the already-recorded skip must not go
+    // silently dead. Same history-aware `deps.buildCastResolver` injected
+    // for the same reason as the test above.
+    const localDeps = { ...deps, buildCastResolver: makeHistoryAwareFakeResolver(idKey) };
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const plan = planBookRepairs(
+      { liveCast, history: { supersededBy: { mayrin: 'mairin' } }, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map() },
+      localDeps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].reason, 'already-recorded');
+  });
+
   test('an id whose NORMALISED form matches a supersededBy key — not an exact key — is ALSO skipped as already-recorded, not auto-recorded', () => {
     // #2107's widened fix (only 'exact' skips the orphan bucket) means an id
     // resolving via the resolver's 'normalised-history' tier now reaches
@@ -739,17 +812,27 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /zero rendered segments/);
   });
 
-  test("I2 / #2107 widened fix: a name match on an id carrying real orphaned segments via the resolver's normalised-id tier now auto-records like any other orphan — the write-set change", () => {
-    // Register row A32's real shape: 'The_Torment' resolves live through
-    // the resolver's 'normalised-id' tier, but #2107's widened fix (owner
-    // decision, 2026-08-05) means collectSegmentOrphans now lists it in
-    // `orphans` with its real rendered segment count (9) instead of
-    // silently reconciling it away. This id now reaches the SAME guard
-    // chain a genuine miss would: a Tier A name match, real segments (guard
-    // 3 passes), no live id-shape conflict (guard 5 passes — the id has no
-    // pre-existing supersededBy entry here), consistent snapshots (guard 4
-    // passes, none recorded here), cache available — so it reaches
-    // `autoRecord`, not `reportOnly`.
+  test('a name match on a genuine-miss id carrying real orphaned segments reaches autoRecord — the #2107-widened write-set path', () => {
+    // CORRECTED (M-1, independent review, 2026-08-05): this test's title
+    // and comment used to claim "'The_Torment' resolves live through the
+    // resolver's 'normalised-id' tier" and "guard 5 passes — the id has no
+    // pre-existing supersededBy entry". Both were false for this fixture:
+    // `liveCast` (shared across this describe block) is
+    // `[narrator, mairin, timkin]` — there is no `the_torment` in it, so
+    // `The_Torment` is a GENUINE MISS (no id-shape match at all), not a
+    // normalised-id match, and guard 5 never even considers it (it only
+    // acts on a LIVE `'normalised-id'` resolution, which doesn't exist
+    // here). What this test actually pins: even a plain genuine-miss id now
+    // carries its real rendered segment count in `orphans` (#2107's
+    // widening — before it, `collectSegmentOrphans` only ever added an id
+    // to `orphans` on a genuine miss anyway, so this specific case was
+    // already correct pre-widening too) and a Tier A name match against it
+    // reaches `autoRecord` normally. The genuinely NEW write-set case this
+    // wave's `'normalised-id'` widening opens — an id that resolves LIVE
+    // and still reaches Tier A/B matching — is pinned by the Tier B control
+    // below ("Important 2: a Tier B match can never trip the conflict
+    // guard"), whose `localLiveCast` actually includes the matching live
+    // id.
     //
     // CORRECTED (Minor 5, independent review, 2026-08-05): this test hand-
     // injects `orphans` directly — it does NOT call

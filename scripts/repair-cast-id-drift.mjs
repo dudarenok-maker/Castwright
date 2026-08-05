@@ -491,11 +491,12 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  function's OWN logic (ambiguity handling, tier precedence, the five
  *  guards) is verifiable with no build step — see the module doc comment's
  *  Tests section. `input.historyResolver` (built once per book, in
- *  `main()`, with the SAME real history the collector already threaded
- *  into its own resolver — see the `historyResolver` local's own doc
- *  comment just below) drives guards `already-recorded` and 5; omit it in
- *  a test that doesn't exercise either (defaults to "nothing resolves via
- *  history, nothing conflicts"). `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
+ *  `collectSegmentOrphans`, and threaded through `main()` — see the
+ *  `historyResolver` local's own doc comment just below) drives guards
+ *  `already-recorded` and 5; a test may omit it, but the default is
+ *  fail-closed (I-A, independent review, 2026-08-05) — it builds the REAL
+ *  resolver from `liveCast`/`history`, not "nothing resolves via history,
+ *  nothing conflicts". `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
  *  two fold-bucket ids (imported for real in `main()`), checked on BOTH
  *  the source id (guard 1) and the matched target (a match is never
  *  auto-recorded ONTO a reserved id either — that would misattribute a
@@ -546,13 +547,34 @@ export function planBookRepairs(input, deps) {
   // exactly the under-reporting the #2107 widening exists to prevent.
   // `historyResolver` — built with the REAL `history` (unlike
   // `idOnlyResolver` above, which must stay empty-history) — is threaded in
-  // from `main()`, which already built one in `collectSegmentOrphans` for
-  // this exact book; NOT reconstructed here, so there is only ever one real
-  // resolver instance per book, never two that could drift apart. Tests
-  // that don't exercise the already-recorded/conflict guards may omit it —
-  // the default below means "nothing resolves via history, nothing already
-  // conflicts", i.e. exactly today's behaviour for those tests.
-  const historyResolver = input.historyResolver ?? { resolve: () => undefined };
+  // from `main()`, which receives it from `collectSegmentOrphans` (which
+  // already built one for this exact book); NOT reconstructed in the
+  // production path, so there is only ever one real resolver instance per
+  // book, never two that could drift apart.
+  //
+  // I-A (independent review, 2026-08-05, on the Important 1 fix above):
+  // this used to default a MISSING resolver to `{ resolve: () => undefined
+  // }` — fail-OPEN, the tenth instance of this wave's shape, one level up
+  // from the one Important 1 just fixed. `undefined` from `.resolve()`
+  // means both "asked, nothing resolves" AND "never asked" — and since this
+  // function no longer reads `history.supersededBy` directly at all (that
+  // was the whole point of Important 1), a caller that omits
+  // `historyResolver` while still passing a fully populated `history` got
+  // ZERO protection from either the already-recorded skip or guard 5, with
+  // no error. Measured: omitting the resolver on the guard-5 probe fixture
+  // (live `the_torment` + `timkin`, orphan `the-torment` 67 real segments,
+  // cache names it "Timkin") auto-recorded a 67-segment durable repoint
+  // onto the wrong character; with `history.supersededBy` also populated,
+  // the already-recorded skip went silently dead too. Exactly the defect
+  // `cacheAvailable`'s doc comment above already describes for a DIFFERENT
+  // guard ("an omitted flag reads as 'unknown, refuse', not 'confirmed
+  // available'") — this one just had the opposite posture. Fixed the same
+  // way: default to building the REAL resolver from the args this function
+  // already receives (`liveCast`, `history`, `deps.buildCastResolver`) —
+  // the identical construction `collectSegmentOrphans` uses — so an omitted
+  // `historyResolver` is a (redundant) optimisation for the production
+  // path, never a silent correctness hole for any other caller.
+  const historyResolver = input.historyResolver ?? buildCastResolver(liveCast, history);
 
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
@@ -1721,7 +1743,12 @@ async function main() {
   console.log(`auto-recordable aliases: ${totalAuto} (${totalAutoSegments} segment(s))${apply ? '' : ' — dry run, nothing written'}`);
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);
-  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s)`);
+  // M-3 (independent review, 2026-08-05): the row count alone forces an
+  // operator to sum every row's `segments` by hand to get the figure the
+  // register/run-sheet/live-view all quote as "the arithmetic check that
+  // the set is complete" (e.g. 188) — print it here instead.
+  const totalRerenderSegments = allRerenderRows.reduce((sum, row) => sum + row.segments, 0);
+  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s) / ${totalRerenderSegments} segment(s)`);
   // Owner-decided policy, review round 2 (2026-08-05): these are now TWO
   // distinct numbers, only one of which gates --apply — printed together,
   // explicitly labelled, so neither reads as the other.
