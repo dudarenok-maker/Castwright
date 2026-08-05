@@ -462,6 +462,31 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
 
 Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
+**#2107 fix (`fix/scripts-2107-rerender-rows`):** `collectSegmentOrphans`'s
+resolver reads `cast-id-history.json` off disk, and any id resolving via the
+`'history'`/`'normalised-history'` tiers used to hit the same blanket
+`continue` as a genuine `'exact'` live match — but both of those tiers depend
+on `supersededBy`, which can gain an entry (as it just had, from this very
+`--apply` run) strictly after the segment's audio was rendered. Fixed by
+routing those two tiers into `orphans` instead. Pinned by a cross-run
+regression test in `scripts/tests/repair-cast-id-drift.test.mjs`
+(`buildOrphansFromSegments` describe block) that reproduces this exact
+before/after-alias sequence over a synthetic fixture. **Not yet re-confirmed
+against the real workspace** — see step 9a below, still owed.
+
+9a. Re-run the script in dry-run mode again, now on top of the #2107 fix
+    (`cd server && npm run build` off the fixed branch first).
+
+Expected: the re-render list reads **17 rows / 120 segments** again — the
+same figure as the original §8.1 measurement, no longer regressed to 13/93 —
+while auto-recordable aliases, skipped, and report-only stay exactly as
+measured in step 9 above (the fix only changes which ids land in the
+re-render list, nothing else).
+
+Result: **NOT RUN as of the #2107 fix landing** — needs a rebuilt
+`server/dist` off the fixed branch and the real workspace; still owed (see
+§8.9).
+
 ### 8.7 Confirm the fix reaches actual audio
 
 10. Re-render *Заказ Коалфолла* chapter 2 (the chapter carrying the
@@ -493,7 +518,8 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
 - [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply`), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
+- [ ] Step 9a (post-#2107-fix dry run confirms re-render list back to 17/120) — still owed (needs a rebuild off the fixed branch + the real workspace)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed**, `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation via step 9a still owed), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

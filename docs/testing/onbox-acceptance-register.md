@@ -1384,8 +1384,9 @@ to sweep the **whole** 20-book workspace at once.
 > **PARTIALLY DISCHARGED — `--apply` was run 2026-08-05** (Claude Code session on
 > the dev box, dudarenok-maker), against `main` @ `f3d6ae0f`. The write path is
 > now proven; **§8.7 (does the fix reach actual audio — re-render *Заказ
-> Коалфолла* ch2 and listen) and §8.8 (Cast-screen banner cross-check) are still
-> owed**, so this row stays open for those two.
+> Коалфолла* ch2 and listen), §8.8 (Cast-screen banner cross-check), and a fresh
+> post-#2107-fix dry run confirming the re-render list reads 17/120 again (not
+> 13/93) are still owed**, so this row stays open for those three.
 >
 > **What was observed.** The liveness rail refused first, against a *real*
 > `npm run dev` — which bound **LAN HTTPS 8443 only, never 8080**, so it was the
@@ -1400,11 +1401,23 @@ to sweep the **whole** 20-book workspace at once.
 > durable.
 >
 > **Two defects filed from the run, neither blocking the write itself:**
-> [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) — the
+> [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) — **FIXED**
+> (`scripts/repair-cast-id-drift.mjs`, `fix/scripts-2107-rerender-rows`) — the
 > re-render list dropped **17 rows / 120 segments → 13 / 93** afterwards, losing
 > exactly the 27 segments the new aliases cover, whose audio is still
 > narrator-substituted on disk (the list is documented as unconditional on
-> auto-record status, and `120` is this row's own stated damage figure).
+> auto-record status, and `120` is this row's own stated damage figure). Root
+> cause: `collectSegmentOrphans` built its resolver WITH the on-disk
+> `cast-id-history.json`, and any id that resolved via the resolver's
+> `'history'`/`'normalised-history'` tiers hit a blanket `continue` — treated
+> identically to a genuine live `'exact'` match, even though both of those
+> tiers depend on `supersededBy`, a table that can gain an entry (this
+> script's own prior `--apply` run, here) strictly AFTER the segment's audio
+> was frozen to disk. Fixed by re-bucketing those two tiers into `orphans`
+> instead of `autoReconciled`/silent-continue — `120` remains the damage
+> figure; **a fresh dry run against the real workspace confirming the
+> re-render list reads 17/120 again (not 13/93) is still owed** (see the run
+> sheet's §8.9 Outcome checklist).
 > [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) — a wrong
 > `WORKSPACE_DIR` scans **0** books and still prints `books missing
 > analysis-cache evidence: 0` and exits **0** from `--apply`; the script does not
