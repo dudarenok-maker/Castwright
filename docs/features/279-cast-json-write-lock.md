@@ -234,24 +234,43 @@ history on open tickets rather than being silently dropped:
   the same book's cast through this route still resolve last-write-wins —
   closing that needs an `If-Match`-style token on the wire, out of scope
   here.
-- **`applyReparse`'s two remaining rule-2 gaps** (`Refs #2099`), surfaced by
-  this PR's own review of the delete it locked. Both are pre-existing and
-  both are design calls rather than mechanical wraps, which is why the sweep
-  stopped at the `rm`. (a) The carryover snapshot is read *outside* the lock
-  and persisted before the delete, so a writer landing in that window is
-  captured by neither side — the snapshot predates it, and cast.json is
-  deleted after it — and its voice fields are lost with no trace. Closing it
-  means widening the lock across `writeStateJsonAtomic` plus the carryover
-  write, an ordering decision. (b) The `existsSync` guard is evaluated
-  outside the lock, so the *decision whether to delete at all* comes from an
-  unlocked read: if cast.json is absent at guard time but a concurrent
-  writer creates it, reparse completes without deleting the stale cast it
-  exists to discard. The simplest fix is dropping the guard — `rm` is
-  already `{ force: true }` — but three sibling arms of the same
-  `Promise.all` share the pattern, so it is a consistency judgement. Gap (a)
-  is the same read-and-write-in-different-scopes shape as #2015 yet was
-  absent from the design spec's §7 check-then-act table, which is part of
-  why it went unnoticed.
+- **`applyReparse`'s two rule-2 gaps, both closed (#2099).** (a) The
+  carryover snapshot's `readJson(cast.json)`, the derived `reuseRows`, the
+  carryover write/rm and the cast.json delete now all run inside one
+  `withCastLock` hold, as one arm of the existing `Promise.all` — not a
+  sequential step before it (a sequential shape was drafted and rejected:
+  today all four `Promise.all` arms start in the same tick, and sequencing
+  the locked block first means a `rm` rejection there, e.g. EPERM/EBUSY,
+  skips the other three — which have already started — while `state.json`
+  was already rewritten with the new chapter slugs and
+  `castConfirmed:false`, a strictly worse inconsistent state than before).
+  **Correction to this doc's own earlier claim**, which said closing (a)
+  "means widening the lock across `writeStateJsonAtomic` plus the carryover
+  write" — that was over-broad. `state.json` is a different file with no
+  cast writer, written before the cast read; only the carryover write (and
+  the read that feeds it) needed to move inside the lock. (b) The
+  `existsSync` guard around the delete is gone — `rm(…, { force: true })` is
+  already a no-op on a missing file, so the guard only ever saved a lock
+  acquisition while sourcing the *decision whether to delete at all* from a
+  read taken outside the lock. The three sibling arms (revisions, audio,
+  analysis-cache) keep their own `existsSync` guards: they gate an
+  already-idempotent `rm` and acquire no lock, so no decision of theirs
+  crosses a lock boundary — only the cast arm's guard was gap B.
+
+  **Honest residuals, not closed by #2099:**
+  - The carryover has a **third** toucher this widened lock does not reach:
+    `analysis.ts:186`'s `readPriorCastForMerge` **reads** it unlocked, and
+    *prefers `cast.json` when present* over it. A concurrent analysis run can
+    still observe the intermediate read→carryover→delete state exactly as
+    before — the lock only serialises other **lock-taking writers** against
+    reparse, not this unlocked reader.
+  - Gap (b)'s *decision* is closed (the guard is gone), but its motivating
+    scenario is not: the racer the ticket names for it is `analysis.ts`'s
+    five still-unlocked merge-base writes (#2015). Those take no cast lock at
+    all, so removing the guard converts "cast.json is never deleted once one
+    of those writers has run" into "deleted unless the write lands after the
+    `rm`" — it serialises nothing against them. Closing that gap fully is
+    #2015's job, not #2099's.
 - **Cross-book residuals**, all carried on #2006: `cast-add-from-roster`
   reads the target book to decide a source-only write; `voice-override-linked`
   and `cast-series-patch` derive their whole write-list from a source book
