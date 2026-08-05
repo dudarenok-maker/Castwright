@@ -594,7 +594,10 @@ test('stepTouchedByDiff: server/package.json stays OUT of scope for lint (no JSO
 // installer scripts under scripts/, and anything else non-.py. Reverting the
 // globs line back to the three narrower globs reddens this test.
 test('stepTouchedByDiff: a non-.py file anywhere under server/tts-sidecar/ is in scope for test:sidecar', () => {
-  assert.equal(stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/README.md']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/README.md']),
+    true,
+  );
   assert.equal(
     stepTouchedByDiff(stepByName['test:sidecar'], [
       'server/tts-sidecar/scripts/install-qwen3.mjs',
