@@ -72,21 +72,22 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qa-report-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  // Resolve the mocked aggregate.js module FIRST, standalone — importing it
-  // concurrently alongside generation.js (which transitively imports it too)
-  // in the same Promise.all raced two "first touch" resolutions of the same
-  // to-be-mocked module and left generation.ts's binding pointing at a stale
-  // pre-mock reference. Awaiting it alone first guarantees the vi.mock
-  // factory has fully settled before anything else touches the module.
+  // #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+  // imports races the async vi.mock factories above (module-under-test can
+  // receive the real binding instead of the mock). Measured latent for this
+  // file — 0 failures in 14 runs (#2083's own survey) — not the live
+  // ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+  // fixed under #2046.
+  // aggregate.js goes first, standalone, since generation.js transitively
+  // imports it too and both would otherwise race to "first touch" the same
+  // to-be-mocked module.
   const aggregateModule = await import('../audio/render-integrity/aggregate.js');
   scoreBook = aggregateModule.scoreBook;
 
-  const [{ qaReportRouter }, { makeBookId }, generationModule, configMod] = await Promise.all([
-    import('./qa-report.js'),
-    import('../workspace/paths.js'),
-    import('./generation.js'),
-    import('../config/resolver.js'),
-  ]);
+  const { qaReportRouter } = await import('./qa-report.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const generationModule = await import('./generation.js');
+  const configMod = await import('../config/resolver.js');
   __registerFakeJobForTest = generationModule.__registerFakeJobForTest;
   __awaitScoringSettled = generationModule.__awaitScoringSettled;
   configModule = configMod;
