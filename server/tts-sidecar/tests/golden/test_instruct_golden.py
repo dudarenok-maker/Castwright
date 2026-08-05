@@ -55,6 +55,7 @@ from tests.golden.compare import (  # noqa: E402
     LOUDNESS_DBFS_EPSILON,
     bless_guard_thresholds,
     describe_measurement_move,
+    should_rewrite_reference,
 )
 
 pytestmark = pytest.mark.golden
@@ -98,6 +99,16 @@ def _qwen_weights_present() -> bool:
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _quantise_rtf_max(raw: float) -> float:
+    """Round `raw` UP to the nearest 0.05 step, never down (#2062 / D3) -- a
+    tolerance ceiling derived from a stochastic `rtf` measurement must never
+    come out tighter than the value it was derived from. Floating-point
+    ceil-division can leave residue (e.g. `math.ceil(20.0) * 0.05` ==
+    `1.0000000000000002`), so the result is rounded to 2dp to match this
+    module's existing tolerance precision."""
+    return round(math.ceil(raw / 0.05) * 0.05, 2)
 
 
 def _pcm_to_float(pcm: bytes) -> np.ndarray:
@@ -249,73 +260,143 @@ def _bless(measured: dict) -> None:
     that answers a DIFFERENT question ("is there recorded data to assert
     against", not "is a re-bless of a specific field safe") with no
     corresponding circularity or blind spot, so it is deliberately left as
-    is rather than aligned to the same probe."""
+    is rather than aligned to the same probe.
+
+    **#2069 / D5, second half: this probe is STRICTLY WEAKER than its
+    predecessor for one shape.** A baseline with all four keys present but
+    explicitly `null` used to read `previously_blessed=True` under
+    `any(k in baseline for k in (...))` (presence, not truthiness) and
+    refuse; under `any(baseline.get(k) is not None for k in (...))` it now
+    reads `previously_blessed=False` and writes blind, with no flag. That
+    shape is byte-identical to the documented first-bless scaffold
+    (`instruct-baseline.json`'s own `description`: "Unblessed (entries
+    null) => the assert test SKIPs."), so the ambiguity between "genuinely
+    never blessed" and "was blessed, then every key got nulled out" is
+    real and this probe cannot resolve it -- the previous paragraph's
+    framing ("no longer refusing an honestly-scaffolded, never-blessed
+    baseline") is true but incomplete: it does not name the shape where the
+    relaxation costs something. `metadata.blessed_at` (present once a real
+    bless has run, absent from a fresh scaffold) is an available
+    disambiguator this probe does not use -- left as a comment rather than
+    wired in, because resolving the ambiguity properly is a different,
+    larger change than documenting it (#2069's own "why filed rather than
+    fixed").
+
+    **#2060 / D1 (root cause of #2035): the flag is now SPLIT, not shared.**
+    #2035 originally reused a single `GOLDEN_REBLESS_THRESHOLDS` for all
+    three fields on the theory that they are "the same kind of judgement
+    call". That theory is what re-opened #1995 one layer down: an operator
+    setting the flag to force through a legitimate `identity` re-bless
+    silently re-authorised the `rtf_max` ceiling too, since one flag armed
+    both. `GOLDEN_REBLESS_THRESHOLDS` now arms `tolerances` ONLY (a
+    quantised ceiling -- see #2062 / D3 above `computed_tolerances`);
+    `GOLDEN_REBLESS_MEASUREMENTS` (new) arms `identity`/`loudness_dbfs` (raw
+    stochastic measurements, a drift-window centre) -- different failure
+    modes, different blast radius, so a legitimate re-bless of one no
+    longer silently reopens the other.
+
+    **#2060 / D4: a within-epsilon move no longer rewrites the reference.**
+    Each `guard_spec` below is followed by `should_rewrite_reference`, which
+    decides what gets WRITTEN independently of what the guard decided to
+    ACCEPT -- `bless_guard_thresholds` returning `None` only means "this
+    write is not refused", not "this write happens verbatim". A first bless
+    or a flag-forced move always writes the fresh `computed` value; a
+    within-epsilon move is noise and keeps `existing` untouched, so N
+    consecutive within-epsilon blesses cannot walk the recorded centre
+    across its own drift window the way #2060 reproduced (ten successive
+    0.39 dB moves, each individually "noise", compounding to 3.90 dB with
+    no refusal)."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
         # Calibrated ceilings with headroom over the on-box measurement.
         "identity_cosine_max": round(max(0.15, id_max + 0.10), 3),
         "loudness_dbfs_abs": 4.0,
-        "rtf_max": round(max(1.0, measured["rtf"] * 1.5), 2),
+        # #2062 / D3: quantised to a 0.05 step, rounded UP -- never down, so
+        # the ceiling can never come out tighter than the value it was
+        # derived from. Below the ~0.667 rtf cliff this stays pinned at the
+        # 1.0 floor exactly as before (verified: the committed baseline's
+        # rtf.batched=0.5089 -> max(1.0, 0.76335)=1.0 -> ceil-to-0.05 of 1.0
+        # is 1.0, so this needs no re-bless). Above the cliff it absorbs
+        # sub-0.05 rtf noise that used to move rtf_max on every honest
+        # re-bless under the exact-equality tolerances guard -- see
+        # `bless_guard_thresholds`' docstring for the cliff itself.
+        "rtf_max": _quantise_rtf_max(max(1.0, measured["rtf"] * 1.5)),
     }
     computed_identity = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
     computed_loudness = measured["loudness_dbfs"]
 
+    # #2060 root cause / D1: two flags, not one -- see this function's
+    # docstring above.
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
+    allow_rebless_measurements = os.environ.get("GOLDEN_REBLESS_MEASUREMENTS") in ("1", "true", "TRUE")
     previously_blessed = any(
         baseline.get(k) is not None for k in ("rtf", "identity", "loudness_dbfs", "tolerances")
     )
     # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
     # equality is correct there, see this function's own docstring above.
     guard_specs = (
-        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0),
-        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON),
-        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON),
+        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0,
+         allow_rebless_thresholds, "GOLDEN_REBLESS_THRESHOLDS"),
+        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON,
+         allow_rebless_measurements, "GOLDEN_REBLESS_MEASUREMENTS"),
+        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON,
+         allow_rebless_measurements, "GOLDEN_REBLESS_MEASUREMENTS"),
     )
-    for label, existing_val, computed_val, epsilon in guard_specs:
+    values_to_write: dict = {}
+    for label, existing_val, computed_val, epsilon, allow_flag, flag_name in guard_specs:
         guard_reason = bless_guard_thresholds(
             existing_val,
             computed_val,
             previously_blessed=previously_blessed,
-            allow_rebless_thresholds=allow_rebless_thresholds,
+            allow_rebless_thresholds=allow_flag,
             label=label,
             epsilon=epsilon,
+            flag_name=flag_name,
         )
         if guard_reason is not None:
             raise AssertionError(guard_reason)
-        if epsilon > 0:
-            echo = describe_measurement_move(existing_val, computed_val, epsilon=epsilon)
+        # #2069 / D5: the forced-absent-key write (existing is None AND
+        # previously_blessed) is the highest-stakes case the guard handles
+        # and must speak even for `tolerances` (epsilon=0.0), which the old
+        # `if epsilon > 0` gate would have suppressed entirely.
+        if epsilon > 0 or existing_val is None:
+            echo = describe_measurement_move(
+                existing_val,
+                computed_val,
+                epsilon=epsilon,
+                flag_name=flag_name,
+                previously_blessed=previously_blessed,
+            )
             if echo is not None:
-                print(f"[golden-bless] {label} moved {echo}")
+                if existing_val is None:
+                    # No "before" to diff against -- a distinct shape from
+                    # both a noise line and a normal forced-move line.
+                    print(f"[golden-bless] {label}: {echo}")
+                else:
+                    print(f"[golden-bless] {label} moved {echo}")
+        # #2060 / D4: what gets WRITTEN is decided independently of what the
+        # guard just ACCEPTED -- a within-epsilon move keeps `existing`.
+        values_to_write[label] = (
+            computed_val
+            if should_rewrite_reference(existing_val, computed_val, epsilon=epsilon)
+            else existing_val
+        )
 
-    baseline["tolerances"] = computed_tolerances
-    baseline["identity"] = computed_identity
-    baseline["loudness_dbfs"] = computed_loudness
+    baseline["tolerances"] = values_to_write["tolerances"]
+    baseline["identity"] = values_to_write["identity"]
+    baseline["loudness_dbfs"] = values_to_write["loudness_dbfs"]
     baseline["rtf"] = {"batched": measured["rtf"]}
     # blessed_at left for the committer to stamp — the harness has no clock.
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
 
 
-def test_live_instruct_golden():
-    if not _qwen_weights_present():
-        pytest.skip("Qwen weights / CUDA absent — run on a box with the 1.7B-Base weights.")
-
-    with tempfile.TemporaryDirectory(prefix="instruct_golden_") as td:
-        engine = _make_engine(Path(td) / "voices")
-        try:
-            measured = _measure(engine)
-        finally:
-            # Leave the GPU clean for the next golden (mirrors test_qwen3's
-            # explicit unload — the idle watchdog doesn't run under pytest).
-            try:
-                engine.unload_base17()
-            except Exception:
-                pass
-
-    if os.environ.get("GOLDEN_BLESS") in ("1", "true", "TRUE"):
-        _bless(measured)
-        pytest.skip("GOLDEN_BLESS set — recorded instruct-baseline.json (not asserting this run).")
-
+def _assert_against_baseline(measured: dict) -> None:
+    """Read the committed baseline and assert `measured` stays within its
+    tolerances, or SKIP if there's nothing to assert against yet. Split out
+    of `test_live_instruct_golden` (#2061 / D2) so the unblessed-SKIP guard
+    is drivable as a plain function call with no GPU -- the same technique
+    `test_instruct_bless_gating.py` uses to drive `_bless()` directly."""
     baseline = _load_json(BASELINE_PATH)
     # #2045 F5: this reads `identity` specifically, NOT `_bless()`'s
     # `any(...)` probe above -- deliberately, not an oversight. `_bless()`'s
@@ -335,7 +416,17 @@ def test_live_instruct_golden():
             "npm run test:golden-audio -- --bless --sidecar-only"
         )
 
-    tol = baseline["tolerances"]
+    # #2061 / D2: `identity` present but `tolerances` absent is the same
+    # hand-resolved-merge-conflict shape every other guarded field in this
+    # module was hardened against -- `.get()`, not `[...]`, so this takes
+    # the SAME documented SKIP path above instead of raising KeyError.
+    tol = baseline.get("tolerances")
+    if tol is None:
+        pytest.skip(
+            "instruct-baseline.json is unblessed. Bless on a GPU box: "
+            "npm run test:golden-audio -- --bless --sidecar-only"
+        )
+
     failures: list[str] = []
 
     # --- Identity stability across instructs ---------------------------------
@@ -366,3 +457,26 @@ def test_live_instruct_golden():
         failures.append(f"rtf: batched {measured['rtf']:.3f} > ceiling {rtf_max} (throughput regressed)")
 
     assert not failures, "Live-instruct golden mismatches:\n  " + "\n  ".join(failures)
+
+
+def test_live_instruct_golden():
+    if not _qwen_weights_present():
+        pytest.skip("Qwen weights / CUDA absent — run on a box with the 1.7B-Base weights.")
+
+    with tempfile.TemporaryDirectory(prefix="instruct_golden_") as td:
+        engine = _make_engine(Path(td) / "voices")
+        try:
+            measured = _measure(engine)
+        finally:
+            # Leave the GPU clean for the next golden (mirrors test_qwen3's
+            # explicit unload — the idle watchdog doesn't run under pytest).
+            try:
+                engine.unload_base17()
+            except Exception:
+                pass
+
+    if os.environ.get("GOLDEN_BLESS") in ("1", "true", "TRUE"):
+        _bless(measured)
+        pytest.skip("GOLDEN_BLESS set — recorded instruct-baseline.json (not asserting this run).")
+
+    _assert_against_baseline(measured)

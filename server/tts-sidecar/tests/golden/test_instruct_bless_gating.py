@@ -106,17 +106,18 @@ def _measured(rtf: float) -> dict:
 def test_bless_writes_tolerances_on_a_never_before_blessed_baseline(monkeypatch, tmp_path) -> None:
     """First bless -- GENUINELY never blessed (no `identity`/`loudness_dbfs`/
     `rtf` recorded yet, so no committed tolerances to protect), so no flag
-    is needed even though `rtf_max` (1.31) differs from nothing."""
+    is needed even though `rtf_max` differs from nothing."""
     path = _write_baseline(tmp_path, blessed=False, tolerances=None)
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
     monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
 
-    # rtf 0.873 * 1.5 = 1.3095 -> round(., 2) = 1.31, matching the #1995
-    # issue's observed regression (1.0 -> 1.31) exactly.
+    # rtf 0.873 * 1.5 = 1.3095, matching the #1995 issue's observed
+    # regression (1.0 -> 1.31) before quantisation. #2062 / D3: quantised UP
+    # to the nearest 0.05 step -> 1.35, never the pre-quantisation 1.31.
     instruct._bless(_measured(rtf=0.873))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["tolerances"]["rtf_max"] == 1.31
+    assert written["tolerances"]["rtf_max"] == 1.35
 
 
 def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_tolerances(
@@ -140,8 +141,13 @@ def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_tolerances(
 
 
 def test_bless_allows_a_previously_blessed_missing_tolerances_with_the_flag(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ) -> None:
+    """#2069 / D5: this is the highest-stakes case the guard handles -- a
+    whole `tolerances` block resurrected blind under the flag, with no prior
+    reference to diff against. It must speak, even though `tolerances` uses
+    epsilon=0.0 (the old `if epsilon > 0` gate would have suppressed this
+    echo entirely)."""
     path = _write_baseline(tmp_path, blessed=True, tolerances=None)
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
     monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
@@ -149,7 +155,11 @@ def test_bless_allows_a_previously_blessed_missing_tolerances_with_the_flag(
     instruct._bless(_measured(rtf=0.873))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["tolerances"]["rtf_max"] == 1.31
+    assert written["tolerances"]["rtf_max"] == 1.35
+    out = capsys.readouterr().out
+    assert "tolerances: FORCED, key was ABSENT" in out, (
+        f"expected the forced-absent-key write to speak, got: {out!r}"
+    )
 
 
 def test_bless_refuses_and_leaves_the_file_untouched_when_rtf_max_would_move(
@@ -178,7 +188,7 @@ def test_bless_allows_the_move_with_the_flag(monkeypatch, tmp_path) -> None:
     instruct._bless(_measured(rtf=0.873))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["tolerances"]["rtf_max"] == 1.31
+    assert written["tolerances"]["rtf_max"] == 1.35
 
 
 def test_bless_needs_no_flag_when_measurements_keep_tolerances_pinned(monkeypatch, tmp_path) -> None:
@@ -213,7 +223,10 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
     `IDENTITY_COSINE_EPSILON` (0.005), i.e. WINDOW-sized, not noise -- must
     refuse, same all-or-nothing shape as the `tolerances` guard, including
     that a refusal on `identity` must leave `tolerances`/`loudness_dbfs`/rtf
-    entirely unwritten too."""
+    entirely unwritten too. #2060 root cause / D1: `identity` is governed by
+    `GOLDEN_REBLESS_MEASUREMENTS`, NOT `GOLDEN_REBLESS_THRESHOLDS` -- the two
+    flags were split so a `tolerances`-only re-bless can never silently
+    re-authorise this move."""
     differing_identity = {
         "anchor": "neutral",
         "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
@@ -223,10 +236,10 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=differing_identity
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
     before = path.read_bytes()
 
-    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
         instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only identity differs
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
@@ -235,12 +248,14 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_identity_would_move(
 def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path, capsys) -> None:
     """#2045 F1 defect (independent review of the shipped fix): this is a
     WINDOW-sized move (0.05, well beyond `IDENTITY_COSINE_EPSILON`) that only
-    gets written because `GOLDEN_REBLESS_THRESHOLDS=1` forced the guard
-    through -- the shipped `describe_measurement_move` unconditionally
-    labelled every echoed move "within epsilon ... (noise)" regardless of
-    whether it actually was, so this exact scenario printed a large,
-    flag-forced re-centre as if it were routine noise, the one line meant to
-    make it loud. Must say BEYOND/FORCED, never "noise"."""
+    gets written because the flag forced the guard through -- the shipped
+    `describe_measurement_move` unconditionally labelled every echoed move
+    "within epsilon ... (noise)" regardless of whether it actually was, so
+    this exact scenario printed a large, flag-forced re-centre as if it were
+    routine noise, the one line meant to make it loud. Must say
+    BEYOND/FORCED, never "noise". #2060 root cause / D1: the forcing flag
+    and its echo both name `GOLDEN_REBLESS_MEASUREMENTS`, not the
+    `tolerances`-only `GOLDEN_REBLESS_THRESHOLDS`."""
     differing_identity = {
         "anchor": "neutral",
         "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
@@ -250,30 +265,39 @@ def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path, capsys)
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=differing_identity
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
 
     instruct._bless(_measured(rtf=0.5))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["identity"]["cosine"]["whisper"] == 0.01
+    assert written["identity"]["cosine"]["whisper"] == 0.01  # forced -- the fresh value IS written
     out = capsys.readouterr().out
     assert "identity" in out and "cosine.whisper" in out
-    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_THRESHOLDS" in out, (
+    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_MEASUREMENTS" in out, (
         f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
     )
     assert "(noise)" not in out
+    assert "GOLDEN_REBLESS_THRESHOLDS" not in out, "identity's echo must never name the wrong flag"
 
 
-def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_path, capsys) -> None:
+def test_bless_accepts_a_noise_sized_identity_move_without_rewriting_the_reference(
+    monkeypatch, tmp_path, capsys
+) -> None:
     """#2045 F1: an exact-equality guard on `identity` refuses on every
     HONEST re-bless -- `instruct-baseline.json`'s own `metadata.notes`
     records ~0.0014 run-to-run identity spread. A committed `whisper: 0.014`
     against this run's measured `0.01` is a 0.004 move -- below
     `IDENTITY_COSINE_EPSILON` (0.005, ~3.6x the observed 0.0014 noise floor)
-    and in the same order as the recorded noise -- so the write must PROCEED
-    with no flag needed, and the move must be echoed to stdout (#2035's
-    Acceptance: surfaced loudly enough that it cannot pass unnoticed) rather
-    than silently absorbed."""
+    and in the same order as the recorded noise -- so the bless must not
+    refuse, no flag needed, and the move must be echoed to stdout (#2035's
+    Acceptance: surfaced loudly enough that it cannot pass unnoticed).
+
+    #2060 / D4: unlike the pre-fix behaviour, the write does NOT rewrite the
+    reference with the fresh measurement -- a noise-sized move is noise, and
+    noise carries no information. `written["identity"]` must stay the
+    COMMITTED `0.014`, not the fresh `0.01`; this is what makes N consecutive
+    within-epsilon blesses structurally unable to walk the reference (#2060's
+    ten-successive-blesses repro), rather than merely bounded."""
     noisy_identity = {
         "anchor": "neutral",
         "cosine": {"whisper": 0.014, "sad": 0.005, "excited": 0.005, "angry": 0.007},
@@ -283,16 +307,22 @@ def test_bless_accepts_and_echoes_a_noise_sized_identity_move(monkeypatch, tmp_p
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=noisy_identity
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
 
     instruct._bless(_measured(rtf=0.5))  # no flag set, no raise -- must not refuse
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["identity"]["cosine"]["whisper"] == 0.01  # the write proceeded
+    assert written["identity"]["cosine"]["whisper"] == 0.014, (
+        "a noise-sized move must leave the committed reference UNCHANGED, not overwrite it "
+        "with the fresh measurement"
+    )
+    assert written["identity"] == noisy_identity
     out = capsys.readouterr().out
     assert "identity" in out and "cosine.whisper" in out, (
         f"expected the noise-sized identity move to be echoed to stdout, got: {out!r}"
     )
+    assert "noise -- reference unchanged" in out
+    assert "BEYOND" not in out and "FORCED" not in out
 
 
 def test_bless_refuses_an_identity_move_the_old_arbitrary_epsilon_would_have_masked(
@@ -320,10 +350,10 @@ def test_bless_refuses_an_identity_move_the_old_arbitrary_epsilon_would_have_mas
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=committed_identity
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
     before = path.read_bytes()
 
-    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
         instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only identity differs
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
@@ -336,63 +366,79 @@ def test_bless_refuses_and_leaves_the_file_untouched_when_loudness_dbfs_would_mo
     drift window `test_live_instruct_golden` measures a fresh run against --
     an assertion reference, not free data. A committed loudness figure that
     differs from this run's measurement by 1.0 dB -- beyond
-    `LOUDNESS_DBFS_EPSILON` (0.4), i.e. WINDOW-sized -- must refuse."""
+    `LOUDNESS_DBFS_EPSILON` (0.4), i.e. WINDOW-sized -- must refuse. #2060
+    root cause / D1: governed by `GOLDEN_REBLESS_MEASUREMENTS`, not
+    `GOLDEN_REBLESS_THRESHOLDS`."""
     differing_loudness = {"whisper": -29.0, "neutral": -20.0}  # measured has whisper: -30.0
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=differing_loudness
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
     before = path.read_bytes()
 
-    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
         instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only loudness_dbfs differs
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
 
 
-def test_bless_accepts_and_echoes_a_noise_sized_loudness_dbfs_move(monkeypatch, tmp_path, capsys) -> None:
+def test_bless_accepts_a_noise_sized_loudness_dbfs_move_without_rewriting_the_reference(
+    monkeypatch, tmp_path, capsys
+) -> None:
     """A committed `whisper: -30.1` against this run's measured `-30.0` is a
     0.1 dB move -- comfortably below `LOUDNESS_DBFS_EPSILON` (0.4), i.e.
-    noise -- so the write must proceed with no flag needed, and echo."""
+    noise -- so the bless must not refuse, no flag needed, and it must echo.
+    #2060 / D4: the write must NOT rewrite the reference with the fresh
+    measurement -- `written["loudness_dbfs"]["whisper"]` stays the committed
+    `-30.1`, not the fresh `-30.0`."""
     noisy_loudness = {"whisper": -30.1, "neutral": -20.0}
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=noisy_loudness
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
 
     instruct._bless(_measured(rtf=0.5))  # no flag set, no raise -- must not refuse
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["loudness_dbfs"]["whisper"] == -30.0  # the write proceeded
+    assert written["loudness_dbfs"]["whisper"] == -30.1, (
+        "a noise-sized move must leave the committed reference UNCHANGED, not overwrite it "
+        "with the fresh measurement"
+    )
+    assert written["loudness_dbfs"] == noisy_loudness
     out = capsys.readouterr().out
     assert "loudness_dbfs" in out and "whisper" in out, (
         f"expected the noise-sized loudness_dbfs move to be echoed to stdout, got: {out!r}"
     )
+    assert "noise -- reference unchanged" in out
+    assert "BEYOND" not in out and "FORCED" not in out
 
 
 def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path, capsys) -> None:
     """#2045 F1 defect (independent review of the shipped fix): a 1.0 dB
     move -- beyond `LOUDNESS_DBFS_EPSILON` (0.4) -- only written because the
-    flag forced it through. Must be echoed BEYOND/FORCED, never as noise."""
+    flag forced it through. Must be echoed BEYOND/FORCED, never as noise.
+    #2060 root cause / D1: `GOLDEN_REBLESS_MEASUREMENTS`, not
+    `GOLDEN_REBLESS_THRESHOLDS`."""
     differing_loudness = {"whisper": -29.0, "neutral": -20.0}
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), loudness_dbfs=differing_loudness
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
 
     instruct._bless(_measured(rtf=0.5))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["loudness_dbfs"]["whisper"] == -30.0
+    assert written["loudness_dbfs"]["whisper"] == -30.0  # forced -- the fresh value IS written
     out = capsys.readouterr().out
     assert "loudness_dbfs" in out and "whisper" in out
-    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_THRESHOLDS" in out, (
+    assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_MEASUREMENTS" in out, (
         f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
     )
     assert "(noise)" not in out
+    assert "GOLDEN_REBLESS_THRESHOLDS" not in out, "loudness_dbfs's echo must never name the wrong flag"
 
 
 # ── #2035 follow-up: the previously_blessed probe must not be `identity` ───
@@ -419,28 +465,34 @@ def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_identity(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_identity=True
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
     before = path.read_bytes()
 
-    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
         instruct._bless(_measured(rtf=0.5))  # rtf pinned -- only identity is missing
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
 
 
 def test_bless_allows_a_previously_blessed_missing_identity_with_the_flag(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ) -> None:
+    """#2069 / D5: the highest-stakes forced write (a whole guarded block
+    resurrected blind over a dropped key) must speak."""
     path = _write_baseline(
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_identity=True
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
 
     instruct._bless(_measured(rtf=0.5))
 
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["identity"]["cosine"]["whisper"] == 0.01
+    out = capsys.readouterr().out
+    assert "identity: FORCED, key was ABSENT" in out, (
+        f"expected the forced-absent-key write to speak, got: {out!r}"
+    )
 
 
 # ── #2045 F5: the `rtf`-only probe removed the CIRCULARITY but kept a ──────
@@ -469,10 +521,10 @@ def test_bless_refuses_when_a_previously_blessed_baseline_is_missing_both_rtf_an
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_rtf=True, omit_identity=True
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
     before = path.read_bytes()
 
-    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
         instruct._bless(_measured(rtf=0.5))  # rtf pinned so tolerances/loudness_dbfs stay quiet
 
     assert path.read_bytes() == before, "a refused bless must leave the baseline file untouched"
@@ -485,7 +537,7 @@ def test_bless_allows_a_previously_blessed_missing_both_rtf_and_identity_with_th
         tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), omit_rtf=True, omit_identity=True
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
-    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
 
     instruct._bless(_measured(rtf=0.5))
 
@@ -530,11 +582,219 @@ def test_bless_allows_a_first_bless_of_the_documented_all_null_scaffold(monkeypa
     )
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
     monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
 
     instruct._bless(_measured(rtf=0.873))
 
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert written["tolerances"]["rtf_max"] == 1.31
+    assert written["tolerances"]["rtf_max"] == 1.35  # #2062 / D3: quantised, see other tests
     assert written["identity"]["cosine"]["whisper"] == 0.01
     assert written["loudness_dbfs"]["whisper"] == -30.0
     assert written["rtf"]["batched"] == 0.873
+
+
+# ── #2060 root cause / D1: the flag is SPLIT, not shared -- setting one ────
+# must never silently authorise the other domain (the exact bug #2035
+# introduced by reusing a single GOLDEN_REBLESS_THRESHOLDS for all three
+# guarded fields).
+
+
+def test_bless_flag_permutations_each_domain_needs_its_own_flag(monkeypatch, tmp_path) -> None:
+    """#2035's original single `GOLDEN_REBLESS_THRESHOLDS` armed `tolerances`,
+    `identity`, AND `loudness_dbfs` together -- an operator setting the flag
+    to force through a legitimate `identity` re-bless silently re-authorised
+    an unrelated `rtf_max` ceiling move too. This fixture needs BOTH a
+    `tolerances` move (rtf 0.5 -> 0.873, pinned floor 1.0 -> quantised 1.35)
+    and a WINDOW-sized `identity` move (committed 0.06 vs measured 0.01) to
+    exercise all four permutations of the two now-separate flags."""
+    differing_identity = {
+        "anchor": "neutral",
+        "cosine": {"whisper": 0.06, "sad": 0.005, "excited": 0.005, "angry": 0.007},
+        "max": 0.06,
+    }
+    path = _write_baseline(
+        tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES), identity=differing_identity
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    before = path.read_bytes()
+
+    # 1. Neither flag set -- refuses. `tolerances` is checked first in
+    # `_bless()`'s guard order, so the refusal names GOLDEN_REBLESS_THRESHOLDS.
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+        instruct._bless(_measured(rtf=0.873))
+    assert path.read_bytes() == before
+
+    # 2. GOLDEN_REBLESS_THRESHOLDS alone -- forces `tolerances` through, but
+    # `identity` is NOT armed by it -- refuses, naming the OTHER flag. Proves
+    # the split: pre-#2060 this single flag would have silently forced BOTH.
+    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_MEASUREMENTS"):
+        instruct._bless(_measured(rtf=0.873))
+    assert path.read_bytes() == before, "a refusal on identity must leave tolerances unwritten too"
+
+    # 3. GOLDEN_REBLESS_MEASUREMENTS alone -- `tolerances` is checked FIRST
+    # and is NOT armed by this flag -- still refuses, naming THRESHOLDS.
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
+    with pytest.raises(AssertionError, match="GOLDEN_REBLESS_THRESHOLDS"):
+        instruct._bless(_measured(rtf=0.873))
+    assert path.read_bytes() == before, "GOLDEN_REBLESS_MEASUREMENTS must never authorise a tolerances move"
+
+    # 4. Both set -- both moves are forced through, and the bless succeeds.
+    monkeypatch.setenv("GOLDEN_REBLESS_THRESHOLDS", "1")
+    monkeypatch.setenv("GOLDEN_REBLESS_MEASUREMENTS", "1")
+    instruct._bless(_measured(rtf=0.873))
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["tolerances"]["rtf_max"] == 1.35
+    assert written["identity"]["cosine"]["whisper"] == 0.01
+
+
+# ── #2062 / D3: rtf_max is quantised to a 0.05 step, rounded UP -- ordinary ─
+# rtf noise (sub-0.05) can no longer move it across a re-bless, and the
+# committed baseline itself must not move under the new arithmetic.
+
+
+def test_bless_quantised_rtf_max_survives_sub_step_rtf_noise_across_two_blesses(
+    monkeypatch, tmp_path
+) -> None:
+    """rtf=0.68 and rtf=0.69 straddle a 0.01 raw difference in
+    `max(1.0, rtf*1.5)` (1.02 vs 1.035) that, pre-quantisation, rounded to
+    TWO DIFFERENT rtf_max values (1.02 vs 1.03) -- a second honest re-bless
+    with slightly different rtf would have refused under the exact-equality
+    `tolerances` guard with no flag set. Quantised to a 0.05 step, both
+    compute the SAME rtf_max (1.05), so the second bless needs no flag."""
+    path = _write_baseline(tmp_path, blessed=False, tolerances=None)
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_THRESHOLDS", raising=False)
+
+    instruct._bless(_measured(rtf=0.68))
+    first = json.loads(path.read_text(encoding="utf-8"))
+    assert first["tolerances"]["rtf_max"] == 1.05
+
+    # Second bless, same identity/loudness (only rtf_max is in play here),
+    # slightly different rtf -- must NOT need the flag.
+    instruct._bless(_measured(rtf=0.69))
+
+    second = json.loads(path.read_text(encoding="utf-8"))
+    assert second["tolerances"]["rtf_max"] == 1.05
+
+
+def test_quantise_rtf_max_does_not_move_the_committed_baseline() -> None:
+    """#2062 / D3 acceptance, verified against the ACTUAL committed
+    `instruct-baseline.json` (`rtf.batched` = 0.5089, well under the ~0.667
+    cliff): `max(1.0, 0.5089 * 1.5)` = 1.0, and quantising 1.0 up to the
+    nearest 0.05 step is still 1.0 -- byte-identical to the committed
+    `tolerances.rtf_max`. If this test ever fails, the quantisation
+    arithmetic changed and the committed baseline needs an actual re-bless,
+    not a silent drift at review time."""
+    baseline = instruct._load_json(instruct.BASELINE_PATH)
+    committed_rtf = baseline["rtf"]["batched"]
+    recomputed = instruct._quantise_rtf_max(max(1.0, committed_rtf * 1.5))
+    assert recomputed == baseline["tolerances"]["rtf_max"]
+
+
+# ── #2060 / D4: a within-epsilon move no longer rewrites the reference, so ──
+# repeated noise-sized blesses cannot compound into an unbounded walk.
+
+
+def test_bless_ten_successive_noise_sized_loudness_moves_leave_the_reference_unmoved(
+    monkeypatch, tmp_path
+) -> None:
+    """#2060's repro: ten successive `_bless()` calls, each measuring
+    `loudness_dbfs["whisper"]` 0.39 dB away from the COMMITTED anchor (just
+    under `LOUDNESS_DBFS_EPSILON` = 0.4) -- representing honest run-to-run
+    noise around a stable true value, the realistic shape of a routine
+    re-bless. Pre-fix, every accepted noise move REWROTE the reference to
+    the fresh measurement, so ten such calls (even non-monotonic ones) each
+    started measuring 0.39 dB from wherever the LAST call had just written,
+    and a deliberately monotonic version of this walked the full 3.90 dB
+    with no refusal, no flag, ever. #2060 / D4: since a noise move keeps
+    `existing` untouched, `_bless()` re-reads the SAME committed anchor on
+    every call -- ten repeats of an identical 0.39 dB-from-anchor
+    measurement never move the reference at all, not even by increments."""
+    starting_whisper = -30.0
+    path = _write_baseline(
+        tmp_path,
+        blessed=True,
+        tolerances=dict(BASE_TOLERANCES),
+        loudness_dbfs={"whisper": starting_whisper, "neutral": -20.0},
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+    monkeypatch.delenv("GOLDEN_REBLESS_MEASUREMENTS", raising=False)
+
+    for _ in range(10):
+        measured = _measured(rtf=0.5)
+        measured["loudness_dbfs"] = {"whisper": starting_whisper - 0.39, "neutral": -20.0}
+        instruct._bless(measured)  # must not refuse -- every call is individually noise-sized
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["loudness_dbfs"]["whisper"] == starting_whisper, (
+        "ten successive noise-sized moves must leave the reference UNMOVED at "
+        f"{starting_whisper}, not walk it toward {starting_whisper - 0.39} "
+        "(the #2060 repro's failure mode)"
+    )
+    assert written["loudness_dbfs"] == {"whisper": starting_whisper, "neutral": -20.0}
+
+
+# ── #2061 / D2, second half: `_assert_against_baseline` (test_live_instruct_ ─
+# golden's guard body, extracted so it's drivable without a GPU).
+
+
+def test_assert_against_baseline_skips_instead_of_keyerror_when_tolerances_is_missing(
+    monkeypatch, tmp_path
+) -> None:
+    """`identity` present but `tolerances` absent is the same hand-resolved-
+    merge-conflict shape `_bless()`'s own guards were hardened against --
+    before this fix, `test_live_instruct_golden` read `baseline["tolerances"]`
+    unguarded behind a skip check that only looked at `identity`, so this
+    shape raised `KeyError` instead of taking the documented SKIP path."""
+    path = tmp_path / "instruct-baseline.json"
+    path.write_text(
+        json.dumps(
+            {
+                "description": "test fixture",
+                "identity": {"anchor": "neutral", "cosine": {"whisper": 0.01}, "max": 0.01},
+                "loudness_dbfs": {"whisper": -30.0, "neutral": -20.0},
+                # tolerances deliberately omitted -- the #2003-shaped hole.
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+
+    with pytest.raises(pytest.skip.Exception) as exc_info:
+        instruct._assert_against_baseline(_measured(rtf=0.5))
+
+    assert "unblessed" in str(exc_info.value).lower()
+
+
+def test_assert_against_baseline_skips_when_identity_is_missing(monkeypatch, tmp_path) -> None:
+    """Unchanged behaviour, pinned alongside the new tolerances-absent case
+    so the two documented SKIP triggers (`identity` absent, `tolerances`
+    absent) stay distinguishable from each other in coverage."""
+    path = tmp_path / "instruct-baseline.json"
+    path.write_text(
+        json.dumps({"description": "test fixture", "tolerances": None, "identity": None}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+
+    with pytest.raises(pytest.skip.Exception) as exc_info:
+        instruct._assert_against_baseline(_measured(rtf=0.5))
+
+    assert "unblessed" in str(exc_info.value).lower()
+
+
+def test_assert_against_baseline_passes_when_fully_blessed(monkeypatch, tmp_path) -> None:
+    """Sanity check that the extraction (#2061 / D2) didn't change the
+    HAPPY path: a fully-blessed baseline with `measured` safely inside
+    tolerance neither skips nor raises."""
+    path = _write_baseline(tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES))
+    monkeypatch.setattr(instruct, "BASELINE_PATH", path)
+
+    instruct._assert_against_baseline(_measured(rtf=0.5))  # must not raise or skip
