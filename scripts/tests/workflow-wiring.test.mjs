@@ -316,7 +316,7 @@ const ACCEPTED_NARROWINGS = [
   [
     'Frontend tests + a11y',
     'tsconfig.json',
-    'same reasoning as Lint/tsconfig.json above: no type-aware tooling in this leg reads tsconfig.json content',
+    "impact-based, not zero-impact: Vitest transforms through esbuild, which DOES read tsconfig.json's compilerOptions (jsx, target, useDefineForClassFields) -- unlike Lint/tsconfig.json above, which is genuinely inert. But the root tsconfig declares no `paths`, and both Typecheck and Build already carry tsconfig.json as an input and would independently redden on the same PR if a compilerOptions edit actually changed this leg's output, so the narrowing costs no real coverage",
   ],
   [
     'Frontend tests + a11y',
