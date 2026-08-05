@@ -11,6 +11,7 @@ import {
   writeFileSync,
   existsSync,
   readdirSync,
+  readFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -758,6 +759,58 @@ test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () =
 
   const cache = { steps: { [step.name]: { inputHash: base } } };
   assert.equal(decide({ stepName: step.name, currentHash: added, cache }), 'run');
+});
+
+// C1 (#2154 review): `check:budget-poll` had a real STEPS[] entry with correct
+// inputs, but NONE of the three local `--steps` CSVs in package.json
+// (`verify:fast`, `verify:fast:scoped`, `verify:fast:branch`) named it —
+// `runPipeline` filters STEPS down to exactly the names it's given, so the
+// step was silently dropped from every local entry point and only ever ran
+// under bare `npm run verify` or in cloud CI. This guard closes that class of
+// bug generally: a STEPS[] entry that isn't in ANY local CSV, and isn't
+// explicitly named below as cloud/full-verify-only by design, goes red.
+//
+// The allowlist mirrors CLAUDE.md's own Commands section, which documents
+// each of these as deliberately absent from the fast local paths:
+//   - test:e2e / test:e2e:visual — cloud verify.yml only (Playwright).
+//   - test:server-slow — cloud verify.yml + full `npm run verify`, not the
+//     fast paths (docs/features/archive/45-vitest-pool-tuning.md).
+//   - test:scripts / test:pinokio — not in any of the three fast aliases
+//     today (`npm run test:all` / `verify` cover them instead).
+// Reading package.json's real scripts (rather than hardcoding the CSVs here)
+// means an edit to any of the three that drops a step name is what this test
+// actually watches for.
+const CLOUD_OR_FULL_VERIFY_ONLY_STEPS = new Set([
+  'test:e2e',
+  'test:e2e:visual',
+  'test:server-slow',
+  'test:scripts',
+  'test:pinokio',
+]);
+
+test('every STEPS[] entry is covered by a local --steps CSV or explicitly allowlisted as cloud/full-verify-only', () => {
+  const pkgPath = resolve(repoRoot, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const LOCAL_ENTRY_POINTS = ['verify:fast', 'verify:fast:scoped', 'verify:fast:branch'];
+
+  const covered = new Set();
+  for (const scriptName of LOCAL_ENTRY_POINTS) {
+    const cmd = pkg.scripts[scriptName];
+    assert.ok(cmd, `package.json is missing its "${scriptName}" script`);
+    const m = cmd.match(/--steps[ =]([^\s]+)/);
+    assert.ok(m, `"${scriptName}" must pass --steps`);
+    for (const name of m[1].split(',')) covered.add(name);
+  }
+
+  const missing = STEPS.map((s) => s.name).filter(
+    (name) => !covered.has(name) && !CLOUD_OR_FULL_VERIFY_ONLY_STEPS.has(name),
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `STEPS[] entr(y/ies) absent from every local --steps CSV and not allowlisted ` +
+      `as cloud/full-verify-only: ${missing.join(', ')}`,
+  );
 });
 
 test('computeShared is true for a root manifest/lockfile change', () => {

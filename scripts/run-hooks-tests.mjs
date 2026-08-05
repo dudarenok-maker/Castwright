@@ -19,6 +19,8 @@ if (result.error) {
 }
 if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
 // check-no-budget-poll.mjs used to run here. It now has its own verify step
-// (`check:budget-poll`) with server/src/**/*.test.ts as its inputs, so a
-// server-only diff actually runs it — which this coupling prevented.
+// (`check:budget-poll`, scripts/verify-cache.mjs) with server/src/**/*.test.ts
+// as its inputs, wired into every local --steps CSV in package.json
+// (verify:fast, verify:fast:scoped, verify:fast:branch) as well as CI — so a
+// server-only diff actually runs it, which this coupling prevented.
 process.exit(0);
