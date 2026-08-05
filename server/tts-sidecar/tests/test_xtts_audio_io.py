@@ -12,7 +12,11 @@ import wave
 
 import numpy as np
 import pytest
-import torch
+
+# torch is an optional heavy dep: it lives in the vendor overlay, not in
+# requirements/base.txt, so the lean CI venv does not have it. Matches this
+# file's own pattern for torchaudio/TTS at the test level (see below).
+torch = pytest.importorskip("torch")
 
 from xtts_audio_io import patched_xtts_load_audio, wave_load_audio
 
