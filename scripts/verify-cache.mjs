@@ -11,6 +11,7 @@ import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
+import { resolveVenvPython } from './run-sidecar-tests.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -638,9 +639,21 @@ function pesterFingerprint() {
   return (r.stdout ?? '').trim() || 'unavailable';
 }
 
-function sidecarFingerprint() {
-  const py = 'server/tts-sidecar/.venv/Scripts/python.exe';
-  if (!existsSync(py)) return 'unavailable';
+// I2 (#2146 review): this used to hardcode the Windows venv layout
+// (server/tts-sidecar/.venv/Scripts/python.exe), so on a POSIX box the
+// fingerprint was the literal string 'unavailable' forever — bootstrapping
+// the venv there never changed the fingerprint, so this step would report
+// [cached] and never actually run post-bootstrap. Reuses
+// run-sidecar-tests.mjs's own platform branch (resolveVenvPython) instead of
+// duplicating the win32/posix ternary here. sidecarDir/platform are
+// parameters (not read from process.cwd()/process.platform inline) purely so
+// the test suite can pin the POSIX path without needing to run on POSIX.
+export function sidecarFingerprint(
+  sidecarDir = join(process.cwd(), 'server', 'tts-sidecar'),
+  platform = process.platform,
+) {
+  const py = resolveVenvPython(sidecarDir, platform);
+  if (!py) return 'unavailable';
   let mtime = '';
   try {
     mtime = String(statSync(py).mtimeMs);

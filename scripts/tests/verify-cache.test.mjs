@@ -5,7 +5,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +32,7 @@ import {
   parseNvidiaSmiUtil,
   isVitestPoolCrash,
   branchDiffFiles,
+  sidecarFingerprint,
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
@@ -714,4 +722,30 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
   }
+});
+
+// I2 (#2146 review): sidecarFingerprint used to hardcode
+// `.venv/Scripts/python.exe` (Windows-only). On a POSIX box that meant the
+// fingerprint was the literal string 'unavailable' BEFORE bootstrap and
+// STAYED 'unavailable' after bootstrapping the venv (since the hardcoded
+// Windows path never exists there) — so the tool fingerprint never moved and
+// test:sidecar would report [cached] forever locally, with nothing under
+// **/*.py changed. Pins the POSIX branch specifically (a Windows-only
+// assertion would leave the exact bug in place): a POSIX-layout venv
+// (.venv/bin/python, no Windows layout present) must resolve to something
+// other than 'unavailable' even when forced via the `platform` param — this
+// does not depend on the host OS actually running the test.
+test('sidecarFingerprint resolves the POSIX venv layout (not just Windows)', () => {
+  const dir = mkTmp();
+  const pyPath = join(dir, '.venv', 'bin', 'python');
+  mkdirSync(dirname(pyPath), { recursive: true });
+  writeFileSync(pyPath, '', 'utf8'); // existence is all resolveVenvPython checks
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.notEqual(result, 'unavailable');
+});
+
+test('sidecarFingerprint still returns unavailable when no venv exists on POSIX', () => {
+  const dir = mkTmp();
+  const result = sidecarFingerprint(dir, 'linux');
+  assert.equal(result, 'unavailable');
 });
