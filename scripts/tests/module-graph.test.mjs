@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { extractRelativeSpecifiers, resolveSpecifier, classifyIgnored } from '../lib/module-graph.mjs';
+import { extractRelativeSpecifiers, resolveSpecifier, classifyIgnored, walk } from '../lib/module-graph.mjs';
 import { execFileSync } from 'node:child_process';
 
 test('extracts static, dynamic and require specifiers', () => {
@@ -179,4 +179,81 @@ test('classifyIgnored marks a gitignored path containing non-ASCII characters', 
   writeFileSync(join(d, 'dist', 'café', 'f.js'), '', 'utf8');
   const m = classifyIgnored([join(d, 'dist', 'café', 'f.js')], d);
   assert.equal(m.get(join(d, 'dist', 'café', 'f.js')), true);
+});
+
+// M17 — the mutation the M5-pair alone cannot provide. In the real repo the
+// walk's live case is neutralised by the declarations landing in the same PR:
+// a depth-1 closure is a SUBSET of a zero-missing full closure, so it is also
+// zero-missing (measured: depth-1 = 56, floor = 50, missing = [] -> GREEN).
+// Deleting the walk would leave the whole battery green. This synthetic tree
+// is what actually pins recursion.
+test('walk follows a depth-2 edge (M17: deleting recursion must go red)', () => {
+  const d = gitRepo({
+    'test.mjs': "import a from './a.mjs';\n",
+    'a.mjs': "import b from './b.mjs';\n",
+    'b.mjs': "export default 1;\n",
+  }, '');
+  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.ok(files.includes('a.mjs'), 'depth-1 edge must be found');
+  assert.ok(files.includes('b.mjs'), 'depth-2 edge must be found — recursion is load-bearing');
+});
+
+test('walk stops at gitignored paths', () => {
+  const d = gitRepo({
+    'test.mjs': "import a from './dist/a.mjs';\n",
+    'dist/a.mjs': "import b from './b.mjs';\n",
+    'dist/b.mjs': "export default 1;\n",
+  }, 'dist/\n');
+  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.deepEqual(files, [], 'nothing under an ignored dir may enter the closure');
+});
+
+test('walk survives an import cycle', () => {
+  const d = gitRepo({
+    'test.mjs': "import a from './a.mjs';\n",
+    'a.mjs': "import b from './b.mjs';\n",
+    'b.mjs': "import a from './a.mjs';\n",
+  }, '');
+  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.deepEqual(files.sort(), ['a.mjs', 'b.mjs']);
+});
+
+test('walk does not follow bare specifiers', () => {
+  const d = gitRepo({ 'test.mjs': "import fs from 'node:fs';\nimport x from 'archiver';\n" }, '');
+  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.deepEqual(files, []);
+});
+
+// M9 — needs a synthetic fixture: post-hardening the real tree has ZERO
+// unresolvable specifiers (the count goes 1 -> 0 once comments are stripped),
+// so asserting against the real repo would be vacuous.
+test('walk reports an unresolvable specifier rather than skipping it', () => {
+  const d = gitRepo({ 'test.mjs': "import x from './missing.mjs';\n" }, '');
+  const { unresolvable } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.equal(unresolvable.length, 1);
+  assert.equal(unresolvable[0].specifier, './missing.mjs');
+});
+
+// The defect this repo's real closure hits: acorn is a JavaScript parser, and
+// server/src/handoff/schemas.ts (one of the two genuine missing declarations
+// this whole PR exists to catch) is TypeScript. It's reached precisely via
+// resolveSpecifier's .js -> .ts mapping (the same shape as the
+// 'resolveSpecifier maps a .js specifier onto a .ts source' test above), and
+// extractRelativeSpecifiers is fail-closed: it THROWS on unparseable input.
+// A naive walk would therefore crash on the single most important file in
+// the closure. The policy: a resolved-but-unparseable file is a LEAF — it
+// still counts as a discovered dependency (already in `files`), it does not
+// crash the walk, it is named in `unparseable` (a distinct fact from an
+// unresolved specifier), and the walk does not recurse past it.
+test('walk records an unparseable TS file as a leaf: found, named, not recursed into', () => {
+  const d = gitRepo({
+    'test.mjs': "import s from './schemas.js';\n",
+    'schemas.ts': "export function f(x: number): string {\n  return String(x);\n}\nimport hidden from './hidden.mjs';\n",
+    'hidden.mjs': "export default 1;\n",
+  }, '');
+  const { files, unresolvable, unparseable } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.ok(files.includes('schemas.ts'), 'the unparseable file is still a discovered dependency');
+  assert.deepEqual(unparseable, ['schemas.ts'], 'named in its own list, not merged into unresolvable');
+  assert.deepEqual(unresolvable, [], 'a parse failure is not a resolution failure');
+  assert.ok(!files.includes('hidden.mjs'), 'must not recurse past an unparseable file');
 });

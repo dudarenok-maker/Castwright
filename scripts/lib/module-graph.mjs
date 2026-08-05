@@ -9,7 +9,7 @@
 // acorn is already a transitive dependency (via eslint) and is used here for
 // its parser only; no plugin, no walker package.
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, dirname, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
@@ -180,4 +180,94 @@ export function classifyIgnored(absPaths, cwd) {
     if (ignored.has(posix[i])) result.set(absPaths[i], true);
   }
   return result;
+}
+
+// Breadth-first transitive walk over relative import edges.
+//
+// Ordering matters and is the answer to "classify or resolve first?": path
+// JOIN is pure string math; module RESOLUTION is extension-candidate probing
+// plus existsSync. They are different operations. Every candidate is
+// classified by check-ignore BEFORE any existence probe, so whether a build
+// artifact happens to be present on this box cannot change the result —
+// server/dist is present locally and absent on a fresh CI clone.
+//
+// Classification is per-CANDIDATE, not once-then-resolve: a file-specific
+// .gitignore pattern could otherwise disagree with what resolution lands on.
+//
+// KNOWN LIMITS (measured, not fixed):
+//   - require() ALIASING (`const req = require; req('./x')`) is a silent
+//     false negative — extractRelativeSpecifiers only recognises a literal
+//     `require(...)` callee by name, so an aliased call contributes no edge
+//     and no error. Confirmed absent from this repo's corpus today.
+//   - The 'module' -> 'script' sourceType fallback inside
+//     extractRelativeSpecifiers (needed for genuinely sloppy-mode CJS) has no
+//     regression coverage of its own from this walk — only via the extractor's
+//     direct unit test ('handles CJS scripts that are not valid ESM' above).
+export function walk({ entryFiles, repoRoot }) {
+  const seen = new Set();
+  const files = new Set();
+  const unresolvable = [];
+  const unparseable = [];
+  let frontier = [...entryFiles];
+
+  while (frontier.length > 0) {
+    // Collect every candidate for this BFS level, then classify in ONE batch.
+    const edges = [];
+    for (const file of frontier) {
+      let source;
+      try {
+        source = readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      let specifiers;
+      try {
+        specifiers = extractRelativeSpecifiers(source);
+      } catch {
+        // A file we successfully RESOLVED but cannot parse — e.g. a .ts file
+        // with type annotations, since acorn is a JavaScript parser. This is
+        // fail-closed made VISIBLE, not a silent drop: the file already
+        // counts as a discovered dependency (added to `files` when its
+        // parent resolved it, or left absent here if it's an entry file), it
+        // is named in `unparseable` so the un-followed edge is never hidden,
+        // and the walk simply does not recurse past it. Deliberately NOT
+        // merged into `unresolvable`: that list means "no file answers this
+        // specifier at all"; this is a real, resolved file we just can't
+        // read further. Only a parse failure is swallowed here — any other
+        // error (e.g. from classifyIgnored) still propagates.
+        unparseable.push(toPosix(relative(repoRoot, file)));
+        continue;
+      }
+      for (const specifier of specifiers) {
+        edges.push({ from: file, specifier, candidates: candidatePaths(file, specifier) });
+      }
+    }
+    if (edges.length === 0) break;
+
+    const allCandidates = [...new Set(edges.flatMap((e) => e.candidates))];
+    const ignoredMap = classifyIgnored(allCandidates, repoRoot);
+
+    const next = [];
+    for (const edge of edges) {
+      const live = edge.candidates.filter((c) => !ignoredMap.get(c));
+      if (live.length === 0) continue; // wholly ignored — stop, not an error
+      const resolved = live.find((c) => existsSync(c));
+      if (!resolved) {
+        // FAIL CLOSED: a specifier that resolves to nothing is reported, not
+        // silently skipped. The old guard's `continue` here meant a broken
+        // edge read as clean.
+        unresolvable.push({ specifier: edge.specifier, from: toPosix(relative(repoRoot, edge.from)) });
+        continue;
+      }
+      const rel = toPosix(relative(repoRoot, resolved));
+      files.add(rel);
+      if (!seen.has(resolved)) {
+        seen.add(resolved);
+        next.push(resolved);
+      }
+    }
+    frontier = next;
+  }
+
+  return { files: [...files].sort(), unresolvable, unparseable };
 }
