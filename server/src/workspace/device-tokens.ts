@@ -23,7 +23,7 @@ export interface DeviceTokenRecord {
   /** SHA-256 hex of the raw token. The raw token is never stored. */
   tokenHash: string;
   createdAt: string;
-  expiresAt?: string;        // ISO; absent on legacy schema-1 records → rejected
+  expiresAt?: string;        // ISO; absent (legacy schema-1) OR unparseable → rejected (#2144)
   lastSeenAt?: string;
   revoked?: boolean;
 }
@@ -57,7 +57,8 @@ export function findValidDevice(
   const h = Buffer.from(hashToken(rawToken));
   for (const d of devices) {
     if (d.revoked) continue;
-    if (d.expiresAt === undefined || now > Date.parse(d.expiresAt)) continue;
+    const exp = d.expiresAt === undefined ? NaN : Date.parse(d.expiresAt);
+    if (!Number.isFinite(exp) || now > exp) continue;
     const dh = Buffer.from(d.tokenHash);
     if (dh.length === h.length && timingSafeEqual(dh, h)) return d;
   }
