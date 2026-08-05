@@ -61,9 +61,69 @@ them are wide:
   that prose in its own row bodies and will silently fall behind.
 - **The rest of the summary strip is unchecked** — oldest debt, and the
   group/blocked/unconfirmed tallies. Recompute those by hand.
-- **The published page is invisible to it.** It only ever reads the source file,
-  so "was it published at all, and was it the right file?" is procedure, not a
-  gate.
+- **The published page is invisible to `check:onbox-register`'s no-flag run.**
+  It only ever reads the two TRACKED files, so "was it published at all, and
+  was it the right file?" is procedure, not that gate — see the merge step
+  below, which gives the specific stale-snapshot race mechanical teeth via a
+  second, explicit mode, but still can't verify by itself that someone ran it.
+
+**The concurrency hazard this closes (#1931).** Before the live view was
+tracked here, on 2026-07-28 two concurrent sessions each correctly added a
+different row (A20, E8) and republished from their own hand-built snapshot —
+the second republish was built from a snapshot taken *before* the first
+session's row had landed, so the surviving page had one row present and the
+other silently gone, with nothing to notice. That was possible because the
+live view lived nowhere but a session's own build of it. Tracking both files
+in git and gating their agreement via `npm run check:onbox-register` on every
+PR closes the git-side half: the live view a PR merges is no longer a
+hand-built snapshot racing another session's, it is the file *inside* the
+merge, checked against this register before either can land.
+
+**The residual hazard, and the merge step that closes it.** Git-side safety
+does not by itself close the ORIGINAL incident, because publishing is a step
+that happens *after* merge, outside git — so the same race reopens one level
+up. Two lanes can each merge a correct, agreeing live-view edit: git resolves
+both rows into the tracked `.html`, and `check:onbox-register` is green on
+both PRs. Lane A publishes its merge. Lane B, having fetched/built its own
+copy of the *published* page before A's merge landed, publishes from a build
+that is now stale relative to what's live — and the artifact loses A's row
+again, invisibly, exactly like 2026-07-28, because the no-flag
+`check:onbox-register` run only ever compares the two TRACKED files; the
+published page itself is outside its reach (no network access from a required
+CI check — the same call this design already made for the tracked-pair
+comparison, see the edge list above). The merge step that closes this, run
+**immediately before every publish**, not only after a suspected race:
+
+1. Fetch the page currently live at the canonical URL above and save it to a
+   local file — this is the CURRENTLY-published register, which may be ahead
+   of what you are about to publish.
+2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
+   Unlike `check:onbox-register`'s no-flag run, this comparison is
+   deliberately ONE-DIRECTIONAL: your register having rows the live page
+   doesn't have yet is the normal reason you're publishing, not a defect, so
+   it is never reported here. It fails ONLY when the live page has a row (or
+   group) your register does not — the signature of another lane having
+   already published ahead of you.
+3. **If it fails**, do NOT publish — your register is BEHIND what is already
+   live. Pull the latest `main` (the row that's already live should already
+   be merged there via its own PR), confirm `npm run check:onbox-register`
+   (no flag) is green, and re-run step 2 against the SAME saved copy from
+   step 1 to confirm it now passes. It should — main pulling in the missing
+   row is what resolves this, not another fetch of the live page.
+4. Only once step 2 passes, publish the tracked `.html`, with the canonical
+   URL above as `url`.
+
+This is deliberately a MANUAL procedure with mechanical support, not a fully
+automatic gate: CI cannot run it (no credentials to fetch the published
+artifact, and a network dependency inside a required status check is its own
+failure mode). `--against-published` exists so step 3's "does the live page
+have something I don't?" judgement is a command's exit code, not an
+eyeballed diff — it does not, and cannot, make the four steps happen on
+their own. An early version of this check compared both directions
+symmetrically, which inverted the diagnosis (failed on every ordinary
+publish and told the operator to delete the rows they were about to ship) —
+fixed before this landed; see the `checkLiveView` function's own header
+comment in `scripts/check-onbox-register.mjs` for the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -1218,25 +1278,39 @@ weights can prove, and neither was exercised on real hardware for this PR:
   **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
   contention warning should print nothing). Confirm it completes and writes
   `kokoro-baseline.json` / `instruct-baseline.json` **without**
-  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set on a
-  routine, uncontended re-bless. **Amended by #2045 F1/F2** (`instruct-
-  baseline.json`'s `identity`/`loudness_dbfs` guard, added by #2035 after
-  this row was written, is noise-tolerant, not silent-or-refuse like
-  `tolerances`): `kokoro-baseline.json`'s `transcript`/`text_edits` and
-  `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
-  (or the guard is broken); `instruct-baseline.json`'s `identity`/
-  `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
-  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=**0.005** /
-  `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
-  printed a `[golden-bless] identity moved ... within epsilon ... (noise)`
-  / `[golden-bless] loudness_dbfs moved ...` line for each one that did —
-  the echo is the part a `git diff` alone can't confirm, and it's the
-  accept-path half of the guard real hardware is uniquely placed to
-  exercise (both the ROUTINE-bless-doesn't-need-the-flag half AND the
-  noise-gets-echoed half need a REAL measurement pair with real noise
-  between them — a synthetic fixture can only assert the arithmetic, never
-  that actual noise clears epsilon on a real box). `blessed_at`-adjacent
-  housekeeping fields may also move as before.
+  `GOLDEN_REBLESS_CONTENT=1`, `GOLDEN_REBLESS_THRESHOLDS=1`, or
+  `GOLDEN_REBLESS_MEASUREMENTS=1` set on a routine, uncontended re-bless.
+  **Amended by #2045 F1/F2, then again by #2060/#2061/#2062/#2069** (the
+  `identity`/`loudness_dbfs` guard, added by #2035 after this row was
+  written, was noise-tolerant-and-WRITTEN as of #2045; #2060/D4 later
+  changed the WRITE side, not the accept side): `kokoro-baseline.json`'s
+  `transcript`/`text_edits`, `instruct-baseline.json`'s `tolerances` block,
+  AND — since #2060/D4 — `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures too must ALL stay BYTE-IDENTICAL on a routine
+  re-bless (or the guard is broken). "Figures MAY move by run-to-run
+  noise" was true before D4 and is **no longer a meaningful thing to
+  check** — a within-epsilon noise-sized move is still ACCEPTED (not
+  refused, no flag needed), it just no longer REWRITES the committed
+  reference, so the file staying byte-identical is now the EXPECTED
+  outcome for `identity`/`loudness_dbfs` too, not evidence on its own that
+  anything happened. What real hardware is uniquely placed to confirm
+  instead is the ECHO: the console should still print a `[golden-bless]
+  identity moved within epsilon ... (noise -- reference unchanged) -- ...`
+  / `[golden-bless] loudness_dbfs moved ...` line whenever this run's raw
+  measurement differs AT ALL from the committed figure (real hardware
+  noise makes a nonzero diff near-certain, even though the file itself
+  won't change) — the echo is the part a `git diff` alone can't confirm,
+  and it's the accept-path half of the guard real hardware is uniquely
+  placed to exercise (both the ROUTINE-bless-doesn't-need-the-flag half
+  AND the noise-gets-echoed-but-not-written half need a REAL measurement
+  pair with real noise between them — a synthetic fixture can only assert
+  the arithmetic, never that actual noise clears epsilon on a real box). A
+  byte-identical block with an echo present is the guard working; a
+  byte-identical block with NO echo at all just means this run's raw
+  measurement happened to land exactly on the committed figure — don't
+  read bare byte-identical output alone as proof the guard fired; the
+  echo is the falsifiable signal. `blessed_at`-adjacent housekeeping
+  fields may still move as before.
 - **This run is also the only thing that retires the identity epsilon's
   open question** (#2066). `IDENTITY_COSINE_EPSILON` moved 0.015 → 0.005
   because 0.015 was derived from an unrelated ceiling (`identity_cosine_max`
@@ -1254,15 +1328,16 @@ weights can prove, and neither was exercised on real hardware for this PR:
   byte-identical to before the attempt — then revert the hand-edit.
   This is the "#2003/#1995 shape, on a real file, via the real CLI entry
   point" check the unit tests can only approximate with `tmp_path` fixtures.
-- **Amended by #2045 F1/F2:** also force one WINDOW-sized refusal on
-  `instruct-baseline.json`'s `identity` block (hand-edit one committed
-  `identity.cosine.<emotion>` figure by clearly more than
+- **Amended by #2045 F1/F2, then #2060/D1:** also force one WINDOW-sized
+  refusal on `instruct-baseline.json`'s `identity` block (hand-edit one
+  committed `identity.cosine.<emotion>` figure by clearly more than
   `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
   command, and confirm it refuses (not just accepts-and-echoes) with the
-  expected `GOLDEN_REBLESS_THRESHOLDS` message and leaves the file
-  byte-identical — then revert the hand-edit. This is the boundary the
-  noise-tolerant epsilon exists to draw; the routine-bless bullet above
-  only exercises the accept side.
+  expected `GOLDEN_REBLESS_MEASUREMENTS` message — **not**
+  `GOLDEN_REBLESS_THRESHOLDS`, which the #2060 flag split now reserves for
+  `tolerances` alone — and leaves the file byte-identical — then revert
+  the hand-edit. This is the boundary the noise-tolerant epsilon exists to
+  draw; the routine-bless bullet above only exercises the accept side.
 - Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
   (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
   normally (expect pass), then deliberately break the engine (e.g. rename

@@ -55,6 +55,7 @@ from tests.golden.compare import (  # noqa: E402
     LOUDNESS_DBFS_EPSILON,
     bless_guard_thresholds,
     describe_measurement_move,
+    should_rewrite_reference,
 )
 
 pytestmark = pytest.mark.golden
@@ -98,6 +99,34 @@ def _qwen_weights_present() -> bool:
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _quantise_rtf_max(raw: float) -> float:
+    """Round `raw` UP to the nearest 0.05 step (#2062 / D3) -- a tolerance
+    ceiling derived from a stochastic `rtf` measurement should not come out
+    tighter than the value it was derived from by more than float rounding
+    noise. `math.ceil` itself is exact (ceiling-then-multiply never lands
+    below `raw`'s true value -- e.g. `math.ceil(20.0) * 0.05 == 1.0`, exact,
+    no residue); the FINAL `round(..., 2)` is what can occasionally pull the
+    published figure a few ULPs under `raw` (e.g. `math.ceil(23.0) * 0.05 ==
+    1.1500000000000001`, then `round(1.1500000000000001, 2) == 1.15`, on the
+    floor side of that residue; at a larger magnitude the same shape gets
+    proportionally bigger -- `raw = 8.200000000000001` rounds to `8.2`, a
+    ~1.8e-15 residue, since a ULP scales with magnitude) -- so "never down"
+    is not a literally unconditional bound, only true up to a handful of
+    ULPs of whatever magnitude `raw` happens to be. That handful-of-ULPs
+    case is real but rare: it needs `raw`'s own float representation to sit
+    almost exactly on a 0.05 boundary, which a specific `rtf` measurement
+    can produce (as above) but a RANDOM `raw` essentially never does --
+    900k uniform draws across `[1,2)`, `[2,4)`, `[4,9)` (300k each,
+    #2116 R5) produced zero cases landing below their own `raw`. `round`
+    stays
+    (dropping it would publish `1.1500000000000001` as `rtf_max` instead of
+    `1.15`) because that residue can never cause a spurious refusal: the
+    published ceiling still carries the full 1.5x calibration headroom over
+    the measurement it was derived from, many orders of magnitude larger
+    than a float epsilon at any magnitude this function operates on."""
+    return round(math.ceil(raw / 0.05) * 0.05, 2)
 
 
 def _pcm_to_float(pcm: bytes) -> np.ndarray:
@@ -249,51 +278,260 @@ def _bless(measured: dict) -> None:
     that answers a DIFFERENT question ("is there recorded data to assert
     against", not "is a re-bless of a specific field safe") with no
     corresponding circularity or blind spot, so it is deliberately left as
-    is rather than aligned to the same probe."""
+    is rather than aligned to the same probe.
+
+    **#2069 / D5, second half: this probe is STRICTLY WEAKER than its
+    predecessor for one shape.** A baseline with all four keys present but
+    explicitly `null` used to read `previously_blessed=True` under
+    `any(k in baseline for k in (...))` (presence, not truthiness) and
+    refuse; under `any(baseline.get(k) is not None for k in (...))` it now
+    reads `previously_blessed=False` and writes blind, with no flag. That
+    shape is byte-identical to the documented first-bless scaffold
+    (`instruct-baseline.json`'s own `description`: "Unblessed (entries
+    null) => the assert test SKIPs."), so the ambiguity between "genuinely
+    never blessed" and "was blessed, then every key got nulled out" is
+    real and this probe cannot resolve it -- the previous paragraph's
+    framing ("no longer refusing an honestly-scaffolded, never-blessed
+    baseline") is true but incomplete: it does not name the shape where the
+    relaxation costs something. `metadata.blessed_at` (present once a real
+    bless has run, absent from a fresh scaffold) is an available
+    disambiguator this probe does not use -- left as a comment rather than
+    wired in, because resolving the ambiguity properly is a different,
+    larger change than documenting it (#2069's own "why filed rather than
+    fixed").
+
+    **#2060 / D1 (root cause of #2035): the flag is now SPLIT, not shared.**
+    #2035 originally reused a single `GOLDEN_REBLESS_THRESHOLDS` for all
+    three fields on the theory that they are "the same kind of judgement
+    call". That theory is what re-opened #1995 one layer down: an operator
+    setting the flag to force through a legitimate `identity` re-bless
+    silently re-authorised the `rtf_max` ceiling too, since one flag armed
+    both. `GOLDEN_REBLESS_THRESHOLDS` now arms `tolerances` ONLY (a
+    quantised ceiling -- see #2062 / D3 above `computed_tolerances`);
+    `GOLDEN_REBLESS_MEASUREMENTS` (new) arms `identity`/`loudness_dbfs` (raw
+    stochastic measurements, a drift-window centre) -- different failure
+    modes, different blast radius, so a legitimate re-bless of one no
+    longer silently reopens the other.
+
+    **#2060 / D4: a within-epsilon move no longer rewrites the reference.**
+    Each `guard_spec` below is followed by `should_rewrite_reference`, which
+    decides what gets WRITTEN independently of what the guard decided to
+    ACCEPT -- `bless_guard_thresholds` returning `None` only means "this
+    write is not refused", not "this write happens verbatim". A first bless
+    or a flag-forced move always writes the fresh `computed` value; a
+    within-epsilon move is noise and keeps `existing` untouched, so N
+    consecutive within-epsilon blesses cannot walk the recorded centre
+    across its own drift window the way #2060 reproduced (ten successive
+    0.39 dB moves, each individually "noise", compounding to 3.90 dB with
+    no refusal).
+
+    **#2116 F1/F2 (independent review of D5): echoes are BUFFERED, and
+    printed unconditionally.** The write below is all-or-nothing -- three
+    `bless_guard_thresholds` calls, one write, at the very end -- but the
+    original D5 revision printed each field's echo INSIDE this loop, right
+    after that field's own guard passed. A later field's refusal then
+    aborted the run with an earlier field's `wrote {...}` already on
+    stdout and the file completely untouched: a mixed
+    `tolerances`-forced / `identity`-refused bless printed "tolerances:
+    FORCED ... wrote {...}" and then raised, which is exactly the class of
+    lie #2060 / D4 removed from the noise line, reintroduced by D5 on the
+    guard's loudest output. Every echo is now appended to `echoes` inside
+    the loop and only `print`ed after `BASELINE_PATH.write_text` below has
+    actually succeeded -- an exception anywhere in the loop propagates
+    before a single line reaches stdout. Separately, the original revision
+    gated the `describe_measurement_move` call itself behind `if epsilon >
+    0 or existing_val is None` -- meant to extend the D5 echo to
+    `tolerances`' absent-key branch (epsilon 0.0) without also echoing
+    every ordinary already-matching `tolerances` bless. It covered the
+    absent HALF of that field but not the other: a flag-forced
+    `tolerances` MOVE (existing present, non-`None`, epsilon 0.0 -- the
+    literal #1995 shape, `rtf_max` loosened from a contended box) still
+    fell outside the gate and printed nothing, `rtf_max` moving 1.0 -> 1.35
+    with stdout empty. The gate was redundant defence in the first place:
+    `describe_measurement_move` already returns `None` for a genuinely
+    quiet call (first bless, or every leaf identical), so it is deleted --
+    every field now calls it unconditionally, which is what makes "the
+    highest-stakes forced write no longer prints nothing" true for every
+    guarded field, not just the absent-key half of `identity`/
+    `loudness_dbfs`."""
     baseline = _load_json(BASELINE_PATH)
     id_max = max(measured["identity"].values())
     computed_tolerances = {
         # Calibrated ceilings with headroom over the on-box measurement.
         "identity_cosine_max": round(max(0.15, id_max + 0.10), 3),
         "loudness_dbfs_abs": 4.0,
-        "rtf_max": round(max(1.0, measured["rtf"] * 1.5), 2),
+        # #2062 / D3: quantised to a 0.05 step, rounded UP (see
+        # `_quantise_rtf_max`'s own docstring for the float-precision
+        # caveat -- "up" holds to within a float epsilon, not literally
+        # always), so the ceiling should not come out meaningfully tighter
+        # than the value it was derived from. Below the ~0.667 rtf cliff
+        # this stays pinned at the 1.0 floor exactly as before (verified:
+        # the committed baseline's rtf.batched=0.5089 -> max(1.0, 0.76335)
+        # =1.0 -> ceil-to-0.05 of 1.0 is 1.0, so this needs no re-bless).
+        # Above the cliff it absorbs sub-0.05 rtf noise that used to move
+        # rtf_max on every honest re-bless under the exact-equality
+        # tolerances guard -- see `bless_guard_thresholds`' docstring for
+        # the cliff itself.
+        "rtf_max": _quantise_rtf_max(max(1.0, measured["rtf"] * 1.5)),
     }
     computed_identity = {"anchor": "neutral", "cosine": measured["identity"], "max": round(id_max, 4)}
     computed_loudness = measured["loudness_dbfs"]
 
+    # #2060 root cause / D1: two flags, not one -- see this function's
+    # docstring above.
     allow_rebless_thresholds = os.environ.get("GOLDEN_REBLESS_THRESHOLDS") in ("1", "true", "TRUE")
+    allow_rebless_measurements = os.environ.get("GOLDEN_REBLESS_MEASUREMENTS") in ("1", "true", "TRUE")
     previously_blessed = any(
         baseline.get(k) is not None for k in ("rtf", "identity", "loudness_dbfs", "tolerances")
     )
     # epsilon=0.0 (bless_guard_thresholds' default) for tolerances -- exact
     # equality is correct there, see this function's own docstring above.
     guard_specs = (
-        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0),
-        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON),
-        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON),
+        ("tolerances", baseline.get("tolerances"), computed_tolerances, 0.0,
+         allow_rebless_thresholds, "GOLDEN_REBLESS_THRESHOLDS"),
+        ("identity", baseline.get("identity"), computed_identity, IDENTITY_COSINE_EPSILON,
+         allow_rebless_measurements, "GOLDEN_REBLESS_MEASUREMENTS"),
+        ("loudness_dbfs", baseline.get("loudness_dbfs"), computed_loudness, LOUDNESS_DBFS_EPSILON,
+         allow_rebless_measurements, "GOLDEN_REBLESS_MEASUREMENTS"),
     )
-    for label, existing_val, computed_val, epsilon in guard_specs:
+    values_to_write: dict = {}
+    # #2116 F1 (independent review): echoes used to print INSIDE this loop,
+    # before the write below -- so a later field's refusal could leave
+    # `wrote {...}` already on stdout while the file stayed byte-identical
+    # (the guard is all-or-nothing; the write only happens once, after every
+    # field is accepted). Buffered here and flushed only once `write_text`
+    # below has actually succeeded, so stdout can never claim a write that
+    # didn't happen -- exactly the class of lie #2060 / D4 removed from the
+    # noise line, reintroduced by D5 on the guard's loudest output.
+    echoes: list[str] = []
+    for label, existing_val, computed_val, epsilon, allow_flag, flag_name in guard_specs:
         guard_reason = bless_guard_thresholds(
             existing_val,
             computed_val,
             previously_blessed=previously_blessed,
-            allow_rebless_thresholds=allow_rebless_thresholds,
+            allow_rebless_thresholds=allow_flag,
             label=label,
             epsilon=epsilon,
+            flag_name=flag_name,
         )
         if guard_reason is not None:
             raise AssertionError(guard_reason)
-        if epsilon > 0:
-            echo = describe_measurement_move(existing_val, computed_val, epsilon=epsilon)
-            if echo is not None:
-                print(f"[golden-bless] {label} moved {echo}")
+        # #2116 F2 (independent review): no `if epsilon > 0 or existing_val
+        # is None` gate here -- `describe_measurement_move` already returns
+        # `None` when there is nothing to report (a genuine first bless, or
+        # every leaf identical), so a caller-side gate is redundant defence
+        # that can only ever narrow it. It DID narrow it: it covered the
+        # absent-key branch but not a flag-forced `tolerances` MOVE (existing
+        # present, epsilon 0.0) -- exactly the #1995 shape this whole
+        # mechanism exists to catch (rtf_max 1.0 -> 1.35 written with stdout
+        # empty). Calling this unconditionally for every field is what makes
+        # "the highest-stakes forced write no longer prints nothing" true.
+        echo = describe_measurement_move(
+            existing_val,
+            computed_val,
+            epsilon=epsilon,
+            flag_name=flag_name,
+            previously_blessed=previously_blessed,
+        )
+        if echo is not None:
+            if existing_val is None:
+                # No "before" to diff against -- a distinct shape from
+                # both a noise line and a normal forced-move line.
+                echoes.append(f"[golden-bless] {label}: {echo}")
+            else:
+                echoes.append(f"[golden-bless] {label} moved {echo}")
+        # #2060 / D4: what gets WRITTEN is decided independently of what the
+        # guard just ACCEPTED -- a within-epsilon move keeps `existing`.
+        values_to_write[label] = (
+            computed_val
+            if should_rewrite_reference(existing_val, computed_val, epsilon=epsilon)
+            else existing_val
+        )
 
-    baseline["tolerances"] = computed_tolerances
-    baseline["identity"] = computed_identity
-    baseline["loudness_dbfs"] = computed_loudness
+    baseline["tolerances"] = values_to_write["tolerances"]
+    baseline["identity"] = values_to_write["identity"]
+    baseline["loudness_dbfs"] = values_to_write["loudness_dbfs"]
     baseline["rtf"] = {"batched": measured["rtf"]}
     # blessed_at left for the committer to stamp — the harness has no clock.
     BASELINE_PATH.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+    # #2116 F1: only echo AFTER the write above has actually landed.
+    for line in echoes:
+        print(line)
+
+
+def _assert_against_baseline(measured: dict) -> None:
+    """Read the committed baseline and assert `measured` stays within its
+    tolerances, or SKIP if there's nothing to assert against yet. Split out
+    of `test_live_instruct_golden` (#2061 / D2) so the unblessed-SKIP guard
+    is drivable as a plain function call with no GPU -- the same technique
+    `test_instruct_bless_gating.py` uses to drive `_bless()` directly."""
+    baseline = _load_json(BASELINE_PATH)
+    # #2045 F5: this reads `identity` specifically, NOT `_bless()`'s
+    # `any(...)` probe above -- deliberately, not an oversight. `_bless()`'s
+    # probe answers "has this baseline EVER been blessed" (any one of the
+    # four guarded/written keys survives a corruption), which is the right
+    # question for deciding whether an omission is a first bless or #2003
+    # corruption. This SKIP answers a narrower, different question: "do I
+    # have `identity` data to assert against" -- the loop right below reads
+    # `tol["identity_cosine_max"]` via `measured["identity"]` and
+    # `base_L[e]`, so `identity` specifically (not `rtf` alone) is the
+    # signal this first check keys off. No circularity here to fix: unlike
+    # `_bless()`'s guard, this is a read-only skip check, not itself
+    # deciding whether to write `identity`.
+    if not baseline.get("identity"):
+        pytest.skip(
+            "instruct-baseline.json is unblessed. Bless on a GPU box: "
+            "npm run test:golden-audio -- --bless --sidecar-only"
+        )
+
+    # #2061 / D2, widened by #2116 F3/F4 (independent review): `tolerances`
+    # and `loudness_dbfs` are each read below (`tol["identity_cosine_max"]`,
+    # `tol["loudness_dbfs_abs"]`, `tol["rtf_max"]`, `base_L[e]`) and each can
+    # carry the SAME two corruption shapes a hand-resolved merge conflict
+    # produces just as easily on either field: dropped outright (`None`) or
+    # collapsed to a non-dict scalar/list (#2061's OTHER guarded shape on
+    # the bless side, here reachable on the ASSERT side instead -- `tol`
+    # non-`None` but non-dict sailed past a bare `is None` check and raised
+    # `TypeError` on the first subscript below). `isinstance(..., dict)`
+    # catches both in one check per field, taking this SAME documented SKIP
+    # path rather than raising `KeyError` or `TypeError`.
+    tol = baseline.get("tolerances")
+    base_L = baseline.get("loudness_dbfs")
+    if not isinstance(tol, dict) or not isinstance(base_L, dict):
+        pytest.skip(
+            "instruct-baseline.json is unblessed. Bless on a GPU box: "
+            "npm run test:golden-audio -- --bless --sidecar-only"
+        )
+
+    failures: list[str] = []
+
+    # --- Identity stability across instructs ---------------------------------
+    id_ceiling = float(tol["identity_cosine_max"])
+    for e, dist in measured["identity"].items():
+        if dist > id_ceiling:
+            failures.append(f"identity[{e}]: cosine {dist:.4f} > {id_ceiling} (voice drifted under instruct)")
+
+    # --- Delivery loudness: directional gain guards (robust to sampling) -----
+    L = measured["loudness_dbfs"]
+    if "whisper" in L and "neutral" in L and not (L["whisper"] < L["neutral"]):
+        failures.append(f"loudness: whisper ({L['whisper']}) not quieter than neutral ({L['neutral']})")
+    if "sad" in L and "neutral" in L and not (L["sad"] < L["neutral"]):
+        failures.append(f"loudness: sad ({L['sad']}) not quieter than neutral ({L['neutral']})")
+    if "angry" in L and "neutral" in L and not (L["angry"] > L["neutral"]):
+        failures.append(f"loudness: angry ({L['angry']}) not louder than neutral ({L['neutral']})")
+
+    # --- Delivery loudness: per-emotion drift vs blessed ---------------------
+    dbfs_abs = float(tol["loudness_dbfs_abs"])
+    for e, val in L.items():
+        if e in base_L and abs(val - base_L[e]) > dbfs_abs:
+            failures.append(f"loudness[{e}]: {val} dBFS drifted > {dbfs_abs} dB from blessed {base_L[e]}")
+
+    # --- Batched RTF baseline ------------------------------------------------
+    rtf_max = float(tol["rtf_max"])
+    if measured["rtf"] > rtf_max:
+        failures.append(f"rtf: batched {measured['rtf']:.3f} > ceiling {rtf_max} (throughput regressed)")
+
+    assert not failures, "Live-instruct golden mismatches:\n  " + "\n  ".join(failures)
 
 
 def test_live_instruct_golden():
@@ -316,53 +554,4 @@ def test_live_instruct_golden():
         _bless(measured)
         pytest.skip("GOLDEN_BLESS set — recorded instruct-baseline.json (not asserting this run).")
 
-    baseline = _load_json(BASELINE_PATH)
-    # #2045 F5: this reads `identity` specifically, NOT `_bless()`'s
-    # `any(...)` probe above -- deliberately, not an oversight. `_bless()`'s
-    # probe answers "has this baseline EVER been blessed" (any one of the
-    # four guarded/written keys survives a corruption), which is the right
-    # question for deciding whether an omission is a first bless or #2003
-    # corruption. This SKIP answers a narrower, different question: "do I
-    # have `identity` data to assert against" -- the loop right below reads
-    # `tol["identity_cosine_max"]` via `measured["identity"]` and
-    # `base_L = baseline["loudness_dbfs"]`, so `identity` specifically
-    # (not `rtf`, not `tolerances` alone) is what this test needs present.
-    # No circularity here to fix: unlike `_bless()`'s guard, this is a
-    # read-only skip check, not itself deciding whether to write `identity`.
-    if not baseline.get("identity"):
-        pytest.skip(
-            "instruct-baseline.json is unblessed. Bless on a GPU box: "
-            "npm run test:golden-audio -- --bless --sidecar-only"
-        )
-
-    tol = baseline["tolerances"]
-    failures: list[str] = []
-
-    # --- Identity stability across instructs ---------------------------------
-    id_ceiling = float(tol["identity_cosine_max"])
-    for e, dist in measured["identity"].items():
-        if dist > id_ceiling:
-            failures.append(f"identity[{e}]: cosine {dist:.4f} > {id_ceiling} (voice drifted under instruct)")
-
-    # --- Delivery loudness: directional gain guards (robust to sampling) -----
-    L = measured["loudness_dbfs"]
-    if "whisper" in L and "neutral" in L and not (L["whisper"] < L["neutral"]):
-        failures.append(f"loudness: whisper ({L['whisper']}) not quieter than neutral ({L['neutral']})")
-    if "sad" in L and "neutral" in L and not (L["sad"] < L["neutral"]):
-        failures.append(f"loudness: sad ({L['sad']}) not quieter than neutral ({L['neutral']})")
-    if "angry" in L and "neutral" in L and not (L["angry"] > L["neutral"]):
-        failures.append(f"loudness: angry ({L['angry']}) not louder than neutral ({L['neutral']})")
-
-    # --- Delivery loudness: per-emotion drift vs blessed ---------------------
-    dbfs_abs = float(tol["loudness_dbfs_abs"])
-    base_L = baseline["loudness_dbfs"]
-    for e, val in L.items():
-        if e in base_L and abs(val - base_L[e]) > dbfs_abs:
-            failures.append(f"loudness[{e}]: {val} dBFS drifted > {dbfs_abs} dB from blessed {base_L[e]}")
-
-    # --- Batched RTF baseline ------------------------------------------------
-    rtf_max = float(tol["rtf_max"])
-    if measured["rtf"] > rtf_max:
-        failures.append(f"rtf: batched {measured['rtf']:.3f} > ceiling {rtf_max} (throughput regressed)")
-
-    assert not failures, "Live-instruct golden mismatches:\n  " + "\n  ".join(failures)
+    _assert_against_baseline(measured)
