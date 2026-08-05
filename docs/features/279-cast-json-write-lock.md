@@ -336,18 +336,34 @@ clearing CLAUDE.md's fix-now bar:
   critical section (not just that its write survived) — the survival-only
   assertion depends on the racer's full read+write losing outright against
   an 80ms head start, which a slow-enough unlocked write can still beat.
-  `#2123` also closed the sweep's last gap: two single-book sites,
-  `cast-add-from-roster.ts` and `voice-library-usage.ts`'s
-  `clearLibraryVoiceReferences`, had been measured as detector-less by
-  neutralising `withCastLocks` (plural) and finding their specs green — but
-  both actually call `withCastLock` (singular; `cast-add-from-roster.ts`
-  locks only the source book it writes, and `clearLibraryVoiceReferences`
-  holds at most one book's lock at a time), which that mutation never
-  touches. A sweep-wide mutation of ONE primitive silently exempts every
-  site built on the OTHER; confirm the primitive a site actually calls by
-  reading the module, don't assume it from the site's shape (one-book vs.
-  two-book). Each now carries its own `runLockDetector`-style test, racing a
-  genuine `withCastLock` writer instead: `cast-add-from-roster.test.ts`
+  `#2123` also re-measured two single-book sites, `cast-add-from-roster.ts`
+  and `voice-library-usage.ts`'s `clearLibraryVoiceReferences`. Both had
+  been read as detector-less by neutralising `withCastLocks` (plural) and
+  finding their specs green — but both actually call `withCastLock`
+  (singular; `cast-add-from-roster.ts` locks only the source book it
+  writes, and `clearLibraryVoiceReferences` holds at most one book's lock
+  at a time), which that mutation never touches. **A sweep-wide mutation of
+  ONE primitive silently exempts every site built on the OTHER**, and a
+  spec staying green under a mutation is evidence of a gap only once you
+  have confirmed the site actually calls the thing you broke. Confirm the
+  primitive by reading the module; don't infer it from the site's shape.
+  Re-measured against the correct primitive the two sites differ:
+  `voice-library-usage.test.ts` was genuinely detector-less (green under
+  `withCastLock` → `return fn();`), while `cast-add-from-roster.test.ts`
+  was already covered — its pre-existing `#1981` self-race test goes red
+  under both that mutation and a rule-2 read-hoist. Its new detector is
+  kept nonetheless because a self-race cannot catch a **divergent lock
+  key**: keying the site's `withCastLock` off a different derivation of
+  the same book (verified by mutating the call site to
+  `sourceLocated.bookDir.toUpperCase()`) leaves the lock fully intact and
+  the self-race green — both callers queue on the same wrong key — while
+  the external-writer detector is the only test that fails. That is the
+  exact failure `cast-lock.ts`'s header warns of ("a site that derived the
+  key slightly differently would get a second mutex that never contends
+  with the first, and every test would still pass"), and it is
+  structurally invisible to any same-site race. Each site now carries its
+  own `runLockDetector`-style test racing a genuine `withCastLock` writer
+  from outside the site: `cast-add-from-roster.test.ts`
   against the route's in-lock `sourceCast` read (no separate unlocked
   pre-lock read of that path to confuse the gate with — `findBookByBookId`
   only reads state.json); `voice-library-usage.test.ts` against
