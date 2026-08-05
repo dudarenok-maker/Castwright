@@ -475,6 +475,25 @@ const ACCEPTED_NARROWINGS = [
     'eslint.config.mjs',
     "openapi:types (package.json: `openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts`) never invokes eslint -- same reasoning as Typecheck/eslint.config.mjs above",
   ],
+
+  // F3 (2026-08-06 whole-branch review) -- verify-cache.mjs's `test` cache
+  // step carried two dead extraFiles entries, tailwind.config.ts and
+  // postcss.config.js, both leftover from a pre-Tailwind-v4 config that no
+  // longer exists in this repo (see the Typecheck/tailwind.config.ts entry
+  // above for the same fact, verified independently here by directory
+  // listing + `git ls-files`). Removing them surfaces these two: both steps
+  // key off `step_test` (this cache step's derived scope), which no longer
+  // trips on a path that was never a real input to begin with.
+  [
+    'Frontend tests + a11y',
+    'tailwind.config.ts',
+    "file does not exist in this repository -- same as Typecheck/tailwind.config.ts above; this step's derived condition includes step_test, which no longer carries the dead tailwind.config.ts/postcss.config.js extraFiles entries removed from the `test` cache step (F3)",
+  ],
+  [
+    'OpenAPI types up to date',
+    'tailwind.config.ts',
+    "file does not exist in this repository -- same as Typecheck/tailwind.config.ts above; openapi:types's own condition includes step_test for the same reason as the Frontend tests + a11y entry directly above, and openapi-typescript never reads tailwind.config.ts regardless",
+  ],
 ];
 
 const PROBE_CORPUS = [

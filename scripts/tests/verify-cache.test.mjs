@@ -514,7 +514,7 @@ test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
 });
 
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
-  const diff = ['tailwind.config.ts'];
+  const diff = ['vite.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
 });
 

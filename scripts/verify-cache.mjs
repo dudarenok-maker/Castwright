@@ -199,8 +199,6 @@ export const STEPS = [
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',
-        'tailwind.config.ts',
-        'postcss.config.js',
         'index.html',
         /* api.clone-voice.test.ts pins the clone-transcript cap against the
            contract, so an openapi-only edit must bust this step's cache —
