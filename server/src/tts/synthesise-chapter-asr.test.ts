@@ -310,6 +310,48 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     });
     expect(res.segments.find((s) => s.kind !== 'title')?.asr?.verdict).toBe('ok');
   });
+
+  it('#2011: a transcribe rejection is logged and skipped, not fatal to the chapter', async () => {
+    // Mirrors the sidecar-side failure the issue traces (main.py's
+    // WhisperModel(...) raising on an unresolvable ASR_MODEL -> /transcribe
+    // 500 -> transcribe-client.ts throws) without needing a real sidecar:
+    // an injected transcribeFn that rejects outright, exactly what
+    // verifySegmentTranscript would surface from transcribeSegment.
+    const provider = makeProvider();
+    const failingTranscribe = async (): Promise<TranscribeResult> => {
+      throw new Error('TTS sidecar /transcribe returned 500: unresolvable ASR_MODEL repo');
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await synthesiseChapter({
+      sentences: [sentence(1), sentence(2)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      asr: { maxRerecords: 2, transcribeFn: failingTranscribe },
+    });
+
+    // Non-fatal: the chapter completes with real audio for both sentences,
+    // it does not abort mid-render.
+    expect(res.pcm.length).toBeGreaterThan(0);
+    const bodySegments = res.segments.filter((s) => s.kind !== 'title');
+    expect(bodySegments).toHaveLength(2);
+    // The QA verdict comes out "unavailable" — the segment's `asr` field is
+    // undefined, the same shape a chapter synthesised without ASR produces
+    // (see the 'is a no-op when asr is absent' test above) — not a fatal
+    // rejection out of synthesiseChapter.
+    for (const seg of bodySegments) {
+      expect(seg.asr).toBeUndefined();
+      expect(seg.asrSuspect).toBeUndefined();
+    }
+    // Matches the SPK embed pass's documented behaviour: logged, not silent.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ASR content-QA pass failed'),
+    );
+
+    warnSpy.mockRestore();
+  });
 });
 
 /* ASR drift re-records must flow through the SAME batched path as the initial
