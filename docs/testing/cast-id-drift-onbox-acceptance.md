@@ -275,7 +275,11 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
   so this doesn't move the re-render/damage total below (still 120) — 161 is
   no longer a proxy for "segments still needing repair".
 - **17 re-render rows, 120 segments** (unconditional on auto-record status) —
-  the actual damage figure.
+  the actual damage figure at the time this section was written. **Superseded
+  by the #2107 widened fix — see step 9a below: the current figure is 23
+  rows/188 segments**, and `the-torment`/`lightning-dave` (68 of those
+  segments) also move from "auto-reconciles, no alias needed" into a genuine
+  auto-record. This bullet is left as originally measured.
 - **0 books modified.**
 - **1 book missing analysis-cache evidence, 0 books with an auto-record
   withheld because of it** — two DIFFERENT numbers as of owner-decided
@@ -462,30 +466,75 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
 
 Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
-**#2107 fix (`fix/scripts-2107-rerender-rows`):** `collectSegmentOrphans`'s
-resolver reads `cast-id-history.json` off disk, and any id resolving via the
-`'history'`/`'normalised-history'` tiers used to hit the same blanket
-`continue` as a genuine `'exact'` live match — but both of those tiers depend
-on `supersededBy`, which can gain an entry (as it just had, from this very
-`--apply` run) strictly after the segment's audio was rendered. Fixed by
-routing those two tiers into `orphans` instead. Pinned by a cross-run
+**#2107 fix (`fix/scripts-2107-rerender-rows`), then WIDENED by an independent
+review + owner decision:** `collectSegmentOrphans`'s resolver reads
+`cast-id-history.json` off disk, and any id resolving via ANY successful tier
+used to hit the same blanket `continue` as a genuine live match. A first-round
+fix moved only the `'history'`/`'normalised-history'` tiers into `orphans` —
+both depend on `supersededBy`, which can gain an entry (as it just had, from
+this very `--apply` run) strictly after the segment's audio was rendered —
+while keeping `'normalised-id'` exempt, reasoned as depending only on the
+current live cast, never on `supersededBy`. **Independent review found that
+reasoning a non-sequitur**, using §8.1's OWN evidence: `the-torment`/
+`lightning-dave` recover under `'normalised-id'` today but were rendered
+*before Wave 1's resolver existed at all* (§1's `resolveGroup` substituted the
+narrator regardless of tier), so a `'normalised-id'` match today proves no
+*rename* happened, not that the rendered bytes are correct. There is no
+per-segment evidence on the real workspace to tell the two cases apart —
+`renderedFallbackCharacterId`/`characterSnapshots` are absent from all 84,642
+real segments. The owner's decision: **only `'exact'` counts as "audio is
+fine"; the other three tiers all list, unconditionally.** This ALSO changes
+what `--apply` *writes*, not merely the re-render list — an id that used to
+silently "auto-reconcile" with no alias ever recorded (the `autoReconciled`
+bucket, now removed entirely) can reach a real Tier A/B auto-record instead.
+A related gap closed alongside: the "already recorded" skip compared raw
+strings against `supersededBy` while the resolver itself also matches on a
+normalised key — now a widened id can reach that skip with real segments
+behind it, so it checks the same normalised footing the resolver does
+(confirmed latent, not live, on the real workspace: all three recorded
+aliases are already normalised fixed points). Pinned by a cross-run
 regression test in `scripts/tests/repair-cast-id-drift.test.mjs`
-(`buildOrphansFromSegments` describe block) that reproduces this exact
-before/after-alias sequence over a synthetic fixture. **Not yet re-confirmed
-against the real workspace** — see step 9a below, still owed.
+(`buildOrphansFromSegments` describe block) reproducing the before/after-alias
+sequence over a synthetic fixture, plus a `planBookRepairs` test pinning the
+write-set change and one pinning the normalised-footing skip. **That
+cross-run test uses two independent `buildOrphansFromSegments` calls with
+hand-written fake resolvers — it does not call `collectSegmentOrphans`, build
+a real `buildCastResolver`, or read a `cast-id-history.json` file, so the
+actual cross-run coupling (this script threading `history.supersededBy` into
+the resolver on each run) is verified only by the re-run below, not by the
+unit-test suite.**
 
-9a. Re-run the script in dry-run mode again, now on top of the #2107 fix
-    (`cd server && npm run build` off the fixed branch first).
+9a. Re-run the script in dry-run mode again, now on top of the widened #2107
+    fix (`cd server && npm run build` off the fixed branch first).
 
-Expected: the re-render list reads **17 rows / 120 segments** again — the
-same figure as the original §8.1 measurement, no longer regressed to 13/93 —
-while auto-recordable aliases, skipped, and report-only stay exactly as
-measured in step 9 above (the fix only changes which ids land in the
-re-render list, nothing else).
+Expected: **auto-recordable aliases, skipped, and report-only do NOT stay the
+same as step 9** — the widened fix changes the write-set, not merely the
+re-render list (I2, independent review, 2026-08-05; the earlier version of
+this run sheet claimed otherwise — that claim was false and has been
+corrected here). `the-torment`/`lightning-dave` move from invisible
+(auto-reconciled, no alias recorded) into a real 2-alias auto-record; the
+report-only total drops by exactly their 68 segments; the re-render list
+grows past the original 17/120 baseline, since `'normalised-id'` matches with
+real rendered segments (Exile/Unlocked's reserved-bucket ids, `sir-harding`,
+`silveny`, `pool-player-2`) now list too.
 
-Result: **NOT RUN as of the #2107 fix landing** — needs a rebuilt
-`server/dist` off the fixed branch and the real workspace; still owed (see
-§8.9).
+Result: **RUN 2026-08-05** (`server/dist` rebuilt off `fix/scripts-2107-rerender-rows`
+@ `1dbc340f`, dry run only, `WORKSPACE_DIR=C:/AudiobookWorkspace
+CACHE_DIR=C:/Claude/Projects/Audiobook-Generator/server/handoff/cache node
+scripts/repair-cast-id-drift.mjs`, no `--apply`). **Matches the corrected
+expectation above.** Auto-recordable aliases **0 → 2 (68 segments)**
+(`lightning-dave -> lightning_dave` 1 segment Tier A, `the-torment ->
+the_torment` 67 segments Tier B); skipped (already-recorded) **3, unchanged**
+(`mayrin`, `coalfall`, `lady-alina` — all three real aliases from step 4/5
+onward); reported for human decision **93 ids/161 segments → 91 ids/93
+segments** (161 − 68 = 93, 93 − 2 = 91 — the whole delta is
+`the-torment`/`lightning-dave` moving out); re-render candidates **13 rows/93
+segments (the #2107-regressed figure) → 23 rows/188 segments** — 188 is the
+original full-workspace orphan count (§1), the arithmetic check that this is
+now the complete set. Books scanned **20**; books missing analysis-cache
+evidence **1** (*Unlocked*, unchanged); books with an auto-record withheld
+**0** (unchanged, `--apply` not blocked). Full console output archived with
+the PR.
 
 ### 8.7 Confirm the fix reaches actual audio
 
@@ -518,8 +567,8 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
 - [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
-- [ ] Step 9a (post-#2107-fix dry run confirms re-render list back to 17/120) — still owed (needs a rebuild off the fixed branch + the real workspace)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed**, `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation via step 9a still owed), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
+- [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened** by independent review + owner decision, `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at step 9a), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

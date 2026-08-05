@@ -274,9 +274,11 @@ down, each a deliberate controller ruling made during implementation:
   fold-bucket id on the source AND the target side — #2093 residual 4),
   `snapshotsConsistent`, the reserved-source guard, the cross-source ambiguity
   veto, the zero-segment guard, `rankSnapshotCandidates`'s scoring, the
-  re-render list shape, `buildOrphansFromSegments` (the auto-reconciled map's
-  producer half, including the `'normalised-history'` tier — #2093 residual
-  5/6), `isCacheAvailable`/`readAnalysisCache` against real fixtures covering
+  re-render list shape, `buildOrphansFromSegments` (#2093 residual 6; #2107,
+  widened by independent review + owner decision 2026-08-05, to list every
+  tier except `'exact'` as an orphan — the `autoReconciled` bucket this used
+  to describe, including its `'normalised-id'`/`'normalised-history'`
+  split, no longer exists), `isCacheAvailable`/`readAnalysisCache` against real fixtures covering
   every refusal state — missing, unparseable, validly-parsing-but-names-zero-
   characters (independent-review Critical C1), and (pre-merge review I1) a
   validly-parsing entry whose id or name is an EMPTY STRING — `isCacheAvailable`
