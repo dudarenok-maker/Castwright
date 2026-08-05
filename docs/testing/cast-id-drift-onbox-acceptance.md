@@ -634,7 +634,50 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
 - [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
 - [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
+- [x] Step 9d run — **2026-08-05, round 1**, PASS against a REVISED expectation
+  that round 2 review then found was itself wrong: a dry run after #2097 /
+  #2135 / #2130 / #2134's FIRST fix reported auto-recordable **2/68 → 0/0**
+  and report-only **91/93 → 93/161**, on the reasoning that guard 4's
+  `'no-evidence'` outcome should withhold auto-record. **Round 2 review
+  replayed `planBookRepairs` with `supersededBy` emptied and found that
+  backwards**: `characterSnapshots` is written only for an id LIVE at
+  render time, so its ABSENCE for an orphan means the narrator was
+  substituted (the actual damage) and its PRESENCE means the audio is
+  already fine — a veto on absence blocks exactly the aliases that fix
+  real damage. The replay showed it would have blocked `mayrin`/`coalfall`
+  (two of the three aliases already applied and accepted on this box) while
+  passing the already-fine `lady-alina`. Reverted to an annotation
+  (`'no-evidence'` now auto-records, carrying a "guard 4 not evaluable"
+  note, rather than withholding).
+- [x] Step 9e run — **2026-08-05, round 2**, PASS: fresh dry run after the
+  round-2 fix reports figures IDENTICAL to the pre-#2134 baseline —
+  re-render **23 rows / 188 segments**, auto-recordable **2 aliases / 68
+  segments**, report-only **91 ids / 93 segments**, skipped **3** — all
+  unchanged from step 9c, because round 1's veto and round 2's fix cancel
+  out on this real data; what changed is the console annotation, not the
+  write decision. Also verified: books with unreadable bak evidence **0**,
+  books withheld for missing bak evidence **0** (#2135's gap not live on
+  this workspace today), books scanned **20** (no drops from #2097's new
+  `collectBooks` accounting either). See register row A33 for the full
+  writeup, including round 2's five smaller fixes (`collectBooks`
+  `Array.isArray` shape check, its `readdirSync` guard, the same shape
+  guard in `collectBakNameEntries`, `planApplyRefusal`'s absent-field
+  handling, and #2130's relocation into the server test suite).
+- [x] Step 9f run — **2026-08-05, round 3**, PASS: round-3 review found
+  #2097's own round-1/round-2 discriminator (`castExists || stateExists`,
+  cleared by round 1's review as "sound") itself misclassified the ordinary
+  mid-import/post-reparse shape — `state.json` present, `cast.json` not yet
+  written — as `'unreadable'`, refusing `--apply` for the whole workspace
+  over one freshly-imported, otherwise-healthy book. Fixed by judging each
+  file independently (a genuinely missing file is never lost evidence; only
+  a present-but-unreadable/wrong-shaped one is), pinned by a fixture using
+  the exact shape `import.ts` writes. **Not live on the real workspace
+  today** — none of the 20 books are mid-import — a fresh dry run reports
+  figures identical to step 9e: re-render **23 rows / 188 segments**,
+  auto-recordable **2 aliases / 68 segments**, report-only **91 ids / 93
+  segments**, skipped **3**, books scanned **20**. See register row A33's
+  round-3 correction for the full writeup.
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102), [#2097](https://github.com/dudarenok-maker/Castwright/issues/2097) + [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135) (evidence that can't be read must count as unknown, not clean — **fixed**, not live on this workspace; #2097's own discriminator itself misclassified an ordinary mid-import book and needed a round-3 correction, see step 9f), [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130) (resolver tier rename would go undetected — **fixed**, then relocated at round 2 after review found the original fix couldn't fire in CI), [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134) (guard 4/ranker inert on drifted ids — **fixed at round 1, found BACKWARDS by round 2 review, corrected to an annotation** — see steps 9d/9e)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

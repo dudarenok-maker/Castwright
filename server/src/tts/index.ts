@@ -113,6 +113,31 @@ export interface SynthesizeBatchInput {
   signal?: AbortSignal;
 }
 
+/** No `voiceSubstitutedFrom` here, unlike `SynthesizeOutput` — deliberate,
+    not an oversight (#2033, rescoped after premise check found no live
+    defect). Only `CoquiEngine._synthesize_claimed` and `KokoroEngine.synthesize`
+    (`server/tts-sidecar/main.py`) ever set `substituted_from`; batching is
+    Qwen-only, and `QwenEngine` never substitutes. A per-item field here would
+    carry a value that's structurally always null.
+
+    What actually enforces "Qwen-only" on the Node side is the
+    `route.engine === 'qwen'` arm of `isBatchable` (`synthesise-chapter.ts:2687`)
+    — NOT a feature-detect on this method. `synthesizeBatch` is an
+    UNCONDITIONAL method on `SidecarTtsProvider` (`server/src/tts/sidecar.ts:322`);
+    every route, Coqui/Kokoro/Qwen alike, gets one, so
+    `typeof route.provider.synthesizeBatch === 'function'` is true for all
+    three today and detects nothing. Covered by
+    `synthesise-chapter.test.ts:1597` ("keeps non-Qwen sentences one-per-call
+    while batching the Qwen ones").
+
+    On the Python side, `test_substituting_engines_cannot_batch`
+    (`server/tts-sidecar/tests/test_batch_synthesis.py`) pins that neither
+    `CoquiEngine` nor `KokoroEngine` exposes a usable `synthesize_batch`
+    (note the Python name — a different symbol on a different object from
+    the Node method above). `test_qwen_engine_never_constructs_a_substituted_synth_result`
+    covers the other arm: that `QwenEngine` never sets `substituted_from` in
+    the first place, since `SynthBatchResult` (unlike `SynthResult`) has
+    nowhere to carry that signal if it ever did. */
 export interface SynthesizeBatchOutput {
   /** One PCM blob per input item, SAME order. */
   pcms: Buffer[];

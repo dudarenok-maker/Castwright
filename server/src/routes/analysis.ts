@@ -105,6 +105,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import {
   mergeAnalysisResultWithExistingCast,
   overlayInterimCastForLiveView,
@@ -2909,7 +2910,18 @@ export async function runMainAnalyzerJob(
          the legacy non-workspace path have no bookDir; the guard
          keeps it cheap). */
       if (recordRef.bookDir) {
-        await rm(castJsonPath(recordRef.bookDir), { force: true });
+        /* #1981 Task 11 — the delete must be serialised against the other 34
+           cast.json writers the same way they're serialised against each
+           other: a writer that acquires the lock AFTER this delete would
+           otherwise recreate cast.json from its own stale read, resurrecting
+           the roster this delete exists to remove (design §4 rule 1 — this
+           is the innermost, one-level lock around the whole read-through-
+           delete span; the delete itself has no read of its own to pull
+           inside it). This file's five merge-base writes plus
+           readPriorCastForMerge are deliberately out of scope here — tracked
+           on #2015, not folded into this lock. */
+        const freshBookDir = recordRef.bookDir;
+        await withCastLock(freshBookDir, () => rm(castJsonPath(freshBookDir), { force: true }));
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
         /* Start fresh intentionally discards reuse continuity — drop the
            reparse carryover too so it can't resurrect links (srv-13). */

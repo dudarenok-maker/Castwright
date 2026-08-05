@@ -1586,6 +1586,95 @@ to sweep the **whole** 20-book workspace at once.
 > fold-bucket **source** is never auto-recorded regardless of evidence, which
 > fires before the ambiguity veto matters at all.
 >
+> **Four more filed issues fixed 2026-08-05
+> ([#2097](https://github.com/dudarenok-maker/Castwright/issues/2097),
+> [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135),
+> [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130),
+> [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134)),
+> after a round-2 review caught #2134's first fix backwards:**
+>
+> - **#2134 round 1 (guard 4/ranker inert on drifted ids) turned
+>   `classifySnapshotEvidence`'s new `'no-evidence'` outcome into a VETO —
+>   round 2 review found that backwards and reverted it to an annotation.**
+>   `characterSnapshots` is a file-level map written ONLY for an id that was
+>   LIVE in `cast.json` at render time. Every id this loop considers is, by
+>   definition, NOT live today (that is what makes it an orphan) — so for
+>   this population, snapshot presence/absence is not neutral: **presence**
+>   means the id WAS live at render (audio already correct, drift happened
+>   after) and **absence** means the narrator was substituted (the actual
+>   A32 damage this pass exists to fix). A veto on absence therefore blocks
+>   exactly the aliases that repair real damage and passes exactly the ones
+>   that needed no repair — replayed against the real workspace with
+>   `supersededBy` emptied, the round-1 veto would have blocked **two of the
+>   three aliases already applied and accepted on this box**
+>   (`mayrin`→`mairin`, `coalfall`→`coalfall-dragon`) while letting the
+>   already-fine `lady-alina`→`dame-alina` alias through. `'no-evidence'`
+>   now flows through to auto-record, carrying an honest "guard 4 not
+>   evaluable" annotation on the row and console line instead of either a
+>   false claim of verification (the pre-#2134 state) or a wrong block (the
+>   round-1 fix). `'conflict'` (real, disagreeing snapshot evidence for a
+>   named id) is unaffected and still downgrades to report-only. **Net
+>   effect: the fresh dry run's figures are IDENTICAL to the pre-#2134
+>   baseline** — auto-recordable **2 aliases / 68 segments**, report-only
+>   **91 ids / 93 segments**, re-render **23 rows / 188 segments** — because
+>   round 1's veto and round 2's fix cancel out for this real data; what
+>   changed is honesty (the console line now says plainly when guard 4 had
+>   nothing to verify), not the write decision.
+> - **#2097 + #2135 (evidence that can't be read must count as UNKNOWN, not
+>   CLEAN) — confirmed sound by round-2 review; NOT live on the real
+>   workspace today, no figure change.** `collectBooks` now counts and names
+>   any dropped book (`'not-yet-analysed'` vs `'unreadable'`, the latter
+>   refusing `--apply`); `collectBakNameEntries` now returns `bakAvailable`,
+>   gating a per-book `withheldForMissingBak` auto-record guard the same way
+>   `cacheAvailable` already gates cache. Round 2 also closed five smaller
+>   gaps found by review: `collectBooks`'s shape check now uses
+>   `Array.isArray`, not truthiness (a truthy non-array `characters` field
+>   used to be silently accepted and later crashed `planBookRepairs`); its
+>   `readdirSync` calls are now guarded the same way its bak sibling's is
+>   (an unreadable author/series directory used to throw out of `main()`
+>   uncaught); `collectBakNameEntries`'s `characters` field is now
+>   `Array.isArray`-checked too (a string silently iterated to zero entries,
+>   an object threw); and a suspected (unverified — not reproducible on this
+>   box) gap where `fs.existsSync` swallows `EACCES` the same as "doesn't
+>   exist" is closed defensively via a tri-state file read that
+>   distinguishes `ENOENT` from every other read failure. The fresh dry run
+>   reports **books scanned: 20** (no drops — every book's
+>   `cast.json`/`state.json` is readable), **books with unreadable
+>   cast.json.bak.* evidence: 0**, and **books with an auto-record withheld
+>   for missing bak evidence: 0** — matching #2135's own real-workspace scan
+>   (41 bak files, 0 unparseable). **Correction (round 3 review,
+>   2026-08-05): the "confirmed sound" claim above was itself wrong.**
+>   `collectBooks`'s discriminator required BOTH `cast.json` AND
+>   `state.json` to be genuinely missing before granting the legitimate
+>   `'not-yet-analysed'` reason — but `state.json` is written at import
+>   time, before any analysis, and `cast.json` is created only later, during
+>   analysis stage 1 (reparse re-creates the identical shape: it deletes
+>   `cast.json` and keeps `state.json`), so a book between import and first
+>   analysis has `state.json` present and `cast.json` absent — misclassified
+>   as `'unreadable'`, refusing `--apply` for the entire workspace over one
+>   freshly-imported, otherwise-healthy book. Fixed by judging each file
+>   independently: only a file that is PRESENT but unreadable or
+>   wrong-shaped counts as lost evidence; a file that is genuinely missing
+>   never does, whichever file it is. **Not live on the real workspace
+>   today** — none of the 20 books are mid-import — so no figure moves.
+> - **#2130 (a resolver tier rename would go undetected) — relocated after
+>   round 2 review found the original fix couldn't fire in CI at all, for
+>   two independent reasons: the job that runs it never builds the server,
+>   and (separately fatal) that job's own scope condition doesn't even run
+>   on a `server/src`-only diff.** The coupling test now lives at
+>   `server/src/store/cast-resolve.repair-pass-contract.test.ts`, in the
+>   **server** test suite — vitest transpiles `cast-resolve.ts` straight
+>   from source (no `server/dist` build needed) and that suite already runs
+>   on every `server/src/` change, closing both gaps at once. Proven twice:
+>   renamed `'exact'` to `'exact-id'` in `cast-resolve.ts`, ran the new test
+>   with `server/dist` entirely absent (confirming no build is needed) and
+>   watched it go red, then reverted. Test-only, no script behaviour change,
+>   no figure change.
+>
+> Dry run command: `WORKSPACE_DIR=C:/AudiobookWorkspace
+> CACHE_DIR=<primary-checkout>/server/handoff/cache node
+> scripts/repair-cast-id-drift.mjs` (no `--apply`).
+
 > **Further revision, #2092/#2089 Task 9 (pair-scoped reject filter):** the
 > `--apply` run recorded above predates this fix and involved zero rejected
 > pairs — no book in the real workspace has ever had a `rejectedPairs` (or

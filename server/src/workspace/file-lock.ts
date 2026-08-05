@@ -8,12 +8,23 @@ export async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise
   const prior = chains.get(key) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  chains.set(key, prior.then(() => gate, () => gate));
+  /* `mine` is what goes in the map. The old code compared against `gate`, which
+     is never what was stored, so this delete never ran and the map grew one
+     entry per key for the process lifetime. */
+  const mine = prior.then(() => gate, () => gate);
+  chains.set(key, mine);
   await prior.catch(() => undefined);
   try {
     return await fn();
   } finally {
     release();
-    if (chains.get(key) === gate) chains.delete(key);
+    if (chains.get(key) === mine) chains.delete(key);
   }
+}
+
+/** Test-only: the number of live chain entries. Used to pin the cleanup in
+ *  Task 3 — NOT a partition detector (design §10.3 explains why that idea was
+ *  rejected). */
+export function __chainsSizeForTest(): number {
+  return chains.size;
 }

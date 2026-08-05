@@ -37,6 +37,7 @@ import {
   qwenVoiceWavPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
@@ -149,11 +150,10 @@ export async function persistEmotionVariant(
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return;
-  const baseVoiceId = qwenStorageKey(character, characterId);
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
-  const addVariant = (c: CastCharacter): CastCharacter => {
+  const addVariant = (c: CastCharacter, baseVoiceId: string): CastCharacter => {
     const map = { ...(c.overrideTtsVoices ?? {}) };
     const qwen = map.qwen ?? { name: baseVoiceId };
     map.qwen = {
@@ -166,15 +166,45 @@ export async function persistEmotionVariant(
 
   if (seriesFilter) {
     /* Linked-cast propagation across the series (matches on the linked
-       identity `voiceId ?? id`, the same key applyOverrideToCastFiles uses). */
-    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, addVariant);
+       identity `voiceId ?? id`, the same key applyOverrideToCastFiles uses).
+       forEachMatchingCastCharacter takes its own per-book cast lock as it
+       walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
+       unlocked and delegating; it must not gain a lock of its own.
+
+       I4 — unlike the book-scoped branch below, `baseVoiceId` here is NOT
+       re-derived per target book inside that per-book lock: it is computed
+       once, from THIS function's own unlocked outer read of the source
+       character, and propagated as-is into every matching book's locked
+       write. That is deliberate — the point of this branch is stamping the
+       source's key onto the series, not re-deriving each target's own — but
+       it does leave a staleness window (a concurrent redesign of the source
+       between this read and a given target's write still propagates the OLD
+       key). Cross-book propagation staleness is tracked on #2006, not fixed
+       here. */
+    const baseVoiceId = qwenStorageKey(character, characterId);
+    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
+      addVariant(c, baseVoiceId),
+    );
     return;
   }
 
-  /* No series context — book-scoped write. */
-  const idx = cast.characters.findIndex((c) => c.id === characterId);
-  cast.characters[idx] = addVariant(character);
-  await writeJsonAtomic(castJsonPath(bookDir), cast);
+  /* Book-scoped write — this function carries no other lock, so the read
+     above is an early-out optimisation only: a concurrent book-scoped writer
+     can land between it and the write below. Re-read and re-decide inside
+     the cast lock, including `baseVoiceId` (the default slot name), which
+     must come from the FRESH character, not the one captured above. I4 —
+     this is the mirror image of the series branch above, which propagates
+     the SOURCE's baseVoiceId by design instead of re-deriving it per book;
+     see that branch's comment. */
+  await withCastLock(bookDir, async () => {
+    const fresh = await readJson<CastFile>(castJsonPath(bookDir));
+    const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
+    if (!fresh || idx === -1) return;
+    const freshCharacter = fresh.characters[idx];
+    const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
+    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
+    await writeJsonAtomic(castJsonPath(bookDir), fresh);
+  });
 }
 
 /* srv-43 — ensure a character has an immutable voiceUuid BEFORE its bespoke
@@ -196,24 +226,41 @@ export async function ensureCharacterVoiceUuid(
     if (!cast || !character) return undefined;
     if (character.voiceUuid) return character.voiceUuid;
 
-    const uuid = nanoid();
-    const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
-
     if (seriesFilter) {
+      /* forEachMatchingCastCharacter takes its own per-book cast lock as it
+         walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
+         unlocked and delegating; it must not gain a lock of its own. */
+      const uuid = nanoid();
+      const stamp = (c: CastCharacter): CastCharacter => ({ ...c, voiceUuid: uuid });
       await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, stamp);
       return uuid;
     }
-    /* Book-scoped — stamp every character in THIS book sharing the linked id. */
-    const linkId = character.voiceId ?? character.id;
-    let dirty = false;
-    for (let i = 0; i < cast.characters.length; i++) {
-      if ((cast.characters[i].voiceId ?? cast.characters[i].id) === linkId) {
-        cast.characters[i] = stamp(cast.characters[i]);
-        dirty = true;
+
+    /* Book-scoped — the design lock above serialises only against OTHER
+       design-lock holders (e.g. another design on this book), not against a
+       non-design cast.json writer (e.g. cast-aliases), so the read above is
+       an early-out optimisation only. Re-read and re-decide inside the cast
+       lock: re-check `voiceUuid` (another concurrent mint may have landed)
+       and re-derive the linked-sibling set from a FRESH cast, not the one
+       captured above. */
+    return withCastLock(bookDir, async () => {
+      const freshCast = await readJson<CastFile>(castJsonPath(bookDir));
+      const freshChar = freshCast?.characters?.find((c) => c.id === characterId);
+      if (!freshCast || !freshChar) return undefined;
+      if (freshChar.voiceUuid) return freshChar.voiceUuid;
+
+      const uuid = nanoid();
+      const linkId = freshChar.voiceId ?? freshChar.id;
+      let dirty = false;
+      for (let i = 0; i < freshCast.characters.length; i++) {
+        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+          freshCast.characters[i] = { ...freshCast.characters[i], voiceUuid: uuid };
+          dirty = true;
+        }
       }
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), cast);
-    return uuid;
+      if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
+      return uuid;
+    });
   });
 }
 
@@ -648,11 +695,22 @@ qwenVoiceRouter.post(
   },
 );
 
+/* #2127 — bound for the sidecar cache-evict fetches below. Node's undici
+   defaults to a 300s fetch timeout; a sidecar that accepts the TCP connection
+   but is blocked (mid model load or recycle — routine on this box) would
+   otherwise hang the caller for up to five minutes even though eviction is
+   purely best-effort (a cheap in-memory dict pop on the sidecar side — see
+   `evictSidecarVoice` in workspace/purge-clone-artifacts.ts for the same
+   endpoint's cost analysis). Single-digit seconds is generous for that. */
+export const EVICT_FETCH_TIMEOUT_MS = 3_000;
+
 /* Tear down a designed emotion variant: delete its `.pt`/`.json` embedding +
    persona sidecar and evict it from the sidecar's in-memory prompt cache.
-   Best-effort throughout — a missing file or unreachable sidecar is non-fatal.
-   Does NOT touch cast.json; the caller owns the slot mutation + atomic write so
-   it can batch multiple removals into a single write. Shared by the per-emotion
+   Best-effort throughout — a missing file, unreachable sidecar, or timed-out
+   evict (see EVICT_FETCH_TIMEOUT_MS) is non-fatal: `fetch` rejecting with an
+   AbortError lands in the same bare `catch` as a network failure. Does NOT
+   touch cast.json; the caller owns the slot mutation + atomic write so it can
+   batch multiple removals into a single write. Shared by the per-emotion
    DELETE route and the redesign-invalidation in promote-voice. */
 async function tearDownEmotionVariant(designedId: string): Promise<void> {
   await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
@@ -662,9 +720,10 @@ async function tearDownEmotionVariant(designedId: string): Promise<void> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voiceId: designedId }),
+      signal: AbortSignal.timeout(EVICT_FETCH_TIMEOUT_MS),
     });
   } catch {
-    /* sidecar unreachable — non-fatal */
+    /* sidecar unreachable, or the evict timed out (AbortError) — non-fatal */
   }
 }
 
@@ -763,15 +822,19 @@ qwenVoiceRouter.post(
 
     /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
        a down/empty sidecar has nothing cached, and generation reads the fresh
-       `.pt` from disk regardless. */
+       `.pt` from disk regardless. #2127 — bounded by EVICT_FETCH_TIMEOUT_MS
+       (see tearDownEmotionVariant above), so a blocked-but-listening sidecar
+       can't hold this open for undici's 300s default; AbortError lands in the
+       same bare `catch` as a network failure. */
     try {
       await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ voiceId: realVoiceId }),
+        signal: AbortSignal.timeout(EVICT_FETCH_TIMEOUT_MS),
       });
     } catch {
-      /* sidecar unreachable — non-fatal */
+      /* sidecar unreachable, or the evict timed out (AbortError) — non-fatal */
     }
 
     /* A redesign replaces the base embedding in place, so every emotion variant
@@ -784,16 +847,34 @@ qwenVoiceRouter.post(
        character's tagged emotions then re-register as missing demand, so the
        cast's "Design full cast → Emotion variants" scope re-mints the ones the
        user still wants from the new base. */
-    const qwenSlot = character.overrideTtsVoices?.qwen;
-    if (qwenSlot?.variants && Object.keys(qwenSlot.variants).length > 0) {
-      const staleVariantIds = Object.values(qwenSlot.variants)
-        .map((v) => v?.name)
-        .filter((n): n is string => !!n);
-      delete qwenSlot.variants;
-      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
-      for (const variantId of staleVariantIds) {
-        await tearDownEmotionVariant(variantId);
+    let staleVariantIds: string[] = [];
+    /* Narrow by design. The artifact moves and the sidecar evict above stay OUTSIDE
+       this lock: those fetches are best-effort network calls (#2127 — now bounded
+       by EVICT_FETCH_TIMEOUT_MS, but still no reason to pin the lock for even that
+       bounded worst case) that would otherwise stall every cast write for this
+       book. Global order: no other lock is held here (cast is last — see
+       cast-lock.ts rule 4). */
+    await withCastLock(located.bookDir, async () => {
+      const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
+      const freshChar = fresh?.characters?.find((c) => c.id === characterId);
+      if (!fresh || !freshChar) return; // deleted mid-promotion — artifacts already moved
+      const freshSlot = freshChar.overrideTtsVoices?.qwen;
+      /* KEEP this guard — it is the current behaviour (qwen-voice.ts:788) and it
+         encloses the write. Without it every promote-voice writes cast.json and
+         takes the lock even when the character has no emotion variants, which is
+         the common path. Evaluated against the FRESH slot, per rule 2. */
+      if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
+        staleVariantIds = Object.values(freshSlot.variants)
+          .map((v) => v?.name)
+          .filter((n): n is string => !!n);
+        delete freshSlot.variants;
+        await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
+    });
+    /* Teardown stays outside: filesystem work, and holding the lock across it
+       reintroduces exactly the stall this narrowing avoids. */
+    for (const variantId of staleVariantIds) {
+      await tearDownEmotionVariant(variantId);
     }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the
@@ -879,22 +960,42 @@ qwenVoiceRouter.delete(
 
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
-    const character = cast?.characters?.find((c) => c.id === characterId);
-    if (!character || !cast) {
+
+    /* C1 fix — mirrors promote-voice above (qwen-voice.ts, the
+       "Narrow by design" comment on its own withCastLock call): the read is
+       inside the lock, and the 404 + the variant-map mutation are both
+       decisions derived from it (rule 2), but `tearDownEmotionVariant`'s
+       sidecar `fetch` is a best-effort network call (#2127 — now bounded by
+       EVICT_FETCH_TIMEOUT_MS rather than Node's undici ~300s default), so
+       holding the lock across it would still needlessly pin this book's cast
+       lock for that bounded worst case — and, per cast-lock.ts rule 4, stall
+       a request queued behind it for `library-voice:<uuid>` too. Compute the
+       designed id from the locked read, close the lock, then run the
+       teardown after — filesystem work + a best-effort network call, nothing
+       that needs the lock. */
+    const designedId = await withCastLock(located.bookDir, async (): Promise<string | undefined> => {
+      const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+      const character = cast?.characters?.find((c) => c.id === characterId);
+      if (!character || !cast) return undefined;
+
+      /* Drop the slot from cast.json (preserving base + sibling variants). */
+      const qwenSlot = character.overrideTtsVoices?.qwen;
+      if (qwenSlot?.variants && emotion in qwenSlot.variants) {
+        delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
+        if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
+        await writeJsonAtomic(castJsonPath(located.bookDir), cast);
+      }
+
+      return `${qwenStorageKey(character, characterId)}__${emotion}`;
+    });
+
+    if (designedId === undefined) {
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
 
-    /* Drop the slot from cast.json (preserving base + sibling variants). */
-    const qwenSlot = character.overrideTtsVoices?.qwen;
-    if (qwenSlot?.variants && emotion in qwenSlot.variants) {
-      delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
-      if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
-      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
-    }
-
-    /* Delete the designed embedding + persona sidecar and evict it (best-effort). */
-    await tearDownEmotionVariant(`${qwenStorageKey(character, characterId)}__${emotion}`);
+    /* Delete the designed embedding + persona sidecar and evict it (best-effort),
+       outside the lock — see the comment above. */
+    await tearDownEmotionVariant(designedId);
 
     return res.status(200).json({ ok: true, removed: emotion });
   },

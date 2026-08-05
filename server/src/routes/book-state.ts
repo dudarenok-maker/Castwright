@@ -33,6 +33,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock } from '../workspace/file-lock.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -675,8 +676,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir, state } = located;
     switch (body.slice) {
       case 'cast': {
-        const guarded = await preserveDesignedVoices(bookDir, body.patch);
-        await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
+        /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
+           `existing` cast that feeds the clone-consent guards) and the write
+           below it must be one atomic span: locking only the write would
+           leave the guards reading a snapshot that a concurrent writer (e.g.
+           POST /voice-library/:voiceUuid/assign) can invalidate between the
+           read and this write, silently erasing whatever it just planted. */
+        await withCastLock(bookDir, async () => {
+          const guarded = await preserveDesignedVoices(bookDir, body.patch);
+          await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
+        });
         break;
       }
       case 'manuscript': {
@@ -964,8 +973,12 @@ async function applyReparse(
   const ad = audioDir(bookDir);
   await Promise.all([
     clearAnalysisCache(state.manuscriptId),
+    /* #1981 Task 11 — this arm (only this arm) takes the cast lock around the
+       delete. A writer that acquired the lock after an unlocked delete would
+       recreate cast.json from its own stale read, resurrecting the roster
+       this reparse deliberately discards. */
     existsSync(castJsonPath(bookDir))
-      ? rm(castJsonPath(bookDir), { force: true })
+      ? withCastLock(bookDir, () => rm(castJsonPath(bookDir), { force: true }))
       : Promise.resolve(),
     existsSync(revisionsJsonPath(bookDir))
       ? rm(revisionsJsonPath(bookDir), { force: true })

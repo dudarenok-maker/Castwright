@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 export const castAddFromRosterRouter = Router();
@@ -101,55 +102,67 @@ castAddFromRosterRouter.post(
       });
     }
 
-    const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
-    const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
-    if (!sourceCast?.characters) {
-      return res
-        .status(409)
-        .json({ error: 'Source book has no cast.json yet. Confirm cast before adding.' });
-    }
-    if (!targetCast?.characters?.length) {
-      return res.status(409).json({ error: 'Target book has no cast on disk.' });
-    }
+    /* #1981 — lock the SOURCE book only (it's the only one written); the
+       target read below is a read-only consultation, not a second RMW, so
+       `withCastLocks` (which would ALSO take a lock on the target book) would
+       be widening the lock for no reason. The target read is a documented
+       check-then-act residual (the target character could change between
+       this read and use) — out of scope for this task, same as the other
+       cross-book sites in this sweep. */
+    return withCastLock(sourceLocated.bookDir, async () => {
+      const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
+      const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
+      if (!sourceCast?.characters) {
+        return res
+          .status(409)
+          .json({ error: 'Source book has no cast.json yet. Confirm cast before adding.' });
+      }
+      if (!targetCast?.characters?.length) {
+        return res.status(409).json({ error: 'Target book has no cast on disk.' });
+      }
 
-    const target = targetCast.characters.find((c) => c.id === targetCharacterId);
-    if (!target)
-      return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
+      const target = targetCast.characters.find((c) => c.id === targetCharacterId);
+      if (!target)
+        return res.status(404).json({ error: `Target character "${targetCharacterId}" not found.` });
 
-    /* Mint a unique id within the source book's cast. Prefer a readable
-       slug derived from the target's id; fall back to a random suffix
-       if it would collide. */
-    const existingIds = new Set(sourceCast.characters.map((c) => c.id));
-    const baseSlug = `${target.id}_from_${targetBookId.slice(0, 8)}`;
-    let newId = baseSlug;
-    if (existingIds.has(newId)) {
-      newId = `${baseSlug}_${randomBytes(3).toString('hex')}`;
-    }
+      /* Mint a unique id within the source book's cast. Prefer a readable
+         slug derived from the target's id; fall back to a random suffix
+         if it would collide. */
+      const existingIds = new Set(sourceCast.characters.map((c) => c.id));
+      const baseSlug = `${target.id}_from_${targetBookId.slice(0, 8)}`;
+      let newId = baseSlug;
+      if (existingIds.has(newId)) {
+        newId = `${baseSlug}_${randomBytes(3).toString('hex')}`;
+      }
 
-    const newCharacter: PersistedCharacter = {
-      id: newId,
-      name: target.name,
-      role: target.role ?? 'character',
-      color: target.color ?? 'unset',
-      gender: target.gender,
-      ageRange: target.ageRange,
-      voiceId: target.voiceId,
-      voiceState: 'reused',
-      matchedFrom: {
-        bookId: targetBookId,
-        characterId: targetCharacterId,
-        bookTitle: targetLocated.state.title,
-        confidence: 1,
-      },
-    };
+      const newCharacter: PersistedCharacter = {
+        id: newId,
+        name: target.name,
+        role: target.role ?? 'character',
+        color: target.color ?? 'unset',
+        gender: target.gender,
+        ageRange: target.ageRange,
+        voiceId: target.voiceId,
+        voiceState: 'reused',
+        matchedFrom: {
+          bookId: targetBookId,
+          characterId: targetCharacterId,
+          bookTitle: targetLocated.state.title,
+          confidence: 1,
+        },
+      };
 
-    const nextCharacters: PersistedCharacter[] = [...sourceCast.characters, newCharacter];
-    await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), { characters: nextCharacters });
+      const nextCharacters: PersistedCharacter[] = [...sourceCast.characters, newCharacter];
+      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+        ...sourceCast,
+        characters: nextCharacters,
+      });
 
-    console.log(
-      `[cast-add-from-roster] ${sourceBookId} ← ${targetBookId}/${targetCharacterId} as "${newId}"`,
-    );
+      console.log(
+        `[cast-add-from-roster] ${sourceBookId} ← ${targetBookId}/${targetCharacterId} as "${newId}"`,
+      );
 
-    return res.json({ character: newCharacter });
+      return res.json({ character: newCharacter });
+    });
   },
 );

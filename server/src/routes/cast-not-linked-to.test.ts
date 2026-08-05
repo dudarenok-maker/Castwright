@@ -14,12 +14,38 @@
    Same lazy-import pattern as cast-link-prior.test.ts so WORKSPACE_DIR
    is set before paths.ts binds BOOKS_ROOT. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #1981 (Task 8) — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the AB/BA
+   deadlock test at the bottom of this file can deterministically intercept
+   this route's OWN `findBookByBookId` calls (bound at scan.js's own
+   module-load time). Defaults to a plain passthrough — every other test in
+   this file behaves exactly as if this mock weren't here. See that test's
+   own header comment for why a bare `Promise.all` of two live requests
+   can't reliably exercise this path (going from "outer lock acquired" to
+   "inner lock requested" is a same-tick microtask with no code seam of its
+   own to hold open — a race at the HTTP layer almost always lets one
+   request win outright before the other even asks for its first lock). */
+vi.mock('../workspace/scan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/scan.js')>();
+  return { ...actual, findBookByBookId: vi.fn(actual.findBookByBookId) };
+});
+
+/* #2123 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the lock-detector
+   test at the bottom of this file can intercept this route's OWN in-lock
+   `readJson(cast.json)` call. Defaults to a plain passthrough — every other
+   test in this file behaves exactly as if this mock weren't here. Same
+   idiom as the `scan.js` mock above and as voices.test.ts's /
+   book-state.reparse.test.ts's own #1981 race tests. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -105,10 +131,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-not-linked-to-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castNotLinkedToRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-not-linked-to.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { castNotLinkedToRouter } = await import('./cast-not-linked-to.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   exileBookId = makeBookId(AUTHOR, SERIES, EXILE_BOOK);
   otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);
@@ -257,6 +281,110 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
     expect(res2.status).toBe(200);
     expect(after).toEqual(before);
   });
+
+  /* #1981 (Task 8) — this route now holds withCastLocks([source, other])
+     across its read-through-write span, sorted so a concurrent call with
+     the two books in opposite roles can't AB/BA the promise-chain mutex.
+
+     A bare `Promise.all` of the two live requests (no scripting) turns out
+     NOT to exercise this reliably: going from "outer lock granted" to
+     "inner lock requested" inside withCastLocks's reduceRight chain is a
+     same-tick microtask with no application code — and no seam to hold
+     open — in between, so whichever request's preamble (two real
+     `findBookByBookId` disk reads) happens to finish first typically wins
+     BOTH its lock acquisitions before the second request even asks for its
+     first. Verified empirically: with `withCastLocks`'s `.sort()` removed,
+     a bare-`Promise.all` version of this test still passed 5/5 runs — a
+     placebo that would never catch a real regression.
+
+     Instead, script the interleaving deterministically: intercept BOTH
+     requests' SECOND `findBookByBookId` call (each request's `otherBookId`
+     lookup — the one immediately preceding withCastLocks) and hold each
+     one's resolution open until BOTH have arrived. Because the fixture
+     books are the same two ids in swapped roles, the second-ever lookup of
+     `keeperBookId` is deterministically call2's "other" lookup, and the
+     second-ever lookup of `exileBookId` is deterministically call1's
+     "other" lookup — true regardless of which physical request reaches
+     that point first. Once both are waiting, release both at once: their
+     continuations resume back-to-back on the microtask queue (JS drains
+     one fully, through its outer lock's synchronous registration and up to
+     its own first internal await, before starting the next) — the exact
+     mechanics cast-lock.test.ts's own AB/BA test relies on when it calls
+     `withCastLocks` directly, reproduced here through the real route. No
+     external timeout is needed to trigger the release (the barrier is
+     self-releasing once both arrive); the outer `Promise.race` only exists
+     to catch an actual deadlock, per the module header's mock rationale. */
+  it('#1981 — two concurrent calls with the books in opposite argument order do not deadlock', async () => {
+    const scan = await import('../workspace/scan.js');
+    const actual = await vi.importActual<typeof import('../workspace/scan.js')>(
+      '../workspace/scan.js',
+    );
+    const seen: Record<string, number> = {};
+    let arrived = 0;
+    let releaseBoth!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const spy = vi.mocked(scan.findBookByBookId).mockImplementation(async (id: string) => {
+      seen[id] = (seen[id] ?? 0) + 1;
+      const isOtherLookup =
+        seen[id] === 2 && (id === keeperBookId || id === exileBookId);
+      const result = await actual.findBookByBookId(id); // real read, now
+      if (isOtherLookup) {
+        arrived += 1;
+        if (arrived === 2) releaseBoth();
+        await gate; // hold the RESOLUTION open until both requests arrive
+      }
+      return result;
+    });
+
+    let result: unknown;
+    let responses: [{ status: number }, { status: number }] | undefined;
+    try {
+      result = await Promise.race([
+        Promise.all([
+          callNotLinked(keeperBookId, 'wren', {
+            otherBookId: exileBookId,
+            otherCharacterId: 'wren',
+          }),
+          callNotLinked(exileBookId, 'wren', {
+            otherBookId: keeperBookId,
+            otherCharacterId: 'wren',
+          }),
+        ]).then((r) => {
+          responses = r as [{ status: number }, { status: number }];
+          return 'settled';
+        }),
+        new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+      ]);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.findBookByBookId);
+    }
+    expect(result).toBe('settled');
+
+    /* #1981 fix-round Finding 3 — 'settled' alone doesn't rule out both
+       requests 500ing after their second book lookup (the barrier only
+       guarantees both reached that lookup, not that either succeeded).
+       Assert the HTTP status AND that both sides of the symmetric pair
+       actually landed on disk. Both calls write the SAME symmetric pair
+       (just with source/other swapped), so the outcome is deterministic
+       regardless of which request's critical section the lock let run
+       first — appendNotLinked is idempotent, so the second call's write is
+       a no-op once the first has already recorded the pair. */
+    expect(responses?.[0].status).toBe(200);
+    expect(responses?.[1].status).toBe(200);
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
+    );
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+      (c) => c.id === 'wren',
+    );
+    expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+    expect(wrenExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'wren' }]);
+  });
 });
 
 describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', () => {
@@ -344,5 +472,227 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
       otherCharacterId: 'lonely',
     });
     expect(standalone.status).toBe(404);
+  });
+});
+
+/* #2123 (srv-87) — cast-not-linked-to.ts was the only cast-lock-sweep site
+   with no BEHAVIOURAL lock detector: the #1981 AB/BA test above defends
+   ordering (a lock-order inversion), not the lock's existence — neutralise
+   `withCastLocks` down to `return fn();`, or keep the wrapper in place but
+   hoist `sourceCast`'s read back outside it (a rule-2 regression — the same
+   stale-snapshot clobber OUTCOME as the `library-cast-override.ts` defect
+   fixed elsewhere on this branch, though that one was a same-book
+   same-character-vs-different-character aliasing bug with zero concurrency
+   involved; the two share an outcome, not a shape), and that test stayed
+   green either way.
+
+   Both of this route's locked handlers — POST (mark) and DELETE (unmark) —
+   have a structurally identical read-through-write span, so BOTH get their
+   own detector below, via the shared `runLockDetector` helper. An earlier
+   version of this describe covered POST only; an independent review found
+   that hoisting DELETE's `sourceCast` read outside its own retained
+   `withCastLocks` left the whole file green, 16/16 — the static
+   `cast-lock.guard.test.ts` regression guard can't see it either, since it
+   checks where the WRITE sits, not the read.
+
+   The racer in both detectors is a genuine `withCastLocks([bookDir], ...)`
+   writer — the SAME primitive this route calls, not a different one
+   (`withCastLock` singular has no reduceRight chain to bypass and this
+   route never calls it) — touching a field this route never reads:
+   `narrator.raceProbe`. Orthogonal by construction, so its survival (or
+   loss) is a clean signal independent of the route's own notLinkedTo
+   bookkeeping.
+
+   The target's IN-LOCK read of `sourceCast` is gated via the hoisted
+   `vi.mock` on state-io.js above — real bytes are read immediately (so the
+   interception genuinely happens-before the racer's write), only the
+   JS-visible resolution is held open. Firing the racer only once THAT read
+   is confirmed intercepted matters: gating an earlier, outer read (e.g. one
+   of the pre-lock `findBookByBookId` lookups) lets the racer finish before
+   the target ever asks for its lock, which passes even with the lock
+   primitive neutralised — a placebo. This construction catches all three
+   mutations (lock neutralised, POST's read hoisted, DELETE's read hoisted)
+   without needing a dedicated test per mutation:
+
+   - Correct code: the target already holds the real per-key mutex on the
+     keeper book when its read is intercepted, so the racer's own
+     `withCastLocks` call queues behind it and doesn't even ENTER its
+     critical section (see `racerEntered` below) — let alone complete its
+     read+write — until the target's write has landed and released the
+     lock. Both changes survive.
+   - Lock neutralised: the target's held-open read no longer implies any
+     real mutex, so the racer — going through the same neutralised
+     primitive — enters and runs unimpeded during the gate window; the
+     target then writes its STALE pre-racer snapshot back over it, and the
+     racer's field is lost.
+   - Read hoisted outside a retained lock (either handler): the target's
+     read fires (and gets intercepted) before it ever calls
+     `withCastLocks`, so no mutex is held yet; the racer acquires the real,
+     unmutated lock uncontested and completes; the target then acquires the
+     lock late and writes back its stale (pre-racer) snapshot, clobbering
+     the racer's field the same way.
+
+   Two hardenings on top of the original single-handler construction, both
+   found by independent review:
+
+   - `racerEntered` — set synchronously on the first line inside the
+     racer's `withCastLocks` callback, and asserted still `false` right
+     before the gate is released. The original construction asserted only
+     that `raceProbe` SURVIVED, which requires the racer's full read+write
+     to lose outright against an 80ms head start — on a contended box, an
+     unlocked racer's `readJson` + `writeJsonAtomic` (mkdir + temp write +
+     rename) can plausibly exceed 80ms, in which case `released()` fires
+     first, the target writes its stale snapshot, and the racer THEN reads
+     those fresh bytes and writes its probe on top — both assertions pass
+     and the mutation goes silently undetected. Entering the critical
+     section is a single synchronous assignment, orders of magnitude faster
+     than completing a read+write, so the same 80ms budget gives this
+     assertion enormous margin. Kept ALONGSIDE the survival assertions, not
+     instead of them — the entry flag asserts a MECHANISM (did the racer
+     queue), `raceProbe` surviving asserts the OUTCOME (did the write
+     land); a mechanism-only assertion can miss a parallel wire that
+     produces the wrong outcome anyway.
+   - `racePromise.catch(() => {})` immediately after `raceWrite()` is
+     called, mirroring `targetPromise`'s own immediate `.catch()` below (and
+     for the same reason): `racePromise` isn't awaited until ~80ms later,
+     and an fs error inside the racer (e.g. an EPERM on rename under
+     Windows AV/indexer contention) would otherwise reject unhandled during
+     that window, failing the run with an unhandled-rejection error instead
+     of the real assertions. */
+async function runLockDetector(
+  targetCall: () => ReturnType<typeof callNotLinked>,
+  assertRouteOutcome: () => void,
+): Promise<void> {
+  const stateIo = await import('../workspace/state-io.js');
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
+  );
+  const { castJsonPath } = await import('../workspace/paths.js');
+  const { withCastLocks } = await import('../workspace/cast-lock.js');
+  const keeperBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK);
+  const keeperCastPath = castJsonPath(keeperBookDir);
+
+  let released!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    released = resolve;
+  });
+  let intercepted = false;
+  const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+    if (!intercepted && path === keeperCastPath) {
+      intercepted = true;
+      const value = await actual.readJson(path); // real bytes, now — happens-before the racer's write
+      await gate; // hold the RESOLUTION open until released below
+      return value;
+    }
+    return actual.readJson(path);
+  });
+
+  // Bypasses the spy entirely (uses `actual` directly) so the racer's own
+  // read/write are never accidentally re-intercepted — it's a plain,
+  // faithful `withCastLocks` consumer, same as any other real route.
+  let racerEntered = false;
+  async function raceWrite(): Promise<void> {
+    await withCastLocks([keeperBookDir], async () => {
+      racerEntered = true; // #2123 Finding 2 — set on entry, before the read
+      const cast = await actual.readJson<{
+        characters: Array<Record<string, unknown>>;
+      }>(keeperCastPath);
+      const narrator = cast!.characters.find((c) => c.id === 'narrator')!;
+      (narrator as Record<string, unknown>).raceProbe = 'concurrent-writer-survived';
+      await actual.writeJsonAtomic(keeperCastPath, { characters: cast!.characters });
+    });
+  }
+
+  let targetPromise: ReturnType<typeof callNotLinked> | undefined;
+  let racePromise: Promise<void> | undefined;
+  try {
+    targetPromise = targetCall();
+    targetPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+    // Poll rather than a fixed sleep — same precedent as voices.test.ts's
+    // and book-state.reparse.test.ts's own #1981 races.
+    const deadline = Date.now() + 2000;
+    while (!intercepted && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(intercepted).toBe(true);
+
+    racePromise = raceWrite();
+    racePromise.catch(() => {}); // #2123 Finding 4 — see block comment above
+
+    // Generous head start: completes fully when unlocked (the bug
+    // window), or queues behind the target's held lock when locked (the
+    // fix) — either way nothing depends on tuning a tight timing window.
+    await new Promise((r) => setTimeout(r, 80));
+
+    // #2123 Finding 2 — see block comment above: this must hold even when
+    // the survival assertions below would still pass by luck.
+    expect(racerEntered).toBe(false);
+
+    released();
+    const [targetRes] = await Promise.all([targetPromise, racePromise]);
+    expect(targetRes.status).toBe(200);
+  } finally {
+    // Idempotent: also fires here so a throw ANYWHERE above (before the
+    // happy-path call) still releases a held `readJson` rather than
+    // leaving it stuck on `await gate` forever. Resolving an
+    // already-resolved promise a second time is a no-op.
+    released();
+    // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+    // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+    // default passthrough behaviour explicitly.
+    spy.mockImplementation(actual.readJson);
+    // On the failure path (an assertion above threw) these are still
+    // in-flight — await them so the test can't return while either is
+    // still running against fixtures `afterAll` is about to delete.
+    await Promise.allSettled([targetPromise, racePromise]);
+  }
+
+  assertRouteOutcome();
+
+  const narratorKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    (c) => c.id === 'narrator',
+  );
+  expect(narratorKeeper?.raceProbe).toBe('concurrent-writer-survived');
+}
+
+describe('#2123 — cast.json lock is real, and its read stays inside it', () => {
+  it('a concurrent withCastLocks writer on the same book survives a not-linked-to POST', async () => {
+    await runLockDetector(
+      () =>
+        callNotLinked(keeperBookId, 'wren', {
+          otherBookId: exileBookId,
+          otherCharacterId: 'wren',
+        }),
+      () => {
+        const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+          (c) => c.id === 'wren',
+        );
+        expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+      },
+    );
+  });
+
+  it('a concurrent withCastLocks writer on the same book survives a not-linked-to DELETE', async () => {
+    // Seed: mark the pair first (same approach as the DELETE describe
+    // above) so there is something for the DELETE to actually remove.
+    await callNotLinked(keeperBookId, 'wren', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'wren',
+    });
+
+    await runLockDetector(
+      () =>
+        callUnmark(keeperBookId, 'wren', {
+          otherBookId: exileBookId,
+          otherCharacterId: 'wren',
+        }),
+      () => {
+        const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+          (c) => c.id === 'wren',
+        );
+        expect(wrenKeeper?.notLinkedTo).toEqual([]);
+      },
+    );
   });
 });

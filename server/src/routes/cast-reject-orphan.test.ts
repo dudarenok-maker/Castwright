@@ -735,3 +735,70 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(history?.rejectedPairs).toEqual([{ from: 'The-Torment', to: 'the-torment' }]);
   });
 });
+
+/* #1981 — this route's cast.json read-modify-write (the notLinkedTo edge) is
+   now locked (withCastLock). Mirrors cast-aliases.test.ts's add-alias race
+   (the bare-Promise.all shape is adequate here: two DIFFERENT characters in
+   the SAME book, no shared state to give either call a head start — per this
+   branch's Task 8 finding, a bare Promise.all is a placebo only for a
+   SAME-TICK acquisition pair, not for "does a lock exist" in general).
+   rejectOrphanedId/forgetSupersededId are NOT part of what this race
+   exercises: they already take their own `cast-id-history:<bookDir>` lock
+   (cast-id-history.ts), a locked leaf this route's cast lock doesn't wrap. */
+describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
+  const RACE_TITLE = 'Cast Reject Orphan Race Book';
+  let raceBookId: string;
+  let raceBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_TITLE);
+    raceBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, RACE_TITLE);
+    mkdirSync(join(raceBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: raceBookId,
+        manuscriptId: 'm_reject_orphan_race_test',
+        title: RACE_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(raceBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(raceBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'race-x', name: 'Race X', role: 'character', color: 'unset' },
+          { id: 'race-y', name: 'Race Y', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+  });
+
+  it('keeps both notLinkedTo edges when two reject-orphan-match calls for one book overlap', async () => {
+    const [resX, resY] = await Promise.all([
+      callReject(raceBookId, 'race-x', { orphanedId: 'race-x-orphan' }),
+      callReject(raceBookId, 'race-y', { orphanedId: 'race-y-orphan' }),
+    ]);
+    expect(resX.status).toBe(200);
+    expect(resY.status).toBe(200);
+
+    const cast = JSON.parse(
+      readFileSync(join(raceBookDir, '.audiobook', 'cast.json'), 'utf8'),
+    ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ characterId: string }> }> };
+    const x = cast.characters.find((c) => c.id === 'race-x')!;
+    const y = cast.characters.find((c) => c.id === 'race-y')!;
+    expect(x.notLinkedTo).toEqual([{ bookId: raceBookId, characterId: 'race-x-orphan' }]);
+    expect(y.notLinkedTo).toEqual([{ bookId: raceBookId, characterId: 'race-y-orphan' }]);
+  });
+});

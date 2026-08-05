@@ -16,12 +16,25 @@
    Same lazy-import pattern as the sibling route tests so WORKSPACE_DIR
    is set before paths.ts binds BOOKS_ROOT. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #1981 fix-round Finding 2 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so
+   the AB/BA deadlock test at the bottom of this file can deterministically
+   intercept this route's OWN `findBookByBookId` calls (bound at scan.js's
+   own module-load time). Defaults to a plain passthrough — every other test
+   in this file behaves exactly as if this mock weren't here. Same shape as
+   cast-not-linked-to.test.ts's own `#1981` deadlock test — see that test's
+   header comment for why a bare `Promise.all` of two live requests can't
+   reliably exercise this path. */
+vi.mock('../workspace/scan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/scan.js')>();
+  return { ...actual, findBookByBookId: vi.fn(actual.findBookByBookId) };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -109,10 +122,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-link-prior-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castLinkPriorRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-link-prior.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { castLinkPriorRouter } = await import('./cast-link-prior.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   newBookId = makeBookId(AUTHOR, SERIES, NEW_BOOK);
   otherBookId = makeBookId(AUTHOR, 'Different Series', OTHER_BOOK);
@@ -663,5 +674,108 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     /* "Hart" was in source's aliases, but it equals target.name → filtered. */
     expect(hartOnDisk?.aliases).not.toContain('Hart');
     expect(hartOnDisk?.aliases).toContain('Hartwell Brennan Vale');
+  });
+
+  /* #1981 fix-round Finding 2 — this route now holds withCastLocks([source,
+     target]) across its read-through-write span, same as cast-not-linked-to
+     and library-cast-override. Only cast-not-linked-to had a route-level
+     AB/BA regression test; this closes the gap for cast-link-prior.
+
+     Two concurrent calls with the path bookId and body.targetBookId in
+     opposite roles: call 1 links keeperBookId/hart -> newBookId's
+     hartwell-brennan-vale (raw lock order [keeperDir, newDir]); call 2 links
+     newBookId/narrator -> keeperBookId's wren (raw lock order [newDir,
+     keeperDir]) — the reverse. Without withCastLocks's `.sort()` this is a
+     classic AB/BA. The two calls touch four DISJOINT character records (call
+     1 writes newBookId's hartwell-brennan-vale + keeperBookId's hart; call 2
+     writes keeperBookId's wren + newBookId's narrator), so the outcome is
+     assertable regardless of which call's critical section the lock lets run
+     first.
+
+     Same deterministic-barrier shape as cast-not-linked-to.test.ts's `#1981`
+     test: intercept BOTH requests' SECOND `findBookByBookId` call (each
+     request's target-book lookup, immediately preceding withCastLocks) and
+     hold each open until both have arrived. Because the fixture books are
+     the same two ids in swapped roles, the second-ever lookup of keeperBookId
+     is deterministically call 2's target lookup, and the second-ever lookup
+     of newBookId is deterministically call 1's target lookup — true
+     regardless of which physical request reaches that point first. */
+  it('#1981 — two concurrent calls with the books in opposite argument order do not deadlock', async () => {
+    const scan = await import('../workspace/scan.js');
+    const actual = await vi.importActual<typeof import('../workspace/scan.js')>(
+      '../workspace/scan.js',
+    );
+    const seen: Record<string, number> = {};
+    let arrived = 0;
+    let releaseBoth!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBoth = resolve;
+    });
+    const spy = vi.mocked(scan.findBookByBookId).mockImplementation(async (id: string) => {
+      seen[id] = (seen[id] ?? 0) + 1;
+      const isSecondLookup = seen[id] === 2 && (id === keeperBookId || id === newBookId);
+      const result = await actual.findBookByBookId(id); // real read, now
+      if (isSecondLookup) {
+        arrived += 1;
+        if (arrived === 2) releaseBoth();
+        await gate; // hold the RESOLUTION open until both requests arrive
+      }
+      return result;
+    });
+
+    let results: [{ status: number }, { status: number }];
+    try {
+      results = (await Promise.race([
+        Promise.all([
+          callLink(keeperBookId, {
+            sourceCharacterId: 'hart',
+            targetBookId: newBookId,
+            targetCharacterId: 'hartwell-brennan-vale',
+          }),
+          callLink(newBookId, {
+            sourceCharacterId: 'narrator',
+            targetBookId: keeperBookId,
+            targetCharacterId: 'wren',
+          }),
+        ]),
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error('DEADLOCK')), 2000),
+        ),
+      ])) as [{ status: number }, { status: number }];
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.findBookByBookId);
+    }
+
+    expect(results[0].status).toBe(200);
+    expect(results[1].status).toBe(200);
+
+    /* Both mutations survived on disk — call 1's target write (newBookId's
+       hartwell-brennan-vale gained hart's name + alias) and source write
+       (keeperBookId's hart adopted the target's canonical voiceId key). */
+    const hartwellOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'hartwell-brennan-vale',
+    );
+    expect(hartwellOnDisk?.aliases).toEqual(
+      expect.arrayContaining(['Bren', 'Hart', 'Hartwell']),
+    );
+    const hartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'hart',
+    );
+    expect(hartOnDisk?.voiceId).toBe('hartwell-brennan-vale');
+
+    /* Call 2's target write (keeperBookId's wren gained narrator's name as
+       an alias) and source write (newBookId's narrator adopted wren's
+       voiceId). */
+    const wrenOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
+    );
+    expect(wrenOnDisk?.aliases).toContain('Narrator');
+    const narratorOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'narrator',
+    );
+    expect(narratorOnDisk?.voiceId).toBe('v_wren');
   });
 });

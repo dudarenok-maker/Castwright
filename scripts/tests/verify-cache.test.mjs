@@ -409,6 +409,11 @@ test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server',
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
 });
 
+test("stepTouchedByDiff: scripts/repair-cast-id-drift.mjs diff matches test:server via extraFiles (#2130 — cast-resolve.repair-pass-contract.test.ts imports it directly, but the script lives outside server/src/**)", () => {
+  const diff = ['scripts/repair-cast-id-drift.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
+});
+
 test('stepTouchedByDiff: a server diff is in scope for test:server, not test', () => {
   const diff = ['server/src/routes/generation.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);

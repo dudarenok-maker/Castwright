@@ -199,6 +199,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import {
   forgetSupersededId,
   rejectOrphanedPair,
@@ -317,95 +318,103 @@ castRejectOrphanRouter.post(
     if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
     const { bookDir } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet. Run analysis before rejecting a match.',
-      });
-    }
-    const character = cast.characters.find((c) => c.id === characterId);
-    if (!character) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
-
-    const changed = appendNotLinked(character, bookId, orphanedId);
-    if (changed) {
-      await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-    }
-
-    /* I1 (fix round 1) — REORDERED from the original forget-then-reject:
-       compute `forgotSupersededTo` by a pure READ first, write the FATAL
-       `rejectOrphanedPair` with the stash already baked in, and only THEN
-       attempt the non-fatal forget. See the module doc's I1 paragraph for
-       the full account of why the original order silently lost the stash
-       on a retry after a partial failure. Pair-scope guard (#2092/#2089
-       D1) unchanged: only treat `supersededBy[orphanedId]` as something to
-       forget when it targets THIS `characterId` — an entry pointing at
-       some OTHER, unrejected character is a live, still-valid alias (D1's
-       whole point is that a different target for the same `from` stays
-       resolvable), so stashing/forgetting it here would be wrong. */
-    const historyBeforeReject = await loadCastIdHistory(bookDir);
-    const forgotSupersededTo =
-      historyBeforeReject.supersededBy[orphanedId] === characterId
-        ? historyBeforeReject.supersededBy[orphanedId]
-        : undefined;
-
-    /* FATAL (fix round 2 review, upgraded from non-fatal; unchanged by the
-       pair-scope change): for the two normalised tiers — where all 188
-       currently-real orphaned segments live — `rejectedPairs` is the ONLY
-       mechanism that enforces this reject. A swallowed failure here would
-       report 200/success to the user while the reject stayed purely
-       cosmetic at render time. Runs BEFORE the forget below (I1) so the
-       stash can never be computed-then-lost on a retry. */
-    try {
-      await rejectOrphanedPair(bookDir, orphanedId, characterId, forgotSupersededTo);
-    } catch (rejectErr) {
-      console.error(
-        '[cast-reject-orphan] failed to record the rejection in cast-id-history.json — surfacing as a failure',
-        rejectErr,
-      );
-      return res.status(500).json({
-        error:
-          'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
-      });
-    }
-
-    /* Non-fatal, and now runs AFTER the durable write above (I1) — see the
-       module doc's I1 paragraph. A stale `supersededBy` entry left behind
-       here is redundant-but-harmless for RESOLUTION purposes, since
-       `rejectedPairs` (already written, above) independently blocks it;
-       this is now purely a best-effort tidy-up, not something the stash's
-       durability depends on. `expectedTarget: forgotSupersededTo` (review
-       round 2 "Also fix") closes the race the reorder opened: a concurrent
-       `retireCharacterId` between the read above and this call could have
-       repointed `supersededBy[orphanedId]` onto something else entirely,
-       and an unconditional delete would discard THAT instead of the value
-       actually stashed on the pair — forget only fires when the value
-       hasn't moved since the read. */
-    if (forgotSupersededTo !== undefined) {
-      try {
-        await forgetSupersededId(bookDir, orphanedId, forgotSupersededTo);
-      } catch (forgetErr) {
-        console.warn(
-          '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
-          forgetErr,
-        );
+    /* #1981 — the read is inside the lock; the 409/404 checks and the
+       notLinkedTo mutation below are all decisions derived from it. The
+       id-history writes (forgetSupersededId / rejectOrphanedId) are a
+       DIFFERENT file — the cast lock doesn't cover them, they're just along
+       for the ride inside this span, mirroring cast-merge.ts's
+       retireCharacterId precedent. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet. Run analysis before rejecting a match.',
+        });
       }
-    }
+      const character = cast.characters.find((c) => c.id === characterId);
+      if (!character) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
 
-    const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
+      const changed = appendNotLinked(character, bookId, orphanedId);
+      if (changed) {
+        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+      }
 
-    console.log(
-      `[cast-reject-orphan] book=${bookId} rejected "${orphanedId}" as ${characterId}` +
-        (changed ? '' : ' (notLinkedTo edge already present)'),
-    );
+      /* I1 (fix round 1) — REORDERED from the original forget-then-reject:
+         compute `forgotSupersededTo` by a pure READ first, write the FATAL
+         `rejectOrphanedPair` with the stash already baked in, and only THEN
+         attempt the non-fatal forget. See the module doc's I1 paragraph for
+         the full account of why the original order silently lost the stash
+         on a retry after a partial failure. Pair-scope guard (#2092/#2089
+         D1) unchanged: only treat `supersededBy[orphanedId]` as something to
+         forget when it targets THIS `characterId` — an entry pointing at
+         some OTHER, unrejected character is a live, still-valid alias (D1's
+         whole point is that a different target for the same `from` stays
+         resolvable), so stashing/forgetting it here would be wrong. */
+      const historyBeforeReject = await loadCastIdHistory(bookDir);
+      const forgotSupersededTo =
+        historyBeforeReject.supersededBy[orphanedId] === characterId
+          ? historyBeforeReject.supersededBy[orphanedId]
+          : undefined;
 
-    return res.json({
-      characterId,
-      orphanedId,
-      alreadyPresent: !changed,
-      resolution: resolution?.via ?? null,
-      resolvedCharacterId: resolution?.character.id,
+      /* FATAL (fix round 2 review, upgraded from non-fatal; unchanged by the
+         pair-scope change): for the two normalised tiers — where all 188
+         currently-real orphaned segments live — `rejectedPairs` is the ONLY
+         mechanism that enforces this reject. A swallowed failure here would
+         report 200/success to the user while the reject stayed purely
+         cosmetic at render time. Runs BEFORE the forget below (I1) so the
+         stash can never be computed-then-lost on a retry. */
+      try {
+        await rejectOrphanedPair(bookDir, orphanedId, characterId, forgotSupersededTo);
+      } catch (rejectErr) {
+        console.error(
+          '[cast-reject-orphan] failed to record the rejection in cast-id-history.json — surfacing as a failure',
+          rejectErr,
+        );
+        return res.status(500).json({
+          error:
+            'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
+        });
+      }
+
+      /* Non-fatal, and now runs AFTER the durable write above (I1) — see the
+         module doc's I1 paragraph. A stale `supersededBy` entry left behind
+         here is redundant-but-harmless for RESOLUTION purposes, since
+         `rejectedPairs` (already written, above) independently blocks it;
+         this is now purely a best-effort tidy-up, not something the stash's
+         durability depends on. `expectedTarget: forgotSupersededTo` (review
+         round 2 "Also fix") closes the race the reorder opened: a concurrent
+         `retireCharacterId` between the read above and this call could have
+         repointed `supersededBy[orphanedId]` onto something else entirely,
+         and an unconditional delete would discard THAT instead of the value
+         actually stashed on the pair — forget only fires when the value
+         hasn't moved since the read. */
+      if (forgotSupersededTo !== undefined) {
+        try {
+          await forgetSupersededId(bookDir, orphanedId, forgotSupersededTo);
+        } catch (forgetErr) {
+          console.warn(
+            '[cast-reject-orphan] failed to forget stale supersededBy entry (non-fatal)',
+            forgetErr,
+          );
+        }
+      }
+
+      const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
+
+      console.log(
+        `[cast-reject-orphan] book=${bookId} rejected "${orphanedId}" as ${characterId}` +
+          (changed ? '' : ' (notLinkedTo edge already present)'),
+      );
+
+      return res.json({
+        characterId,
+        orphanedId,
+        alreadyPresent: !changed,
+        resolution: resolution?.via ?? null,
+        resolvedCharacterId: resolution?.character.id,
+      });
     });
   },
 );
@@ -440,148 +449,154 @@ castRejectOrphanRouter.delete(
     if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
     const { bookDir } = located;
 
-    const cast = await readJson<CastFile>(castJsonPath(bookDir));
-    if (!cast?.characters?.length) {
-      return res.status(409).json({
-        error: 'Book has no cast on disk yet.',
-      });
-    }
-    const character = cast.characters.find((c) => c.id === characterId);
-    if (!character) {
-      return res.status(404).json({ error: `Character "${characterId}" not found.` });
-    }
+    /* #1981 Task 12 (static guard, caught by the merge with the cast-lock
+       sweep): this DELETE does a cast.json read-modify-write just like the
+       POST above, so it takes the same per-book lock. It was written before
+       withCastLock existed and the guard test is what surfaced it. */
+    return withCastLock(bookDir, async () => {
+      const cast = await readJson<CastFile>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) {
+        return res.status(409).json({
+          error: 'Book has no cast on disk yet.',
+        });
+      }
+      const character = cast.characters.find((c) => c.id === characterId);
+      if (!character) {
+        return res.status(404).json({ error: `Character "${characterId}" not found.` });
+      }
 
-    /* Important 1/2 (review round 2) — find the pair(s) this row's chip was
-       ACTUALLY derived from, via `rejectedPairsGoverning`, the SAME shared
-       helper the read side (`collectOrphanedCharacterFallbacks`,
-       segments-io.ts) uses to decide whether to show a chip at all. A
-       raw-exact match here (round 1's approach) misses a chip that was
-       shown because of a normalised-tier collision under a DIFFERENT raw
-       spelling (the repo's own `the_torment`/`The-Torment` shape) — the
-       DELETE the UI sends for that row would 200 with `wasRejected: false`,
-       leave disk unchanged, and the chip would return on the next hydrate.
-       See `rejectedPairsGoverning`'s own doc comment for the two-rule
-       reasoning. A pair found this way can carry a DIFFERENT `from` than
-       `orphanedId` (the row's own raw id) — every id-history and
-       notLinkedTo operation below uses the PAIR's own `from`, not
-       `orphanedId`, since that is the raw spelling the original POST
-       actually wrote under. Round 3 — `rejectedPairsGoverning` now takes
-       `(cast, history)` directly and builds its own ignoring-resolver
-       internally, so this route no longer builds one itself (see the
-       helper's own doc comment for why: it closes M-1, a legacy `rejected`
-       block getting mis-attributed to an unrelated pair, and makes passing
-       the wrong resolver structurally unrepresentable at this call site). */
-    const historyBeforeUndo = await loadCastIdHistory(bookDir);
-    const governingPairs = rejectedPairsGoverning(orphanedId, cast.characters, historyBeforeUndo);
-    const matchingPairs = governingPairs.filter((p) => p.to === characterId);
-    const wasRejected = matchingPairs.length > 0;
+      /* Important 1/2 (review round 2) — find the pair(s) this row's chip was
+         ACTUALLY derived from, via `rejectedPairsGoverning`, the SAME shared
+         helper the read side (`collectOrphanedCharacterFallbacks`,
+         segments-io.ts) uses to decide whether to show a chip at all. A
+         raw-exact match here (round 1's approach) misses a chip that was
+         shown because of a normalised-tier collision under a DIFFERENT raw
+         spelling (the repo's own `the_torment`/`The-Torment` shape) — the
+         DELETE the UI sends for that row would 200 with `wasRejected: false`,
+         leave disk unchanged, and the chip would return on the next hydrate.
+         See `rejectedPairsGoverning`'s own doc comment for the two-rule
+         reasoning. A pair found this way can carry a DIFFERENT `from` than
+         `orphanedId` (the row's own raw id) — every id-history and
+         notLinkedTo operation below uses the PAIR's own `from`, not
+         `orphanedId`, since that is the raw spelling the original POST
+         actually wrote under. Round 3 — `rejectedPairsGoverning` now takes
+         `(cast, history)` directly and builds its own ignoring-resolver
+         internally, so this route no longer builds one itself (see the
+         helper's own doc comment for why: it closes M-1, a legacy `rejected`
+         block getting mis-attributed to an unrelated pair, and makes passing
+         the wrong resolver structurally unrepresentable at this call site). */
+      const historyBeforeUndo = await loadCastIdHistory(bookDir);
+      const governingPairs = rejectedPairsGoverning(orphanedId, cast.characters, historyBeforeUndo);
+      const matchingPairs = governingPairs.filter((p) => p.to === characterId);
+      const wasRejected = matchingPairs.length > 0;
 
-    /* Same-book removal, keyed on THIS book's id (trap: the matchers on the
-       write side ignore `bookId`, which tempts filtering on `characterId`
-       alone — that would collaterally delete a cross-book edge written by
-       cast-not-linked-to.ts for an unrelated pair that merely shares this
-       orphanedId string) — and on each matching pair's OWN `from`, not
-       `orphanedId`: the notLinkedTo edge was written using the pair's
-       `from` at reject time (always the row that was actually clicked
-       then), which the current row's raw id need not match. */
-    let changed = false;
-    for (const pair of matchingPairs) {
-      if (removeNotLinked(character, bookId, pair.from)) changed = true;
-    }
-    if (changed) {
-      await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-    }
+      /* Same-book removal, keyed on THIS book's id (trap: the matchers on the
+         write side ignore `bookId`, which tempts filtering on `characterId`
+         alone — that would collaterally delete a cross-book edge written by
+         cast-not-linked-to.ts for an unrelated pair that merely shares this
+         orphanedId string) — and on each matching pair's OWN `from`, not
+         `orphanedId`: the notLinkedTo edge was written using the pair's
+         `from` at reject time (always the row that was actually clicked
+         then), which the current row's raw id need not match. */
+      let changed = false;
+      for (const pair of matchingPairs) {
+        if (removeNotLinked(character, bookId, pair.from)) changed = true;
+      }
+      if (changed) {
+        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+      }
 
-    /* C1 (fix round 1, Critical) — restoreSupersededId, NOT
-       retireCharacterId. retireCharacterId writes supersededBy[from]
-       UNCONDITIONALLY and repoints every entry whose VALUE is `from` — both
-       sound only when `from` is genuinely dead, which an Undo cannot
-       assume: a re-analysis may have recorded a DIFFERENT, correct alias
-       for `orphanedId` since the original reject. Using retireCharacterId
-       here would silently overwrite that correct alias back to the stale
-       rejected one and repoint anything targeting `orphanedId` — #2040's
-       own failure mode, produced by the button labelled "Undo". See
-       `restoreSupersededId`'s own doc comment in `cast-id-history.ts`.
-       Looped over `matchingPairs` (ordinarily just one) rather than a
-       single pair, for the same reason the notLinkedTo removal above is:
-       whichever pair(s) the shared helper says govern this row. Round 3
-       (M-7) — accumulates into an ARRAY rather than overwriting a single
-       local: round 1 only ever kept the LAST skipped restore's target, so a
-       row governing two pairs that both skipped silently dropped the first
-       one from the response, the log, and the toast. */
-    const supersededByOthers: string[] = [];
-    for (const pair of matchingPairs) {
-      if (pair.forgotSupersededTo === undefined) continue;
-      try {
-        const restoreResult = await restoreSupersededId(bookDir, pair.from, pair.forgotSupersededTo);
-        if (!restoreResult.restored && restoreResult.supersededByOther !== undefined) {
-          supersededByOthers.push(restoreResult.supersededByOther);
-          console.log(
-            `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
-              `"${pair.forgotSupersededTo}" — a newer alias to "${restoreResult.supersededByOther}" already exists`,
+      /* C1 (fix round 1, Critical) — restoreSupersededId, NOT
+         retireCharacterId. retireCharacterId writes supersededBy[from]
+         UNCONDITIONALLY and repoints every entry whose VALUE is `from` — both
+         sound only when `from` is genuinely dead, which an Undo cannot
+         assume: a re-analysis may have recorded a DIFFERENT, correct alias
+         for `orphanedId` since the original reject. Using retireCharacterId
+         here would silently overwrite that correct alias back to the stale
+         rejected one and repoint anything targeting `orphanedId` — #2040's
+         own failure mode, produced by the button labelled "Undo". See
+         `restoreSupersededId`'s own doc comment in `cast-id-history.ts`.
+         Looped over `matchingPairs` (ordinarily just one) rather than a
+         single pair, for the same reason the notLinkedTo removal above is:
+         whichever pair(s) the shared helper says govern this row. Round 3
+         (M-7) — accumulates into an ARRAY rather than overwriting a single
+         local: round 1 only ever kept the LAST skipped restore's target, so a
+         row governing two pairs that both skipped silently dropped the first
+         one from the response, the log, and the toast. */
+      const supersededByOthers: string[] = [];
+      for (const pair of matchingPairs) {
+        if (pair.forgotSupersededTo === undefined) continue;
+        try {
+          const restoreResult = await restoreSupersededId(bookDir, pair.from, pair.forgotSupersededTo);
+          if (!restoreResult.restored && restoreResult.supersededByOther !== undefined) {
+            supersededByOthers.push(restoreResult.supersededByOther);
+            console.log(
+              `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
+                `"${pair.forgotSupersededTo}" — a newer alias to "${restoreResult.supersededByOther}" already exists`,
+            );
+          }
+        } catch (restoreErr) {
+          console.error(
+            '[cast-reject-orphan] failed to restore the forgotten supersededBy entry during undo — surfacing as a failure',
+            restoreErr,
           );
+          return res.status(500).json({
+            /* I5 (fix round 1) — the notLinkedTo removal above is
+               UNCONDITIONAL and already landed by this point (see the module
+               doc's cast.json paragraph); this message used to claim
+               "nothing else was changed", which was false. */
+            error:
+              'Failed to restore the forgotten alias entry. Retry — the character link removal, if any, was already saved.',
+          });
         }
-      } catch (restoreErr) {
-        console.error(
-          '[cast-reject-orphan] failed to restore the forgotten supersededBy entry during undo — surfacing as a failure',
-          restoreErr,
-        );
-        return res.status(500).json({
-          /* I5 (fix round 1) — the notLinkedTo removal above is
-             UNCONDITIONAL and already landed by this point (see the module
-             doc's cast.json paragraph); this message used to claim
-             "nothing else was changed", which was false. */
-          error:
-            'Failed to restore the forgotten alias entry. Retry — the character link removal, if any, was already saved.',
-        });
       }
-    }
 
-    for (const pair of matchingPairs) {
-      try {
-        await unrejectOrphanedPair(bookDir, pair.from, pair.to);
-      } catch (unrejectErr) {
-        console.error(
-          '[cast-reject-orphan] failed to remove the rejected pair from cast-id-history.json — surfacing as a failure',
-          unrejectErr,
-        );
-        return res.status(500).json({
-          error:
-            'Failed to durably remove the rejection. Retry — the character link update and alias restore, if any, were already saved.',
-        });
+      for (const pair of matchingPairs) {
+        try {
+          await unrejectOrphanedPair(bookDir, pair.from, pair.to);
+        } catch (unrejectErr) {
+          console.error(
+            '[cast-reject-orphan] failed to remove the rejected pair from cast-id-history.json — surfacing as a failure',
+            unrejectErr,
+          );
+          return res.status(500).json({
+            error:
+              'Failed to durably remove the rejection. Retry — the character link update and alias restore, if any, were already saved.',
+          });
+        }
       }
-    }
 
-    const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
+      const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
 
-    /* Round 3 (M-6) — deduped, and names every removed spelling when the
-       row governed more than one, instead of only ever naming `orphanedId`
-       (which, per `rejectedPairsGoverning`, need not be any pair's own
-       `from`). */
-    const removedFrom = [...new Set(matchingPairs.map((p) => p.from))];
-    console.log(
-      `[cast-reject-orphan] (undo) book=${bookId} un-rejected "${orphanedId}" as ${characterId}` +
-        (wasRejected
-          ? removedFrom.length > 1
-            ? ` — removed ${removedFrom.length} pairs: ${removedFrom.map((f) => `"${f}"`).join(', ')}`
-            : ''
-          : ' (pair already absent)'),
-    );
+      /* Round 3 (M-6) — deduped, and names every removed spelling when the
+         row governed more than one, instead of only ever naming `orphanedId`
+         (which, per `rejectedPairsGoverning`, need not be any pair's own
+         `from`). */
+      const removedFrom = [...new Set(matchingPairs.map((p) => p.from))];
+      console.log(
+        `[cast-reject-orphan] (undo) book=${bookId} un-rejected "${orphanedId}" as ${characterId}` +
+          (wasRejected
+            ? removedFrom.length > 1
+              ? ` — removed ${removedFrom.length} pairs: ${removedFrom.map((f) => `"${f}"`).join(', ')}`
+              : ''
+            : ' (pair already absent)'),
+      );
 
-    /* Round 4 review, cheap 6 — deduped like `removedFrom` above: two
-       skipped restores can legitimately land on the SAME newer alias (two
-       differently-spelled pairs both stashed the same forgotten target,
-       both since superseded by the same fresher one), and without this the
-       client would render that alias's name twice ("Narrator" / "Narrator"). */
-    const supersededByOther = [...new Set(supersededByOthers)];
-    return res.json({
-      characterId,
-      orphanedId,
-      wasRejected,
-      resolution: resolution?.via ?? null,
-      resolvedCharacterId: resolution?.character.id,
-      removedFrom,
-      supersededByOther: supersededByOther.length ? supersededByOther : undefined,
+      /* Round 4 review, cheap 6 — deduped like `removedFrom` above: two
+         skipped restores can legitimately land on the SAME newer alias (two
+         differently-spelled pairs both stashed the same forgotten target,
+         both since superseded by the same fresher one), and without this the
+         client would render that alias's name twice ("Narrator" / "Narrator"). */
+      const supersededByOther = [...new Set(supersededByOthers)];
+      return res.json({
+        characterId,
+        orphanedId,
+        wasRejected,
+        resolution: resolution?.via ?? null,
+        resolvedCharacterId: resolution?.character.id,
+        removedFrom,
+        supersededByOther: supersededByOther.length ? supersededByOther : undefined,
+      });
     });
   },
 );

@@ -166,12 +166,17 @@ export const STEPS = [
          ffmpeg-version-cases.json: diagnostics/ffmpeg.test.ts drives its
          parser cases from that file at runtime, sharing the corpus with the
          CJS preflight parser so the two cannot drift. Without it here, a
-         fixture-only diff re-checks only the CJS side. */
+         fixture-only diff re-checks only the CJS side.
+         repair-cast-id-drift.mjs: cast-resolve.repair-pass-contract.test.ts
+         imports it directly (#2130) — it lives outside server/src/**, so
+         without this line an edit there reports [cached] and the contract
+         test never re-runs against it. */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
         'openapi.yaml',
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
+        'scripts/repair-cast-id-drift.mjs',
       ],
       includeLockfiles: ['server'],
     },
