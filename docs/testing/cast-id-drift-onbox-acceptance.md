@@ -332,7 +332,7 @@ Expected: refuses immediately, naming the reachable port(s), exit code 1, no
 `cast-id-history.json` written anywhere (confirm via a workspace-wide file
 search before and after).
 
-Result: _______________________________________________________________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** `cd server && npm run dev` bound **LAN HTTPS 8443 only** — it never opened 8080 — so this exercised the `LAN_HTTPS_PORT` half of the probe rather than the `PORT` half. `--apply` refused immediately: `Refusing --apply: port(s) 8443 did not return a clear ECONNREFUSED — treating as possibly-live`, exit code **1**. Workspace-wide search for `cast-id-history.json` returned **0** files both before and after. Worth noting for anyone repeating this: had the probe covered only the default 8080, this real server would have been invisible to it.
 
 3. Stop the server before continuing.
 
@@ -350,29 +350,33 @@ last dry run — stop and re-measure before trusting anything below; if the
 cache-evidence line is nonzero, `--apply` refuses outright instead — fix
 `CACHE_DIR` per §8.3 and re-run the dry run first).
 
-Result (console summary matches §8.1): ______________
+Result (console summary matches §8.1): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exact match.** `mode: APPLY (writing cast-id-history.json)`; books scanned **20**; auto-recordable aliases **3 (27 segment(s))**; reported for human decision **93 id(s) / 161 segment(s)**; re-render candidates **17**; books missing analysis-cache evidence **0**.
+
+> **Read that last figure against the right revision.** This run was made against `main` @ `f3d6ae0f`, i.e. the **pre-#2102** gate, where the cache-evidence count was global and `0` was the go/no-go. #2102 makes the gate honest and scopes the refusal per book, after which the expected output is `books missing analysis-cache evidence: 1` (*Unlocked* parses but names nobody) **plus a new `books with an auto-record withheld: 0`** — and it is that second line, not the first, that gates `--apply`. Do not read this PASS as "the first line must be 0" once #2102 lands.
+
+Invocation: `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="C:/Claude/Projects/Audiobook-Generator/server/handoff/cache" node scripts/repair-cast-id-drift.mjs --apply`. **`WORKSPACE_DIR` must be passed explicitly** — the script does not read `server/.env`, and its `<home>/AudiobookWorkspace` default is empty on this box (see [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108)).
 
 ### 8.6 After `--apply` — confirm what was and wasn't written
 
 5. Read `.audiobook/cast-id-history.json` for *Заказ Коалфолла*.
 
 Result (`supersededBy` contains `mayrin: "mairin"` and
-`coalfall: "coalfall-dragon"`): ______________
+`coalfall: "coalfall-dragon"`): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** File reads `{"schema": 1, "supersededBy": {"mayrin": "mairin", "coalfall": "coalfall-dragon"}}`.
 
 6. Read `.audiobook/cast-id-history.json` for *Everblaze*.
 
-Result (`supersededBy` contains `"lady-alina": "dame-alina"`): ______________
+Result (`supersededBy` contains `"lady-alina": "dame-alina"`): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** File reads `{"schema": 1, "supersededBy": {"lady-alina": "dame-alina"}}`.
 
 7. Search the whole workspace for `cast-id-history.json`. Expected: **exactly
    two** files — the two above. No other book gained one.
 
-Result (file count and locations): ______________
+Result (file count and locations): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exactly two.** `Castwright/Standalones/Заказ Коалфолла/.audiobook/cast-id-history.json` and `Shannon Messenger/Keeper of the Lost Cities/Everblaze/.audiobook/cast-id-history.json`. No other book gained one (workspace-wide `find`, 0 before → 2 after).
 
 8. Diff every book's `cast.json` against its pre-run state (mtime, then
    content). Expected: byte-unchanged everywhere — the pass never touches
    `cast.json`.
 
-Result: ______________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS.** md5 of all **20** `cast.json` files captured before the run and re-captured after — the two sorted digest lists are identical, so every book's cast is byte-unchanged.
 
 9. Re-run the script in **dry-run** mode (no `--apply`) immediately after.
    Expected: the three now-recorded aliases no longer appear in the
@@ -380,7 +384,7 @@ Result: ______________
    report-only ids are unchanged from §8.1 — proving the write was durable,
    not merely printed once.
 
-Result: ______________
+Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
 ### 8.7 Confirm the fix reaches actual audio
 
@@ -391,12 +395,12 @@ Result: ______________
 Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
 now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
 
-Result: ______________
+Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A33 stays open for this and §8.8.
 
 12. **Listen.** Confirm both characters' lines are audibly distinct from the
     narrator, not merely a different id in the JSON.
 
-Result (by ear): ______________
+Result (by ear): **NOT RUN as of 2026-08-05** — depends on step 10/11 above.
 
 ### 8.8 Cast-screen banner cross-check
 
@@ -407,12 +411,13 @@ Expected: the auto-reconciled section names `mayrin`/`coalfall` (Заказ
 still names the untouched ids — spot-check *Exile*'s `unknown-male` as the
 negative control (a reserved-bucket source must still refuse to auto-record).
 
-Result: ______________
+Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the post-`--apply` dry run still reports *Exile*'s `unknown-male` as report-only with the reserved-fold-bucket refusal reason intact, so the negative control holds at the script level. The Cast-screen rendering of both sections has not been checked.
 
 ### 8.9 Outcome
 
-- [ ] §§8.4-8.8 run
-- [ ] Defects filed: ____________________________________
+- [x] §§8.4-8.6 run — **2026-08-05**, all PASS
+- [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply`), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

@@ -1379,8 +1379,50 @@ already-analysed book.
 
 Wave 1 (A32) and Wave 2 (B3) are proven or pending against a single already-drifted
 chapter/book each. Wave 3's `scripts/repair-cast-id-drift.mjs` is the pass meant
-to sweep the **whole** 20-book workspace at once, and **has never been run with
-`--apply`** — every number below comes from its dry-run mode, which writes
+to sweep the **whole** 20-book workspace at once.
+
+> **PARTIALLY DISCHARGED — `--apply` was run 2026-08-05** (Claude Code session on
+> the dev box, dudarenok-maker), against `main` @ `f3d6ae0f`. The write path is
+> now proven; **§8.7 (does the fix reach actual audio — re-render *Заказ
+> Коалфолла* ch2 and listen) and §8.8 (Cast-screen banner cross-check) are still
+> owed**, so this row stays open for those two.
+>
+> **What was observed.** The liveness rail refused first, against a *real*
+> `npm run dev` — which bound **LAN HTTPS 8443 only, never 8080**, so it was the
+> `LAN_HTTPS_PORT` half of the probe that caught it (exit 1, nothing written; a
+> probe covering only the default 8080 would have missed this server). With the
+> server stopped, `--apply` recorded exactly the 3 predicted aliases across
+> **2** books — `mayrin → mairin`, `coalfall → coalfall-dragon` (*Заказ
+> Коалфолла*), `lady-alina → dame-alina` (*Everblaze*). No other book gained a
+> `cast-id-history.json` (0 → 2 workspace-wide). All **20** `cast.json` files
+> byte-unchanged (md5 before/after). The immediate dry re-run showed auto-records
+> **3 → 0**, skipped **0 → 3**, report-only **93 / 161 unchanged** — the write is
+> durable.
+>
+> **Two defects filed from the run, neither blocking the write itself:**
+> [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) — the
+> re-render list dropped **17 rows / 120 segments → 13 / 93** afterwards, losing
+> exactly the 27 segments the new aliases cover, whose audio is still
+> narrator-substituted on disk (the list is documented as unconditional on
+> auto-record status, and `120` is this row's own stated damage figure).
+> [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) — a wrong
+> `WORKSPACE_DIR` scans **0** books and still prints `books missing
+> analysis-cache evidence: 0` and exits **0** from `--apply`; the script does not
+> read `server/.env`, so the bare command hits an empty `<home>/AudiobookWorkspace`.
+> That one bites this row directly, because the precondition below tells you to
+> trust that line.
+>
+> **Revision-sensitive:** the numbers above are against the **pre-#2102** global
+> cache gate. Once #2102 lands, `books missing analysis-cache evidence` is
+> expected to read **1** (*Unlocked* has a cache that parses and names nobody) and
+> a new `books with an auto-record withheld: 0` becomes the line that actually
+> gates `--apply`. Note for the record that *Unlocked* is not "nothing to
+> repair" — it carries **34 orphaned segments** across ch63/ch67 under
+> `unknown-male`; what makes withholding safe there is that a reserved
+> fold-bucket **source** is never auto-recorded regardless of evidence, which
+> fires before the ambiguity veto matters at all.
+
+Every number below comes from the pass's dry-run mode, which writes
 nothing. No automated test can substitute for the real run: the pure helpers
 (candidate ranking, ambiguity/reserved-source guards, the re-render list shape)
 are unit-tested against synthetic fixtures, and the liveness probe was verified

@@ -124,7 +124,12 @@ owner: null
    prior, the analysis cache already holds the drifted id, so the fallback
    never re-fires for that pair and no retirement is ever recorded for it. Only
    the *file* becomes authoritative again; the mapping itself needs
-   `scripts/repair-cast-id-drift.mjs --apply` (owed, A33) or a re-render to
+   `scripts/repair-cast-id-drift.mjs --apply` (A33 — run 2026-08-05, but only
+   **partially** discharged: the write path is proven and recorded 3
+   auto-recordable aliases across 2 books, but the workspace is not
+   orphan-free — 93 ids / 161 segments remain report-only, needing a human
+   decision, and *Unlocked* alone still carries 34 orphaned segments under
+   `unknown-male`; see the on-box register's A33 row) or a re-render to
    recover.
 
 ## Deviations from the spec
