@@ -222,13 +222,16 @@ export function walk({ entryFiles, repoRoot }) {
         // (not `files`, not `unresolvable`, not `unparseable`) — a genuine
         // silent skip in a module whose whole contract is "nothing is
         // skipped silently." Judged unreachable in this guard's synchronous,
-        // single-process use: `file` was already resolved via `existsSync` +
-        // `statSync().isFile()` moments earlier in the same tick, so reaching
-        // this catch requires the file to vanish (or its permissions to
-        // change) between resolution and read — a TOCTOU race with an
-        // external actor, not a condition this guard's own logic can
-        // trigger. Not hardened further: that would be speculative error
-        // plumbing for a trigger with no reachable path today.
+        // single-process use: `file` was already resolved via THIS function's
+        // own `isRegularFile` check (`existsSync` + `statSync().isFile()`,
+        // below) at the end of the previous BFS level, when it was pushed
+        // onto `next` — not via `resolveSpecifier`, which `walk()` does not
+        // call. So reaching this catch requires the file to vanish (or its
+        // permissions to change) between that resolution and this read — a
+        // TOCTOU race with an external actor, not a condition this guard's
+        // own logic can trigger. Not hardened further: that would be
+        // speculative error plumbing for a trigger with no reachable path
+        // today.
         continue;
       }
       let specifiers;
@@ -262,7 +265,7 @@ export function walk({ entryFiles, repoRoot }) {
     for (const edge of edges) {
       const live = edge.candidates.filter((c) => !ignoredMap.get(c));
       if (live.length === 0) continue; // wholly ignored — stop, not an error
-      const resolved = live.find((c) => existsSync(c));
+      const resolved = live.find((c) => isRegularFile(c));
       if (!resolved) {
         // FAIL CLOSED: a specifier that resolves to nothing is reported, not
         // silently skipped. The old guard's `continue` here meant a broken

@@ -198,6 +198,29 @@ test('walk follows a depth-2 edge (M17: deleting recursion must go red)', () => 
   assert.ok(files.includes('b.mjs'), 'depth-2 edge must be found — recursion is load-bearing');
 });
 
+// I1 (#2154 review): walk() inlines its own candidate-picking loop instead of
+// calling resolveSpecifier, and used a bare `existsSync` there — true for a
+// directory too, and the literal-match candidate ('' in CANDIDATES) is tried
+// before any `/index.*` candidate. That re-admits the exact directory bug
+// `resolveSpecifier`/`isRegularFile` was hardened against, just in the
+// function production actually uses: a directory-shaped specifier resolves
+// to the directory ITSELF, which then can't be read (I2) and silently
+// truncates the closure past it.
+test('walk resolves a directory-shaped specifier to its index file, not the directory itself (I1)', () => {
+  const d = gitRepo({
+    'test.mjs': "import lib from './lib';\n",
+    'lib/index.js': "import deep from './deep.mjs';\n",
+    'lib/deep.mjs': "export default 1;\n",
+  }, '');
+  const { files } = walk({ entryFiles: [join(d, 'test.mjs')], repoRoot: d });
+  assert.ok(files.includes('lib/index.js'), 'must resolve into the index file, not the bare directory');
+  assert.ok(!files.includes('lib'), 'the directory itself must never enter the closure');
+  assert.ok(
+    files.includes('lib/deep.mjs'),
+    'must recurse past the index file into its own imports — a directory in the closure cannot be read, silently truncating here',
+  );
+});
+
 test('walk stops at gitignored paths', () => {
   const d = gitRepo({
     'test.mjs': "import a from './dist/a.mjs';\n",
