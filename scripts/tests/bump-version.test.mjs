@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage } from '../bump-version.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -532,6 +532,96 @@ test('bump-version does not false-positive on a RELEASE_NOTES.md with no conflic
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// #2114 — a UTF-8 BOM must never lead RELEASE_NOTES.md or a --notes-file:
+// docs/release-notes-next.md (the default --notes-file) is fed verbatim into
+// the annotated tag message, which release.yml publishes as the public
+// GitHub release body. Real EF BB BF bytes are written on disk (not a JS
+// string via 'utf8' encoding) so these tests prove detection of the actual
+// defect, not a string-level stand-in a BOM-stripping reader could silently
+// normalise away.
+function writeBOMFile(path, text) {
+  writeFileSync(path, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]));
+}
+
+test('bump-version refuses on a BOM in RELEASE_NOTES.md, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notesPath = resolve(dir, 'RELEASE_NOTES.md');
+    writeBOMFile(notesPath, '# v1.0.1\n\n- Something shipped.\n');
+    assert.deepEqual([...readFileSync(notesPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /RELEASE_NOTES\.md begins with a UTF-8 byte-order mark/);
+    assert.match(out.stderr, /EF BB BF/);
+    assert.match(out.stderr, /no allowlist or --force/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a BOM in RELEASE_NOTES.md even with --dry-run', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notesPath = resolve(dir, 'RELEASE_NOTES.md');
+    writeBOMFile(notesPath, '# v1.0.1\n\n- Something shipped.\n');
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add release notes'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--dry-run', '--allow-placeholder']);
+    assert.notEqual(out.status, 0);
+    assert.doesNotMatch(out.stdout, /DRY-RUN.*byte-order mark/i);
+    assert.match(out.stderr, /byte-order mark/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version refuses on a BOM in --notes-file, even with --force', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-bom-${process.pid}-${Date.now()}.md`);
+    writeBOMFile(notes, '# v1.0.1\n\nFixes:\n- the bug\n');
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /begins with a UTF-8 byte-order mark/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Direct unit test of the defensive strip (#2114): even though the
+// unconditional pre-flight above already refuses to reach the tag-creation
+// step with a BOM-prefixed --notes-file, buildTagMessage is the seam that
+// actually decides what git receives — this pins that it strips the BOM
+// regardless, independent of whether the pre-flight ran at all. BOM_CHAR is
+// built via fromCharCode, not an embedded literal, so this test file itself
+// carries no raw BOM source bytes outside the deliberate byte-level fixture
+// above.
+const BOM_CHAR = String.fromCharCode(0xfeff);
+
+test('buildTagMessage produces BOM-free output from BOM-prefixed input', () => {
+  assert.equal(buildTagMessage(`${BOM_CHAR}# v1.0.1\n\n- the bug\n`), '# v1.0.1\n\n- the bug\n');
+  assert.equal(buildTagMessage('# v1.0.1\n\n- the bug\n'), '# v1.0.1\n\n- the bug\n'); // no-op
 });
 
 /* Plan 127 — cross-OS gate. The throwaway repo has no `gh` and no remote, so

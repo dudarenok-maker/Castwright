@@ -28,6 +28,8 @@ import {
   checkReleaseNotes,
   checkMojibake,
   checkConflictMarkers,
+  checkBOM,
+  stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
 
@@ -356,6 +358,17 @@ export function staleNotesVersion(notesText, version) {
   return m && m[1] !== version ? m[1] : null;
 }
 
+/** The exact text handed to `git tag -F -` as the annotated-tag message
+ *  (#2114). A thin, independently-testable seam around the BOM strip: even
+ *  though pre-flight 6c above already refuses to reach the tag step with a
+ *  BOM-prefixed --notes-file, this function is what actually decides the
+ *  bytes git receives, so it strips defensively rather than trusting the
+ *  pre-flight alone — a future reordering, or a call site that skips the
+ *  pre-flight, still can't make it through here with a BOM intact. */
+export function buildTagMessage(fileText) {
+  return stripBOM(fileText);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.level) {
@@ -475,6 +488,13 @@ async function main() {
     const conflictCheck = checkConflictMarkers(notesText, 'RELEASE_NOTES.md');
     if (!conflictCheck.ok) die(conflictCheck.reason);
 
+    // Pre-flight 5e (#2114): a leading UTF-8 BOM must never ship, same
+    // unconditional posture as 5d above — no --force, no --dry-run downgrade,
+    // because there is no legitimate reason for a BOM to lead this file (see
+    // checkBOM's doc comment).
+    const bomCheck = checkBOM(notesText, 'RELEASE_NOTES.md');
+    if (!bomCheck.ok) die(bomCheck.reason);
+
     const mojibakeCheck = checkMojibake(notesText, 'RELEASE_NOTES.md');
     if (!mojibakeCheck.ok) {
       if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
@@ -515,6 +535,13 @@ async function main() {
     // pre-flight 5d above, for the technical notes file.
     const conflictCheck = checkConflictMarkers(notesFileText, args.notesFile);
     if (!conflictCheck.ok) die(conflictCheck.reason);
+
+    // Pre-flight 6c (#2114): same unconditional BOM refusal as pre-flight 5e
+    // above, for the technical notes file — this is the one fed verbatim into
+    // the tag annotation, so this is the check that actually protects the
+    // published release body.
+    const bomCheck = checkBOM(notesFileText, args.notesFile);
+    if (!bomCheck.ok) die(bomCheck.reason);
 
     if (!mojibakeCheck.ok) {
       if (args.force) info(`[WARN] mojibake gate (--force): ${mojibakeCheck.reason}`);
@@ -627,7 +654,21 @@ async function main() {
   // in place; preserve them by default from here on.
   info('[STEP] git tag ...');
   if (args.notesFile) {
-    git(['tag', '--cleanup=verbatim', '-a', newTag, '-F', resolve(args.notesFile)]);
+    // #2114 — strip a leading BOM defensively before it becomes the tag
+    // message, even though pre-flight 6c above already refuses to reach here
+    // with one. This is belt-and-suspenders at the point of use: this
+    // content is what release.yml publishes verbatim as the GitHub release
+    // body, so a future change to (or bypass of) the pre-flight check still
+    // can't let a BOM through here. Reads the file in Node and pipes it to
+    // `git tag -F -` (stdin) rather than `-F <path>`, which would hand git
+    // the raw, unstripped bytes.
+    const tagMessage = buildTagMessage(readFileSync(resolve(args.notesFile), 'utf8'));
+    execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
+      cwd: repoRoot,
+      input: tagMessage,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      encoding: 'utf8',
+    });
   } else {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }

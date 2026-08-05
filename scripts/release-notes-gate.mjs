@@ -220,6 +220,65 @@ function reencodeOrForceAdvice(label) {
   );
 }
 
+/* #2114 — a UTF-8 byte-order mark (U+FEFF, encoded EF BB BF) must never lead
+   a published release-notes file. `readFileSync(path, 'utf8')` does NOT strip
+   a BOM — it survives as the literal first character of the string — and
+   docs/release-notes-next.md is fed verbatim into the annotated tag message,
+   which release.yml publishes as the public GitHub release body. The file's
+   opening ~39 lines are an internal maintainer HTML comment whose invisibility
+   depends on `<!--` starting the line per CommonMark's HTML-block start
+   condition; a leading BOM may defeat that condition and leak the comment
+   into the published body. Not hypothetical: a branch in the #2040 follow-up
+   wave committed exactly this (`3c 21 2d 2d` → `ef bb bf 3c`) and every gate
+   at the time — including this one, pre-fix — was green.
+
+   On Windows this is easy to introduce by accident: PowerShell's `Out-File`,
+   `>` and `>>` default to UTF-8-WITH-BOM. Deliberately no allowlist and no
+   --force downgrade (same posture as checkConflictMarkers below): there is no
+   legitimate reason for a BOM to lead this file, so every call site treats a
+   hit as unconditional. */
+// Built via fromCharCode rather than an embedded literal so the character
+// never appears as raw source bytes in a file that specifically exists to
+// catch invisible-Unicode defects like this one.
+const BOM = String.fromCharCode(0xfeff);
+
+/** Whether `text`'s first character is a UTF-8 byte-order mark. A plain
+    string comparison is exact here (not a normalisation that could paper
+    over the defect): `readFileSync(path, 'utf8')` decodes the `EF BB BF`
+    byte sequence to the single code point U+FEFF and does not strip it, so
+    `text[0] === BOM` is checking the same bytes the published artifact would
+    carry. */
+export function hasBOM(text) {
+  return String(text ?? '').startsWith(BOM);
+}
+
+/** Strip a single leading BOM, if present. Used defensively at the point a
+    file's content becomes a published artifact (bump-version.mjs's tag
+    message), independent of whether a gate already refused to reach there —
+    belt-and-suspenders so a future change to (or bypass of) the gate still
+    can't let a BOM through. */
+export function stripBOM(text) {
+  const s = String(text ?? '');
+  return hasBOM(s) ? s.slice(BOM.length) : s;
+}
+
+/** Check that `label`'s text does not begin with a UTF-8 byte-order mark.
+    No allowlist, no --force override — see the header comment above. */
+export function checkBOM(text, label) {
+  if (!hasBOM(text)) return { ok: true, reason: '' };
+  return {
+    ok: false,
+    reason:
+      `${label} begins with a UTF-8 byte-order mark (U+FEFF / EF BB BF). This can defeat the ` +
+      `CommonMark HTML-block start condition that keeps ${label}'s internal maintainer comment ` +
+      `invisible on the published release, and there is no allowlist or --force override for this ` +
+      `check (#2114) — a BOM has no legitimate reason to lead this file. Re-save it as UTF-8 ` +
+      `WITHOUT a BOM: on Windows, PowerShell's Out-File / > / >> default to UTF-8-with-BOM, so a ` +
+      `plain redirect reintroduces this easily — write via Node (fs.writeFileSync(path, text, ` +
+      `'utf8') never emits one) or an editor's explicit "UTF-8" (no BOM) save option instead.`,
+  };
+}
+
 /* #2018 — unresolved git conflict markers must never reach a published
    release. Not hypothetical: a `git merge origin/main` on the branch for PR
    #2010 left three markers inside RELEASE_NOTES.md's own v1.15.0 section, and
@@ -599,6 +658,14 @@ if (invokedHref && import.meta.url === invokedHref) {
     const conflictRes = checkConflictMarkers(text, label);
     if (!conflictRes.ok) {
       process.stderr.write(`[release-notes-gate] ${conflictRes.reason}\n`);
+      process.exit(1);
+    }
+
+    // #2114 — unconditional, same posture as the conflict-marker check above:
+    // no allowlist, no --force, a BOM is never legitimate here.
+    const bomRes = checkBOM(text, label);
+    if (!bomRes.ok) {
+      process.stderr.write(`[release-notes-gate] ${bomRes.reason}\n`);
       process.exit(1);
     }
 
