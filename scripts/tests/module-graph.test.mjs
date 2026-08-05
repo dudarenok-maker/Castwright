@@ -56,6 +56,18 @@ test('handles CJS scripts that are not valid ESM', () => {
   assert.deepEqual(extractRelativeSpecifiers(src), ['./a.js']);
 });
 
+// M-a (#2154 review): the 'module' -> 'script' sourceType fallback was
+// deferred as untested on the grounds that no fixture discriminates between
+// the two modes — that reasoning was wrong. A legacy octal literal (valid
+// sloppy-mode syntax, invalid under 'use strict'/ESM) parses under
+// sourceType:'script' and throws ("Invalid number") under sourceType:'module',
+// so it's exactly the discriminating case: without the fallback this source
+// would throw instead of returning its require() specifier.
+test('falls back to sourceType "script" for legacy octal literals', () => {
+  const src = `var x = 010;\nrequire('./a.js');\n`;
+  assert.deepEqual(extractRelativeSpecifiers(src), ['./a.js']);
+});
+
 test('handles a hashbang', () => {
   const src = `#!/usr/bin/env node\nimport a from './a.mjs';\n`;
   assert.deepEqual(extractRelativeSpecifiers(src), ['./a.mjs']);

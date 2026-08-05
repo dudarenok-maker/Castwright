@@ -201,8 +201,12 @@ export function classifyIgnored(absPaths, cwd) {
 //     and no error. Confirmed absent from this repo's corpus today.
 //   - The 'module' -> 'script' sourceType fallback inside
 //     extractRelativeSpecifiers (needed for genuinely sloppy-mode CJS) has no
-//     regression coverage of its own from this walk — only via the extractor's
-//     direct unit test ('handles CJS scripts that are not valid ESM' above).
+//     regression coverage of its own from THIS walk — only via the
+//     extractor's own direct unit test (module-graph.test.mjs: 'falls back to
+//     sourceType "script" for legacy octal literals', M-a #2154 review — a
+//     legacy octal literal parses under 'script' and throws under 'module',
+//     which is the discriminating fixture an earlier pass claimed didn't
+//     exist).
 export function walk({ entryFiles, repoRoot }) {
   const seen = new Set();
   const files = new Set();
