@@ -13,7 +13,7 @@ owner: null
 > `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
-> `POST /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
+> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
 
 ## Benefit / Rationale
 
@@ -61,12 +61,22 @@ owner: null
   **is now reversible** (#2092/#2089, design settled 2026-08-05, superseding the
   "no in-app undo" state this section previously described):
   `DELETE .../reject-orphan-match` — same path and body shape as the POST that
-  created it — removes the `(orphanedId, characterId)` pair from `rejectedPairs`,
-  removes the same-book `notLinkedTo` edge (keyed on `{bookId, characterId:
-  orphanedId}`, never on `characterId` alone, so an unrelated cross-book edge from
-  `cast-not-linked-to.ts` can't be collaterally deleted), and — when the original
-  reject had forgotten a `supersededBy` entry — restores it via the
-  `forgotSupersededTo` value stashed on the pair at reject time. The undo is
+  created it — removes EVERY `rejectedPairs` entry that governs `(orphanedId,
+  characterId)` (`rejectedPairsGoverning`, `server/src/store/cast-resolve.ts` —
+  ordinarily one, but a row can govern more than one differently-punctuated raw
+  spelling of the same underlying id that collide onto the same normalised key;
+  review round 2/#2092/#2089 found the original raw-exact match missed that case).
+  For each governing pair, removes the same-book `notLinkedTo` edge keyed on
+  `{bookId, characterId: pair.from}` — the PAIR's OWN raw spelling, which need
+  not equal `orphanedId` itself (never on `characterId` alone, so an unrelated
+  cross-book edge from `cast-not-linked-to.ts` can't be collaterally deleted) —
+  and, when that pair had forgotten a `supersededBy` entry, restores it via the
+  `forgotSupersededTo` value stashed on the pair at reject time. The response
+  echoes every removed pair's `from` as `removedFrom` (review round 3/#2092/
+  #2089), which the client keys its own redux `notLinkedTo` mirror off instead of
+  `orphanedId` — mirroring off `orphanedId` was itself a defect this same round
+  fixed, since a governing pair's `from` can differ from the row's own id. The
+  undo is
   **lossless for resolution purposes**: `buildCastResolver(...).resolve(orphanedId)`
   returns the exact same tier/target after a POST-then-DELETE round trip that it
   returned before the POST, pinned directly against the resolver (not by
