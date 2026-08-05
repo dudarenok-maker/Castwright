@@ -404,17 +404,22 @@ and the run sheet
   banner cross-check — see the register row A33 and the run sheet's §8.6+
   for the full account, including two defects the run surfaced
   ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
-  re-render list drops an aliased row's segments after `--apply`;
+  re-render list drops an aliased row's segments after `--apply` — **still
+  OPEN, tracked separately, fixed on its own branch, NOT in the #2102 PR**;
   [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108), a
   wrong `WORKSPACE_DIR` scanned 0 books and still reported a clean summary
-  — both now fixed in the #2102 PR that also closes the residuals below).
+  — fixed here in the #2102 PR that also closes the residuals below).
   The dry run (re-measured 2026-08-05, `CACHE_DIR` correctly pointed at the
   checkout that ran this workspace's analysis) reports: **3 auto-recordable
   aliases covering 27 segments**, **93 ids reported for a human decision
   covering 161 segments** (corrected from a prior 93 — see below), **17
-  re-render rows covering 120 segments**, **0 books modified**, **1 book
-  missing analysis-cache evidence, 0 books with an auto-record withheld
-  because of it**. These are two DIFFERENT numbers (independent-review
+  re-render rows covering 120 segments** (the pre-#2107 figure — with #2107
+  still open, the re-render list drops the 3 freshly-aliased rows' segments,
+  so a dry run against the real workspace right now reports **13** rows,
+  not 17; the true damage figure is still 17 rows / 120 segments, and the
+  13 must not be read as a regression once #2107 lands), **0 books
+  modified**, **1 book missing analysis-cache evidence, 0 books with an
+  auto-record withheld because of it**. These are two DIFFERENT numbers (independent-review
   Critical C1, widened by a later pre-merge review pass (I1), found the
   cache-availability gate could read a cache as usable when it wasn't; the
   repo owner then decided that a book's raw missing-cache status should stop

@@ -1005,6 +1005,27 @@ function analysisCacheFileExists(cacheDir, manuscriptId) {
  *  operator (see its own comment). */
 export function isCacheAvailable(cacheDir, manuscriptId, normaliseFn) {
   const cache = readAnalysisCache(cacheDir, manuscriptId);
+  return cacheAvailableFromParsed(cache, normaliseFn);
+}
+
+/** Pure core of `isCacheAvailable`, operating on an already-parsed `cache`
+ *  value (whatever `readAnalysisCache` returns — the raw object, or `null`
+ *  on missing/unparseable) rather than re-reading the file itself. Minor,
+ *  pre-merge review, 2026-08-05: `main()` used to call `isCacheAvailable`
+ *  (which reads the file once internally) and THEN call `readAnalysisCache`
+ *  again itself for `cacheNameIndex` — two reads of the same path per book,
+ *  and a theoretical window where the two reads could observe different
+ *  filesystem states (a concurrent write between them). `main()` now reads
+ *  once via `readAnalysisCache` and passes that same parsed value to both
+ *  this function and `cacheEntriesOf`, so the gate and the guard it
+ *  protects are guaranteed to measure the identical parse, not merely the
+ *  identical NORMALISER (which `isCacheAvailable`'s own doc comment above
+ *  already required). `isCacheAvailable` itself keeps its original
+ *  `(cacheDir, manuscriptId, normaliseFn)` signature — real fs fixtures
+ *  test the read-through path (missing file, corrupt JSON, empty
+ *  characters) via that signature, and changing it would lose that
+ *  coverage for no benefit `main()` doesn't already get from this split. */
+export function cacheAvailableFromParsed(cache, normaliseFn) {
   if (cache === null) return false;
   return buildNameIndex(cacheEntriesOf(cache), normaliseFn).size > 0;
 }
@@ -1126,6 +1147,23 @@ export const AUTO_REBIND_RANGE = 20;
  *  exist in the rebind range is still fully probed, and the fail-closed
  *  property is unaffected either way. */
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
+  // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
+  // building the candidate list, not merely clamp the list. main() derives
+  // startPort from `Number(process.env.PORT ?? 8080)` with no validation —
+  // `Number('abc')` is NaN, and `NaN <= 65535` is false for every
+  // candidate, so the old `.filter()` alone silently emptied `ports` to
+  // `[]` for a malformed PORT. `Promise.all([])` resolves `[]`, and
+  // main() reads an empty `notRefused` as "every candidate definitively
+  // refused" — indistinguishable from a genuinely clean 20-port scan, so
+  // main() proceeded to WRITE. On main (pre this branch) the same input
+  // reached `net.connect({ port: NaN })`, which throws synchronously and
+  // crashes the run closed; the earlier clamp here turned that crash into
+  // a silent pass-through. A bad startPort is returned as its own
+  // one-element "not refused" result instead, so main() refuses and NAMES
+  // the bad value rather than reading "nothing to probe" as "all clear".
+  // Two-sided on purpose — the old one-sided `<= 65535` clamp let a
+  // negative startPort (e.g. PORT=-1) through to net.connect uncaught.
+  if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return [startPort];
   const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) => p <= 65535);
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
@@ -1311,9 +1349,32 @@ async function main() {
     }
   }
 
-  const mods = await loadServerModules();
+  // Ie (pre-merge review, 2026-08-05): collectBooks + the empty-scan refusal
+  // are deliberately ordered BEFORE loadServerModules() — collectBooks needs
+  // no compiled server module at all, and putting the refusal ahead of the
+  // one thing in this function that DOES need `server/dist` built means a
+  // wrong WORKSPACE_DIR + `--apply` is caught (and named specifically)
+  // before an unrelated "missing compiled server module" error would
+  // otherwise mask it, AND means THAT combination's exit path needs no
+  // build step. (A subprocess test of it was considered and deliberately
+  // NOT added: the review that requested this reorder also forbade this
+  // repair pass from ever invoking `--apply`, and a DRY run against zero
+  // books does not exercise this refusal at all — `shouldRefuseApplyForEmptyScan`
+  // only fires when `apply === true` — so it still falls through to
+  // `loadServerModules()` below either way, which needs `server/dist`
+  // built and is NOT built in the `test:hooks` CI job that runs this
+  // script's test file; see that file's own note on this.) Behaviour is
+  // unchanged for every case that reaches this point with books.length > 0
+  // or apply === false — only the zero-book + --apply combination now
+  // short-circuits earlier.
   const books = collectBooks(workspaceDir);
-  console.log(`books scanned: ${books.length}\n`);
+  // #2108, minor (pre-merge review, 2026-08-05): this early line now goes
+  // through the same formatBooksScannedLine() the summary block already
+  // used — previously this printed a bare `books scanned: 0` with none of
+  // the summary's explicit warning, so a zero-book dry run's FIRST visible
+  // line still looked like an unremarkable count rather than the "nothing
+  // was examined" callout #2108 added further down.
+  console.log(`${formatBooksScannedLine(books.length)}\n`);
 
   // #2108: a wrong WORKSPACE_DIR (the script does not read server/.env, so a
   // bare invocation defaults to <home>/AudiobookWorkspace, not necessarily
@@ -1338,6 +1399,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  const mods = await loadServerModules();
 
   let totalAuto = 0;
   let totalAutoSegments = 0;
@@ -1387,9 +1450,13 @@ async function main() {
     // present-but-corrupt OR present-but-empty file as "available" — the
     // exact fail-open shape the round-2 fix closed one level up, reopened
     // here three times now).
-    const cacheAvailable = isCacheAvailable(cacheDir, book.state.manuscriptId, mods.normaliseForMatch);
-    if (!cacheAvailable) booksMissingCache += 1;
+    // Minor (pre-merge review, 2026-08-05): read the cache file exactly
+    // once per book and reuse the same parsed value for both the
+    // availability gate and cacheNameIndex, rather than reading it twice
+    // (see cacheAvailableFromParsed's own doc comment).
     const cache = readAnalysisCache(cacheDir, book.state.manuscriptId);
+    const cacheAvailable = cacheAvailableFromParsed(cache, mods.normaliseForMatch);
+    if (!cacheAvailable) booksMissingCache += 1;
     const cacheNameIndex = buildNameIndex(cacheEntriesOf(cache), mods.normaliseForMatch);
     const bakNameIndex = buildNameIndex(collectBakNameEntries(book.audiobookDir), mods.normaliseForMatch);
 

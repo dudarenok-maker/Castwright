@@ -415,9 +415,12 @@ matching the dry-run numbers in §8.1 exactly (a diverging number here means
 the workspace changed since the last dry run — stop and re-measure before
 trusting anything below; if the WITHHELD-count line is nonzero, `--apply`
 refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
-first; a nonzero missing-cache-evidence line alone does NOT refuse). **As
-measured 2026-08-05, this precondition IS satisfied — this step can be run**
-(the repo owner's decision, review round 2: *Unlocked* DOES have an
+first; a nonzero missing-cache-evidence line alone does NOT refuse).
+**Revision-sensitive: the numbers above are against the pre-#2102 gate** —
+see the callout below the Result for what changes once #2102 lands. **As
+measured 2026-08-05 (pre-#2102), this precondition WAS satisfied and this
+step WAS run** — see the Result immediately below, which is no longer
+pending (the repo owner's decision, review round 2: *Unlocked* DOES have an
 orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
 auto-record from it as a reserved fold-bucket source before the cache gate
 is ever reached, so it has nothing at stake and no longer blocks the

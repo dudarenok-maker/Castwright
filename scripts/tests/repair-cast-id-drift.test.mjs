@@ -29,6 +29,7 @@ import {
   formatReportRowSummary,
   readAnalysisCache,
   isCacheAvailable,
+  cacheAvailableFromParsed,
   probePortRangeRefused,
   buildOrphansFromSegments,
   AUTO_REBIND_RANGE,
@@ -743,6 +744,44 @@ describe('planBookRepairs', () => {
     assert.equal(plan.withheldForMissingCache, 0);
   });
 
+  test('I2 (missing case, pre-merge review, 2026-08-05): a Tier A match with INCONSISTENT characterSnapshots and cacheAvailable=false withholds NOTHING — guard 4 refuses first', () => {
+    // The sibling case to the guard-3 test above, for guard 4
+    // (snapshotsConsistent) — the planBookRepairs doc comment claims BOTH
+    // guard 3 and guard 4 sit ahead of the cacheAvailable gate ("was
+    // refused SOLELY because cacheAvailable was false... AND guard 3...
+    // AND guard 4"), but until now only guard 3 had a test pinning it in
+    // combination with cacheAvailable=false. A book whose cache is entirely
+    // unavailable but whose orphan's own rendered snapshots already
+    // disagree across chapters has nothing at stake for the cache gate
+    // either — guard 4 was always going to refuse it, cache evidence or
+    // not — so withheldForMissingCache must stay 0 here too.
+    const bakNameIndex = buildNameIndex([{ id: 'unstable-guy', name: 'Timkin' }], lc);
+    const orphans = new Map([
+      [
+        'unstable-guy',
+        {
+          segments: 2,
+          chapters: [
+            { chapterId: 7, chapterTitle: 'Five', segments: 1, durationSec: 3 },
+            { chapterId: 33, chapterTitle: 'Thirty-One', segments: 1, durationSec: 2 },
+          ],
+          snapshots: [
+            { gender: 'male', ageRange: 'adult' },
+            { gender: 'female', ageRange: 'adult' }, // conflict
+          ],
+        },
+      ],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.match(plan.reportOnly[0].reason, /disagree across chapters/); // guard 4's reason, NOT the cacheAvailable one
+    assert.equal(plan.withheldForMissingCache, 0);
+  });
+
   test('RESIDUAL 3 (#2093, inverted): cacheAvailable now defaults to FALSE when omitted — the safe default for an otherwise fail-closed guard', () => {
     // This test used to assert the OPPOSITE — that an omitted `cacheAvailable`
     // defaults to `true` and lets an otherwise-clean auto-record through.
@@ -998,6 +1037,85 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
   });
 });
 
+describe('cacheAvailableFromParsed (minor, pre-merge review, 2026-08-05 — the pure core main() now calls to avoid reading the cache file twice per book)', () => {
+  test('null (missing/unparseable cache) is unavailable, same as isCacheAvailable', () => {
+    assert.equal(cacheAvailableFromParsed(null, lc), false);
+  });
+
+  test('a parsed object naming at least one usable character is available', () => {
+    const parsed = { stage1: { characters: [{ id: 'mairin', name: 'Мэйрин' }] } };
+    assert.equal(cacheAvailableFromParsed(parsed, lc), true);
+  });
+
+  test('a parsed object naming zero characters is unavailable', () => {
+    assert.equal(cacheAvailableFromParsed({}, lc), false);
+  });
+
+  test('isCacheAvailable(dir, id, fn) and cacheAvailableFromParsed(readAnalysisCache(dir, id), fn) agree — the split is a pure refactor, not a behaviour change', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-cache-split-'));
+    try {
+      const contents = { stage1: { characters: [{ id: 'mairin', name: 'Мэйрин' }] } };
+      fs.writeFileSync(path.join(dir, 'good-book.json'), JSON.stringify(contents));
+      assert.equal(
+        isCacheAvailable(dir, 'good-book', lc),
+        cacheAvailableFromParsed(readAnalysisCache(dir, 'good-book'), lc),
+      );
+      assert.equal(
+        isCacheAvailable(dir, 'nonexistent-book', lc),
+        cacheAvailableFromParsed(readAnalysisCache(dir, 'nonexistent-book'), lc),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** M5 (independent review, 2026-08-05): a hardcoded "high, unusual" base
+ *  port is a guess, not a guarantee — some other process on a CI/dev box
+ *  could genuinely be listening anywhere in that window, which would fail
+ *  this test for a reason that has nothing to do with the code under
+ *  test. This instead PROVES a `rangeSize`-port CONSECUTIVE window is free
+ *  by actually binding a real listener on every port in it (an OS refuses
+ *  a bind on an occupied port, so a successful bind is real evidence, not
+ *  an assumption), then releases them immediately before the probe under
+ *  test runs. Retries with a fresh random base on a bind collision rather
+ *  than asserting anything about the failed candidate. There remains a
+ *  short residual race between releasing the verified-free ports and the
+ *  probe connecting to them — inherent to testing a TCP liveness probe at
+ *  all — but it is now bounded to that narrow window instead of "was this
+ *  static number ever free on this box in the first place".
+ *
+ *  Module-scope (Ie, pre-merge review, 2026-08-05) — was local to the
+ *  `probePortRangeRefused` describe block, relocated so the `main() wiring`
+ *  describe block below can reuse it for the same collision-avoidance
+ *  purpose against PORT/LAN_HTTPS_PORT, rather than a second, duplicated
+ *  copy. */
+async function findVerifiedFreeRange(rangeSize, host = '127.0.0.1') {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const base = 40000 + Math.floor(Math.random() * 20000);
+    const servers = [];
+    try {
+      for (let i = 0; i < rangeSize; i += 1) {
+        const s = net.createServer();
+        // Sequential (not Promise.all) deliberately — binding must prove
+        // each port individually so a collision on port N doesn't leave
+        // ports > N bound-but-unrecorded.
+        await new Promise((resolve, reject) => {
+          s.once('error', reject);
+          s.listen(base + i, host, resolve);
+        });
+        servers.push(s);
+      }
+      await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+      return base;
+    } catch {
+      await Promise.all(servers.map((s) => new Promise((resolve) => s.close(() => resolve()))));
+      // retry with a fresh random base
+    }
+  }
+  throw new Error(`could not find ${rangeSize} consecutive free ports after 25 attempts`);
+}
+
 describe('probePortRangeRefused (#2090)', () => {
   function listenOnEphemeralPort() {
     return new Promise((resolve, reject) => {
@@ -1005,46 +1123,6 @@ describe('probePortRangeRefused (#2090)', () => {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => resolve(server));
     });
-  }
-
-  /** M5 (independent review, 2026-08-05): a hardcoded "high, unusual" base
-   *  port is a guess, not a guarantee — some other process on a CI/dev box
-   *  could genuinely be listening anywhere in that window, which would fail
-   *  this test for a reason that has nothing to do with the code under
-   *  test. This instead PROVES a `rangeSize`-port CONSECUTIVE window is free
-   *  by actually binding a real listener on every port in it (an OS refuses
-   *  a bind on an occupied port, so a successful bind is real evidence, not
-   *  an assumption), then releases them immediately before the probe under
-   *  test runs. Retries with a fresh random base on a bind collision rather
-   *  than asserting anything about the failed candidate. There remains a
-   *  short residual race between releasing the verified-free ports and the
-   *  probe connecting to them — inherent to testing a TCP liveness probe at
-   *  all — but it is now bounded to that narrow window instead of "was this
-   *  static number ever free on this box in the first place". */
-  async function findVerifiedFreeRange(rangeSize, host = '127.0.0.1') {
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      const base = 40000 + Math.floor(Math.random() * 20000);
-      const servers = [];
-      try {
-        for (let i = 0; i < rangeSize; i += 1) {
-          const s = net.createServer();
-          // Sequential (not Promise.all) deliberately — binding must prove
-          // each port individually so a collision on port N doesn't leave
-          // ports > N bound-but-unrecorded.
-          await new Promise((resolve, reject) => {
-            s.once('error', reject);
-            s.listen(base + i, host, resolve);
-          });
-          servers.push(s);
-        }
-        await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
-        return base;
-      } catch {
-        await Promise.all(servers.map((s) => new Promise((resolve) => s.close(() => resolve()))));
-        // retry with a fresh random base
-      }
-    }
-    throw new Error(`could not find ${rangeSize} consecutive free ports after 25 attempts`);
   }
 
   test('I3 (pre-merge review, 2026-08-05): AUTO_REBIND_RANGE is exactly 20 — matches listenWithAutoRebind\'s own maxAttempts default (server/src/crash-logging.ts)', () => {
@@ -1180,6 +1258,38 @@ describe('probePortRangeRefused (#2090)', () => {
     // 65536-65549 from the probed set entirely rather than crashing on them.
     assert.deepEqual(notRefused, []);
   });
+
+  test('C1 (pre-merge review, 2026-08-05): a non-numeric startPort (NaN) refuses instead of silently probing nothing', async () => {
+    // Before this fix: `NaN <= 65535` is false for every candidate the old
+    // `.filter()` produced, so `ports` was emptied to `[]`, `Promise.all([])`
+    // resolved `[]`, and main() read that as "every port definitively
+    // refused" — the same shape a genuinely clean 20-port scan produces.
+    // `Number('abc')` is exactly what `Number(process.env.PORT ?? 8080)`
+    // yields for a malformed PORT env var. The fix must return a NON-EMPTY
+    // array so main() refuses --apply and names the bad value.
+    const notRefused = await probePortRangeRefused(Number('abc'), '127.0.0.1');
+    assert.ok(notRefused.length > 0, `expected a non-empty refusal, got ${JSON.stringify(notRefused)}`);
+    assert.ok(Number.isNaN(notRefused[0]));
+  });
+
+  test('C1: an out-of-range startPort (65536, one past the valid ceiling) refuses instead of probing nothing', async () => {
+    const notRefused = await probePortRangeRefused(65536, '127.0.0.1');
+    assert.deepEqual(notRefused, [65536]);
+  });
+
+  test('C1: a negative startPort (-1) refuses instead of reaching net.connect uncaught', async () => {
+    const notRefused = await probePortRangeRefused(-1, '127.0.0.1');
+    assert.deepEqual(notRefused, [-1]);
+  });
+
+  test('C1: a valid startPort is unaffected by the new guard — still probes the full range', async () => {
+    const base = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    const notRefused = await probePortRangeRefused(base, '127.0.0.1');
+    // A verified-free range should read as fully refused (empty array) —
+    // same as before this fix. Pins that the new guard doesn't over-refuse
+    // a legitimate, in-range startPort.
+    assert.deepEqual(notRefused, []);
+  });
 });
 
 describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-reconciled map)', () => {
@@ -1255,6 +1365,23 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
   });
 });
 
+// Ie (pre-merge review, 2026-08-05): a subprocess test spawning the real
+// script against an empty WORKSPACE_DIR was considered, to cover main()'s
+// WIRING of this decision (that it's called with the right arguments and
+// that main() actually exits 1) rather than only the decision itself below.
+// Deliberately NOT added, for two reasons: (1) this repair pass is under an
+// explicit instruction to never invoke `--apply`, and
+// shouldRefuseApplyForEmptyScan only ever returns true when apply === true —
+// a DRY run against zero books does not exercise this refusal at all, it
+// falls through to loadServerModules() the same as any other dry run; (2)
+// that fallthrough means such a subprocess test would need `server/dist`
+// built to complete, which is not true in the `test:hooks` CI job this file
+// runs in (see this file's own header comment) — so even a dry-run-only
+// subprocess test would be environment-dependent in a way none of this
+// file's other tests are. main()'s production wiring of this decision
+// remains verified only by the live dry run against the real workspace (see
+// the module doc comment's Tests section), same as
+// shouldRefuseApplyForWithheldAutoRecord's own documented caveat above.
 describe('shouldRefuseApplyForEmptyScan (#2108)', () => {
   test('dry run never refuses, whatever booksScanned is', () => {
     assert.equal(shouldRefuseApplyForEmptyScan(false, 0), false);
