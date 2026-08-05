@@ -169,7 +169,18 @@ export async function persistEmotionVariant(
        identity `voiceId ?? id`, the same key applyOverrideToCastFiles uses).
        forEachMatchingCastCharacter takes its own per-book cast lock as it
        walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
-       unlocked and delegating; it must not gain a lock of its own. */
+       unlocked and delegating; it must not gain a lock of its own.
+
+       I4 — unlike the book-scoped branch below, `baseVoiceId` here is NOT
+       re-derived per target book inside that per-book lock: it is computed
+       once, from THIS function's own unlocked outer read of the source
+       character, and propagated as-is into every matching book's locked
+       write. That is deliberate — the point of this branch is stamping the
+       source's key onto the series, not re-deriving each target's own — but
+       it does leave a staleness window (a concurrent redesign of the source
+       between this read and a given target's write still propagates the OLD
+       key). Cross-book propagation staleness is tracked on #2006, not fixed
+       here. */
     const baseVoiceId = qwenStorageKey(character, characterId);
     await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
       addVariant(c, baseVoiceId),
@@ -181,7 +192,10 @@ export async function persistEmotionVariant(
      above is an early-out optimisation only: a concurrent book-scoped writer
      can land between it and the write below. Re-read and re-decide inside
      the cast lock, including `baseVoiceId` (the default slot name), which
-     must come from the FRESH character, not the one captured above. */
+     must come from the FRESH character, not the one captured above. I4 —
+     this is the mirror image of the series branch above, which propagates
+     the SOURCE's baseVoiceId by design instead of re-deriving it per book;
+     see that branch's comment. */
   await withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
     const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
@@ -929,18 +943,21 @@ qwenVoiceRouter.delete(
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    /* #1981 — the read is inside the lock; the 404 and the variant-map
-       mutation are both decisions derived from it. The teardown call below
-       (embedding + sidecar file deletion, sidecar cache evict) touches no
-       cast.json state, but stays inside the lock's closure anyway — it's the
-       simplest shape and it doesn't itself take another lock on this book,
-       so there's no ordering hazard (rule 1). */
-    return withCastLock(located.bookDir, async () => {
+    /* C1 fix — mirrors promote-voice above (qwen-voice.ts, the
+       "Narrow by design" comment on its own withCastLock call): the read is
+       inside the lock, and the 404 + the variant-map mutation are both
+       decisions derived from it (rule 2), but `tearDownEmotionVariant`'s
+       sidecar `fetch` has no AbortSignal/timeout, so holding the lock across
+       it would let a blocked-but-listening sidecar pin this book's cast lock
+       for up to Node's undici default (~300s) — and, per cast-lock.ts rule 4,
+       stall a request queued behind it for `library-voice:<uuid>` too.
+       Compute the designed id from the locked read, close the lock, then run
+       the teardown after — filesystem work + a best-effort network call,
+       nothing that needs the lock. */
+    const designedId = await withCastLock(located.bookDir, async (): Promise<string | undefined> => {
       const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = cast?.characters?.find((c) => c.id === characterId);
-      if (!character || !cast) {
-        return res.status(404).json({ error: `Character "${characterId}" not found.` });
-      }
+      if (!character || !cast) return undefined;
 
       /* Drop the slot from cast.json (preserving base + sibling variants). */
       const qwenSlot = character.overrideTtsVoices?.qwen;
@@ -950,10 +967,17 @@ qwenVoiceRouter.delete(
         await writeJsonAtomic(castJsonPath(located.bookDir), cast);
       }
 
-      /* Delete the designed embedding + persona sidecar and evict it (best-effort). */
-      await tearDownEmotionVariant(`${qwenStorageKey(character, characterId)}__${emotion}`);
-
-      return res.status(200).json({ ok: true, removed: emotion });
+      return `${qwenStorageKey(character, characterId)}__${emotion}`;
     });
+
+    if (designedId === undefined) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    /* Delete the designed embedding + persona sidecar and evict it (best-effort),
+       outside the lock — see the comment above. */
+    await tearDownEmotionVariant(designedId);
+
+    return res.status(200).json({ ok: true, removed: emotion });
   },
 );

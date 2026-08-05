@@ -1350,6 +1350,56 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     /* nopersona: its only variant (sad) removed → whole map cleaned up. */
     expect(nopersonaQwen.qwen.variants).toBeUndefined();
   });
+
+  /* C1 — the teardown's sidecar `fetch` (inside tearDownEmotionVariant) has no
+     AbortSignal/timeout, so holding the cast lock across it would let a
+     blocked-but-listening sidecar pin this book's cast lock for the length of
+     that hang — the same defect class promote-voice's own "Narrow by design"
+     comment (above, on its withCastLock call) already fixes for its teardown.
+     Proves the fix the same way voice-style.test.ts's own #1981 lock-
+     narrowing races do (`/generate-all no longer holds the book lock across
+     the whole batch`, `/generate no longer holds the book lock across the
+     LLM call`): delay the sidecar call artificially and assert a concurrent
+     cast write on the SAME book (add-alias) lands quickly rather than
+     waiting for it. */
+  it('C1 — releases the cast lock before the sidecar evict, so a concurrent add-alias on the same book lands quickly', async () => {
+    seedVariants();
+    const EVICT_DELAY_MS = 300;
+    fetchMock.mockImplementation(async (url: unknown) => {
+      if (String(url).endsWith('/qwen/evict-voice')) {
+        await new Promise((r) => setTimeout(r, EVICT_DELAY_MS));
+      }
+      return { ok: true };
+    });
+
+    const deletePromise = request(app).delete(
+      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
+    );
+    deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+    // Let the DELETE handler acquire + release the cast lock and reach (and
+    // start waiting on) its slow sidecar evict.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const start = Date.now();
+    const addAliasRes = await request(app)
+      .post(`/api/books/${bookId}/cast/add-alias`)
+      .send({ characterId: 'nopersona', aliasName: 'Quick' });
+    const elapsed = Date.now() - start;
+
+    expect(addAliasRes.status).toBe(200);
+    /* Under the pre-fix shape the evict ran INSIDE the lock, so add-alias's
+       own withCastLock call couldn't even start until the evict resolved —
+       >= EVICT_DELAY_MS. Generous headroom under that while staying well
+       above the few ms a genuinely-unlocked add-alias takes. */
+    expect(elapsed).toBeLessThan(EVICT_DELAY_MS - 100);
+
+    const deleteRes = await deletePromise;
+    expect(deleteRes.status).toBe(200);
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+  });
 });
 
 describe('persistEmotionVariant', () => {

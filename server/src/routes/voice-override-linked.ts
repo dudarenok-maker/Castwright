@@ -234,8 +234,16 @@ export async function applyToBook(
   override: { engine: Engine; name: string } | null,
 ): Promise<string[]> {
   /* #1981 — the read is inside the lock; every guard/throw below (cloned-slot
-     refusal, the reserved-prefix consent check) and the write are all
-     decisions derived from it. */
+     refusal, the reserved-prefix consent check) is a decision derived from
+     THIS in-lock read of the target book. I3 — `canonicalVoiceId` /
+     `canonicalVoiceUuid` are NOT derived from it: they come from the route
+     handler's own unlocked read of the SOURCE book's character, computed
+     once above and threaded through every target book's write unchanged.
+     That is deliberate — the whole point is stamping the source's canonical
+     identity onto the series, not re-deriving it per target — but it does
+     leave a staleness window against a concurrent redesign of the source
+     between that unlocked read and a given target's write. Cross-book
+     propagation staleness is tracked on #2006, not fixed here. */
   return withCastLock(bookDir, () => applyToBookLocked(bookDir, ids, canonicalVoiceId, canonicalVoiceUuid, override));
 }
 
