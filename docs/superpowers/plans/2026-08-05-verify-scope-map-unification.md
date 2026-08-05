@@ -2549,7 +2549,7 @@ regresses.
 | M5 | a dropped declaration is caught | Task 13 Step 5 | run it |
 | M6 | depth-1 is GREEN against the real repo — so M5 alone cannot prove recursion | Task 12 Step 5 (the inverse: killing recursion reddens the *fixture*) | pinned by test |
 | M7 | comments/strings are not edges, and a keyword-preceded regex literal cannot swallow later imports | Task 10 Step 1 — three tests (comment, string literal, regex-literal) | pinned by test |
-| M8 | the ignored-vs-untracked *predicate* is load-bearing | Task 11 Step 4b | run it |
+| M8 | the ignored-vs-untracked *predicate* is load-bearing | Task 13 Step 4b | **placebo for this corpus — see note** |
 | M9 | unresolvable specifiers fail closed | Task 12 Step 1, `walk reports an unresolvable specifier` | pinned by test |
 | M10 | `ci-scope.mjs` fails safe, not silent | Task 5 Steps 5 + 5b | run it |
 | M11 | Metric B floor catches a dead regex | Task 13 Step 6 | run it |
@@ -2567,6 +2567,32 @@ the floor of 50, and reports `missing = []` — **green**. That is why M17's
 synthetic fixture exists at all. Do not try to make M6 red against the real
 tree; if it ever does go red there, the two declarations from Task 13 have
 been lost and M5 will say so.
+
+**M8 deserves a note.** As specified — swap `classifyIgnored` for a
+`git ls-files`/tracked-status predicate and diff the result across a
+fresh-clone vs. built-box state — it does **not** go red for this
+repo's actual corpus. Verified directly (Task 13 Step 4b), in both clone
+states: with `server/dist/` absent (this worktree's natural state — never
+built here) and with it present as 7 untracked stub files at the exact
+paths `scripts/repair-cast-id-drift.mjs` dynamically imports. Both states
+came back identical — 0 `unresolvable`, `files.length` unchanged. Root
+cause: `git ls-files` reflects the **index**, not the working tree, so a
+gitignored build artifact that has never been `git add`ed reads as
+untracked whether or not it currently exists on disk — the mutated
+predicate agrees with the real `check-ignore` predicate for the one
+gitignore-relevant edge in this corpus (`repair-cast-id-drift.mjs`'s 7
+`server/dist/**` dynamic imports) regardless of clone state, so there is
+no divergence left for this mutation to catch here. This is a defect in
+the mutation's premise, not in the shipped guard: the real `check-ignore`
+predicate's correctness is independently covered by
+`module-graph.test.mjs` (`classifyIgnored marks gitignored paths`,
+`classifyIgnored marks a gitignored path containing non-ASCII
+characters`, `walk stops at gitignored paths`). M8 is recorded here as a
+**placebo for this corpus**, not silently marked done — a different
+predicate mutation (e.g. one that also varies disk existence for a
+genuinely tracked-but-ignored file) would be needed to add coverage on
+this axis, and is left as an open question rather than invented to force
+a pass.
 
 **M12 is only partially dischargeable before merge, and the ledger says so
 rather than overclaiming.** Task 9 Step 3 proves the *bash comparison* —

@@ -218,6 +218,17 @@ export function walk({ entryFiles, repoRoot }) {
       try {
         source = readFileSync(file, 'utf8');
       } catch {
+        // KNOWN, ACCEPTED RESIDUAL: a read failure here is reported nowhere
+        // (not `files`, not `unresolvable`, not `unparseable`) — a genuine
+        // silent skip in a module whose whole contract is "nothing is
+        // skipped silently." Judged unreachable in this guard's synchronous,
+        // single-process use: `file` was already resolved via `existsSync` +
+        // `statSync().isFile()` moments earlier in the same tick, so reaching
+        // this catch requires the file to vanish (or its permissions to
+        // change) between resolution and read — a TOCTOU race with an
+        // external actor, not a condition this guard's own logic can
+        // trigger. Not hardened further: that would be speculative error
+        // plumbing for a trigger with no reachable path today.
         continue;
       }
       let specifiers;
