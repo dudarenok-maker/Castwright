@@ -673,7 +673,7 @@ test('test:hooks completeness guard: every producer a hooks test depends on is a
     .filter((f) => f.endsWith('.test.mjs'))
     .map((f) => join(testsDir, f));
 
-  const { files, unresolvable } = walk({ entryFiles, repoRoot });
+  const { files, unresolvable, unparseable } = walk({ entryFiles, repoRoot });
 
   // Fail closed on a specifier that resolves to nothing (defect A). The old
   // guard's existsSync-then-continue silently dropped these.
@@ -681,6 +681,20 @@ test('test:hooks completeness guard: every producer a hooks test depends on is a
     unresolvable,
     [],
     `specifier(s) that resolve to nothing:\n${unresolvable.map((u) => `${u.specifier} <- ${u.from}`).join('\n')}`,
+  );
+
+  // I3 (#2154 review): `unparseable` was computed and then discarded here —
+  // the module comment at module-graph.mjs's top documents it as the
+  // visibility mechanism for a truncated subtree ("never hidden... named in
+  // `unparseable`"), but nothing actually read the list, so that visibility
+  // was theoretical. Pinning the exact, known entry turns a NEW unparseable
+  // file (up to 13 possible before the floor above goes red) into a
+  // deliberate, reviewed decision instead of a silent one.
+  assert.deepEqual(
+    unparseable,
+    ['server/src/handoff/schemas.ts'],
+    `unparseable file(s) changed — a new entry here silently shrinks the ` +
+      `walked closure by everything past it; confirm this is intended:\n${unparseable.join('\n')}`,
   );
 
   // Anti-vacuity on METRIC B (unique tracked closure files), NOT on the old
