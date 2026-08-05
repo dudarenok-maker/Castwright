@@ -488,8 +488,9 @@ test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
 });
 
 // I1 (#2146 review): .github/actions/** is defect D's other half — the
-// composite setup action is consumed by every verify.yml job but matched no
-// scope at all, so an actions-only diff ran zero legs and printed [cached].
+// composite setup action is consumed by every verify.yml job that sets up
+// Node but matched no scope at all, so an actions-only diff ran zero legs
+// and printed [cached].
 test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', () => {
   assert.equal(
     stepTouchedByDiff(stepByName['test:hooks'], ['.github/actions/setup/action.yml']),
@@ -500,9 +501,10 @@ test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', (
 // ops-21 (#2152): pins BOTH halves of the routing decision at once, so
 // neither can be deleted alone. `shared` (computeShared) covers CI; the
 // test:hooks glob is what busts the LOCAL input-hash cache, since `shared`
-// only widens the scope filter (scopeShared, verify-cache.mjs:916) and does
-// not touch the per-step hash below it. Losing either half quietly re-opens
-// the #2146 hole for one of the two runners.
+// only widens the scope filter — the `scopeShared` guard at the head of
+// `runPipeline`'s per-step loop in verify-cache.mjs — and does not touch the
+// per-step hash below it. Losing either half quietly re-opens the #2146 hole
+// for one of the two runners.
 test('.github/actions/** is covered by BOTH computeShared and the test:hooks glob', () => {
   const path = '.github/actions/setup/action.yml';
   assert.equal(computeShared([path]), true, 'computeShared must cover it (CI scope)');

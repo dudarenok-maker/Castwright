@@ -22,7 +22,7 @@ const source = readFileSync(actionPath, 'utf8');
 test('setup action node_modules cache key interpolates inputs.node-version, not a literal major', () => {
   const keyLine = source
     .split(/\r?\n/)
-    .find((line) => line.includes('runner.os') && line.includes('modules'));
+    .find((line) => line.includes('key:') && line.includes('runner.os') && line.includes('modules'));
   assert.ok(keyLine, 'expected a node_modules cache `key:` line naming runner.os and modules');
   assert.ok(
     keyLine.includes('${{ inputs.node-version }}'),

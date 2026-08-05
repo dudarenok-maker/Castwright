@@ -93,15 +93,22 @@ export const STEPS = [
            #2152, resolving the "open question" #2146 left here) — the
            composite setup action needs every leg able to catch a soft
            failure in it, not just this one. The glob stays here too, and
-           deliberately: `shared` only widens the pre-commit/pre-push SCOPE
-           FILTER (scopeShared, gating stepTouchedByDiff at :916); the
-           input-hash cache below that filter runs per step regardless of
-           scope. With no step's glob matching, a LOCAL actions-only diff
-           would move no step's input hash, so every step would print
-           [cached] and the run would gate nothing — `shared` alone would
-           quietly re-open the exact hole this glob was added to close. Do
-           NOT delete this glob because "shared covers it" — shared covers
-           CI; this glob is what makes the local cache notice the diff. */
+           deliberately: `shared` only widens the pre-commit/pre-push scope
+           filter — the `scopeShared` guard at the head of `runPipeline`'s
+           per-step loop (cited by name, not line, because a bare line
+           number is exactly what staled here last time — don't "helpfully"
+           add one back); the input-hash cache below that filter runs per
+           step regardless of scope. With no step's glob matching, a LOCAL
+           actions-only diff would move no step's input hash, so every step
+           would print [cached] and the run would gate nothing — `shared`
+           alone would quietly re-open the exact hole this glob was added to
+           close. Do NOT delete this glob because "shared covers it" — shared
+           covers CI; this glob is what makes the local cache notice the
+           diff. It is now ALSO scripts/tests/setup-action.test.mjs's input:
+           that test `readFileSync`s .github/actions/setup/action.yml at
+           RUNTIME, not via a module-graph edge, so without this glob an
+           actions-only diff would leave that test stale-green on the very
+           file it exists to check — same #1847 trap as fixtures/** above. */
         '.github/actions/**',
         /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
            matcher, which A2 deletes — and it is an input to no step, so
@@ -595,10 +602,10 @@ export function selectStepFiles({ fileList, step }) {
 // to match. A root manifest/lockfile change is the first — a dep/lock bump
 // can affect every leg. `.github/actions/**` is the second (ops-21, #2152):
 // its composite setup action is `uses:`-ed with no `if:` in every
-// verify.yml job, so a hard failure there already reddens everything
-// regardless of routing — but a *soft* failure (setup succeeds, environment
-// is wrong) needs every leg to be able to catch it, not just whichever one
-// step's glob matched.
+// verify.yml job that sets up Node, so a hard failure there already reddens
+// everything regardless of routing — but a *soft* failure (setup succeeds,
+// environment is wrong) needs every leg to be able to catch it, not just
+// whichever one step's glob matched.
 export function computeShared(diffFiles) {
   return diffFiles.some((f) => {
     const p = toPosix(f);
@@ -894,7 +901,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       console.log('[scope] git diff --cached failed; running all selected steps');
     } else if (computeShared(scopeDiff)) {
       scopeShared = true;
-      console.log('[scope] root manifest changed — all selected steps in scope');
+      console.log('[scope] shared-scope change detected — all selected steps in scope');
     }
   } else if (flags.scopeBranch) {
     scopeDiff = branchDiffFiles(cwd);
@@ -904,7 +911,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       console.log('[scope] no diff vs main — nothing in scope, selected steps will skip');
     } else if (computeShared(scopeDiff)) {
       scopeShared = true;
-      console.log('[scope] root manifest changed — all selected steps in scope');
+      console.log('[scope] shared-scope change detected — all selected steps in scope');
     }
   }
 
