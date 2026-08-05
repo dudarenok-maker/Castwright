@@ -413,7 +413,13 @@ export function CastView({
           resolvedCharacterId: res.resolvedCharacterId,
         }),
       );
-      for (const removed of res.removedFrom) {
+      /* Round 4 review, cheap 5 — `?? []` defends a response missing the
+         (contractually required) field: without it, a malformed/legacy
+         response would throw HERE, after `undoOrphanRejection` above has
+         already dispatched — the row would read as undone while the
+         notLinkedTo mirror silently never ran, surfaced only as an error
+         toast rather than a clean all-or-nothing failure. */
+      for (const removed of res.removedFrom ?? []) {
         dispatch(
           castActions.removeNotLinked({
             characterId: targetCharacterId,
@@ -436,10 +442,9 @@ export function CastView({
       const otherNames = (res.supersededByOther ?? []).map(
         (id) => characters.find((c) => c.id === id)?.name ?? id,
       );
+      const removedFrom = res.removedFrom ?? [];
       const multiNote =
-        res.removedFrom.length > 1
-          ? ` (undid ${res.removedFrom.length} rejected spellings of this id)`
-          : '';
+        removedFrom.length > 1 ? ` (undid ${removedFrom.length} rejected spellings of this id)` : '';
       const aliasNote = otherNames.length
         ? ` — its previous alias now points to ${otherNames.map((n) => `"${n}"`).join(' / ')}, so that was left as-is.`
         : '.';

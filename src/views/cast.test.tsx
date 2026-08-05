@@ -1010,6 +1010,82 @@ describe('CastView Qwen status pill (plan 117)', () => {
       });
     });
 
+    it('review round 4 (M-7 frontend half) — the toast names BOTH removed spellings and BOTH superseded aliases when a single Undo removes more than one pair', async () => {
+      // The mock in this suite's top-level vi.mock always resolves a
+      // single-element removedFrom, so `multiNote` and the ' / '-joined
+      // multi-alias clause in handleUndoOrphanRejection (cast.tsx) had no
+      // coverage — only the server-side M-7 fix (cast-reject-orphan.test.ts)
+      // pinned the array semantics; this pins the client reading it.
+      const timkin: Character = { ...marrow, id: 'timkin', name: 'Timkin' };
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        removedFrom: ['mayrin', 'The-Torment'],
+        supersededByOther: ['narrator', 'timkin'],
+      });
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow, timkin],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'unresolved' as const,
+                segments: 6,
+                rejectedAgainst: ['marrow'],
+              },
+            },
+          },
+        },
+      });
+      render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow, timkin]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+
+      const row = within(screen.getByTestId('orphaned-needs-decision'))
+        .getByText(/mayrin/)
+        .closest('li')!;
+      const undoButton = within(row).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        const toasts = store.getState().notifications.toasts;
+        expect(toasts.length).toBeGreaterThanOrEqual(1);
+      });
+      const toasts = store.getState().notifications.toasts;
+      const undoToast = toasts[toasts.length - 1];
+      // Both removed spellings counted (not just orphanedId's own "1").
+      expect(undoToast.message).toMatch(/undid 2 rejected spellings/);
+      // Both superseding characters' DISPLAY names, joined — not just the
+      // last one a last-wins server bug (or a naive client) would report.
+      expect(undoToast.message).toMatch(/"Narrator" \/ "Timkin"/);
+    });
+
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
