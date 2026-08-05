@@ -408,7 +408,7 @@ test('every ACCEPTED_NARROWINGS entry carries a non-empty reason', () => {
 });
 
 test('coverage parity: no derived condition silently narrows a leg', () => {
-  const accepted = new Set(ACCEPTED_NARROWINGS.map(([s, p]) => `${s} ${p}`));
+  const accepted = new Set(ACCEPTED_NARROWINGS.map(([s, p]) => `${s}\u0000${p}`));
   const regressions = [];
 
   for (const [stepName, legacyScopes] of Object.entries(LEGACY_GATES)) {
@@ -427,7 +427,7 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
       const ranBefore = legacyScopes.some((s) => LEGACY_MATCHERS[s].test(path));
       const scopes = computeScopes([path], { eventName: 'pull_request' });
       const runsNow = derivedKeys.some((k) => scopes[k]);
-      if (ranBefore && !runsNow && !accepted.has(`${stepName} ${path}`)) {
+      if (ranBefore && !runsNow && !accepted.has(`${stepName}\u0000${path}`)) {
         regressions.push(`${stepName} no longer runs for ${path}`);
       }
     }
