@@ -719,35 +719,20 @@ export function planBookRepairs(input, deps) {
 
   const liveIds = new Set(liveCast.map((c) => c.id));
   const rejectedSet = new Set(history.rejected ?? []);
-  // #2092/#2089 Task 9 — pair-scoped successor to `rejected`: `from -> Set<to>`,
-  // in TWO keyspaces, mirroring `buildCastResolver`'s own
-  // `rejectedTargetsByRawFrom`/`rejectedTargetsByNormFrom`
-  // (`server/src/store/cast-resolve.ts`) rather than a single, hand-picked
-  // one. I2 (review round 1): a first version of this filter mirrored ONLY
-  // the raw keyspace, on the theory that it matched `rejectedTargetsByRawFrom`
-  // — but that map guards the resolver's tier 2 (history) only. The candidate
-  // THIS filter actually protects is `resolveTierBId` below, which returns
-  // exclusively `via === 'normalised-id'` — the tier the resolver guards with
-  // `rejectedTargetsByNormFrom`, keyed on `normaliseIdKey(pair.from)`. Two
-  // raw spellings of the same orphaned id (`the_torment`/`The-Torment`, the
-  // repo's own real drift shape) both normalise to the same key: rejecting
-  // one must still block the other's Tier B match onto the same target, or
-  // `--apply` writes an alias that moves a rejected pairing from a blocked
-  // tier (2, raw-checked) onto an unblocked one (3, checked only against the
-  // OTHER raw spelling). Checking the union of both keyspaces is strictly
-  // safe (a real book's Tier A name-match still gets the raw-exact check it
-  // needs; Tier B additionally gets the normalised check it actually needs)
-  // and never MORE permissive than checking either alone. Checked once a
-  // Tier A/B candidate is known (see below), NOT here alongside the id-wide
-  // `rejectedSet` — the whole point of the pair scope is that a rejection
-  // against ONE target must not withhold a DIFFERENT, later target for the
-  // same orphaned id (spec: "X is not Y" is not "X is not anyone").
-  const rejectedTargetsByRawFrom = new Map();
+  // #2092/#2089 Task 9 (fix round 5, F6 — collapsed from an earlier
+  // two-keyspace union that was strictly redundant) — pair-scoped successor
+  // to `rejected`: `normalisedFrom -> Set<to>`. Only the normalised
+  // keyspace is needed: the candidate this filter protects is
+  // `resolveTierBId` below, which returns exclusively `via ===
+  // 'normalised-id'` matches, so a raw `pair.from === id` match — which
+  // normalises to the same key — is already covered by checking normalised
+  // alone. Checked once a Tier A/B candidate is known (see below), NOT here
+  // alongside the id-wide `rejectedSet` — the whole point of the pair scope
+  // is that a rejection against ONE target must not withhold a DIFFERENT,
+  // later target for the same orphaned id (spec: "X is not Y" is not "X is
+  // not anyone").
   const rejectedTargetsByNormFrom = new Map();
   for (const pair of history.rejectedPairs ?? []) {
-    if (!rejectedTargetsByRawFrom.has(pair.from)) rejectedTargetsByRawFrom.set(pair.from, new Set());
-    rejectedTargetsByRawFrom.get(pair.from).add(pair.to);
-
     const normFrom = normaliseIdKey(pair.from);
     if (!rejectedTargetsByNormFrom.has(normFrom)) rejectedTargetsByNormFrom.set(normFrom, new Set());
     rejectedTargetsByNormFrom.get(normFrom).add(pair.to);
@@ -1016,18 +1001,18 @@ export function planBookRepairs(input, deps) {
       // either skip every candidate (id-wide, the bug this replaces) or
       // none. Mirrors `buildCastResolver`'s own D2 rule (`cast-resolve.ts`):
       // a rejected pair refuses outright rather than falling through to try
-      // a different tier/candidate for the same id. I2 (review round 1):
-      // checks BOTH keyspaces — raw (what Tier A's exact-id-shaped match
-      // needs) and normalised (what Tier B's `resolveTierBId` match, which
-      // is defined ENTIRELY by normalisation, actually needs) — see the
-      // `rejectedTargetsByRawFrom`/`rejectedTargetsByNormFrom` construction
-      // above for the full reasoning. Runs BEFORE guard 5 below — an
+      // a different tier/candidate for the same id. Checks the normalised
+      // keyspace (see `rejectedTargetsByNormFrom`'s own comment above) — a
+      // raw match is strictly subsumed by it, and this guard is
+      // deliberately broader than `buildCastResolver`'s own per-tier check:
+      // it only decides whether to WITHHOLD a write, and over-blocking is
+      // the fail-closed direction here, unlike the resolver, which must
+      // pick exactly one tier or refuse. Runs BEFORE guard 5 below — an
       // explicit prior rejection of this exact pairing is a settled user
       // decision and should skip outright without also asking whether the
       // two evidence sources agree.
-      const rawBlocked = rejectedTargetsByRawFrom.get(id)?.has(matchedId);
-      const normBlocked = rejectedTargetsByNormFrom.get(normaliseIdKey(id))?.has(matchedId);
-      if (rawBlocked || normBlocked) {
+      const blocked = rejectedTargetsByNormFrom.get(normaliseIdKey(id))?.has(matchedId);
+      if (blocked) {
         skipped.push({
           id,
           reason: 'rejected-pair',
