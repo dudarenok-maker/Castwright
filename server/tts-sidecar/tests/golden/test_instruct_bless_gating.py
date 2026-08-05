@@ -276,7 +276,13 @@ def test_bless_allows_identity_move_with_the_flag(monkeypatch, tmp_path, capsys)
     assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_MEASUREMENTS" in out, (
         f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
     )
-    assert "(noise)" not in out
+    # #2116 R3 (independent review): the producer emits "within epsilon N
+    # (noise -- reference unchanged)" for a noise move, so the literal
+    # substring "(noise)" (with the parenthesis) never appears in EITHER
+    # branch and this assertion could not fail -- a placebo, same shape as
+    # the one already fixed in the F2 test. "noise" (no parens) is what
+    # actually distinguishes the BEYOND/FORCED branch from the noise one.
+    assert "noise" not in out
     assert "GOLDEN_REBLESS_THRESHOLDS" not in out, "identity's echo must never name the wrong flag"
 
 
@@ -437,7 +443,11 @@ def test_bless_allows_loudness_dbfs_move_with_the_flag(monkeypatch, tmp_path, ca
     assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_MEASUREMENTS" in out, (
         f"a flag-forced window-sized move must never be echoed as noise, got: {out!r}"
     )
-    assert "(noise)" not in out
+    # #2116 R3 (independent review): same placebo shape as the F2 test and
+    # the sibling identity test above -- "(noise)" with the parenthesis
+    # never appears in either branch, so the bare-string check "noise" is
+    # what actually distinguishes BEYOND/FORCED from within-epsilon.
+    assert "noise" not in out
     assert "GOLDEN_REBLESS_THRESHOLDS" not in out, "loudness_dbfs's echo must never name the wrong flag"
 
 
