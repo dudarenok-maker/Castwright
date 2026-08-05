@@ -456,11 +456,10 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
 });
 
 // Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
-// PR ran zero legs — in cloud AND locally. The wiring assertions added in
-// A2 read verify.yml as evidence, so the step that runs them must be in
-// scope when verify.yml changes, or the guard cannot run on the PR that
-// breaks it.
-test('stepTouchedByDiff: a verify.yml diff matches test:hooks via extraFiles', () => {
+// PR ran zero legs — in cloud AND locally. This suite's own stepTouchedByDiff
+// assertions against real workflow paths are what must stay in scope when
+// verify.yml changes, or the guard cannot run on the PR that breaks it.
+test('stepTouchedByDiff: a verify.yml diff matches test:hooks via globs', () => {
   assert.equal(
     stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']),
     true,
@@ -490,8 +489,11 @@ test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', (
 // defect D again for .husky, on the very PR that fixes it for .github, and
 // none of the four wiring assertions can see it (they check key existence
 // and job membership, not whether a derived condition still covers what the
-// legacy one did). release-manifest.test.mjs:95 reads .husky/pre-commit at
-// runtime, so this is a real edge, not a theoretical one.
+// legacy one did). release-manifest.test.mjs:95 includes .husky/pre-commit
+// as a literal string in an array of sample paths fed to a pure classifier —
+// it does not read the file from disk — but it is still a real edge worth
+// pinning, not a theoretical one (M1, #2146 review: corrects the previous
+// "reads at runtime" claim, which was false).
 test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
   for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
     assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);

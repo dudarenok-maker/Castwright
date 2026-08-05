@@ -56,12 +56,13 @@ export const STEPS = [
       globs: [
         'scripts/**/*.{mjs,cjs}',
         'scripts/tests/fixtures/**',
-        /* .github/workflows/** is an input because workflow-wiring.test.mjs
-           parses verify.yml at RUNTIME and asserts its `if:` conditions agree
-           with ci-scope.mjs's emitted keys. Without this, a workflow-only diff
-           — precisely the edit that breaks the wiring — prints [cached] and
-           the assertion sits stale-green. Same #1847 trap as fixtures/**
-           above (defect D, #2119 review). */
+        /* .github/workflows/** is an input because this step's own tests
+           (verify-cache.test.mjs) assert stepTouchedByDiff against real
+           workflow paths, so a workflow-only diff must stay in scope for the
+           step that exercises those assertions. Without this, a
+           workflow-only diff — precisely the edit that breaks the wiring —
+           prints [cached] and the assertion sits stale-green. Same #1847
+           trap as fixtures/** above (defect D, #2119 review). */
         '.github/workflows/**',
         /* .github/actions/** is defect D's other half (I1, #2146 review):
            the composite setup action is consumed by all seven verify.yml
@@ -75,8 +76,10 @@ export const STEPS = [
         /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
            matcher, which A2 deletes — and it is an input to no step, so
            without this a .husky-only PR would run zero legs after A2.
-           release-manifest.test.mjs reads .husky/pre-commit at runtime
-           (plan review round 2). */
+           release-manifest.test.mjs's sample-path array includes
+           .husky/pre-commit as a literal string fed to a pure classifier —
+           it does not read the file from disk (plan review round 2 named
+           the wrong file/mechanism; M1, #2146 review). */
         '.husky/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
