@@ -315,6 +315,16 @@ clearing CLAUDE.md's fix-now bar:
   same-tick microtask with no seam to hold open, so AB/BA tests use a
   deterministic barrier (a hoisted `vi.mock` holding both requests at a
   common point, released together) instead.
+  `cast-not-linked-to.test.ts` shipped with only the AB/BA test until
+  `#2123`: its lock-existence detector races a genuine `withCastLocks`
+  writer (an orthogonal field on the SAME book) against the route's own
+  in-lock `readJson`, gated via the same barrier idiom — proven red both
+  when `withCastLocks` is neutralised (`return fn();`, bypassing its
+  `reduceRight` chain — mutation-verified against that primitive, not
+  `withCastLock`, which this two-book site never calls) and when
+  `sourceCast`'s read is hoisted back outside the still-present lock (a
+  rule-2 regression, the same shape that hit `library-cast-override.ts`
+  above).
 - `server/src/routes/analysis.fresh-cast-lock.test.ts` and
   `server/src/routes/book-state.reparse.test.ts` — race the two delete
   sites against `cast-aliases`, which re-reads inside its own lock and
