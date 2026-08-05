@@ -272,4 +272,10 @@ test('renderTransitionComment: recipe covers BOTH outcomes, and says the pin no 
   // rejected-release path is now covered too, and states the pin isn't what re-arms it.
   assert.ok(/still (there|applies)|warning is still|not gone/i.test(md));
   assert.ok(/no longer (what arms|arms)|not what arms/i.test(md));
+  // The advice must be bound to the rejected-release condition ON THE SAME LINE,
+  // not merely present somewhere in the body — otherwise a rewrite that attaches
+  // "leave the pin alone" to the WRONG bullet (e.g. the success path) would still
+  // pass every assertion above. `.` doesn't match `\n` by default, so this only
+  // matches if both phrases are on one line with nothing else between them.
+  assert.match(md, /warning is still there.*leave the pin alone/i);
 });

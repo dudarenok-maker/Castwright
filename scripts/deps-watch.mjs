@@ -11,6 +11,11 @@ export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
  * Known limitation: collapses prerelease ordering, so `1.0.0` vs `1.0.0-beta`
  * compares EQUAL (stable-over-prerelease is under-reported). Safe for the three
  * KGP plugins (all pinned at stable). Revisit if a plugin pins a `-beta`/`-dev`.
+ * Build metadata is dropped too, so `10.1.0+1` vs `10.1.0` also compares EQUAL.
+ * Unlike the prerelease case this IS reachable here: the workflow runs
+ * `flutter pub outdated --json --show-all` with no `--prereleases`, so
+ * prereleases never reach `latest`, but a `+N`-only republish does — and
+ * won't fire a transition even though the observed `latest` string changed.
  */
 export function compareSemver(a, b) {
   const core = (v) => String(v).split('+')[0].split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
