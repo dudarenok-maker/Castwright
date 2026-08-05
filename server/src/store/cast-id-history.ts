@@ -173,6 +173,40 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
  *  Updates transitive mappings: whether a→b then b→c is recorded, or b→c
  *  then a→b, both a and b end up pointing to c in the final map (O(1)
  *  resolution). */
+/** #2092/#2089 Task 10 — when `retireCharacterId` repoints a `supersededBy`
+ *  entry whose VALUE is the id being retired (`from`) onto its live
+ *  replacement (`newTarget`), do the same to a `rejectedPairs` entry whose
+ *  `to` is that same id. Reasoning: `retireCharacterId` is only ever called
+ *  when `from` and `newTarget` (after dereferencing) are the SAME real
+ *  character under two ids — that is the invariant the whole
+ *  `supersededBy`-repoint loop above already relies on (a rename, a
+ *  dedupe, a merge — never two different people). A rejected pair
+ *  `{ from: X, to: Y }` records a decision about a PERSON, not a string:
+ *  "the orphaned id X is not the character currently addressable as Y."
+ *  When Y retires into Y', Y' is still that same person, so "X is not Y"
+ *  must keep meaning "X is not [that person]" — i.e. become "X is not Y'"
+ *  — or the rejection silently stops applying the moment the character it
+ *  was about gets a new id, and the auto-repair pass (or a future banner
+ *  render) could re-offer the exact pairing the user already said no to.
+ *  Dropping the pair instead was considered and rejected: it would forget
+ *  a genuine user decision for no reason tied to that decision itself,
+ *  purely because of bookkeeping happening on the OTHER id it references.
+ *
+ *  Degenerate case: if `newTarget === pair.from` (the retiring id's live
+ *  replacement is itself the pair's `from` id — a person's canonical id
+ *  became the very id that was rejected as "not them"), the entry is
+ *  dropped rather than written as a self-referencing `{from: X, to: X}`
+ *  pair — mirroring `retireCharacterId`'s own "never write a self-entry"
+ *  guard below for `supersededBy`. It would never fire at read time anyway
+ *  (`buildCastResolver` checks `exact` before any rejected pair), but
+ *  leaving a nonsensical pair on disk serves nothing. */
+function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: string): void {
+  if (!history.rejectedPairs?.length) return;
+  history.rejectedPairs = history.rejectedPairs
+    .map((pair) => (pair.to === from ? { ...pair, to: newTarget } : pair))
+    .filter((pair) => pair.from !== pair.to);
+}
+
 export async function retireCharacterId(
   bookDir: string,
   from: string,
@@ -209,6 +243,7 @@ export async function retireCharacterId(
         }
       }
       history.supersededBy[from] = to;
+      repointRejectedPairs(history, from, to);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
       return;
     }
@@ -234,6 +269,8 @@ export async function retireCharacterId(
 
     // Add/update the new mapping
     history.supersededBy[from] = resolvedTo;
+
+    repointRejectedPairs(history, from, resolvedTo);
 
     // Write back
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);

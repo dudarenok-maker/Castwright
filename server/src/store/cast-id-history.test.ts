@@ -549,6 +549,65 @@ describe('cast id history', () => {
     });
   });
 
+  /* #2092/#2089 Task 10 — retireCharacterId repoints a rejectedPairs entry
+     the same way it already repoints supersededBy: when the pair's `to`
+     is the id being retired, the pair follows the character to its new
+     live id, because a rejected pair is a decision about a PERSON, not a
+     string (see repointRejectedPairs's own doc comment for the full
+     reasoning). */
+  describe('retireCharacterId repoints rejectedPairs (#2092/#2089 Task 10)', () => {
+    it('repoints a rejected pair whose target is the id being retired (main branch)', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await retireCharacterId(dir, 'mairin', 'mairin-final');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin-final' },
+      ]);
+    });
+
+    it('repoints through the direct-reversal branch too', async () => {
+      // Same reversal shape as the 'direct reversal' describe above:
+      // антон -> anton is recorded first, then a later call reverses it
+      // (anton -> антон). A pair rejected against 'anton' while it was
+      // still live must follow the reversal onto 'антон'.
+      await retireCharacterId(dir, 'антон', 'anton');
+      await rejectOrphanedPair(dir, 'mayrin', 'anton');
+      await retireCharacterId(dir, 'anton', 'антон');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'антон' },
+      ]);
+    });
+
+    it('preserves forgotSupersededTo across a repoint', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+      await retireCharacterId(dir, 'mairin', 'mairin-final');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin-final', forgotSupersededTo: 'wren' },
+      ]);
+    });
+
+    it('leaves a rejected pair targeting an UNRELATED live id untouched', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await retireCharacterId(dir, 'someone-else', 'timkin');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin' },
+      ]);
+    });
+
+    it('drops a rejected pair that would become a self-loop (the retiring id\'s new target IS the pair\'s own `from`)', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      // 'mairin' itself retires INTO 'mayrin' — the pair's `to` (mairin)
+      // would repoint onto 'mayrin', which is already the pair's `from`.
+      await retireCharacterId(dir, 'mairin', 'mayrin');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([]);
+    });
+
+    it('does not touch the legacy `rejected` list, which has no target to repoint', async () => {
+      await rejectOrphanedId(dir, 'the-torment');
+      await retireCharacterId(dir, 'the-torment', 'lightning-dave');
+      expect((await loadCastIdHistory(dir)).rejected).toEqual(['the-torment']);
+    });
+  });
+
   /* Wave 2 final-review finding 1(b) — the recording-boundary half of the
      live-id guard. `retireCharacterId`'s repoint loop is only sound when
      `from` is dead, so a retirement naming a LIVE cast id is bogus by
