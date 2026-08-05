@@ -26,6 +26,7 @@ import {
   planBookRepairs,
   buildRerenderRows,
   shouldRefuseApplyForWithheldAutoRecord,
+  planApplyRefusal,
   formatReportRowSummary,
   readAnalysisCache,
   isCacheAvailable,
@@ -893,6 +894,61 @@ describe('shouldRefuseApplyForWithheldAutoRecord (#2093 residual 2, re-scoped by
   });
 });
 
+describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, driven through the seam main() itself calls)", () => {
+  // This covers the ACCUMULATION main()'s loop-tail used to hand-roll
+  // inline (only a book with withheldForMissingCache > 0 counts; the label
+  // text; the threshold crossing) — driven through the exact function
+  // main() calls, not a second computation of the same fact hand-rolled in
+  // the test. What it does NOT cover is named in planApplyRefusal's own doc
+  // comment: that main()'s loop actually pushes the real per-book value in,
+  // and that main() actually acts on `.refuse` by setting process.exitCode
+  // and returning — both need apply === true, which routes through a live
+  // port probe and a server/dist import this harness doesn't have.
+  test('apply=false never refuses, regardless of withheld books', () => {
+    const result = planApplyRefusal(false, [{ label: 'Book A', withheldForMissingCache: 3 }]);
+    assert.equal(result.refuse, false);
+    assert.equal(result.booksWithheldForMissingCache, 1);
+  });
+
+  test('apply=true with no withheld books does not refuse', () => {
+    const result = planApplyRefusal(true, [
+      { label: 'Book A', withheldForMissingCache: 0 },
+      { label: 'Book B', withheldForMissingCache: 0 },
+    ]);
+    assert.equal(result.refuse, false);
+    assert.equal(result.booksWithheldForMissingCache, 0);
+    assert.deepEqual(result.withheldBookLabels, []);
+  });
+
+  test('CRITICAL (#2111): apply=true with one withheld book refuses and names it — the last workspace-level rail', () => {
+    const result = planApplyRefusal(true, [
+      { label: 'Book A', withheldForMissingCache: 0 },
+      { label: 'Book B', withheldForMissingCache: 2 },
+    ]);
+    assert.equal(result.refuse, true);
+    assert.equal(result.booksWithheldForMissingCache, 1);
+    assert.deepEqual(result.withheldBookLabels, ['Book B (2 id(s))']);
+  });
+
+  test('accumulates across multiple withheld books, not just the first', () => {
+    const result = planApplyRefusal(true, [
+      { label: 'Book A', withheldForMissingCache: 1 },
+      { label: 'Book B', withheldForMissingCache: 0 },
+      { label: 'Book C', withheldForMissingCache: 5 },
+    ]);
+    assert.equal(result.booksWithheldForMissingCache, 2);
+    assert.deepEqual(result.withheldBookLabels, ['Book A (1 id(s))', 'Book C (5 id(s))']);
+    assert.equal(result.refuse, true);
+  });
+
+  test('an empty bookWithholds list refuses nothing (matches an empty workspace scan, not "unknown")', () => {
+    const result = planApplyRefusal(true, []);
+    assert.equal(result.refuse, false);
+    assert.equal(result.booksWithheldForMissingCache, 0);
+    assert.deepEqual(result.withheldBookLabels, []);
+  });
+});
+
 describe('formatReportRowSummary (#2093 residual 5, cosmetic)', () => {
   test('normal report row includes the chapter count', () => {
     assert.equal(
@@ -1326,34 +1382,108 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
     assert.deepEqual(autoReconciled.get('drifted'), { segments: 2, resolvedTo: 'live' });
   });
 
-  test("RESIDUAL 5 (#2093): an id resolving via 'normalised-history' is ALSO counted in autoReconciled — used to be dropped as a phantom orphan", () => {
-    // Before this fix, only 'normalised-id' was counted here — an id that
-    // resolves purely through a RECORDED alias's own normalised spelling
-    // (cast-resolve.ts's 'normalised-history' tier) fell through to
-    // planBookRepairs's `orphans.get(id) ?? { segments: 0, ... }` and got
-    // the misleading "zero rendered segments — no damage to repair" reason
-    // instead of "already auto-reconciles" — the same
-    // contradicts-the-Cast-banner shape round-2 review already fixed once
-    // for the id-shape tier, reopened here for the alias tier.
+  test("#2107 REVERSES residual 5 (#2093): an id resolving via 'normalised-history' is an orphan, NOT counted in autoReconciled", () => {
+    // #2093 residual 5 originally counted 'normalised-history' here too,
+    // reasoning "already resolves live, nothing to repair". That shared
+    // #2107's exact reasoning gap: 'normalised-history', like 'history',
+    // depends on history.supersededBy — a table that can gain an entry
+    // AFTER the segment's audio was already rendered (this script's own
+    // --apply, or retireCharacterId elsewhere). A match through it does not
+    // prove the rendered bytes are current, only that SOME alias exists
+    // today — so it belongs in `orphans` (stale, needs re-render), not
+    // `autoReconciled` (proven fine). See buildOrphansFromSegments's own
+    // doc comment for the full per-tier reasoning.
     const resolver = { resolve: (id) => (id === 'old-alias' ? { character: { id: 'live' }, via: 'normalised-history' } : undefined) };
     const segs = [seg(1, 'One', [{ characterId: 'old-alias' }, { characterId: 'old-alias' }, { characterId: 'old-alias' }])];
     const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
-    assert.equal(orphans.size, 0);
-    assert.deepEqual(autoReconciled.get('old-alias'), { segments: 3, resolvedTo: 'live' });
+    assert.equal(autoReconciled.size, 0);
+    assert.equal(orphans.get('old-alias')?.segments, 3);
   });
 
-  test("an id resolving via 'exact' or 'history' is neither an orphan nor counted in autoReconciled (already live, nothing to reconcile)", () => {
+  test("an id resolving via 'exact' is neither an orphan nor counted in autoReconciled (no alias table involved, always fine)", () => {
     const resolver = {
       resolve(id) {
         if (id === 'live-id') return { character: { id: 'live-id' }, via: 'exact' };
-        if (id === 'aliased') return { character: { id: 'live-id' }, via: 'history' };
         return undefined;
       },
     };
-    const segs = [seg(1, 'One', [{ characterId: 'live-id' }, { characterId: 'aliased' }])];
+    const segs = [seg(1, 'One', [{ characterId: 'live-id' }])];
     const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
     assert.equal(autoReconciled.size, 0);
+  });
+
+  test("CRITICAL (#2107): an id resolving via 'history' is an orphan, NOT silently dropped as already-live", () => {
+    // The root-cause shape: `mayrin` was aliased to `mairin` by a PRIOR
+    // --apply run. The alias makes `resolver.resolve('mayrin')` succeed via
+    // the 'history' tier today, but that says nothing about whether the
+    // rendered audio on disk predates the alias — it does not (#2107's
+    // real-workspace incident). Before this fix, ANY successful resolution
+    // hit a blanket `continue` and this id vanished from `orphans` (and was
+    // never added to `autoReconciled` either, since only the two
+    // normalised tiers were tracked there) — genuinely rendered damage
+    // silently disappeared from the collector's output.
+    const resolver = {
+      resolve(id) {
+        if (id === 'aliased') return { character: { id: 'live-id' }, viaAlias: 'aliased', via: 'history' };
+        return undefined;
+      },
+    };
+    const segs = [seg(2, 'Two', [{ characterId: 'aliased', startSec: 0, endSec: 4 }, { characterId: 'aliased', startSec: 4, endSec: 6 }])];
+    const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
+    assert.equal(autoReconciled.size, 0);
+    const entry = orphans.get('aliased');
+    assert.equal(entry.segments, 2);
+    assert.equal(entry.chapters[0].chapterId, 2);
+  });
+
+  test('CRITICAL (#2107): the cross-run case — an id auto-recorded on run 1 still lands on the re-render list on run 2, even though run 2 resolves it via history', () => {
+    // The same-run case (above) would NOT have caught #2107: within a
+    // single run, pendingWrites are only written to cast-id-history.json
+    // AFTER segmentOrphans is computed, so a same-run resolver never sees
+    // its own pass's new alias. The bug only bites on the NEXT run, which
+    // reads the alias back off disk — exactly the "re-run to get my work
+    // list" flow the real-workspace incident hit. This test drives two
+    // separate buildOrphansFromSegments calls over the SAME fixture to pin
+    // that specifically, mirroring the real numbers from A33's `--apply`
+    // run: `mayrin` ch2, 8 rendered segments, still narrator-substituted on
+    // disk after the alias was recorded.
+    const mayrinSegs = [
+      seg(
+        2,
+        'Chapter Two',
+        Array.from({ length: 8 }, (_, i) => ({ characterId: 'mayrin', startSec: i, endSec: i + 1 })),
+      ),
+    ];
+
+    // Run 1: no alias recorded yet (a genuine miss) — becomes an orphan,
+    // and the re-render list names it.
+    const run1Resolver = { resolve: () => undefined };
+    const run1 = buildOrphansFromSegments(mayrinSegs, run1Resolver);
+    assert.equal(run1.orphans.get('mayrin')?.segments, 8);
+    const run1Rows = buildRerenderRows('Coalfall', run1.orphans);
+    assert.equal(run1Rows.length, 1);
+    assert.equal(run1Rows[0].id, 'mayrin');
+
+    // Run 2: same fixture, but cast-id-history.json now carries
+    // `mayrin -> mairin` (written by run 1's own --apply, or an earlier
+    // one) — the resolver's 'history' tier now succeeds for 'mayrin'. The
+    // audio on disk is unchanged; it must still appear on the re-render
+    // list.
+    const run2Resolver = {
+      resolve: (id) => (id === 'mayrin' ? { character: { id: 'mairin' }, viaAlias: 'mayrin', via: 'history' } : undefined),
+    };
+    const run2 = buildOrphansFromSegments(mayrinSegs, run2Resolver);
+    assert.equal(
+      run2.orphans.get('mayrin')?.segments,
+      8,
+      'the audio on disk is still narrator-substituted — recording the alias must not drop it off the re-render list',
+    );
+    assert.equal(run2.autoReconciled.size, 0, "'history' is not an id-shape auto-reconcile tier — must not be marked already-fixed either");
+    const run2Rows = buildRerenderRows('Coalfall', run2.orphans);
+    assert.equal(run2Rows.length, 1);
+    assert.equal(run2Rows[0].id, 'mayrin');
+    assert.equal(run2Rows[0].segments, 8);
   });
 
   test('non-string characterIds are ignored', () => {

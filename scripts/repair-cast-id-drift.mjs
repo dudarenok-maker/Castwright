@@ -665,14 +665,13 @@ export function planBookRepairs(input, deps) {
         // reason.
         const reconciled = autoReconciled?.get(id);
         if (reconciled) {
-          // #2093 residual 5 incidental fix: this used to hardcode "via the
-          // normalised-id tier" — accurate while `autoReconciled` only ever
-          // captured that one tier, but no longer accurate now that it also
-          // captures 'normalised-history' matches (see
-          // `buildOrphansFromSegments`'s doc comment). Worded generically
-          // rather than threading the specific `via` value through, since
-          // both tiers mean the same thing here: "already resolves live,
-          // nothing to repair."
+          // #2107: `autoReconciled` only ever captures the `'normalised-id'`
+          // tier now — `'history'`/`'normalised-history'` moved to `orphans`
+          // instead (see `buildOrphansFromSegments`'s doc comment for why:
+          // both depend on the mutable `supersededBy` table, so a match
+          // through either can post-date the render and must not read as
+          // "no damage"). Worded generically rather than hardcoding the tier
+          // name, since this branch only ever sees the one tier now.
           reportOnly.push({
             id,
             segments: reconciled.segments,
@@ -808,9 +807,62 @@ export function buildRerenderRows(bookLabel, orphans) {
  *  right arguments, and that `main()` actually exits 1 on `true`)
  *  testable — `main` isn't exported (it needs `server/dist` built; see the
  *  module doc comment's Tests section), so that wiring remains verified
- *  only by the live dry run. */
+ *  only by the live dry run. **#2111 narrows, but does not close, this gap
+ *  — see `planApplyRefusal`'s own doc comment immediately below.** */
 export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache) {
   return apply === true && booksWithheldForMissingCache > 0;
+}
+
+/** #2111: the smallest orchestration seam `main()`'s per-workspace `--apply`
+ *  refusal can be pulled through a test without needing `server/dist` or a
+ *  live book scan. `main()` calls this ONCE, right after its per-book loop,
+ *  with `bookWithholds` — one `{ label, withheldForMissingCache }` entry per
+ *  scanned book, built by pushing `plan.withheldForMissingCache` straight
+ *  from each iteration's `planBookRepairs` result. This is a single source
+ *  of truth, not a second computation of the same fact re-derived in a test
+ *  (`cast-resolve.ts`'s own doc comment explains why this codebase avoids
+ *  that shape) — `main()`'s loop-tail accumulation that used to inline this
+ *  logic now calls this function instead of hand-rolling it a second time.
+ *
+ *  What this closes, on top of `shouldRefuseApplyForWithheldAutoRecord`
+ *  alone: the ACCUMULATION across multiple books — only a book with
+ *  `withheldForMissingCache > 0` counts, the label text is built correctly,
+ *  and the threshold crossing is driven through the same function `main()`
+ *  calls, not a hand-reimplemented copy in the test.
+ *
+ *  What this does NOT close, named explicitly rather than overclaimed (the
+ *  #2102 pre-merge review caught exactly this shape once already — an
+ *  extraction that moves the untested boundary down a level and then reads
+ *  as "wiring covered" when it isn't):
+ *    1. That `main()`'s per-book loop actually pushes the REAL
+ *       `plan.withheldForMissingCache` it computed into `bookWithholds` — a
+ *       one-line push, visible by inspection, not exercised by any
+ *       automated test in this file.
+ *    2. That `main()` actually acts on the returned `.refuse` by setting
+ *       `process.exitCode = 1` and returning before the write phase.
+ *       Unreachable from `test:hooks`: exercising it needs `apply === true`,
+ *       which `main()` gates behind a live TCP port-probe
+ *       (`probePortRangeRefused`) and a `server/dist` import, neither of
+ *       which exist in this harness — the same wall `shouldRefuseApplyFor
+ *       EmptyScan`'s own "Ie" test-file comment already documents for the
+ *       sibling `--apply`-gated refusal.
+ *  Both remain verified only by the on-box acceptance run (register row
+ *  A33, `docs/testing/onbox-acceptance-register.md`), never by an automated
+ *  test in this file. */
+export function planApplyRefusal(apply, bookWithholds) {
+  let booksWithheldForMissingCache = 0;
+  const withheldBookLabels = [];
+  for (const b of bookWithholds) {
+    if (b.withheldForMissingCache > 0) {
+      booksWithheldForMissingCache += 1;
+      withheldBookLabels.push(`${b.label} (${b.withheldForMissingCache} id(s))`);
+    }
+  }
+  return {
+    booksWithheldForMissingCache,
+    withheldBookLabels,
+    refuse: shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache),
+  };
 }
 
 /** Formats one `reportOnly` row for the console listing (main()). Extracted
@@ -1224,12 +1276,11 @@ async function loadServerModules() {
  *  loaded segments-file records (`segs`, the shape `mods.loadSegmentsFiles`
  *  returns) and a resolver (the real `buildCastResolver` result in
  *  production, a fake with the same `.resolve()` contract in tests), walks
- *  every rendered segment and buckets it into `orphans` (the resolver
- *  misses entirely — per-chapter breakdown, approximate affected duration
- *  from each segment's own startSec/endSec, every non-empty
- *  characterSnapshot) or `autoReconciled` (the resolver hits via EITHER
- *  id-shape tier — round-2 review, MINOR finding 4, widened by residual 5
- *  below).
+ *  every rendered segment and buckets it into `orphans` (the rendered
+ *  bytes on disk may be stale — per-chapter breakdown, approximate affected
+ *  duration from each segment's own startSec/endSec, every non-empty
+ *  characterSnapshot) or `autoReconciled` (the resolver hits via a tier that
+ *  proves the rendered bytes are fine — round-2 review, MINOR finding 4).
  *
  *  Exported so the producer half of the auto-reconciled map — previously
  *  proven only by a live dry run against the real workspace, since
@@ -1238,16 +1289,45 @@ async function loadServerModules() {
  *  the module doc comment's Tests section). `collectSegmentOrphans` itself
  *  stays the thin I/O wrapper that loads `segs` and calls this.
  *
- *  #2093 residual 5: `resolution.via === 'normalised-id'` used to be the
- *  ONLY tier counted as "already reconciles" — but `cast-resolve.ts`'s own
- *  `'normalised-history'` tier (a normalised match through a RECORDED
- *  alias, not just id-shape) is exactly the same "already fixed, no damage
- *  here" case, and was missing. An id that only resolves that way used to
- *  fall through to `orphans.get(id) ?? { segments: 0, ... }` in
- *  `planBookRepairs` and get the misleading "zero rendered segments — no
- *  damage to repair" reason instead of "already auto-reconciles" — the
- *  same contradiction-with-the-Cast-banner shape round-2 already fixed once
- *  for the id-shape tier, reopened here for the alias tier. */
+ *  #2107: the question this function answers per segment is NOT "does
+ *  `resolver.resolve(id)` succeed" — it's "is the audio already on disk
+ *  stale". Those used to be treated as the same question (any successful
+ *  resolution, whatever the tier, hit a blanket `continue`); they aren't.
+ *  Reasoned per tier, against `cast-resolve.ts`'s own four:
+ *    - `'exact'`: the segment's raw `characterId`, frozen to disk at render
+ *      time, literally IS a live cast id today. No alias table involved —
+ *      fine, not orphaned.
+ *    - `'normalised-id'`: matches a LIVE cast id after normalising, with NO
+ *      history/alias lookup at all — a pure function of the CURRENT cast
+ *      list, independent of when the render happened. This codebase's own
+ *      invariant (see this repo's CLAUDE.md "Conventions worth preserving")
+ *      is that any path that changes a persisted character id calls
+ *      `retireCharacterId`, i.e. a real rename always leaves a history
+ *      entry — so an id that STILL normalised-matches a live id with no
+ *      history entry for it has always had this normalised spelling, and
+ *      the real render pipeline (`synthesise-chapter.ts` builds the same
+ *      resolver) would have resolved it exactly the same way at render
+ *      time. Fine, not orphaned — matches #2093 residual 5's original call
+ *      for this tier, unchanged here.
+ *    - `'history'` / `'normalised-history'`: BOTH depend on
+ *      `history.supersededBy`, a table that gains entries over time (this
+ *      script's own `--apply`, or `retireCharacterId` elsewhere). There is
+ *      no timestamp proving a given alias predates the render that froze
+ *      this segment's `characterId` to disk — the #2107 incident IS exactly
+ *      that ordering: `mayrin -> mairin` got written by an `--apply` run,
+ *      and the VERY NEXT dry run resolved `mayrin` via `'history'` and
+ *      dropped it from the re-render list, even though the frozen audio
+ *      predates the alias and is still narrator-substituted. Conservatively
+ *      STALE for both tiers — belongs in `orphans`, not `autoReconciled`.
+ *      This REVERSES #2093 residual 5's treatment of `'normalised-history'`
+ *      as "no damage" — that call shared #2107's exact reasoning gap (it
+ *      asked "does this resolve" instead of "is the alias older than the
+ *      render"), just never hit in practice before this incident.
+ *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
+ *  being empty for an id must mean "resolves via a tier that CANNOT have
+ *  been written after the render" (`exact`/`normalised-id`), never merely
+ *  "resolver.resolve() returned something" — that laxer reading is the bug
+ *  this comment exists to prevent from coming back. */
 export function buildOrphansFromSegments(segs, resolver) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
   const autoReconciled = new Map(); // id -> { segments, resolvedTo }
@@ -1259,12 +1339,20 @@ export function buildOrphansFromSegments(segs, resolver) {
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
       if (resolution) {
-        if (resolution.via === 'normalised-id' || resolution.via === 'normalised-history') {
+        if (resolution.via === 'exact') continue; // fine — no alias table involved, not orphaned
+        if (resolution.via === 'normalised-id') {
+          // fine — depends only on the CURRENT live cast list, not on
+          // history/supersededBy, so it can't have been written after this
+          // segment's audio was rendered (see the doc comment above).
           const entry = autoReconciled.get(id) ?? { segments: 0, resolvedTo: resolution.character.id };
           entry.segments += 1;
           autoReconciled.set(id, entry);
+          continue;
         }
-        continue; // resolves (exact/history/normalised) — not an orphan
+        // 'history' / 'normalised-history': depends on history.supersededBy,
+        // which can gain entries AFTER this segment's audio was rendered
+        // (#2107) — falls through to the orphan bucket below, same as an
+        // unresolved id, rather than being silently dropped.
       }
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
@@ -1408,14 +1496,11 @@ async function main() {
   let totalReportSegments = 0;
   let totalSkipped = 0;
   let booksMissingCache = 0;
-  // Owner-decided policy, review round 2: the count that actually gates
-  // `--apply` (see shouldRefuseApplyForWithheldAutoRecord's doc comment) —
-  // books where planBookRepairs withheld a REAL auto-record candidate for
-  // the missing-cache reason, not merely books whose cache happens to be
-  // unusable. `withheldBookLabels` makes the refusal message name the
-  // specific book(s) an operator needs to act on, rather than just a count.
-  let booksWithheldForMissingCache = 0;
-  const withheldBookLabels = [];
+  // #2111: fed to `planApplyRefusal` once, after the loop, instead of
+  // hand-accumulating `booksWithheldForMissingCache`/`withheldBookLabels`
+  // inline here — see that function's doc comment for what this does and
+  // does not close of the wiring-untested gap.
+  const bookWithholds = []; // { label, withheldForMissingCache }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -1478,10 +1563,7 @@ async function main() {
       },
     );
 
-    if (plan.withheldForMissingCache > 0) {
-      booksWithheldForMissingCache += 1;
-      withheldBookLabels.push(`${book.label} (${plan.withheldForMissingCache} id(s))`);
-    }
+    bookWithholds.push({ label: book.label, withheldForMissingCache: plan.withheldForMissingCache });
 
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
     allRerenderRows.push(...rerenderRows);
@@ -1554,6 +1636,10 @@ async function main() {
     }
   }
 
+  // #2111: single call, right after the loop — see `planApplyRefusal`'s
+  // own doc comment for exactly what this does and does not prove tested.
+  const { booksWithheldForMissingCache, withheldBookLabels, refuse: refuseApply } = planApplyRefusal(apply, bookWithholds);
+
   if (allRerenderRows.length) {
     console.log('--- Re-render list (book / chapter / orphaned id / segments / ~duration) ---');
     for (const row of allRerenderRows) {
@@ -1600,7 +1686,7 @@ async function main() {
   // This refusal now fires only when withholding actually happened
   // (booksWithheldForMissingCache > 0), so a blind-but-empty book no longer
   // blocks a run it was never going to affect.
-  if (shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache)) {
+  if (refuseApply) {
     console.error(
       `\nRefusing --apply: ${booksWithheldForMissingCache} scanned book(s) had a real auto-record candidate ` +
         `withheld because their analysis-cache evidence is unusable at CACHE_DIR (${cacheDir}): ` +
