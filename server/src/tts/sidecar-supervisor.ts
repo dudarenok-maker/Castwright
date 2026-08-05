@@ -306,6 +306,14 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
       },
     });
     if (refusedReason !== null) {
+      /* stop() can race in while spawnFn was still in flight (awaited just
+         above) — mirrors onChildExit's own stopped guard. Without this, a
+         refusal that resolves AFTER shutdown still increments
+         consecutiveFailures and logs a "respawning in …ms" line before the
+         eventual respawn's own `if (stopped) return;` (further down, inside
+         scheduleRespawnAttempt's delayed continuation) bails — i.e. the
+         counter/log noise happens even though nothing will ever respawn. */
+      if (stopped) return;
       isRecycling = true; // refused — no sidecar exists; keep dispatch held.
       scheduleRespawnAttempt(
         `spawn refused: ${refusedReason}`,
@@ -316,10 +324,13 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     }
     /* A sidecar is now ready: either an owned child (handle non-null) or a
        healthy adopt (handle null, onAdoptExisting fired).  Either way the
-       queue can dispatch.  The autoStart-off null path also lands here but
-       that supervisor is never registered via registerActiveSupervisor, so
-       getActiveSupervisor() returns null and queue.ts short-circuits to
-       recycling:false independently. */
+       queue can dispatch.  The autoStart-off null path also lands here — no
+       sidecar is wanted, so isRecycling=false is the right signal there too.
+       This supervisor IS registered via registerActiveSupervisor regardless
+       of autoStart (index.ts calls start() then registerActiveSupervisor()
+       unconditionally; only enforceSingleSidecarOwner is autoStart-gated) —
+       so queue.ts:60 reads this flag straight off the real, active
+       supervisor, not via some autoStart-off short-circuit. */
     isRecycling = false;
   }
 

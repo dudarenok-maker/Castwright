@@ -343,6 +343,44 @@ describe('sidecar supervisor (srv-15)', () => {
 
       expect(seenPids).toEqual([null, 111, 222]);
     });
+
+    /* Review finding (PR #2101): onChildExit checks `stopped` before ever
+       reaching scheduleRespawnAttempt; the refusal branch in spawnOnce did
+       not. If stop() races in while spawnFn is still in flight, a refusal
+       that resolves AFTER shutdown must not schedule a respawn or move the
+       failure counter — nothing should ever try to bring the sidecar back
+       once the supervisor has been told to stop. */
+    it('a refusal that resolves AFTER stop() does not schedule a respawn or move the failure counter', async () => {
+      let releaseSpawn!: (v: SidecarHandle | null) => void;
+      const pendingSpawn = new Promise<SidecarHandle | null>((r) => (releaseSpawn = r));
+      let capturedOnSpawnRefused: SpawnSidecarOpts['onSpawnRefused'];
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        capturedOnSpawnRefused = opts.onSpawnRefused;
+        return pendingSpawn;
+      });
+      const log = vi.fn();
+      const warn = vi.fn();
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn,
+        log,
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 5,
+      });
+
+      const startPromise = sup.start(); // spawnFn in flight, not yet resolved
+      await sup.stop(); // stop() races in WHILE the spawn attempt is still pending
+      // The in-flight spawn attempt now settles as a REFUSAL, after stop().
+      capturedOnSpawnRefused?.('port still held');
+      releaseSpawn(null);
+      await startPromise;
+
+      expect(spawnFn).toHaveBeenCalledTimes(1); // no respawn was ever scheduled
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('respawning in'));
+      expect(sup.exhaustedEvent()).toBe(false); // consecutiveFailures never moved
+    });
   });
 
   /* Adopt-supervision: when the server honours an ALREADY-listening sidecar
