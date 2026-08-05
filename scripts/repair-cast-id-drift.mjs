@@ -87,26 +87,53 @@
  *      spoken a rendered line.
  *
  * A fourth guard predates round 1 and is still real, but **narrower than it
- * looks** (#2134): **snapshot consistency** (see `classifySnapshotEvidence`'s
- * and `snapshotsConsistent`'s own doc comments) downgrades a name match to
- * report-only when the rendered `characterSnapshots` disagree across the
- * chapters the id appears in. `characterSnapshots` is a FILE-level map keyed
- * by the id that was LIVE at RENDER time — for a drifted id (exactly what
- * this pass repairs), that key is not the orphaned id itself, so the lookup
+ * looks, and asymmetric in a way that matters** (#2134): **snapshot
+ * consistency** (see `classifySnapshotEvidence`'s and `snapshotsConsistent`'s
+ * own doc comments) downgrades a name match to report-only when the rendered
+ * `characterSnapshots` disagree across the chapters the id appears in.
+ * `characterSnapshots` is a FILE-level map written ONLY for an id that was
+ * LIVE in `cast.json` at render time — for a drifted id (exactly what this
+ * pass repairs), that key is never the orphaned id itself, so the lookup
  * finds nothing, `orphan.snapshots` comes back `[]`, and this guard used to
  * pass VACUOUSLY (`snapshotsConsistent([])` is trivially `true`) for exactly
  * the ids it exists to protect (register row A32's `the-torment`/
- * `lightning-dave`). `classifySnapshotEvidence` now distinguishes "checked,
- * agrees" from "never found any evidence under this key" and this pass
- * withholds on the latter rather than trusting an unverifiable match — so
- * this guard, and the candidate ranker downstream of it
- * (`rankSnapshotCandidates`, whose own doc comment has the full account),
- * are genuinely load-bearing ONLY for a non-reserved id whose snapshots
- * exist but conflict, never for a drifted id with no snapshot evidence at
- * all — a considered lookup change (resolving through the id's live
- * resolution instead) was rejected: checked against the real workspace,
- * these ids have no snapshot entry under ANY spelling, so there is nothing
- * a smarter lookup would find.
+ * `lightning-dave`).
+ *
+ * `classifySnapshotEvidence` correctly names that "never found any evidence"
+ * state 'no-evidence', distinct from "checked, agrees" — but a first-round
+ * fix that turned 'no-evidence' into a VETO (withholding auto-record) was
+ * itself wrong, caught by independent review with a decisive real-data
+ * replay: snapshot ABSENCE for this population is not neutral, it is the
+ * damage signal. A snapshot exists only for an id that was live at render
+ * time, so **presence means the audio already rendered correctly**
+ * (drift happened after the render, metadata-only fix) and **absence means
+ * the narrator was substituted** (the actual A32 damage class this pass
+ * exists to fix). Vetoing on absence therefore blocks exactly the aliases
+ * that repair real damage and passes exactly the aliases that needed no
+ * repair at all — replayed against the real workspace, it would have
+ * blocked two of the three aliases the owner already applied and accepted
+ * (register row A33: `mayrin`, `coalfall`) while letting the one
+ * already-fine alias (`lady-alina`) through. A check that structurally
+ * cannot pass for its own target population is not fail-closed protection;
+ * it is the inverse of the vacuous `true` it replaced. So: 'no-evidence'
+ * now flows through to auto-record, subject to every remaining guard, with
+ * an honest annotation ("guard 4 not evaluable") on the row and console
+ * line instead of a false claim of verification — 'conflict' is unaffected
+ * and still downgrades to report-only. This guard, and the candidate
+ * ranker downstream of it (`rankSnapshotCandidates`, whose own doc comment
+ * has the full account), are genuinely load-bearing ONLY for a
+ * non-reserved id whose snapshots exist but conflict — never for a
+ * drifted id with no snapshot evidence at all, where they have nothing to
+ * check and correctly say so rather than blocking or guessing. A
+ * considered lookup change (resolving through the id's live resolution
+ * instead of its raw spelling) was rejected: checked against the real
+ * workspace, these ids have no snapshot entry under ANY spelling, so there
+ * is nothing a smarter lookup would find. Also considered and rejected:
+ * splitting the annotation-vs-veto question by Tier A vs Tier B — it would
+ * restore only the resolve-time-no-op case (`the-torment`, Tier B, already
+ * resolves via `'normalised-id'`) while still blocking every
+ * `mayrin`-shaped Tier A case, where there is no id-shape fallback and the
+ * alias is the only mechanism that reconnects the id.
  *
  * A fifth guard was added on top of these four, independently, by the
  * #2107 widening (Important 2, independent review, 2026-08-05) —
@@ -414,14 +441,15 @@ export function snapshotsConsistent(snapshots) {
 /** #2134: `orphan.snapshots === []` is otherwise ambiguous between two
  *  different facts — "every rendered segment's `characterSnapshots` entry
  *  for this id agreed (or there were 0/1 to compare)" and "this id has
- *  rendered segments, but `characterSnapshots` is a FILE-level map keyed by
- *  the id that was LIVE at RENDER time, so a drifted id's own segments never
- *  match under their own key at all" — `snapshotsConsistent([])` returns
- *  `true` for both, which lets guard 4 pass VACUOUSLY for exactly the ids
- *  this pass exists to repair (register row A32's `the-torment`/
- *  `lightning-dave`: both have real rendered segments and zero snapshot
- *  entries, because their `characterSnapshots` keys are the pre-drift live
- *  ids `the_torment`/`lightning_dave`, never their own orphaned spelling).
+ *  rendered segments, but `characterSnapshots` is a FILE-level map written
+ *  ONLY for an id that was LIVE in cast.json at RENDER time, so a drifted
+ *  id's own segments never match under their own key at all" —
+ *  `snapshotsConsistent([])` returns `true` for both, which lets guard 4
+ *  pass VACUOUSLY for exactly the ids this pass exists to repair (register
+ *  row A32's `the-torment`/`lightning-dave`: both have real rendered
+ *  segments and zero snapshot entries, because their `characterSnapshots`
+ *  keys are the pre-drift live ids `the_torment`/`lightning_dave`, never
+ *  their own orphaned spelling).
  *
  *  This function is the SAME distinguishing test guard 3 (zero-segment
  *  scoping) already makes just below guard 4's call site — `orphan.segments
@@ -432,9 +460,29 @@ export function snapshotsConsistent(snapshots) {
  *  "checked, and it agrees" or "checked, and it conflicts" (both still
  *  `snapshotsConsistent`'s job). Four states in, three states out on
  *  purpose: 'no-evidence' is new; 'consistent'/'conflict' are
- *  `snapshotsConsistent`'s existing boolean, renamed to a string so a caller
- *  can't accidentally treat 'no-evidence' as truthy the way `true` would
- *  read.
+ *  `snapshotsConsistent`'s existing boolean, renamed to a string — `false`
+ *  is not one of the three values this returns, so a caller can't reuse a
+ *  loose truthy check across both this function and `snapshotsConsistent`;
+ *  `'no-evidence'` is itself still truthy as a JS value, so a caller MUST
+ *  compare against the literal string explicitly (`=== 'no-evidence'` /
+ *  `=== 'conflict'` / `=== 'consistent'`), not merely test presence.
+ *
+ *  IMPORTANT (round 2, independent review, 2026-08-05) — what a caller does
+ *  with 'no-evidence' is NOT "veto". `characterSnapshots` is written only
+ *  for a LIVE id at render time, and by construction every id reaching this
+ *  function via `planBookRepairs` is NOT a live id today (that is what
+ *  makes it an orphan) — so for this population, snapshot ABSENCE is not
+ *  neutral, it is anti-correlated with the very risk a veto would be meant
+ *  to catch: presence means the id was live at render (audio already
+ *  correct, drift happened after), absence means the narrator was
+ *  substituted (the actual A32 damage class). A round-1 version of this fix
+ *  turned 'no-evidence' into a veto and was wrong — replayed against the
+ *  real workspace, it would have blocked *Заказ Коалфолла*'s `mayrin`/
+ *  `coalfall` (two of the three aliases the owner already applied and
+ *  accepted, register row A33) while letting the already-fine `lady-alina`
+ *  alias through. See `planBookRepairs`'s guard 4 call site for the full
+ *  account and what 'no-evidence' actually does now: flows through to
+ *  auto-record with an honest annotation, never a block.
  *
  *  The considered alternative (issue #2134's option 1) was resolving the
  *  lookup through the id's own live resolution instead of its raw spelling —
@@ -443,9 +491,8 @@ export function snapshotsConsistent(snapshots) {
  *  not the id it resolves to today), so there is nothing a smarter lookup
  *  would find; worse, if it ever DID resolve to a snapshot, that snapshot
  *  would belong to a DIFFERENT character than the one guard 4 is asked
- *  about. Honesty about the gap, not a lookup change, is the fix — see
- *  `planBookRepairs`'s guard 4 call site for what 'no-evidence' does with
- *  this. */
+ *  about. Honesty about the gap, not a lookup change and not a veto, is the
+ *  fix. */
 export function classifySnapshotEvidence(orphan) {
   if (orphan.segments > 0 && orphan.snapshots.length === 0) return 'no-evidence';
   return snapshotsConsistent(orphan.snapshots) ? 'consistent' : 'conflict';
@@ -489,24 +536,30 @@ export function classifySnapshotEvidence(orphan) {
  *  suggested — they're not a "who actually said this line" answer.
  *
  *  #2134: this function returns `[]` immediately when `snapshot` is falsy
- *  (the `if (!snapshot) return [];` below), which is exactly what every
- *  caller passes for a `classifySnapshotEvidence(orphan) === 'no-evidence'`
- *  row (`orphan.snapshots[0]` is `undefined` there by construction — see
- *  that function's doc comment). That is not a gap to close: measured
- *  against the real workspace, the report-only rows carrying genuine
- *  actionable damage (`pool-player-2`, `silveny`, `sir-harding`) are
- *  EXACTLY the 'no-evidence' rows, so this ranker cannot help an operator
- *  triage them — there is no snapshot signal to score against, under any
- *  spelling (see `classifySnapshotEvidence`'s doc comment on why a smarter
- *  lookup wouldn't help either). The rows that DO get ranked candidates
- *  today are the reserved fold-bucket ids (`unknown-male`/`unknown-female`)
- *  guard 1 refuses outright — and the module doc comment's guard-1
- *  paragraph already documents THAT snapshot as generic/non-discriminating.
- *  So: this function is real and load-bearing for the OTHER report-only
- *  shape — a non-reserved id whose snapshots exist but disagree
- *  (`classifySnapshotEvidence(orphan) === 'conflict'`) — never for a
- *  drifted id with no evidence at all. Documented here rather than
- *  "fixed" because there is nothing to fix: giving this function evidence
+ *  (the `if (!snapshot) return [];` below) — `orphan.snapshots[0]` is
+ *  `undefined` for two DIFFERENT reasons a caller reaches this function:
+ *  (a) no name/id match was ever found for the id at all (the final,
+ *  generic `reportOnly.push` at the bottom of `planBookRepairs`'s loop —
+ *  `pool-player-2`/`silveny`/`sir-harding` on the real workspace are this
+ *  shape, and none of them ever reaches `classifySnapshotEvidence`, since
+ *  that only runs once a Tier A/B match exists), or (b) a match WAS found
+ *  but `classifySnapshotEvidence(orphan) === 'no-evidence'` (round 2,
+ *  independent review, 2026-08-05: this no longer means report-only by
+ *  itself — see `planBookRepairs`'s guard 4 call site — an id in this
+ *  shape may still reach `autoRecord`, just without a ranked-candidates
+ *  line, since there is nothing to rank). Either way, there is no snapshot
+ *  signal to score against, under any spelling (see
+ *  `classifySnapshotEvidence`'s doc comment on why a smarter lookup
+ *  wouldn't help either) — this is not a gap to close. The rows that DO
+ *  get ranked candidates today are the reserved fold-bucket ids
+ *  (`unknown-male`/`unknown-female`) guard 1 refuses outright — and the
+ *  module doc comment's guard-1 paragraph already documents THAT snapshot
+ *  as generic/non-discriminating. So: this function is real and
+ *  load-bearing for the OTHER report-only shape — a non-reserved id whose
+ *  snapshots exist but disagree (`classifySnapshotEvidence(orphan) ===
+ *  'conflict'`) — never for an id with no evidence at all, matched or
+ *  not. Documented here rather than "fixed" because there is nothing to fix:
+ *  giving this function evidence
  *  it doesn't have would mean guessing, which is exactly what it exists
  *  not to do. */
 export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3) {
@@ -920,19 +973,60 @@ export function planBookRepairs(input, deps) {
         continue;
       }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
-      // own doc comment for its narrowed scope post round-1). #2134: split
-      // into three outcomes via classifySnapshotEvidence, not two — a
-      // drifted id with real rendered segments but zero snapshot entries
-      // under its own key (characterSnapshots is a file-level map keyed by
-      // the id that was LIVE at RENDER time — see classifySnapshotEvidence's
-      // doc comment) used to read as `snapshotsConsistent([]) === true` and
-      // pass this guard VACUOUSLY, exactly for the ids this pass repairs
-      // (register row A32). That is "never checked", not "checked, all
-      // clear" — this pass withholds rather than trust an unverifiable
-      // match, the same fail-closed posture guard 2's bak/cache
-      // availability gates already take for the analogous "evidence that
-      // can't be read/found must count as unknown, not clean" shape
-      // (#2097/#2135).
+      // own doc comment for its narrowed scope post round-1).
+      //
+      // #2134, round 1: classifySnapshotEvidence's 'no-evidence' outcome
+      // was made a VETO here (downgrading to report-only) — WRONG, caught
+      // by round-2 review with a decisive real-data replay. `characterSnapshots`
+      // is written ONLY for an id that was LIVE in cast.json at render
+      // time. For this loop's population (every id here is, by definition,
+      // NOT a live id today — that's what makes it an orphan), that fact
+      // is anti-correlated with the risk the veto was meant to guard
+      // against:
+      //   - snapshot PRESENT  => the id WAS live when the chapter
+      //     rendered => it rendered in that character's real voice =>
+      //     drift happened AFTER the render => metadata-only fix, audio
+      //     already correct.
+      //   - snapshot ABSENT   => the id was NEVER live at render =>
+      //     `resolveGroup` substituted the narrator => the audio is
+      //     GENUINELY WRONG — precisely register row A32's damage class,
+      //     and precisely the case this whole pass exists to repair.
+      // So a veto on 'no-evidence' blocks exactly the aliases that fix
+      // real damage and permits exactly the aliases that were already
+      // fine. Replayed against the real workspace with `supersededBy`
+      // emptied: *Заказ Коалфолла*'s `mayrin` (8 seg) and `coalfall` (13
+      // seg) — two of the three aliases the owner already applied and
+      // accepted on 2026-08-05 (register row A33) — would have been
+      // wrongly blocked by the round-1 veto, while `lady-alina` (already
+      // fine, snapshot present) would have sailed through. A check that
+      // structurally cannot pass for its target population is not
+      // fail-closed protection — it is the mirror image of the vacuous
+      // `true` it replaced, costing this pass its entire remaining
+      // capability on the population it exists to repair, for a
+      // discrimination power of zero.
+      //
+      // The diagnosis from round 1 stands: `snapshotsConsistent([])`
+      // returning `true` really did conflate "never checked" with
+      // "checked, all clear" — classifySnapshotEvidence still exists to
+      // name that distinction correctly. The fix is to stop CLAIMING
+      // guard 4 verified anything for a 'no-evidence' id, not to convert
+      // an inapplicable check into a veto: 'no-evidence' now flows through
+      // to `autoRecord` (subject to every remaining guard below — 3, then
+      // bak/cache availability), carrying an honest annotation instead of
+      // a false "verified consistent". Deliberately NOT split by tier
+      // (Tier A vs Tier B) — considered and rejected: it would restore
+      // only `the-torment` (a Tier B id-shape match that's already a
+      // resolve-time no-op — recording it only promotes an existing
+      // `'normalised-id'` resolution to `'history'`, same character
+      // either way) while still blocking every `mayrin`-shaped Tier A
+      // case, where the letters differ, there is no `normalised-id`
+      // fallback, and the alias is the ONLY mechanism that reconnects the
+      // id — exactly the case that matters most.
+      //
+      // 'conflict' is unaffected by any of this — real, disagreeing
+      // snapshot evidence for a NAMED, non-reserved id (the case
+      // `snapshotsConsistent`'s own doc comment describes) is still
+      // downgraded to report-only below.
       const snapshotEvidence = classifySnapshotEvidence(orphan);
       if (snapshotEvidence === 'conflict') {
         reportOnly.push({
@@ -941,19 +1035,6 @@ export function planBookRepairs(input, deps) {
           chapters: orphan.chapters,
           reason: `name-matched "${matchedId}" (${evidence}) but the rendered characterSnapshots disagree ` +
             `across chapters — this id was reused for more than one voice; needs per-chapter human review`,
-          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
-        });
-        continue;
-      }
-      if (snapshotEvidence === 'no-evidence') {
-        reportOnly.push({
-          id,
-          segments: orphan.segments,
-          chapters: orphan.chapters,
-          reason: `name/id-matched "${matchedId}" (${evidence}) but no rendered characterSnapshots evidence ` +
-            `exists under "${id}"'s own key — characterSnapshots is keyed by the id that was LIVE at render ` +
-            `time, so a drifted id's own segments never match under their own key (#2134); guard 4 has ` +
-            `nothing to verify, so this pass withholds rather than trusting an unverifiable match`,
           candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
         });
         continue;
@@ -1055,7 +1136,12 @@ export function planBookRepairs(input, deps) {
         });
         continue;
       }
-      autoRecord.push({ id, to: matchedId, tier, evidence, segments: orphan.segments, chapters: orphan.chapters });
+      // #2134 round 2: `snapshotEvidence` rides along on the row itself
+      // ('consistent' or 'no-evidence' — 'conflict' already `continue`d
+      // above) so the console line (main()) can say plainly when guard 4
+      // had nothing to verify, instead of the row silently implying every
+      // guard positively confirmed this alias.
+      autoRecord.push({ id, to: matchedId, tier, evidence, segments: orphan.segments, chapters: orphan.chapters, snapshotEvidence });
       continue;
     }
 
@@ -1155,7 +1241,10 @@ export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldCount
  *  What this closes, on top of `shouldRefuseApplyForWithheldAutoRecord`
  *  alone: the ACCUMULATION across multiple books — a book counts toward the
  *  refusal if EITHER `withheldForMissingCache > 0` OR
- *  `withheldForMissingBak > 0` (the two are mutually exclusive per id per
+ *  `withheldForMissingBak > 0` OR either field is genuinely ABSENT from
+ *  its `bookWithholds` entry (round 2 review, defect 7 — see the loop body
+ *  below for why an absent field must not read as a confirmed zero; the two
+ *  present-and-nonzero counts are mutually exclusive per id per
  *  `planBookRepairs`'s own doc comment, but a book can have both nonzero
  *  across different ids), the label text is built correctly (naming which
  *  reason(s) applied), and the threshold crossing is driven through the
@@ -1186,15 +1275,29 @@ export function planApplyRefusal(apply, bookWithholds) {
   let booksWithheldTotal = 0;
   const withheldBookLabels = [];
   for (const b of bookWithholds) {
-    const cacheCount = b.withheldForMissingCache ?? 0;
-    const bakCount = b.withheldForMissingBak ?? 0;
+    // Round 2 review, defect 7: `?? 0` made a GENUINELY ABSENT field (the
+    // key missing entirely) indistinguishable from a confirmed zero — the
+    // same "an omitted signal reads as unknown, refuse" shape this file
+    // already applies to `cacheAvailable`/`bakAvailable` (default `false`)
+    // and `historyResolver` (defaults to building a real one, not `{
+    // resolve: () => undefined }`), reintroduced here two functions over
+    // from where a prior review round spent a whole pass eliminating it.
+    // Latent today — `main()`'s one production caller always pushes both
+    // fields as real numbers — this is a safety net for any future caller
+    // that forgets to, exactly like the other two defaults it mirrors.
+    const cacheProvided = typeof b.withheldForMissingCache === 'number';
+    const bakProvided = typeof b.withheldForMissingBak === 'number';
+    const cacheCount = cacheProvided ? b.withheldForMissingCache : 0;
+    const bakCount = bakProvided ? b.withheldForMissingBak : 0;
     if (cacheCount > 0) booksWithheldForMissingCache += 1;
     if (bakCount > 0) booksWithheldForMissingBak += 1;
-    if (cacheCount > 0 || bakCount > 0) {
+    if (cacheCount > 0 || bakCount > 0 || !cacheProvided || !bakProvided) {
       booksWithheldTotal += 1;
       const reasons = [];
-      if (bakCount > 0) reasons.push(`${bakCount} id(s) missing bak evidence`);
-      if (cacheCount > 0) reasons.push(`${cacheCount} id(s) missing cache evidence`);
+      if (!bakProvided) reasons.push('bak-withheld count missing from caller (treated as unknown, refuses)');
+      else if (bakCount > 0) reasons.push(`${bakCount} id(s) missing bak evidence`);
+      if (!cacheProvided) reasons.push('cache-withheld count missing from caller (treated as unknown, refuses)');
+      else if (cacheCount > 0) reasons.push(`${cacheCount} id(s) missing cache evidence`);
       withheldBookLabels.push(`${b.label} (${reasons.join('; ')})`);
     }
   }
@@ -1286,6 +1389,36 @@ const readJsonSync = (p) => {
   }
 };
 
+/** #2097 defect 10 (round 2 review, suspected — not reproducible on this
+ *  box, fixed defensively regardless): reads and parses a JSON file,
+ *  distinguishing "genuinely does not exist" (`ENOENT`) from "exists but
+ *  could not be read" (permission denied, a directory where a file was
+ *  expected, any other `readFileSync` error) or "exists, read, but failed
+ *  to parse" — collapsing the first case to `'missing'` and the other two
+ *  to `'unreadable'`. `collectBooks` used to derive "does this file exist"
+ *  from `fs.existsSync`, which swallows EVERY error (including `EACCES`)
+ *  to a bare `false` — indistinguishable from a genuinely absent file, so a
+ *  permission-denied `cast.json`/`state.json` would have misclassified as
+ *  the legitimate `'not-yet-analysed'` case instead of `'unreadable'`, with
+ *  no `--apply` refusal for evidence that was actually lost, not absent.
+ *  Reading the file directly and inspecting the thrown error's `code`
+ *  removes that blind spot: the attempted read itself is the source of
+ *  truth, not a separate existence probe that can lie about why it
+ *  failed. */
+function readJsonTriState(p) {
+  let raw;
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch (err) {
+    return { status: err && err.code === 'ENOENT' ? 'missing' : 'unreadable' };
+  }
+  try {
+    return { status: 'ok', value: JSON.parse(raw) };
+  } catch {
+    return { status: 'unreadable' };
+  }
+}
+
 /** #2097: was a silent `continue` with no counter, no log line — a book
  *  whose `cast.json`/`state.json` was missing, corrupt, or wrong-shaped
  *  vanished from `books` entirely, indistinguishable from a book that was
@@ -1319,7 +1452,23 @@ const readJsonSync = (p) => {
  *
  *  3-level author/series/title walk — the same convention
  *  `repair-linked-character-attributes.mjs` and every other workspace-wide
- *  fs-direct repair script already use for `WORKSPACE_DIR/books`.
+ *  fs-direct repair script already use for `WORKSPACE_DIR/books`. Each
+ *  level's own `readdirSync` is guarded (round 2 review, defect 5) — the
+ *  original only checked `fs.existsSync(booksRoot)` once, so an unreadable
+ *  author or series directory (permission denied, mid-write, whatever)
+ *  threw straight out of `main()` uncaught, rather than being counted and
+ *  named the same way an unreadable BOOK is. An unreadable directory is
+ *  pushed to `droppedBooks` as `'unreadable'` (evidence loss — we don't
+ *  know what books, if any, are inside) and the walk moves on to its
+ *  siblings instead of aborting the whole 20-book run.
+ *
+ *  The per-book shape check (round 2 review, defect 4) uses `Array.isArray`,
+ *  not truthiness — `!cast?.characters` accepted ANY truthy value
+ *  (`{"characters": "notanarray"}` used to be KEPT as a valid book, and
+ *  `planBookRepairs` then crashed on `liveCast.map(...)` over a string,
+ *  aborting the whole run with an unclassified stack trace instead of this
+ *  one corrupt file being counted and named — precisely the contract
+ *  `'unreadable'` exists for).
  *
  *  Exported so this is directly unit testable against real, deliberately
  *  broken fs fixtures, with no `server/dist` build needed — the same
@@ -1330,26 +1479,52 @@ export function collectBooks(workspaceDir) {
   const books = [];
   const droppedBooks = []; // { label, reason: 'not-yet-analysed' | 'unreadable' }
   if (!fs.existsSync(booksRoot)) return { books, droppedBooks };
-  const dirs = (p) =>
-    fs
-      .readdirSync(p, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  for (const author of dirs(booksRoot)) {
-    for (const series of dirs(path.join(booksRoot, author))) {
-      for (const title of dirs(path.join(booksRoot, author, series))) {
+  // Returns `null` (not a throw) on a readdir failure — every call site
+  // below must check for that and record a dropped entry instead of
+  // indexing into it.
+  const dirs = (p) => {
+    try {
+      return fs
+        .readdirSync(p, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return null;
+    }
+  };
+  const authorDirs = dirs(booksRoot);
+  if (authorDirs === null) {
+    droppedBooks.push({ label: 'books/ (unreadable directory)', reason: 'unreadable' });
+    return { books, droppedBooks };
+  }
+  for (const author of authorDirs) {
+    const seriesDirs = dirs(path.join(booksRoot, author));
+    if (seriesDirs === null) {
+      droppedBooks.push({ label: `${author} (unreadable directory)`, reason: 'unreadable' });
+      continue;
+    }
+    for (const series of seriesDirs) {
+      const titleDirs = dirs(path.join(booksRoot, author, series));
+      if (titleDirs === null) {
+        droppedBooks.push({ label: `${author} / ${series} (unreadable directory)`, reason: 'unreadable' });
+        continue;
+      }
+      for (const title of titleDirs) {
         const bookDir = path.join(booksRoot, author, series, title);
         const audiobookDir = path.join(bookDir, '.audiobook');
         const label = `${author} / ${series} / ${title}`;
-        const castExists = fs.existsSync(path.join(audiobookDir, 'cast.json'));
-        const stateExists = fs.existsSync(path.join(audiobookDir, 'state.json'));
-        const cast = readJsonSync(path.join(audiobookDir, 'cast.json'));
-        const state = readJsonSync(path.join(audiobookDir, 'state.json'));
-        if (!cast?.characters || !state?.chapters) {
-          droppedBooks.push({
-            label,
-            reason: castExists || stateExists ? 'unreadable' : 'not-yet-analysed',
-          });
+        const castResult = readJsonTriState(path.join(audiobookDir, 'cast.json'));
+        const stateResult = readJsonTriState(path.join(audiobookDir, 'state.json'));
+        const cast = castResult.status === 'ok' ? castResult.value : null;
+        const state = stateResult.status === 'ok' ? stateResult.value : null;
+        if (!Array.isArray(cast?.characters) || !Array.isArray(state?.chapters)) {
+          // Legitimate absence ONLY when BOTH files are genuinely missing
+          // (ENOENT) — anything else (one present, one missing but the
+          // other unreadable/wrong-shaped, a permission error masquerading
+          // as "missing" pre-#2097-defect-10-fix, a parse failure) is
+          // evidence loss, not absence.
+          const bothMissing = castResult.status === 'missing' && stateResult.status === 'missing';
+          droppedBooks.push({ label, reason: bothMissing ? 'not-yet-analysed' : 'unreadable' });
           continue;
         }
         books.push({
@@ -1405,13 +1580,26 @@ export function shouldRefuseApplyForUnreadableBooks(apply, unreadableBookCount) 
  *      `cacheAvailable` already takes.
  *
  *  Deliberately does NOT flag a bak file that parses fine but has no
- *  `characters` array (or an empty one) as unavailable — an empty/missing
- *  `characters` field is a legitimate SHAPE for an early backup to have, not
- *  evidence loss (the same way `cacheEntriesOf`'s `??[]` fallbacks aren't
- *  treated as corruption); #2135's own scan of the real workspace found 41
- *  bak files, 0 unparseable, 0 missing a `characters` array — the case this
- *  function refuses on is not live today, only reachable on a corrupted
- *  file.
+ *  `characters` array (field absent, or present and already `[]`) as
+ *  unavailable — a missing/empty `characters` field is a legitimate SHAPE
+ *  for an early backup to have, not evidence loss (the same way
+ *  `cacheEntriesOf`'s `??[]` fallbacks aren't treated as corruption);
+ *  #2135's own scan of the real workspace found 41 bak files, 0
+ *  unparseable, 0 missing a `characters` array — the case this function
+ *  refuses on is not live today, only reachable on a corrupted file.
+ *
+ *  Round 2 review, defect 6: a `characters` field that is PRESENT but not
+ *  an array (`{"characters": "oops"}`, `{"characters": {...}}`) is a
+ *  DIFFERENT shape from "absent/empty" — `bak?.characters ?? []` let both
+ *  slip through uncaught: a string silently iterates its own characters
+ *  (yielding zero usable `{id,name}` entries, same fail-open shape #2135
+ *  exists to close, one level deeper) and a plain object throws an
+ *  uncaught `TypeError: object is not iterable`, aborting the whole run.
+ *  `Array.isArray` now distinguishes "present but wrong type" (treated as
+ *  lost evidence — `bakAvailable: false`, matching a parse failure, since a
+ *  file whose own declared field can't be trusted is no different from one
+ *  that failed to parse) from "absent or a genuine (possibly empty) array"
+ *  (tolerated, per the paragraph above).
  *
  *  Exported for the same reason `collectBooks` now is — a direct fs-fixture
  *  unit test, no `server/dist` build needed (#2093 residual 1's precedent). */
@@ -1437,7 +1625,16 @@ export function collectBakNameEntries(audiobookDir) {
       bakAvailable = false;
       continue;
     }
-    for (const c of bak?.characters ?? []) {
+    const chars = bak?.characters;
+    if (chars !== undefined && !Array.isArray(chars)) {
+      // Present but the wrong shape — not the tolerated "absent/empty"
+      // case (round 2 review, defect 6): a string would otherwise iterate
+      // silently to zero entries, and a plain object would throw. Treated
+      // the same as a parse failure: lost evidence, not clean.
+      bakAvailable = false;
+      continue;
+    }
+    for (const c of chars ?? []) {
       if (typeof c?.id === 'string' && typeof c?.name === 'string') entries.push({ id: c.id, name: c.name });
     }
   }
@@ -2107,6 +2304,17 @@ async function main() {
       for (const a of plan.autoRecord) {
         console.log(`    ${a.id} -> ${a.to}  [Tier ${a.tier}] ${a.evidence}`);
         if (a.segments) console.log(`      ${a.segments} rendered segment(s) carry this id`);
+        // #2134 round 2: an honest annotation, not a claim guard 4 verified
+        // something it couldn't — see planBookRepairs' guard-4 doc comment
+        // for why 'no-evidence' is expected, not suspicious, for this
+        // population (characterSnapshots is written only for a LIVE id at
+        // render time, and every id here is by definition not live today).
+        if (a.snapshotEvidence === 'no-evidence') {
+          console.log(
+            `      (guard 4 not evaluable — no rendered characterSnapshots evidence exists under "${a.id}"'s own key; ` +
+              `this alias relies on guards 1/2/3/5 and cache/bak availability alone)`,
+          );
+        }
         totalAuto += 1;
         totalAutoSegments += a.segments;
       }
