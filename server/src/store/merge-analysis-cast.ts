@@ -155,10 +155,46 @@ export function voicedSurvivorsDropped(
     union aliases, and re-add voiced characters the fresh roster dropped.
     Returns a new array plus the id retirements the name-fallback performed
     (a dropped-by-id existing row matched to a differently-id'd fresh row);
-    inputs are not mutated. */
+    inputs are not mutated.
+
+    Delegates to `mergeCore` with the name-fallback ON — this entry point is
+    for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
+    the whole book and a dropped prior row really is gone. See
+    `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
+): { characters: T[]; retirements: Retirement[] } {
+  return mergeCore(existing, fresh, true);
+}
+
+/** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
+    writes (`analysis.ts:3633`, `:3845`, `:5613`). Same as
+    `mergeAnalysisResultWithExistingCast` MINUS the id-drift name-fallback: an
+    interim roster is partial by construction (`buildInterimCast` only folds
+    chapters already analysed), so a prior character who simply hasn't been
+    reached yet looks identical to one the analyzer actually dropped — the
+    fallback cannot tell them apart and, at an interim write, has repeatedly
+    turned that ambiguity into a durably swapped character id with no history
+    record (srv-87, #2086). Returns the roster ONLY: there is no
+    `retirements` in the return type, so no caller can discard it — the
+    defect this closes is structural, not a discipline reminder. */
+export function overlayInterimCastForLiveView<T extends { id: string }>(
+  existing: ReadonlyArray<CastRecord>,
+  fresh: T[],
+): T[] {
+  return mergeCore(existing, fresh, false).characters;
+}
+
+/** Shared core for both entry points above. `nameFallback` gates the id-drift
+    same-name match (`:281-305`-shaped block below) — when false, `old` is only
+    ever resolved by exact id, `claimedByName` stays empty, and the
+    carry-forward loop at the end unconditionally rescues every voiced prior
+    row instead of treating any of them as already claimed. */
+function mergeCore<T extends { id: string }>(
+  existing: ReadonlyArray<CastRecord>,
+  fresh: T[],
+  nameFallback: boolean,
 ): { characters: T[]; retirements: Retirement[] } {
   if (!existing.length) return { characters: fresh, retirements: [] };
   const retirements: Retirement[] = [];
@@ -241,7 +277,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
 
   const overlaid = fresh.map((f) => {
     let old = byId.get(f.id);
-    if (!old) {
+    if (nameFallback && !old) {
       const key = nameOf(f as T & Record<string, unknown>);
       // A fresh narrator-id row never adopts a name-fallback candidate
       // either. Unlike the droppedByName exclusion above, this direction
@@ -256,7 +292,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
       // Safe to exclude unconditionally: the narrator id is code-seeded
       // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
       // legitimate id-drift case here for the fallback to rescue, and
-      // :263-269 already carries the narrator name forward on its own path.
+      // :323-332 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
         const cand = dropMatchCandidateByName.get(key);
         // A notLinkedTo edge between this specific pair is the user's
