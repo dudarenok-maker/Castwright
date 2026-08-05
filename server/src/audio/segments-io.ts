@@ -350,19 +350,18 @@ export async function collectOrphanedCharacterFallbacks(
      this read side and the reject-undo route's write side call to decide
      "which rejectedPairs apply to this raw id" — see its own doc comment
      for the two-rule reasoning (raw always applies; normalised applies
-     only when the id's tier-3/4 resolution, computed IGNORING rejects,
+     only when the id's tier-3/4 resolution, computed IGNORING PAIR rejects,
      says so). Round 1 unioned the raw and normalised keyspaces
      unconditionally instead, which is broader than anything `resolver`
      itself does for a single id — verified by review round 2's probe to
      put a chip (and a disabled reject button) on a row the resolver had
      never blocked, whose Undo the DELETE route couldn't find either since
-     it still matched pairs by raw `from` alone. `resolveIgnoringRejects`
-     is built ONCE here, not once per segment, mirroring how `resolver`
-     itself (WITH rejects) is already built once outside the loop below. */
-  const resolveIgnoringRejects = buildCastResolver(cast, {
-    supersededBy: castIdHistory.supersededBy,
-  }).resolve;
-  const rejectedPairs = castIdHistory.rejectedPairs ?? [];
+     it still matched pairs by raw `from` alone. Round 3 — the function now
+     takes `(cast, castIdHistory)` and builds its own ignoring-resolver
+     internally (see its own doc comment: this both closes M-1, a legacy
+     `rejected` block that used to get mis-attributed to an unrelated pair,
+     and makes passing the wrong resolver structurally unrepresentable),
+     so this call site no longer builds one itself. */
 
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {
@@ -392,7 +391,7 @@ export async function collectOrphanedCharacterFallbacks(
           ? 'normalised'
           : 'alias';
 
-      const governingPairs = rejectedPairsGoverning(s.characterId, rejectedPairs, resolveIgnoringRejects);
+      const governingPairs = rejectedPairsGoverning(s.characterId, cast, castIdHistory);
 
       const existing = out[s.characterId];
       out[s.characterId] = {
@@ -414,8 +413,15 @@ export async function collectOrphanedCharacterFallbacks(
            rejected id, per D2's no-fall-through). Doing so would delete the
            row and orphan the frontend's Undo control. Tier-accurate per
            review round 2 (Important 1) — see `rejectedPairsGoverning`'s own
-           doc comment for why a plain union of raw+normalised over-reports. */
-        rejectedAgainst: governingPairs.length ? governingPairs.map((p) => p.to) : undefined,
+           doc comment for why a plain union of raw+normalised over-reports.
+           Deduped via `Set` (round 3, I-A) — `governingPairs` can legitimately
+           contain two DISTINCT pairs (different raw `from`) that both target
+           the SAME live `to` (the repo's own `the_torment`/`The-Torment`
+           shape, both rejected against the same character): without the
+           dedup, `.map` alone would carry that `to` twice, rendering two
+           identical "Not <Name> · Undo" chips with the same React key AND
+           the same `data-testid` (`OrphanRejectedChips`, src/views/cast.tsx). */
+        rejectedAgainst: governingPairs.length ? [...new Set(governingPairs.map((p) => p.to))] : undefined,
       };
     }
   }

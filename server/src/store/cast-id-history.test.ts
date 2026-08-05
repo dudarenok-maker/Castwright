@@ -389,6 +389,22 @@ describe('cast id history', () => {
         expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mr-marrow' });
       });
 
+      it('review round 3 (M-8) — the expectedTarget mismatch no-op logs a warning naming both the expected and actual values, instead of failing silently', async () => {
+        // Round 2's fix (above) correctly refuses to discard the concurrent
+        // write, but the refusal itself was silent — "someone else moved
+        // this key since the read" was indistinguishable, in the logs, from
+        // "there was nothing to forget in the first place". Named so an
+        // operator can tell the two apart after the fact.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        await retireCharacterId(dir, 'mayrin', 'mr-marrow');
+        await forgetSupersededId(dir, 'mayrin', 'mairin');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringMatching(/mayrin.*mairin.*mr-marrow/s),
+        );
+        warnSpy.mockRestore();
+      });
+
       it('deletes unconditionally when expectedTarget is omitted — back-compat with every other caller', async () => {
         await retireCharacterId(dir, 'mayrin', 'mairin');
         await expect(forgetSupersededId(dir, 'mayrin')).resolves.toBe('mairin');

@@ -233,25 +233,58 @@ export function buildCastResolver<T extends CastRecord>(
  *  2. A pair whose NORMALISED `from` matches `characterId`'s normalised key
  *     applies ONLY when this id's resolution goes through the
  *     normalised-id/normalised-history tier — decided by resolving
- *     `characterId` against `supersededBy` ALONE, ignoring `rejectedPairs`
- *     entirely (`resolveIgnoringRejects`, typically
- *     `buildCastResolver(cast, { supersededBy: history.supersededBy })
- *     .resolve`), so a currently-BLOCKED id still gets credited to
- *     whichever tier it would hit absent the reject. A tier-2 (raw
+ *     `characterId` against `supersededBy` ALONE (and, since round 3 below,
+ *     the LEGACY `rejected` list), ignoring `rejectedPairs` entirely, so a
+ *     currently-pair-blocked id still gets credited to whichever tier it
+ *     would hit absent the PAIR reject specifically. A tier-2 (raw
  *     `supersededBy`) resolution NEVER consults the normalised keyspace —
  *     exactly like `resolve()`'s own tier 2 never falls through to check
  *     `rejectedTargetsByNormFrom`.
  *
- *  Callers build `resolveIgnoringRejects` ONCE per book (not once per id)
- *  and pass it in, the same way `collectOrphanedCharacterFallbacks` already
- *  builds its real (WITH-rejects) resolver once outside its segment loop. */
+ *  Round 3 (#2092/#2089 review round 3) — two changes from round 2's shape,
+ *  both closing the SAME defect class this whole file keeps reproducing (a
+ *  guard measuring a different quantity than the thing it protects):
+ *
+ *  - M-1: the "ignoring rejects" resolver used for rule 2 now takes
+ *    `history.rejected` (the LEGACY id-wide list) as well as
+ *    `history.supersededBy` — it must ignore PAIR rejects only, not every
+ *    reject. Built with `rejected` OMITTED, an id blocked purely by a
+ *    legacy `rejected` entry would still resolve past `exact` in the
+ *    ignoring-resolver's eyes, land on a normalised tier, and this function
+ *    would then wrongly credit an unrelated `rejectedPairs` entry for a
+ *    block the legacy list actually caused (Undo would remove the pair,
+ *    report `wasRejected: true`, and the row would stay blocked with no
+ *    pair left to explain why). Latent on every book in the real workspace
+ *    today — no book has ever written a legacy `rejected` entry — but the
+ *    fix is unconditional, not gated on that.
+ *  - Informational (round 2's own doc comment invited exactly this): the
+ *    ignoring-resolver used to be a bare `(id) => CastResolution | undefined`
+ *    function callers built themselves, once per book, and passed in.
+ *    Nothing in that type distinguishes a rejects-ignoring resolver from a
+ *    rejects-honouring one — passing the wrong one (or, per M-1, an
+ *    incompletely-ignoring one) fails quiet and narrow. This function now
+ *    takes `(cast, history)` and builds its OWN ignoring-resolver inside,
+ *    the same way `buildCastResolver` itself is always handed `history`
+ *    rather than a caller-assembled subset (see this file's own module doc
+ *    comment) — making "the wrong resolver reached this call" structurally
+ *    unrepresentable at both call sites, at the cost of rebuilding a
+ *    resolver once per call instead of once per book. Accepted deliberately:
+ *    `cast` here is a book's live roster (tens of entries), call volume is
+ *    one per orphaned SEGMENT within one book (the real workspace's largest
+ *    orphaned row is 67), not one per request across a fleet — correctness
+ *    is worth more than this data scale's µs-level rebuild cost. */
 export function rejectedPairsGoverning<T extends CastRecord>(
   characterId: string,
-  rejectedPairs: readonly RejectedPair[],
-  resolveIgnoringRejects: (characterId: string) => CastResolution<T> | undefined,
+  cast: readonly T[],
+  history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>,
 ): RejectedPair[] {
+  const rejectedPairs = history.rejectedPairs ?? [];
   const raw = rejectedPairs.filter((p) => p.from === characterId);
-  const ignoring = resolveIgnoringRejects(characterId);
+  const resolveIgnoringPairRejects = buildCastResolver(cast, {
+    supersededBy: history.supersededBy,
+    rejected: history.rejected,
+  }).resolve;
+  const ignoring = resolveIgnoringPairRejects(characterId);
   const normalisedTierRelevant = ignoring?.via === 'normalised-id' || ignoring?.via === 'normalised-history';
   if (!normalisedTierRelevant) return raw;
   const key = normaliseIdKey(characterId);

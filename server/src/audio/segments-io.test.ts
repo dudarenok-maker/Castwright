@@ -514,6 +514,40 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
       // the normalised keyspace.
       expect(result.the_torment.rejectedAgainst).toBeUndefined();
     });
+
+    it('I-A (review round 3) — two DISTINCT governing pairs targeting the SAME live character produce ONE deduped rejectedAgainst entry, not two', async () => {
+      // Verified-by-probe regression (review round 3): `rejectedPairsGoverning`
+      // correctly returns TWO distinct RejectedPair objects here (rule 1: raw
+      // `from` === 'the_torment'; rule 2: 'The-Torment' normalises the same,
+      // and the id resolves via the normalised-id tier) — that part is
+      // correct and untouched. Round 1's `unionRejectedAgainst` deduped the
+      // resulting `to` values via a `Set`; round 2's replacement dropped that
+      // Set, so `.map(p => p.to)` on the two pairs (both targeting
+      // 'the-torment') carried the SAME target twice:
+      //   rejectedAgainst: ["the-torment", "the-torment"]
+      // `OrphanRejectedChips` (src/views/cast.tsx) renders one <span> per
+      // `rejectedAgainst` entry, keyed on the target id — two identical
+      // entries means two chips with the same React key AND the same
+      // data-testid, a duplicate-key warning and a `getByTestId` collision.
+      const cast = [{ id: 'the-torment' }];
+      writeSegmentsArray('01-one', [{ characterId: 'the_torment', sentenceIds: [1] }]);
+      const result = await collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        cast,
+        h(
+          {},
+          {
+            rejectedPairs: [
+              { from: 'the_torment', to: 'the-torment' },
+              { from: 'The-Torment', to: 'the-torment' },
+            ],
+          },
+        ),
+      );
+      expect(result.the_torment.resolution).toBe('unresolved');
+      expect(result.the_torment.rejectedAgainst).toEqual(['the-torment']);
+    });
   });
 
   it('accumulates the segment count across multiple rendered chapters for the same orphaned id', async () => {

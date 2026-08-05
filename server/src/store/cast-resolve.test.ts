@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCastResolver } from './cast-resolve.js';
+import { buildCastResolver, rejectedPairsGoverning } from './cast-resolve.js';
 import type { CastIdHistory } from './cast-id-history.js';
 
 const cast = [
@@ -249,5 +249,93 @@ describe('buildCastResolver', () => {
         expect(buildCastResolver(c, history).resolve('ghost')).toBeUndefined();
       });
     });
+  });
+});
+
+/* #2092/#2089 review round 3 (M-4) — `rejectedPairsGoverning` had NO direct
+   unit test before this round (`grep -c rejectedPairsGoverning
+   cast-resolve.test.ts` → 0): every existing regression exercised it only
+   indirectly, through `collectOrphanedCharacterFallbacks`
+   (segments-io.test.ts) or the reject-undo route (cast-reject-orphan.test.ts).
+   For the branch's own stated single-source-of-truth helper, that is the
+   wrong place to have zero direct coverage. Table-driven across its actual
+   rules (see the function's own doc comment): raw-always, tier-2-never-
+   normalised, collision (a raw pair AND its normalised sibling BOTH apply,
+   without double-counting the raw one — the M-3 dedup pin), and the M-1
+   legacy-`rejected`-list fix. Round 3 also changed the signature from
+   `(characterId, rejectedPairs, resolveIgnoringRejects)` to `(characterId,
+   cast, history)` — the helper now builds its own ignoring-resolver
+   internally instead of trusting a caller-supplied one (see the function's
+   own doc comment for why). */
+describe('rejectedPairsGoverning (#2092/#2089 review round 3, M-4)', () => {
+  it('rule 1 (raw-always): a pair whose raw `from` exactly equals characterId always applies — even when nothing else resolves this id at all', () => {
+    // 'ghost' doesn't resolve through ANY tier (no live cast id, no
+    // supersededBy entry) — proving rule 1 doesn't depend on the
+    // ignoring-resolution succeeding.
+    const c = [{ id: 'x', name: 'X' }];
+    const history = hp({}, [{ from: 'ghost', to: 'x' }]);
+    expect(rejectedPairsGoverning('ghost', c, history)).toEqual([{ from: 'ghost', to: 'x' }]);
+  });
+
+  it('rule 2 (tier-2-never-normalised): a normalised-only-matching pair does NOT apply when the id resolves via the RAW tier-2 (history) instead', () => {
+    // 'the_torment' has its OWN raw supersededBy entry (tier 2) pointing at
+    // the live 'the-torment' — a clean, unblocked resolution. The rejected
+    // pair's raw `from` ('The-Torment') is a DIFFERENT string that only
+    // normalises the same; tier 2 is raw-only and never falls through to
+    // consult the normalised keyspace, so this pair must not apply.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history = hp({ the_torment: 'the-torment' }, [{ from: 'The-Torment', to: 'the-torment' }]);
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([]);
+  });
+
+  it('rule 3 (collision) / M-3 (dedup): a raw pair AND a differently-spelled normalised-matching pair BOTH apply, without double-counting the raw one', () => {
+    // The repo's own real drift shape: 'the_torment' (this call's own raw
+    // `from`, matched by rule 1) and 'The-Torment' (a DIFFERENT raw
+    // spelling that normalises the same, matched by rule 2 since neither
+    // has its own supersededBy entry — 'the_torment' resolves via the
+    // normalised-id tier). Exactly 2 entries, not 3: the M-3 dedup clause
+    // (`p.from !== characterId`) must keep rule 1's own pair from ALSO
+    // being counted a second time by rule 2's normalised filter.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history = hp({}, [
+      { from: 'the_torment', to: 'the-torment' },
+      { from: 'The-Torment', to: 'the-torment' },
+    ]);
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([
+      { from: 'the_torment', to: 'the-torment' },
+      { from: 'The-Torment', to: 'the-torment' },
+    ]);
+  });
+
+  it('M-1: a legacy id-wide `rejected` block is not mis-attributed to an unrelated normalised-matching rejectedPairs entry', () => {
+    // 'the_torment' is blocked by the LEGACY `rejected` list (not any pair)
+    // — it has no live cast id of its own and no supersededBy entry, so
+    // absent the legacy block it would resolve via the normalised-id tier
+    // onto 'the-torment'. An unrelated pair, recorded against a DIFFERENT
+    // raw spelling that normalises the same ('The-Torment'), must NOT be
+    // credited for a block the legacy list actually caused: the
+    // ignoring-resolver this function builds internally must honour
+    // `rejected` too, or it would wrongly see 'the_torment' resolving via
+    // 'normalised-id' (since it only ignores PAIR rejects, not the id
+    // itself being on the legacy list) and credit the unrelated pair.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = {
+      supersededBy: {},
+      rejected: ['the_torment'],
+      rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }],
+    };
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([]);
+  });
+
+  it('an id whose resolution goes through an exact live match ignores every rejectedPairs entry naming a different `from`', () => {
+    const c = [{ id: 'mairin', name: 'M' }];
+    const history = hp({}, [{ from: 'someone-else', to: 'mairin' }]);
+    expect(rejectedPairsGoverning('mairin', c, history)).toEqual([]);
+  });
+
+  it('defaults to no governing pairs when rejectedPairs is omitted entirely', () => {
+    const c = [{ id: 'x', name: 'X' }];
+    const history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = { supersededBy: {} };
+    expect(rejectedPairsGoverning('ghost', c, history)).toEqual([]);
   });
 });

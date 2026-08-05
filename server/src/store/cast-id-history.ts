@@ -474,7 +474,20 @@ export async function forgetSupersededId(
     const history = await loadCastIdHistory(bookDir);
     const removed = history.supersededBy[id];
     if (removed === undefined) return undefined;
-    if (expectedTarget !== undefined && removed !== expectedTarget) return undefined;
+    if (expectedTarget !== undefined && removed !== expectedTarget) {
+      /* Round 3 (M-8) — this branch used to fail closed silently: correct
+         (someone else's concurrent write must not be discarded), but
+         indistinguishable from "forgotten" in the log with nothing printed
+         either way. Named so an operator can tell "someone else moved this
+         key since the read" from "nothing needed forgetting" after the
+         fact. */
+      console.warn(
+        `[cast-id-history] forgetSupersededId("${id}") skipped — expected supersededBy["${id}"] to still be ` +
+          `"${expectedTarget}" but found "${removed}"; someone else changed this key since the read, so it was ` +
+          `left alone rather than discarding their write.`,
+      );
+      return undefined;
+    }
     delete history.supersededBy[id];
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return removed;
