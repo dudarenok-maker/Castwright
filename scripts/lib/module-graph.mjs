@@ -142,12 +142,20 @@ const toPosix = (p) => p.split(sep).join('/');
 // 128, a spawn failure, or git being absent all THROW rather than defaulting
 // either way. Defaulting to "ignored" would silently empty the walk wherever
 // git is unavailable.
+//
+// `-c core.quotePath=false` (a GIT-level option, so it must precede the
+// subcommand): git's default core.quotePath=true C-quotes non-ASCII bytes in
+// printed paths (e.g. 'café' -> '"caf\303\251"'), which would never match the
+// plain POSIX string built above, misclassifying a genuinely-ignored
+// non-ASCII path as NOT ignored. Direction of failure matters here: that
+// reads as "keep walking" rather than "stop early", so it's the safer of the
+// two ways this could break — but it's still a real gap this flag closes.
 export function classifyIgnored(absPaths, cwd) {
   const result = new Map(absPaths.map((p) => [p, false]));
   if (absPaths.length === 0) return result;
 
   const posix = absPaths.map((p) => toPosix(relative(cwd, p)));
-  const proc = spawnSync('git', ['check-ignore', '--stdin'], {
+  const proc = spawnSync('git', ['-c', 'core.quotePath=false', 'check-ignore', '--stdin'], {
     cwd,
     input: posix.join('\n'),
     encoding: 'utf8',

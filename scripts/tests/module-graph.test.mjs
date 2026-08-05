@@ -167,3 +167,16 @@ test('classifyIgnored throws on a path outside the repository (exit 128)', () =>
     /check-ignore/i,
   );
 });
+
+// git's default core.quotePath=true C-quotes non-ASCII bytes in printed
+// paths ('café' -> '"caf\303\251"'). Without `-c core.quotePath=false` on the
+// git invocation, that quoted form never matches the plain POSIX string this
+// module builds, and a genuinely-ignored non-ASCII path misclassifies as NOT
+// ignored.
+test('classifyIgnored marks a gitignored path containing non-ASCII characters', () => {
+  const d = gitRepo({ 'src/a.js': '' }, 'dist/\n');
+  mkdirSync(join(d, 'dist', 'café'), { recursive: true });
+  writeFileSync(join(d, 'dist', 'café', 'f.js'), '', 'utf8');
+  const m = classifyIgnored([join(d, 'dist', 'café', 'f.js')], d);
+  assert.equal(m.get(join(d, 'dist', 'café', 'f.js')), true);
+});
