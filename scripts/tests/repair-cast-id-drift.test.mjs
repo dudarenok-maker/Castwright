@@ -4,6 +4,13 @@
 // though the script's own `main()` needs one (see the script's module doc
 // comment). Run directly: `node --test scripts/tests/repair-cast-id-drift.test.mjs`.
 //
+// ONE exception (#2130, below): the `buildOrphansFromSegments against the
+// REAL buildCastResolver` describe block dynamically imports the compiled
+// `server/dist/store/cast-resolve.js` — but only inside a runtime
+// `fs.existsSync` guard, `skip`-ping with a clear reason when it isn't
+// built (the `test:hooks` CI job never builds server first). Every other
+// test in this file stays build-free.
+//
 // Review round 1 (two Criticals, three Importants) landed on top of the
 // original 40 tests — see the `CRITICAL`/`IMPORTANT` prefixed test names
 // below for the ones added or inverted in response. Full account in
@@ -15,6 +22,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   parseArgs,
   formatDuration,
@@ -22,6 +30,7 @@ import {
   resolveTierAName,
   resolveTierBId,
   snapshotsConsistent,
+  classifySnapshotEvidence,
   rankSnapshotCandidates,
   planBookRepairs,
   buildRerenderRows,
@@ -36,6 +45,9 @@ import {
   AUTO_REBIND_RANGE,
   shouldRefuseApplyForEmptyScan,
   formatBooksScannedLine,
+  collectBooks,
+  collectBakNameEntries,
+  shouldRefuseApplyForUnreadableBooks,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -337,6 +349,39 @@ describe('snapshotsConsistent', () => {
   });
 });
 
+describe('classifySnapshotEvidence (#2134)', () => {
+  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A32 the-torment/lightning-dave shape", () => {
+    assert.equal(classifySnapshotEvidence({ segments: 67, snapshots: [] }), 'no-evidence');
+  });
+
+  test("mutation control: segments === 0 with zero snapshots is NOT 'no-evidence' — guard 3 (zero-segment scoping) owns that case, not guard 4", () => {
+    // Pins the `orphan.segments > 0 &&` half of the condition specifically:
+    // deleting it would make a genuinely never-rendered id (which legitimately
+    // has no snapshots) read as 'no-evidence' too, which is guard 3's job.
+    assert.equal(classifySnapshotEvidence({ segments: 0, snapshots: [] }), 'consistent');
+  });
+
+  test("mutation control: real segments with a NON-EMPTY (even single, field-less) snapshot array is NOT 'no-evidence'", () => {
+    // Pins the `snapshots.length === 0` half specifically: deleting it (or
+    // loosening it to e.g. `.length < 2`) would misclassify a genuinely
+    // single-snapshot orphan — 0 or 1 snapshots is exactly what
+    // snapshotsConsistent treats as vacuously consistent — as 'no-evidence'.
+    assert.equal(classifySnapshotEvidence({ segments: 5, snapshots: [{}] }), 'consistent');
+  });
+
+  test("'conflict': real segments, snapshots present but disagree — delegates to snapshotsConsistent, unaffected by the no-evidence split", () => {
+    assert.equal(
+      classifySnapshotEvidence({ segments: 2, snapshots: [{ gender: 'male' }, { gender: 'female' }] }),
+      'conflict',
+    );
+  });
+
+  test("'consistent': real segments, snapshots present and agree", () => {
+    const snap = { gender: 'male', ageRange: 'adult' };
+    assert.equal(classifySnapshotEvidence({ segments: 3, snapshots: [snap, { ...snap }] }), 'consistent');
+  });
+});
+
 describe('rankSnapshotCandidates', () => {
   const liveCast = [
     { id: 'narrator', name: 'Narrator', gender: 'neutral' },
@@ -429,17 +474,31 @@ describe('planBookRepairs', () => {
   /** A single-chapter rendered orphan with real segments — IMPORTANT 2
    *  means every auto-record test below needs actual on-disk damage, not
    *  an empty `orphans` map, or the zero-segment guard now (correctly)
-   *  downgrades it to report-only. */
-  const renderedOrphan = (segments, chapters) => ({
+   *  downgrades it to report-only.
+   *
+   *  #2134: defaults `snapshots` to a single neutral (empty-fields) entry,
+   *  not `[]` — `classifySnapshotEvidence` now reads a real
+   *  `segments > 0, snapshots: []` orphan as 'no-evidence' and withholds
+   *  it, so a bare `[]` default would silently downgrade every OTHER
+   *  guard's test in this describe block (ambiguity veto, reserved-id,
+   *  Tier A/B precedence, etc. — none of which are testing guard 4) to
+   *  report-only too. One neutral snapshot means "evidence was found under
+   *  this id's own key, and there's nothing in it to disagree with" —
+   *  `classifySnapshotEvidence` reads that as 'consistent', matching this
+   *  helper's pre-#2134 behaviour for every caller that doesn't override
+   *  it. Tests that actually exercise guard 4's three-way split (conflict /
+   *  no-evidence / consistent) pass `snapshots` explicitly instead — see
+   *  the dedicated `classifySnapshotEvidence` guard-4 tests below. */
+  const renderedOrphan = (segments, chapters, snapshots) => ({
     segments,
     chapters: chapters ?? [{ chapterId: 1, chapterTitle: 'One', segments, durationSec: segments * 2 }],
-    snapshots: [],
+    snapshots: snapshots ?? [{}],
   });
 
   test('Tier A auto-record via an unambiguous cache name, when the id has real rendered damage', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 1);
     assert.equal(plan.autoRecord[0].id, 'mayrin');
     assert.equal(plan.autoRecord[0].to, 'mairin');
@@ -452,7 +511,7 @@ describe('planBookRepairs', () => {
     const cacheNameIndex = buildNameIndex([{ id: 'old-timkin-alias', name: 'Someone Else' }], lc);
     const bakNameIndex = buildNameIndex([{ id: 'old-timkin-alias', name: 'Timkin' }], lc);
     const orphans = new Map([['old-timkin-alias', renderedOrphan(5)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex, orphans, cacheAvailable: true }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex, orphans, cacheAvailable: true, bakAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 1);
     assert.equal(plan.autoRecord[0].to, 'timkin');
     assert.match(plan.autoRecord[0].evidence, /cast\.json\.bak/);
@@ -575,7 +634,7 @@ describe('planBookRepairs', () => {
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
     assert.doesNotThrow(() => {
       const plan = planBookRepairs(
-        { liveCast, history: { rejected: [] }, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true },
+        { liveCast, history: { rejected: [] }, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true },
         localDeps,
       );
       assert.equal(plan.autoRecord.length, 1);
@@ -702,7 +761,7 @@ describe('planBookRepairs', () => {
     };
     const localLiveCast = [...liveCast, { id: 'lightning_dave', name: 'Lightning Dave' }];
     const plan = planBookRepairs(
-      { liveCast: localLiveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans, cacheAvailable: true, historyResolver },
+      { liveCast: localLiveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true, historyResolver },
       deps,
     );
     assert.equal(plan.autoRecord.length, 1);
@@ -744,6 +803,77 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.reportOnly.length, 1);
     assert.match(plan.reportOnly[0].reason, /disagree across chapters/);
+  });
+
+  test('#2134: a Tier A match with real rendered segments but NO characterSnapshots evidence under its own key is withheld (report-only), not vacuously auto-recorded — the register-row-A32 the-torment shape', () => {
+    // 'the-torment' normalises the same as live 'the_torment' (guard 5's
+    // default historyResolver, built from deps.buildCastResolver, resolves
+    // it via 'normalised-id' to the SAME character the Tier A name match
+    // finds — so guard 5 does not trip and this reaches guard 4). Real
+    // workspace shape: characterSnapshots is keyed by the pre-drift id
+    // ('the_torment'), never the orphaned spelling, so this id's own
+    // segments carry zero snapshot entries despite 67 real rendered
+    // segments — snapshots: [] here, NOT via renderedOrphan's now-neutral
+    // default.
+    const localLiveCast = [...liveCast, { id: 'the_torment', name: 'The Torment' }];
+    const cacheNameIndex = buildNameIndex([{ id: 'the-torment', name: 'The Torment' }], lc);
+    const orphans = new Map([
+      [
+        'the-torment',
+        { segments: 67, chapters: [{ chapterId: 19, chapterTitle: 'Nineteen', segments: 67, durationSec: 400 }], snapshots: [] },
+      ],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast: localLiveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'the-torment');
+    assert.equal(plan.reportOnly[0].segments, 67);
+    assert.match(plan.reportOnly[0].reason, /no rendered characterSnapshots evidence/);
+    assert.match(plan.reportOnly[0].reason, /#2134/);
+    assert.deepEqual(plan.reportOnly[0].candidates, []); // the ranker has nothing to score either — orphan.snapshots[0] is undefined
+  });
+
+  test('#2134: a Tier B match with real rendered segments but no characterSnapshots evidence is ALSO withheld — the register-row-A32 lightning-dave shape', () => {
+    // No name evidence anywhere -> reaches Tier B (id-shape only).
+    // 'lightning-dave' normalises the same as live 'lightning_dave'.
+    const localLiveCast = [...liveCast, { id: 'lightning_dave', name: 'Lightning Dave' }];
+    const orphans = new Map([
+      ['lightning-dave', { segments: 1, chapters: [{ chapterId: 3, chapterTitle: 'Three', segments: 1, durationSec: 4 }], snapshots: [] }],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast: localLiveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'lightning-dave');
+    assert.match(plan.reportOnly[0].reason, /no rendered characterSnapshots evidence/);
+  });
+
+  test("#2134 mutation control: the SAME the-torment shape WITH real (even minimal) snapshot evidence auto-records normally — proves the new guard is scoped to the no-evidence case, not a blanket block on this id shape", () => {
+    const localLiveCast = [...liveCast, { id: 'the_torment', name: 'The Torment' }];
+    const cacheNameIndex = buildNameIndex([{ id: 'the-torment', name: 'The Torment' }], lc);
+    const orphans = new Map([
+      [
+        'the-torment',
+        {
+          segments: 67,
+          chapters: [{ chapterId: 19, chapterTitle: 'Nineteen', segments: 67, durationSec: 400 }],
+          snapshots: [{ gender: 'male' }], // real evidence this time, unlike the test above
+        },
+      ],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast: localLiveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true },
+      deps,
+    );
+    assert.equal(plan.reportOnly.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'the-torment');
+    assert.equal(plan.autoRecord[0].to, 'the_torment');
   });
 
   test('CRITICAL 2 (inverted): a reserved fold-bucket SOURCE id is refused even with unambiguous bak evidence and consistent characterSnapshots (the real Exile shape)', () => {
@@ -884,7 +1014,7 @@ describe('planBookRepairs', () => {
     // removal test immediately below for that.
     const cacheNameIndex = buildNameIndex([{ id: 'The_Torment', name: 'Timkin' }], lc);
     const orphans = new Map([['The_Torment', renderedOrphan(9)]]);
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: true }, deps);
     assert.equal(plan.reportOnly.length, 0);
     assert.equal(plan.autoRecord.length, 1);
     assert.equal(plan.autoRecord[0].id, 'The_Torment');
@@ -940,7 +1070,7 @@ describe('planBookRepairs', () => {
     const bakNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
     const plan = planBookRepairs(
-      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: false },
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: false, bakAvailable: true },
       deps,
     );
     assert.equal(plan.autoRecord.length, 0);
@@ -951,6 +1081,51 @@ describe('planBookRepairs', () => {
     // Owner-decided policy, review round 2: this is the "≥1 withheld
     // candidate" shape shouldRefuseApplyForWithheldAutoRecord gates on.
     assert.equal(plan.withheldForMissingCache, 1);
+    assert.equal(plan.withheldForMissingBak, 0);
+  });
+
+  test('#2135: bakAvailable=false withholds an otherwise-clean Tier A auto-record, since the cross-source ambiguity veto cannot see this book\'s full bak evidence — mirrors the cache test above', () => {
+    // Realistic shape: cacheNameIndex has a clean, unambiguous match;
+    // bakAvailable is false (a cast.json.bak.* for this book existed but
+    // failed to parse — main() computes this from collectBakNameEntries).
+    // Isolates the bak gate the same way the cache test above isolates it.
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true, bakAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'mayrin');
+    assert.match(plan.reportOnly[0].reason, /cast\.json\.bak\.\* files could not be read or parsed/);
+    assert.equal(plan.withheldForMissingBak, 1);
+    assert.equal(plan.withheldForMissingCache, 0); // bak gate is checked first and consumes the id — cache is never reached
+  });
+
+  test('#2135: bakAvailable defaults to FALSE when omitted — the same fail-closed posture as cacheAvailable (RESIDUAL 3\'s sibling)', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    // `input` deliberately omits `bakAvailable` entirely; `cacheAvailable:
+    // true` isolates it from the cache gate.
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true }, deps);
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.match(plan.reportOnly[0].reason, /cast\.json\.bak\.\* files could not be read or parsed/);
+  });
+
+  test('#2135: a book with bakAvailable=false but NO Tier A/B candidate withholds NOTHING — the bak-side sibling of the cache "nothing at stake" policy', () => {
+    const orphans = new Map([
+      ['silveny', { segments: 17, chapters: [{ chapterId: 50, chapterTitle: 'Forty-Eight', segments: 6, durationSec: 12 }], snapshots: [] }],
+    ]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans, bakAvailable: false, cacheAvailable: true },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.match(plan.reportOnly[0].reason, /no display name found/);
+    assert.equal(plan.withheldForMissingBak, 0);
   });
 
   test('OWNER-DECIDED POLICY (review round 2, 2026-08-05): a book with cacheAvailable=false but NO Tier A/B candidate withholds NOTHING — withheldForMissingCache stays 0', () => {
@@ -1080,8 +1255,11 @@ describe('planBookRepairs', () => {
     // deleted.
     const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
     const orphans = new Map([['mayrin', renderedOrphan(8)]]);
-    // `input` deliberately omits `cacheAvailable` entirely.
-    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans }, deps);
+    // `input` deliberately omits `cacheAvailable` entirely — `bakAvailable:
+    // true` isolates that default from the (also fail-closed-by-default,
+    // #2135) bak gate, which would otherwise fire first and mask this test's
+    // actual assertion.
+    const plan = planBookRepairs({ liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans, bakAvailable: true }, deps);
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.reportOnly.length, 1);
     assert.equal(plan.reportOnly[0].id, 'mayrin');
@@ -1194,6 +1372,7 @@ describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, dr
     const result = planApplyRefusal(false, [{ label: 'Book A', withheldForMissingCache: 3 }]);
     assert.equal(result.refuse, false);
     assert.equal(result.booksWithheldForMissingCache, 1);
+    assert.equal(result.booksWithheldTotal, 1);
   });
 
   test('apply=true with no withheld books does not refuse', () => {
@@ -1203,6 +1382,7 @@ describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, dr
     ]);
     assert.equal(result.refuse, false);
     assert.equal(result.booksWithheldForMissingCache, 0);
+    assert.equal(result.booksWithheldTotal, 0);
     assert.deepEqual(result.withheldBookLabels, []);
   });
 
@@ -1213,7 +1393,7 @@ describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, dr
     ]);
     assert.equal(result.refuse, true);
     assert.equal(result.booksWithheldForMissingCache, 1);
-    assert.deepEqual(result.withheldBookLabels, ['Book B (2 id(s))']);
+    assert.deepEqual(result.withheldBookLabels, ['Book B (2 id(s) missing cache evidence)']);
   });
 
   test('accumulates across multiple withheld books, not just the first', () => {
@@ -1223,7 +1403,7 @@ describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, dr
       { label: 'Book C', withheldForMissingCache: 5 },
     ]);
     assert.equal(result.booksWithheldForMissingCache, 2);
-    assert.deepEqual(result.withheldBookLabels, ['Book A (1 id(s))', 'Book C (5 id(s))']);
+    assert.deepEqual(result.withheldBookLabels, ['Book A (1 id(s) missing cache evidence)', 'Book C (5 id(s) missing cache evidence)']);
     assert.equal(result.refuse, true);
   });
 
@@ -1232,6 +1412,30 @@ describe("planApplyRefusal (#2111 — main()'s per-workspace --apply refusal, dr
     assert.equal(result.refuse, false);
     assert.equal(result.booksWithheldForMissingCache, 0);
     assert.deepEqual(result.withheldBookLabels, []);
+  });
+
+  test('#2135: a book withheld for BAK evidence alone (no cache withholding) also refuses and is counted under booksWithheldForMissingBak, not cache', () => {
+    const result = planApplyRefusal(true, [{ label: 'Book A', withheldForMissingCache: 0, withheldForMissingBak: 4 }]);
+    assert.equal(result.refuse, true);
+    assert.equal(result.booksWithheldForMissingCache, 0);
+    assert.equal(result.booksWithheldForMissingBak, 1);
+    assert.equal(result.booksWithheldTotal, 1);
+    assert.deepEqual(result.withheldBookLabels, ['Book A (4 id(s) missing bak evidence)']);
+  });
+
+  test('#2135: a book withheld for BOTH bak and cache evidence names both reasons in one label and counts once toward the total', () => {
+    const result = planApplyRefusal(true, [{ label: 'Book A', withheldForMissingCache: 2, withheldForMissingBak: 3 }]);
+    assert.equal(result.booksWithheldForMissingCache, 1);
+    assert.equal(result.booksWithheldForMissingBak, 1);
+    assert.equal(result.booksWithheldTotal, 1);
+    assert.deepEqual(result.withheldBookLabels, ['Book A (3 id(s) missing bak evidence; 2 id(s) missing cache evidence)']);
+  });
+
+  test('#2135: withheldForMissingBak omitted (older-shaped input) defaults to 0, not a crash', () => {
+    const result = planApplyRefusal(true, [{ label: 'Book A', withheldForMissingCache: 1 }]);
+    assert.equal(result.booksWithheldForMissingBak, 0);
+    assert.equal(result.booksWithheldForMissingCache, 1);
+    assert.equal(result.booksWithheldTotal, 1);
   });
 });
 
@@ -1417,6 +1621,215 @@ describe('cacheAvailableFromParsed (minor, pre-merge review, 2026-08-05 — the 
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('collectBakNameEntries (#2135) — real fs fixtures, no server/dist needed', () => {
+  test('zero bak files at all -> bakAvailable TRUE (the normal case) and zero entries', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, []);
+      assert.equal(result.bakAvailable, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the directory does not exist at all -> bakAvailable FALSE (unknown, not "zero files") — readdir failure', () => {
+    const dir = path.join(os.tmpdir(), 'repair-bak-does-not-exist-' + Date.now());
+    const result = collectBakNameEntries(dir);
+    assert.deepEqual(result.entries, []);
+    assert.equal(result.bakAvailable, false);
+  });
+
+  test('one valid cast.json.bak.* -> bakAvailable TRUE, its characters collected', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'cast.json.bak.2026-08-01'),
+        JSON.stringify({ characters: [{ id: 'timkin', name: 'Timkin' }] }),
+      );
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, [{ id: 'timkin', name: 'Timkin' }]);
+      assert.equal(result.bakAvailable, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CRITICAL (#2135): a cast.json.bak.* that exists but fails to PARSE -> bakAvailable FALSE, not silently contributing zero entries as 'clean'", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'cast.json.bak.corrupt'), '{ this is not valid json');
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, []);
+      assert.equal(result.bakAvailable, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('one corrupt bak file AND one valid bak file -> bakAvailable FALSE overall, but the valid file\'s entries are still collected', () => {
+    // Book-level, not per-id: one unreadable file taints the whole book's
+    // bak evidence (an unread file could have named ANY id ambiguous), but
+    // this function still surfaces what it COULD read for ranking/display.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'cast.json.bak.1'), JSON.stringify({ characters: [{ id: 'rex', name: 'Rex' }] }));
+      fs.writeFileSync(path.join(dir, 'cast.json.bak.2'), 'not json at all {{{');
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, [{ id: 'rex', name: 'Rex' }]);
+      assert.equal(result.bakAvailable, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('mutation control: a bak file that parses fine but has NO characters array is NOT flagged unavailable (a legitimate shape, per #2135\'s own real-workspace scan finding 0 such cases as corruption)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'cast.json.bak.empty'), JSON.stringify({}));
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, []);
+      assert.equal(result.bakAvailable, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a non-bak file in the same directory is ignored, whether or not it is valid JSON', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-bak-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'cast.json'), 'not valid json {{{'); // NOT a .bak file — must not affect bakAvailable
+      fs.writeFileSync(path.join(dir, 'cast.json.bak.1'), JSON.stringify({ characters: [{ id: 'rex', name: 'Rex' }] }));
+      const result = collectBakNameEntries(dir);
+      assert.deepEqual(result.entries, [{ id: 'rex', name: 'Rex' }]);
+      assert.equal(result.bakAvailable, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('collectBooks (#2097) — real fs fixtures, no server/dist needed', () => {
+  const writeBook = (booksRoot, author, series, title, { cast, state } = {}) => {
+    const audiobookDir = path.join(booksRoot, author, series, title, '.audiobook');
+    fs.mkdirSync(audiobookDir, { recursive: true });
+    if (cast !== undefined) fs.writeFileSync(path.join(audiobookDir, 'cast.json'), typeof cast === 'string' ? cast : JSON.stringify(cast));
+    if (state !== undefined) fs.writeFileSync(path.join(audiobookDir, 'state.json'), typeof state === 'string' ? state : JSON.stringify(state));
+  };
+
+  test('workspace with no books/ dir at all -> empty books, empty droppedBooks (not a crash)', () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.deepEqual(result.droppedBooks, []);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a well-formed book is collected, with its label built from author/series/state.title', () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'title-dir', {
+        cast: { characters: [{ id: 'timkin', name: 'Timkin' }] },
+        state: { chapters: [{ id: 1, slug: 'one', title: 'One' }], title: 'The Real Title' },
+      });
+      const result = collectBooks(workspaceDir);
+      assert.equal(result.books.length, 1);
+      assert.equal(result.books[0].label, 'Author / Series / The Real Title');
+      assert.deepEqual(result.droppedBooks, []);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2097: a book with NEITHER cast.json nor state.json is 'not-yet-analysed' — legitimate absence, counted and named, not vanished", () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      // audiobookDir exists but is otherwise empty — mid-import shape.
+      fs.mkdirSync(path.join(workspaceDir, 'books', 'Author', 'Series', 'NewBook', '.audiobook'), { recursive: true });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'not-yet-analysed');
+      assert.match(result.droppedBooks[0].label, /Author \/ Series \/ NewBook/);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("CRITICAL (#2097): a book whose cast.json exists but fails to PARSE is 'unreadable' — evidence LOST, not absent, counted and named", () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'Corrupt', {
+        cast: '{ not valid json',
+        state: { chapters: [{ id: 1 }] },
+      });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'unreadable');
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2097: a book whose state.json exists and parses but lacks a chapters array is 'unreadable' (present evidence that fails to validate), even though cast.json is entirely absent", () => {
+    // Mixed shape: state.json present (wrong-shaped), cast.json missing —
+    // "either file present" is enough to mean evidence exists and was lost,
+    // not "neither file present at all" (the only legitimate-absence case).
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      writeBook(path.join(workspaceDir, 'books'), 'Author', 'Series', 'Mixed', {
+        state: { title: 'Mixed' }, // no chapters field — wrong-shaped
+      });
+      const result = collectBooks(workspaceDir);
+      assert.deepEqual(result.books, []);
+      assert.equal(result.droppedBooks.length, 1);
+      assert.equal(result.droppedBooks[0].reason, 'unreadable');
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a mix of one good book, one not-yet-analysed, and one unreadable book — all three are accounted for, nothing vanishes', () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-books-'));
+    try {
+      const booksRoot = path.join(workspaceDir, 'books');
+      writeBook(booksRoot, 'Author', 'Series', 'Good', {
+        cast: { characters: [{ id: 'timkin', name: 'Timkin' }] },
+        state: { chapters: [{ id: 1 }], title: 'Good' },
+      });
+      fs.mkdirSync(path.join(booksRoot, 'Author', 'Series', 'NotYet', '.audiobook'), { recursive: true });
+      writeBook(booksRoot, 'Author', 'Series', 'Broken', { cast: 'not json', state: { chapters: [] } });
+      const result = collectBooks(workspaceDir);
+      assert.equal(result.books.length, 1);
+      assert.equal(result.droppedBooks.length, 2);
+      assert.equal(result.droppedBooks.find((b) => b.label.includes('NotYet'))?.reason, 'not-yet-analysed');
+      assert.equal(result.droppedBooks.find((b) => b.label.includes('Broken'))?.reason, 'unreadable');
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('shouldRefuseApplyForUnreadableBooks (#2097)', () => {
+  test('dry run never refuses, whatever the unreadable count', () => {
+    assert.equal(shouldRefuseApplyForUnreadableBooks(false, 0), false);
+    assert.equal(shouldRefuseApplyForUnreadableBooks(false, 3), false);
+  });
+
+  test('--apply with zero unreadable books does not refuse', () => {
+    assert.equal(shouldRefuseApplyForUnreadableBooks(true, 0), false);
+  });
+
+  test('CRITICAL: --apply with even ONE unreadable book refuses — unconditional, unlike the withheld-evidence refusals', () => {
+    assert.equal(shouldRefuseApplyForUnreadableBooks(true, 1), true);
+    assert.equal(shouldRefuseApplyForUnreadableBooks(true, 5), true);
   });
 });
 
@@ -1799,6 +2212,78 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     const { orphans } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
   });
+});
+
+/** #2130: every OTHER `buildOrphansFromSegments` test above drives a
+ *  hand-written fake resolver (`{ resolve: ... }` object literals, or the
+ *  module-scope `makeFakeResolver`) that hard-codes the same tier-name
+ *  string literals ('exact', 'normalised-id', 'history',
+ *  'normalised-history') the real `cast-resolve.ts` defines. Nothing in
+ *  this test file previously imported the REAL `buildCastResolver`, and
+ *  `.mjs` is not typechecked — so a tier RENAME in `cast-resolve.ts` (e.g.
+ *  'exact' -> 'exact-id') would make `buildOrphansFromSegments`'s own
+ *  `resolution?.via === 'exact'` check stop matching in PRODUCTION (every
+ *  segment becomes an orphan, and after #2107's widening that means the
+ *  entire workspace lands on the re-render list), while this WHOLE test
+ *  file stayed green, because every fake asserts against the same stale
+ *  copy of the vocabulary the real code no longer emits.
+ *
+ *  This describe block is the fix: it drives `buildOrphansFromSegments`
+ *  against the compiled REAL `buildCastResolver` from
+ *  `server/dist/store/cast-resolve.js`, not a fake — a rename in
+ *  `cast-resolve.ts` breaks THIS test directly (see the "prove it" note in
+ *  the PR description for the actual rename-and-revert experiment run
+ *  against this exact test).
+ *
+ *  Gated behind a runtime `fs.existsSync` check, `skip`-ping with a clear
+ *  reason rather than failing, because `npm run test:hooks` (this file's own
+ *  CI job) never runs `npm run build` first — see this file's own header
+ *  comment and the module doc comment's Tests section for why every OTHER
+ *  test here stays build-free. Locally: `cd server && npm run build` (or
+ *  the root `npm run build`) makes this test actually run. */
+describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', () => {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const castResolveDistPath = path.resolve(__dirname, '../../server/dist/store/cast-resolve.js');
+  const built = fs.existsSync(castResolveDistPath);
+  const skip = built ? false : `server/dist not built — run "cd server && npm run build" first; this test only runs against the real compiled buildCastResolver (see main()'s own build requirement in the module doc comment)`;
+
+  test(
+    "a live id resolves via the REAL resolver's 'exact' tier and is NOT an orphan; a genuine miss still is — pinned against cast-resolve.ts itself, not a hand-written fake",
+    { skip },
+    async () => {
+      const { buildCastResolver } = await import(pathToFileURL(castResolveDistPath).href);
+      const liveCast = [{ id: 'live-id', name: 'Live' }];
+      const resolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+      const segs = [
+        {
+          chapterId: 1,
+          chapterTitle: 'One',
+          segments: [
+            { characterId: 'live-id' },
+            { characterId: 'live-id' },
+            { characterId: 'ghost' },
+          ],
+        },
+      ];
+      const { orphans } = buildOrphansFromSegments(segs, resolver);
+      assert.equal(orphans.has('live-id'), false, 'a live id resolving via the real "exact" tier must not be an orphan');
+      assert.equal(orphans.get('ghost')?.segments, 1, 'a genuine miss is still an orphan under the real resolver');
+    },
+  );
+
+  test(
+    "a case/separator-drifted id resolves via the REAL resolver's 'normalised-id' tier and IS an orphan (#2107's widening) — pinned against cast-resolve.ts itself",
+    { skip },
+    async () => {
+      const { buildCastResolver } = await import(pathToFileURL(castResolveDistPath).href);
+      const liveCast = [{ id: 'the_torment', name: 'The Torment' }];
+      const resolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+      const segs = [{ chapterId: 19, chapterTitle: 'Nineteen', segments: [{ characterId: 'the-torment' }] }];
+      const { orphans } = buildOrphansFromSegments(segs, resolver);
+      assert.equal(orphans.get('the-torment')?.segments, 1, "a 'normalised-id' match is still an orphan (#2107), not silently exempted");
+    },
+  );
 });
 
 // Ie (pre-merge review, 2026-08-05): a subprocess test spawning the real
