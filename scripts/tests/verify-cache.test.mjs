@@ -556,6 +556,67 @@ test('stepTouchedByDiff: server/tts-sidecar/pytest.ini is in scope for test:side
   );
 });
 
+// --- server/package.json widening (verify-scope fix round 1) ---------------
+// A bare server/package.json edit (not yet reflected in server/package-lock.json)
+// invalidated NOTHING before this fix — stepTouchedByDiff's includeLockfiles
+// branch only special-cases the literal server/package-lock.json path.
+// Reverting any one of these five extraFiles entries reddens its own test.
+test('stepTouchedByDiff: server/package.json is in scope for typecheck', () => {
+  assert.equal(stepTouchedByDiff(stepByName['typecheck'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for config:check', () => {
+  assert.equal(stepTouchedByDiff(stepByName['config:check'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for test:server', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for test:server-slow', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server-slow'], ['server/package.json']), true);
+});
+
+test('stepTouchedByDiff: server/package.json is in scope for build', () => {
+  assert.equal(stepTouchedByDiff(stepByName['build'], ['server/package.json']), true);
+});
+
+// lint deliberately does NOT get server/package.json: eslint.config.mjs has no
+// JSON target (verified: no `files`/plugin entry for *.json anywhere in it),
+// so a package.json content change cannot change lint's output.
+test('stepTouchedByDiff: server/package.json stays OUT of scope for lint (no JSON lint target)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['lint'], ['server/package.json']), false);
+});
+
+// --- test:sidecar widened to the whole tree (verify-scope fix round 1, G6) -
+// Legacy CI regex was `^server/tts-sidecar/` (anything in the tree); A2's
+// derivation narrowed this to .py/requirements/pytest.ini only, missing docs,
+// installer scripts under scripts/, and anything else non-.py. Reverting the
+// globs line back to the three narrower globs reddens this test.
+test('stepTouchedByDiff: a non-.py file anywhere under server/tts-sidecar/ is in scope for test:sidecar', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/README.md']), true);
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], [
+      'server/tts-sidecar/scripts/install-qwen3.mjs',
+    ]),
+    true,
+  );
+});
+
+// --- test:scripts (Pester) fixtures widening (verify-scope fix round 1, G7) -
+// scripts/tests/run-golden-tests.Tests.ps1's BeforeAll block shadows
+// qwen_tts/torch/TTS onto PYTHONPATH via these stub .py files at RUNTIME (see
+// that test file's own comment) — a real dependency, not a hypothetical one.
+// Reverting the 'scripts/tests/fixtures/**' glob entry reddens this test.
+test('stepTouchedByDiff: a run-golden-tests stub module is in scope for test:scripts', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:scripts'], [
+      'scripts/tests/fixtures/run-golden-tests-stub-modules/qwen_tts.py',
+    ]),
+    true,
+  );
+});
+
 // --- test:hooks completeness guard (ops-18, #2115) -------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
 // file a hooks test depends on". This test checks that approximation against

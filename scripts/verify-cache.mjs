@@ -31,7 +31,23 @@ export const STEPS = [
     name: 'typecheck',
     inputs: {
       globs: ['src/**', 'server/src/**'],
-      extraFiles: ['tsconfig.json', 'server/tsconfig.json', 'vite.config.ts', 'vitest.config.ts'],
+      /* server/package.json (bare, NOT the lockfile): stepTouchedByDiff's
+         includeLockfiles branch below only special-cases the literal
+         server/package-lock.json path, so a manual server dependency/types
+         edit that hasn't been `npm install`-ed into the lockfile yet
+         invalidated NOTHING here (verified against the live module: it
+         touched zero steps) — a real local-cache + CI-scope hole, since a
+         new/removed server dependency's types can change `tsc`'s output.
+         Added as an explicit extraFiles entry (not a stepTouchedByDiff
+         lockfile-branch extension) to avoid also making this step hash the
+         FULL server lockfile the way `includeLockfiles: ['server']` would. */
+      extraFiles: [
+        'tsconfig.json',
+        'server/tsconfig.json',
+        'vite.config.ts',
+        'vitest.config.ts',
+        'server/package.json',
+      ],
       includeLockfiles: ['root', 'server'],
     },
   },
@@ -42,7 +58,15 @@ export const STEPS = [
     name: 'config:check',
     inputs: {
       globs: ['server/src/config/*.ts'],
-      extraFiles: ['server/.env.example', 'server/scripts/sync-env-example.ts'],
+      // server/package.json: same gap/fix as `typecheck` above — see that
+      // step's comment. Least certain of the five: config:check's own
+      // pass/fail doesn't read package.json content, but it's a
+      // server-tagged step per the branch owner's explicit ruling.
+      extraFiles: [
+        'server/.env.example',
+        'server/scripts/sync-env-example.ts',
+        'server/package.json',
+      ],
       includeLockfiles: [],
     },
   },
@@ -199,13 +223,18 @@ export const STEPS = [
          repair-cast-id-drift.mjs: cast-resolve.repair-pass-contract.test.ts
          imports it directly (#2130) — it lives outside server/src/**, so
          without this line an edit there reports [cached] and the contract
-         test never re-runs against it. */
+         test never re-runs against it.
+         server/package.json: same lockfile-vs-manifest gap as `typecheck`
+         above — includeLockfiles below only special-cases the literal
+         server/package-lock.json path, so a manifest-only server dependency
+         edit invalidated nothing (verified against the live module). */
       extraFiles: [
         'server/vitest.config.ts',
         'server/tsconfig.json',
         'openapi.yaml',
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
         'scripts/repair-cast-id-drift.mjs',
+        'server/package.json',
       ],
       includeLockfiles: ['server'],
     },
@@ -219,10 +248,12 @@ export const STEPS = [
     name: 'test:server-slow',
     inputs: {
       globs: ['server/src/**'],
+      // server/package.json: same gap/fix as `test:server` above.
       extraFiles: [
         'server/vitest.config.slow.ts',
         'server/vitest.config.ts',
         'server/tsconfig.json',
+        'server/package.json',
       ],
       includeLockfiles: ['server'],
     },
@@ -230,7 +261,19 @@ export const STEPS = [
   {
     name: 'test:scripts',
     inputs: {
-      globs: ['scripts/lib/**', 'scripts/tests/**/*.Tests.ps1', 'scripts/tests/**/*.ps1'],
+      globs: [
+        'scripts/lib/**',
+        'scripts/tests/**/*.Tests.ps1',
+        'scripts/tests/**/*.ps1',
+        // run-golden-tests.Tests.ps1 shadows qwen_tts/torch/TTS onto
+        // PYTHONPATH via these stub .py files at RUNTIME (see that test's own
+        // BeforeAll block) — no module-graph edge, so without this glob a
+        // stub-only diff (exactly the shape that would need re-verifying)
+        // printed [cached] here. Same #1847 runtime-read trap `test:hooks`'s
+        // fixtures/** entry documents; verified by reading the test file
+        // before adding this, not assumed.
+        'scripts/tests/fixtures/**',
+      ],
       extraFiles: ['scripts/tests/run.ps1'],
       includeLockfiles: ['root'],
     },
@@ -239,18 +282,20 @@ export const STEPS = [
   {
     name: 'test:sidecar',
     inputs: {
-      /* M3 (#2146 review): 'requirements*.txt' compiles to
-         requirements[^/]*\.txt$ — a single-segment `*` that cannot cross a
-         `/`, so it never matched anything under the requirements/
-         SUBDIRECTORY. requirements/base.txt became load-bearing in this PR
-         (the CI bootstrap installs from it directly), so a base.txt-only
-         diff must bust this step's cache. Added as its own glob rather than
-         widening the existing one, to keep the miss visible in the diff. */
-      globs: [
-        'server/tts-sidecar/**/*.py',
-        'server/tts-sidecar/requirements*.txt',
-        'server/tts-sidecar/requirements/*.txt',
-      ],
+      /* Widened to the WHOLE sidecar tree (matching the legacy CI regex
+         `^server/tts-sidecar/`, restored after A2's derivation narrowed it to
+         .py/requirements/pytest.ini only — an under-declaration: any file in
+         this tree, including non-.py sources, docs, and install scripts, can
+         affect the pytest suite or its bootstrap). Safe without an explicit
+         exclusion for .venv/**, models/, .coqui/, voices/, or sample.* —
+         verified those are the exact paths .gitignore excludes under
+         server/tts-sidecar/ (root .gitignore lines 108-113), and every
+         diffFiles/fileList this glob is tested against already comes from
+         `git diff`/`git ls-files --exclude-standard`, which never surfaces a
+         gitignored path in the first place — so there's no churn risk to
+         guard against, and globToRegex has no exclusion syntax to express one
+         with regardless. */
+      globs: ['server/tts-sidecar/**'],
       extraFiles: [
         'server/tts-sidecar/run-tests.ps1',
         // The npm script now invokes this instead; run-tests.ps1 is retained
@@ -289,12 +334,14 @@ export const STEPS = [
     name: 'build',
     inputs: {
       globs: ['src/**', 'server/src/**'],
+      // server/package.json: same gap/fix as `typecheck`/`test:server` above.
       extraFiles: [
         'vite.config.ts',
         'tsconfig.json',
         'server/tsconfig.json',
         'index.html',
         'scripts/sync-docs-to-public.mjs',
+        'server/package.json',
       ],
       includeLockfiles: ['root', 'server'],
     },
