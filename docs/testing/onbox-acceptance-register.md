@@ -65,6 +65,21 @@ them are wide:
   so "was it published at all, and was it the right file?" is procedure, not a
   gate.
 
+**The concurrency hazard this closes (#1931).** Before the live view was
+tracked here, on 2026-07-28 two concurrent sessions each correctly added a
+different row (A20, E8) and republished from their own hand-built snapshot —
+the second republish was built from a snapshot taken *before* the first
+session's row had landed, so the surviving page had one row present and the
+other silently gone, with nothing to notice. That was possible because the
+live view lived nowhere but a session's own build of it. Tracking both files
+in git and gating their agreement via `npm run check:onbox-register` on every
+PR closes it structurally: the live view a PR merges is no longer a
+hand-built snapshot racing another session's, it is the file *inside* the
+merge, checked against this register before either can land — a stale
+snapshot can't reach the publish step in the first place. What that does
+**not** close is the two edges named just above: a wording-only drift, and
+whether the merged file was then actually published, and to the right URL.
+
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
 
