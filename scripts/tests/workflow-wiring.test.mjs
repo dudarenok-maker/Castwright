@@ -172,12 +172,12 @@ const LEGACY_MATCHERS = {
   frontend:
     /^(src\/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)/,
   server:
-    /^(server\/src\/|server\/package(-lock)?\.json$|server\/tsconfig\.json$|server\/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server\/\.env\.example$|server\/scripts\/sync-env-example\.ts$|scripts\/tests\/fixtures\/)/,
+    /^(server\/src\/|server\/package(-lock)?\.json$|server\/tsconfig\.json$|server\/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server\/\.env\.example$|server\/scripts\/sync-env-example\.ts$|scripts\/tests\/fixtures\/|scripts\/repair-cast-id-drift\.mjs$)/,
   sidecar: /^server\/tts-sidecar\//,
   e2e: /^(e2e\/|playwright\.config\.ts$)/,
   scripts: /^scripts\//,
   hooks:
-    /^(\.husky\/|\.github\/workflows\/|scripts\/run-hooks-tests\.mjs$|scripts\/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs\/release-notes-next\.md$|scripts\/release-notes-gate\.mjs$|docs\/testing\/onbox-acceptance-register\.md$|docs\/testing\/onbox-acceptance-register-live-view\.html$)/,
+    /^(\.husky\/|\.github\/workflows\/|\.github\/actions\/|scripts\/run-hooks-tests\.mjs$|scripts\/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs\/release-notes-next\.md$|scripts\/release-notes-gate\.mjs$|docs\/testing\/onbox-acceptance-register\.md$|docs\/testing\/onbox-acceptance-register-live-view\.html$)/,
   pinokio: /^(pinokio\.js$|pinokio-scripts\/|scripts\/run-pinokio-tests\.mjs$)/,
   openapi: /^openapi\.yaml$/,
 };
@@ -358,6 +358,34 @@ const ACCEPTED_NARROWINGS = [
     'scripts/lib/log.ps1',
     "PowerShell library files are Pester's domain (test:scripts). Grepped scripts/run-hooks-tests.mjs and every scripts/tests/*.test.mjs for a runtime read of anything under scripts/lib/ and found none -- the one scripts/lib reference in the whole suite is a code comment, not a read",
   ],
+
+  // LEGACY_MATCHERS repair (workflow-wiring review Finding 2) -- the `server`
+  // matcher was missing the scripts/repair-cast-id-drift.mjs$ alternative
+  // present in the real pre-derivation verify.yml (git show
+  // a1e4b70e:.github/workflows/verify.yml), so the corpus never exercised it.
+  // Adding it surfaces these four -- each a `.mjs` script inert to a
+  // tool/step that never reads .mjs source at all, the same G4 shape as
+  // scripts/tests/fixtures/x.json above, just for this one file.
+  [
+    'Typecheck',
+    'scripts/repair-cast-id-drift.mjs',
+    'tsc only compiles files reachable from tsconfig.json `include` (src/**, server/src/**); scripts/repair-cast-id-drift.mjs sits outside both, so its content cannot change tsc output',
+  ],
+  [
+    'Config check',
+    'scripts/repair-cast-id-drift.mjs',
+    'config:check validates the config registry (server/src/config/*.ts + .env.example) -- same reasoning as Config check/server/src/tts/mp3.ts above: an arbitrary unrelated .mjs script cannot affect its outcome',
+  ],
+  [
+    'PowerShell-helper tests (Pester)',
+    'scripts/repair-cast-id-drift.mjs',
+    'Pester covers scripts/lib/*.ps1 (+ the golden-tests fixtures dir) only -- same reasoning as PowerShell-helper tests (Pester)/scripts/ci-scope.mjs above: an unrelated .mjs change cannot affect it',
+  ],
+  [
+    'Build',
+    'scripts/repair-cast-id-drift.mjs',
+    "vite build's entry graph is index.html -> src/**; server/src/** is compiled separately by tsc. scripts/repair-cast-id-drift.mjs is a standalone script under scripts/, outside both, so it is not bundled or compiled by `npm run build`",
+  ],
 ];
 
 const PROBE_CORPUS = [
@@ -378,10 +406,12 @@ const PROBE_CORPUS = [
   'scripts/tests/fixtures/x.json',
   '.husky/pre-commit',
   '.github/workflows/verify.yml',
+  '.github/actions/setup/action.yml',
   'pinokio.js',
   'pinokio-scripts/lib/menu.js',
   'launch.mjs',
   'server/tts-sidecar/scripts/install-qwen3.mjs',
+  'scripts/repair-cast-id-drift.mjs',
   'RELEASE_NOTES.md',
   'docs/release-notes-next.md',
 ];
