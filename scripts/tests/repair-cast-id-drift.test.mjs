@@ -35,6 +35,7 @@ import {
   AUTO_REBIND_RANGE,
   shouldRefuseApplyForEmptyScan,
   formatBooksScannedLine,
+  collectSegmentOrphans,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -476,6 +477,54 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.skipped.length, 1);
     assert.equal(plan.skipped[0].reason, 'rejected');
+  });
+
+  // #2092/#2089 Task 9 — pair-scoped `rejectedPairs`, replacing the old
+  // id-wide skip for NEW rejects (the legacy `rejected` list above stays
+  // id-wide on purpose — see planBookRepairs's own doc comment). These two
+  // are the brief's stated minimum: the SAME orphaned id ("mayrin") rejected
+  // against ONE target ("mairin") must still auto-record against a DIFFERENT
+  // target ("timkin") it separately matches, and must still be blocked
+  // against the rejected target itself. A test only covering the second
+  // half would pass against the old unconditional id-wide skip too.
+  test('a pair-rejected id is skipped when it matches the REJECTED target', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc); // matches live 'mairin'
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] },
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+    assert.match(plan.skipped[0].detail, /"mayrin" -> "mairin"/);
+  });
+
+  test('a pair-rejected id is STILL auto-recorded when it matches a DIFFERENT target', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Timkin' }], lc); // matches live 'timkin', not 'mairin'
+    const orphans = new Map([['mayrin', renderedOrphan(5)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] }, // rejection is against a DIFFERENT target
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.skipped.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'mayrin');
+    assert.equal(plan.autoRecord[0].to, 'timkin');
   });
 
   test('inconsistent characterSnapshots across chapters downgrade a name match to report-only (non-reserved id)', () => {
@@ -1362,6 +1411,68 @@ describe('buildOrphansFromSegments (#2093 residual 6, producer half of the auto-
     const { orphans, autoReconciled } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
     assert.equal(autoReconciled.size, 0);
+  });
+});
+
+describe('collectSegmentOrphans (#2092/#2089 Task 9 — threads the loaded history object, not a hand-built subset)', () => {
+  // Guards exactly the trap the task 9 brief named: a hand-built
+  // `{ supersededBy, rejected }` object silently drops `rejectedPairs`, so
+  // this resolver would disagree with the real render-time resolver (which
+  // DOES see rejected pairs) about whether a pair-rejected id counts as an
+  // orphan. Asserted by capturing what `collectSegmentOrphans` actually
+  // hands to `buildCastResolver`, since a mutation reintroducing the old
+  // `{ supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] }`
+  // subset would make this go red (no `rejectedPairs` key reaches the fake).
+  test('passes the whole history object — including rejectedPairs — to buildCastResolver, not a stripped subset', async () => {
+    let receivedHistory;
+    const mods = {
+      buildCastResolver(cast, history) {
+        receivedHistory = history;
+        return { resolve: () => undefined };
+      },
+      async loadSegmentsFiles() {
+        return [];
+      },
+    };
+    const history = {
+      schema: 1,
+      supersededBy: { a: 'b' },
+      rejected: ['legacy-id'],
+      rejectedPairs: [{ from: 'mayrin', to: 'mairin' }],
+    };
+    await collectSegmentOrphans('/book', [], { characters: [] }, history, mods);
+    assert.equal(receivedHistory, history); // the SAME object, not a rebuilt copy
+    assert.deepEqual(receivedHistory.rejectedPairs, [{ from: 'mayrin', to: 'mairin' }]);
+  });
+
+  test('a segment whose id is pair-rejected against its only resolvable target is reported as an orphan, not silently reconciled', async () => {
+    // Simulates the real buildCastResolver's D2 rule (cast-resolve.ts): a
+    // rejected pair returns undefined instead of resolving, even though the
+    // id WOULD otherwise resolve via a normalised-history hit. If
+    // collectSegmentOrphans dropped rejectedPairs (the bug this test
+    // guards), a fake resolver standing in for the real one would never see
+    // this — but the real production resolver DOES, so this pins the
+    // contract collectSegmentOrphans must uphold: pass history through
+    // whole, so whatever the real resolver decides is what gets counted.
+    const mods = {
+      buildCastResolver(cast, history) {
+        return {
+          resolve(id) {
+            if (id !== 'mayrin') return undefined;
+            const rejected = (history.rejectedPairs ?? []).some((p) => p.from === 'mayrin' && p.to === 'mairin');
+            if (rejected) return undefined; // D2: pair-rejected, no fall-through
+            return { character: { id: 'mairin' }, via: 'normalised-history' };
+          },
+        };
+      },
+      async loadSegmentsFiles() {
+        return [{ chapterId: 1, chapterTitle: 'One', segments: [{ characterId: 'mayrin', startSec: 0, endSec: 1 }] }];
+      },
+    };
+    const history = { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] };
+    const { orphans, autoReconciled } = await collectSegmentOrphans('/book', [], { characters: [] }, history, mods);
+    assert.equal(autoReconciled.size, 0);
+    assert.equal(orphans.get('mayrin')?.segments, 1);
   });
 });
 

@@ -425,8 +425,12 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
 /** The core planning step for one book — pure, no I/O. Given already-loaded
  *  plain data, decides for every orphaned id whether to auto-record a
  *  `cast-id-history.json` alias, or report it for a human, or skip it
- *  (already recorded, or explicitly rejected by the user — #2040 Task 17's
- *  `rejected` list). Returns `{ autoRecord, reportOnly, skipped,
+ *  (already recorded, explicitly rejected id-wide by the user — #2040 Task
+ *  17's LEGACY `rejected` list, still honoured unconditionally since those
+ *  entries genuinely were recorded as "block every candidate" — or
+ *  explicitly rejected against this specific candidate, #2092/#2089's
+ *  `rejectedPairs`, checked once a candidate is known — see the guard below
+ *  for why it can't run any earlier). Returns `{ autoRecord, reportOnly, skipped,
  *  withheldForMissingCache }` — the last is a COUNT (owner-decided policy,
  *  review round 2, 2026-08-05; ordering fixed by pre-merge review I2,
  *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
@@ -486,6 +490,19 @@ export function planBookRepairs(input, deps) {
 
   const liveIds = new Set(liveCast.map((c) => c.id));
   const rejectedSet = new Set(history.rejected ?? []);
+  // #2092/#2089 Task 9 — pair-scoped successor to `rejected`: `from -> Set<to>`,
+  // mirroring `buildCastResolver`'s own `rejectedTargetsByRawFrom`
+  // (`server/src/store/cast-resolve.ts`) rather than a second, independently
+  // -derived reject matcher. Checked once a Tier A/B candidate is known (see
+  // below), NOT here alongside the id-wide `rejectedSet` — the whole point of
+  // the pair scope is that a rejection against ONE target must not withhold a
+  // DIFFERENT, later target for the same orphaned id (spec: "X is not Y" is
+  // not "X is not anyone").
+  const rejectedTargetsByFrom = new Map();
+  for (const pair of history.rejectedPairs ?? []) {
+    if (!rejectedTargetsByFrom.has(pair.from)) rejectedTargetsByFrom.set(pair.from, new Set());
+    rejectedTargetsByFrom.get(pair.from).add(pair.to);
+  }
   const supersededBy = history.supersededBy ?? {};
   // Tier B's own resolver — id-shape only, empty history on purpose (see
   // resolveTierBId's doc comment). Built once per book, not once per id.
@@ -630,6 +647,22 @@ export function planBookRepairs(input, deps) {
     }
 
     if (matchedId) {
+      // --- #2092/#2089 Task 9: pair-scoped reject filter. Must run here,
+      // AFTER `matchedId` is known, not alongside the id-wide `rejectedSet`
+      // check above — a pair only blocks THIS candidate, so checking it
+      // before a candidate exists would have nothing to compare against and
+      // either skip every candidate (id-wide, the bug this replaces) or
+      // none. Mirrors `buildCastResolver`'s own D2 rule (`cast-resolve.ts`):
+      // a rejected pair refuses outright rather than falling through to try
+      // a different tier/candidate for the same id.
+      if (rejectedTargetsByFrom.get(id)?.has(matchedId)) {
+        skipped.push({
+          id,
+          reason: 'rejected-pair',
+          detail: `user explicitly rejected pairing "${id}" -> "${matchedId}" (Cast screen "Not the same character")`,
+        });
+        continue;
+      }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
       // own doc comment for its narrowed scope post round-1).
       if (!snapshotsConsistent(orphan.snapshots)) {
@@ -1288,11 +1321,26 @@ export function buildOrphansFromSegments(segs, resolver) {
   return { orphans, autoReconciled };
 }
 
-async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
-  const resolver = mods.buildCastResolver(cast.characters, {
-    supersededBy: history.supersededBy ?? {},
-    rejected: history.rejected ?? [],
-  });
+// Exported (previously module-private) SOLELY so Task 9's fix — passing
+// `history` through unmodified instead of a hand-built subset — has a direct
+// unit test asserting what actually reaches `buildCastResolver`, rather than
+// relying on the live dry run the way most of this file's I/O wrappers do.
+export async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
+  // #2092/#2089 Task 9 incidental fix: this used to hand-build a
+  // `{ supersededBy, rejected }` subset of `history`, silently dropping
+  // `rejectedPairs` — the exact "defaulted field a caller can drop" shape
+  // Task 3 made unrepresentable server-side by threading the whole loaded
+  // `CastIdHistory` object instead (see `synthesise-chapter.ts`'s
+  // `castResolver = buildCastResolver(cast, castIdHistory)`). With the
+  // subset, a segment whose id was pair-rejected against the very target it
+  // would otherwise resolve onto (an alias or normalised-id/-history hit)
+  // resolved anyway here — so it was counted as NOT orphaned, disagreeing
+  // with the real render-time resolver (which DOES know about the pair) and
+  // silently hiding the rejected pairing from this script's damage report.
+  // Passing `history` itself, the same loaded object `planBookRepairs`
+  // already receives unmodified, is what `buildCastResolver` actually wants
+  // (`Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>`).
+  const resolver = mods.buildCastResolver(cast.characters, history);
   const segs = await mods.loadSegmentsFiles(bookDir, chapters);
   return buildOrphansFromSegments(segs, resolver);
 }
