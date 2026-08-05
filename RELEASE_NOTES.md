@@ -77,6 +77,7 @@
 - **Security housekeeping on the parts you don't see.** We've taken the latest patched versions of the outside code Castwright is built on — including the component that opens your EPUB files, where a malformed book could previously have made Castwright try to swallow far more memory than it should. Nothing to do at your end, and nothing looks different.
 - **The demo library shows the right covers again.** In the built-in sample library, _Saltgrave_ and _The Tidewatcher's Oath_ were wearing each other's cover art — they now each show their own.
 - **In-app Help now answers "Is my data private?" and "Does it work offline?"** — the same plain-language answers as the website, so both agree: analysis reads your book on a local model by default, and the optional cloud fallback is on by default but a single switch turns it off for good.
+- **A paired device whose expiry date got scrambled could keep its access forever.** Every phone or browser you pair with Castwright gets an authorisation that expires on its own, so an old one can't linger. If that expiry date was ever corrupted — by a bad edit, a half-finished upgrade, or a file written oddly — Castwright read the damage as "no expiry" and let the device straight in, for good, with no way to notice from the device list. It now treats a damaged expiry the same as a missing one and turns the device away, so you re-pair it and get a fresh, properly dated authorisation.
 
 # Castwright 1.14.0
 

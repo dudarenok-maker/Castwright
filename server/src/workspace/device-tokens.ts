@@ -57,7 +57,8 @@ export function findValidDevice(
   const h = Buffer.from(hashToken(rawToken));
   for (const d of devices) {
     if (d.revoked) continue;
-    if (d.expiresAt === undefined || now > Date.parse(d.expiresAt)) continue;
+    const exp = d.expiresAt === undefined ? NaN : Date.parse(d.expiresAt);
+    if (!Number.isFinite(exp) || now > exp) continue;
     const dh = Buffer.from(d.tokenHash);
     if (dh.length === h.length && timingSafeEqual(dh, h)) return d;
   }

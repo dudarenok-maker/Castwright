@@ -71,6 +71,42 @@ describe('device-tokens (pure)', () => {
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
+  // srv-2144 — Date.parse(expiresAt) is NaN for these shapes, and every
+  // comparison against NaN is false, so a bare `>` check lets them through.
+  // Each shape gets its own assertion so a future regression pins to the
+  // specific input rather than one representative case.
+  it('rejects expiresAt: null (e.g. a JSON round-trip or hand-edited store)', () => {
+    const d = {
+      id: '1',
+      label: 'P',
+      tokenHash: hashToken('tok'),
+      createdAt: future,
+      expiresAt: null as unknown as string,
+    };
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  it('rejects expiresAt: "" (empty string)', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: '' };
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  it('rejects expiresAt: "garbage" (unparseable string)', () => {
+    const d = {
+      id: '1',
+      label: 'P',
+      tokenHash: hashToken('tok'),
+      createdAt: future,
+      expiresAt: 'garbage',
+    };
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  it('accepts a valid future ISO expiresAt', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: future };
+    expect(findValidDevice([d], 'tok')?.id).toBe('1');
+  });
+
   it('honours an injected now', () => {
     const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: future };
     expect(findValidDevice([d], 'tok', Date.parse(future) + 1)).toBeNull();
