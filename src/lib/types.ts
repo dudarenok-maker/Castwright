@@ -450,8 +450,11 @@ export interface BookStateResponse {
       id whose configured ENGINE changed — this is a wrong-CHARACTER
       substitution, not an engine one. `characterId` (who actually rendered
       the line) is present only when the render stamped it; `resolution` /
-      `resolvedCharacterId` / `segments` are always present. Empty / undefined
-      when nothing is orphaned. */
+      `resolvedCharacterId` / `segments` are always present. `rejectedAgainst`
+      (#2092/#2089 D4) is every live cast id this orphaned id has been
+      pair-rejected against, driving the banner's "Not <Name> · Undo" chip(s)
+      — absent when never rejected. Empty / undefined when nothing is
+      orphaned. */
   orphanedCharacterFallbacks?: Record<
     string,
     {
@@ -460,6 +463,7 @@ export interface BookStateResponse {
       resolution: 'alias' | 'normalised' | 'unresolved';
       resolvedCharacterId?: string;
       segments: number;
+      rejectedAgainst?: string[];
     }
   >;
   /** #650 — render-time sentence→speaker map per rendered chapter

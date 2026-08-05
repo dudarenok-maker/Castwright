@@ -472,18 +472,14 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        `.then`ing `.supersededBy`, one `.then`ing `.rejected`), which can
        observe two different file states if a write lands between them (the
        exact split-object footgun fix round 1 closed for `buildCastResolver`
-       itself, re-opened here one level up). `supersededBy`/`rejected` are
-       both derived from the one awaited object below. */
+       itself, re-opened here one level up). #2092/#2089 task 3 — the
+       collector now takes this WHOLE loaded object directly rather than
+       `supersededBy`/`rejected` threaded as separate params, closing the
+       same footgun one level further: there is no longer a way to load this
+       once and still forget to pass one of its fields through. */
     const orphanedCharacterFallbackHistoryFile: CastIdHistory = await loadCastIdHistory(
       bookDir,
     ).catch(() => ({ schema: 1 as const, supersededBy: {} }));
-    const orphanedCharacterFallbackHistory = orphanedCharacterFallbackHistoryFile.supersededBy;
-    /* `rejected` is the list of orphaned ids the user has explicitly said
-       are NOT the same character as whatever they'd otherwise resolve onto
-       (the banner's "not the same character" action) — threaded into the
-       collector so a just-rejected reconciliation reports as unresolved on
-       this very hydrate, not the next one. */
-    const orphanedCharacterFallbackRejected = orphanedCharacterFallbackHistoryFile.rejected ?? [];
 
     /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
        render-time substitution, aggregated the same way as
@@ -500,8 +496,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       bookDir,
       state.chapters,
       (cast?.characters ?? []) as Array<{ id: string }>,
-      orphanedCharacterFallbackHistory,
-      orphanedCharacterFallbackRejected,
+      orphanedCharacterFallbackHistoryFile,
     ).catch(() => ({}));
 
     /* Render-time sentence→speaker map per rendered chapter (#650). The frontend

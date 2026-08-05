@@ -421,18 +421,20 @@ trusting anything below; if the WITHHELD-count line is nonzero, `--apply`
 refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
 first; a nonzero missing-cache-evidence line alone does NOT refuse).
 **Revision-sensitive: the numbers above are against the pre-#2102 gate** —
-see the callout below the Result for what changes once #2102 lands. **As
-measured 2026-08-05 (pre-#2102), this precondition WAS satisfied and this
-step WAS run** — see the Result immediately below, which is no longer
-pending (the repo owner's decision, review round 2: *Unlocked* DOES have an
-orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
+see the callout below the Result for what changed once #2102 landed (it now
+has). **As measured 2026-08-05 (pre-#2102), this precondition WAS satisfied
+and this step WAS run** — see the Result immediately below, which is no
+longer pending (the repo owner's decision, review round 2: *Unlocked* DOES
+have an orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
 auto-record from it as a reserved fold-bucket source before the cache gate
 is ever reached, so it has nothing at stake and no longer blocks the
 workspace run).
 
 Result (console summary matches §8.1): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exact match.** `mode: APPLY (writing cast-id-history.json)`; books scanned **20**; auto-recordable aliases **3 (27 segment(s))**; reported for human decision **93 id(s) / 161 segment(s)**; re-render candidates **17**; books missing analysis-cache evidence **0**.
 
-> **Read that last figure against the right revision.** This run was made against `main` @ `f3d6ae0f`, i.e. the **pre-#2102** gate, where the cache-evidence count was global and `0` was the go/no-go. #2102 makes the gate honest and scopes the refusal per book, after which the expected output is `books missing analysis-cache evidence: 1` (*Unlocked* parses but names nobody) **plus a new `books with an auto-record withheld: 0`** — and it is that second line, not the first, that gates `--apply`. Do not read this PASS as "the first line must be 0" once #2102 lands.
+> **Read that last figure against the right revision.** This run was made against `main` @ `f3d6ae0f`, i.e. the **pre-#2102** gate, where the cache-evidence count was global and `0` was the go/no-go. **#2102 has since landed**, making the gate honest and scoping the refusal per book — post-#2102 code now reports `books missing analysis-cache evidence: 1` (*Unlocked* parses but names nobody) **plus `books with an auto-record withheld: 0`** — and it is that second line, not the first, that gates `--apply`. Do not read this PASS as "the first line must be 0."
+>
+> **#2092/#2089 Task 9 (pair-scoped reject filter) has ALSO since landed, on the same branch as #2102's rebase.** It has no effect on the numbers above: neither book involved in this run had a `rejectedPairs` or legacy id-wide `rejected` entry — the Cast-screen "Not the same character" action hadn't shipped to a real run of the app when this `--apply` was performed, so nothing here was ever gated on a reject. The change matters only the NEXT time this pass runs against a workspace where a real reject exists on disk: the old code skipped that id from auto-recording against ANY candidate; the new code only withholds the specific rejected `(from, to)` pairing, so a different, later candidate for the same id can still auto-record.
 
 Invocation: `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="C:/Claude/Projects/Audiobook-Generator/server/handoff/cache" node scripts/repair-cast-id-drift.mjs --apply`. **`WORKSPACE_DIR` must be passed explicitly** — the script does not read `server/.env`, and its `<home>/AudiobookWorkspace` default is empty on this box (see [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108)).
 
