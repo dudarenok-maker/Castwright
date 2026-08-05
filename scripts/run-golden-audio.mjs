@@ -200,6 +200,21 @@ function computeIsDirectInvocation() {
 const isDirectInvocation = computeIsDirectInvocation();
 
 if (isDirectInvocation) {
+  // Internal, undocumented test hook (#2036 review round 2, R2) — NOT a
+  // documented flag, not in the header's Flags list, and no npm script sets
+  // it. The regression test for the guard's symlink/junction fix needs to
+  // spawn this script through a REAL junction to genuinely exercise the
+  // argv[1]-vs-import.meta.url resolution — a mock or an in-process import
+  // can't reproduce that — but must not thereby execute a real golden-audio
+  // suite (ffmpeg, real synth, real weights) inside `npm run test:hooks`,
+  // which runs in the pre-commit/pre-push/CI hot path. This proves the guard
+  // resolved TRUE and exits before either suite is spawned; the only caller
+  // is scripts/tests/run-golden-audio.test.mjs.
+  if (process.env.RUN_GOLDEN_AUDIO_PROBE_GUARD_ONLY === '1') {
+    console.log('golden-audio: direct-invocation guard resolved TRUE (probe-only, no suites run)');
+    process.exit(0);
+  }
+
   warnIfGpuBusyForBless();
 
   if (!sidecarOnly) {

@@ -1,7 +1,7 @@
 // Runs under `npm run test:hooks` (node --test over scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, symlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, symlinkSync, rmdirSync, unlinkSync, mkdtempSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -120,24 +120,48 @@ test('gpuBusyWarningFor reports CONTENTION_UNKNOWN, not silence, on empty/unpars
 // This repo junctions aggressively for worktrees, and POSIX's `/tmp` is
 // itself commonly a symlink (macOS: `/tmp` -> `/private/tmp`), so this is not
 // a hypothetical shape. Reproduces it for real: a link stands in for a
-// worktree root, the script is invoked THROUGH it, and the real Suite B run
-// must actually happen — an empty stdout means the guard silently no-op'd.
-test('a junction/symlink earlier in the invoked path does not silently no-op the run', () => {
+// worktree root, and the script is invoked THROUGH it via a real subprocess
+// (an in-process import can't reproduce an argv[1]-vs-import.meta.url
+// mismatch — argv[1] would just be the test runner's own path). That real
+// subprocess is what proves the guard, not the pure exports.
+//
+// #2036 review round 2, finding R2: an earlier version of this test invoked
+// `--assembly-only` for real, reaching the real Suite B — real ffmpeg, real
+// `synthesiseChapter`, real two-pass loudnorm — inside `npm run test:hooks`,
+// which runs in pre-commit, pre-push, `test:all` AND `verify.yml`'s
+// `lint-and-checks` job (which does not install ffmpeg). So this test spawns
+// with `RUN_GOLDEN_AUDIO_PROBE_GUARD_ONLY=1`, an internal, undocumented test
+// hook (see its call site in run-golden-audio.mjs) that proves the guard
+// resolved TRUE and exits before either suite is spawned — no ffmpeg, no
+// weights, no venv needed, and it still goes red if the guard reverts to
+// strict-only (mutation-verified: reverting `computeIsDirectInvocation` to
+// the strict-only check left the probe line unprinted and this test red).
+test('a junction/symlink earlier in the invoked path does not silently no-op the guard', (t) => {
   const tmpRoot = mkdtempSync(join(tmpdir(), 'rga-junction-'));
   const linkPath = join(tmpRoot, 'repo-link');
   let linkCreated = false;
   try {
-    // 'junction' is honoured on Windows; POSIX ignores the type argument and
-    // creates an ordinary symlink to the directory — both reproduce the same
-    // import.meta.url-vs-argv[1] mismatch, so no OS branch is needed.
-    symlinkSync(REPO_ROOT, linkPath, 'junction');
-    linkCreated = true;
+    try {
+      // 'junction' is honoured on Windows; POSIX ignores the type argument
+      // and creates an ordinary symlink to the directory — both reproduce
+      // the same import.meta.url-vs-argv[1] mismatch, so no OS branch is
+      // needed for creation. #2036 review round 2, finding R4: a restricted
+      // container, a hardened Windows policy, or a filesystem without
+      // reparse-point support can make this throw (EPERM and friends) — skip
+      // rather than fail the whole suite over an environment that can't
+      // exercise this scenario at all.
+      symlinkSync(REPO_ROOT, linkPath, 'junction');
+      linkCreated = true;
+    } catch (err) {
+      t.skip(`cannot create a symlink/junction in this environment: ${err.message}`);
+      return;
+    }
 
     const target = join(linkPath, 'scripts', 'run-golden-audio.mjs');
     const r = spawnSync(process.execPath, [target, '--assembly-only'], {
       encoding: 'utf8',
-      timeout: 120000,
-      env: { ...process.env, CUDA_VISIBLE_DEVICES: '' },
+      timeout: 30000,
+      env: { ...process.env, CUDA_VISIBLE_DEVICES: '', RUN_GOLDEN_AUDIO_PROBE_GUARD_ONLY: '1' },
     });
     assert.equal(
       r.status,
@@ -147,21 +171,29 @@ test('a junction/symlink earlier in the invoked path does not silently no-op the
     );
     assert.match(
       r.stdout,
-      /assembly \(Suite B\)/,
-      'the real Suite B run must have happened through the junction — empty stdout ' +
-        `means the guard silently no-op'd. stdout was: ${JSON.stringify(r.stdout)}`,
+      /direct-invocation guard resolved TRUE/,
+      'the guard must have resolved TRUE through the junction — empty/silent stdout ' +
+        `means it silently no-op'd. stdout was: ${JSON.stringify(r.stdout)}`,
     );
+    // The probe hook exits before either suite's own `run()` call, so its
+    // "=== golden-audio: …" label must never appear — if it does, the probe
+    // didn't actually pre-empt a real suite spawn, and this test would no
+    // longer be proving what its own name claims.
+    assert.doesNotMatch(r.stdout, /=== golden-audio:/);
   } finally {
     // Remove the link FIRST, and only proceed to the recursive delete once
     // that succeeded — never a recursive delete while the link might still
     // be present, which would follow it straight into the real repo this
     // test points at (the exact worktree-teardown hazard CLAUDE.md warns
-    // about). rmdirSync on a junction/symlink-to-directory removes just the
-    // reparse point without traversing into the target.
+    // about). #2036 review round 2, finding R3: `rmdirSync` removes just the
+    // reparse point on Windows (a junction OR a symlink-to-directory), but
+    // throws ENOTDIR for an ordinary symlink on POSIX — `unlinkSync` is the
+    // POSIX-correct non-recursive removal for a symlink there.
     let junctionRemoved = !linkCreated;
     if (linkCreated) {
       try {
-        rmdirSync(linkPath);
+        if (process.platform === 'win32') rmdirSync(linkPath);
+        else unlinkSync(linkPath);
         junctionRemoved = true;
       } catch (cleanupErr) {
         console.error(
