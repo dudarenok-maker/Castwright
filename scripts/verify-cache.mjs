@@ -171,6 +171,15 @@ export const STEPS = [
         // which proves nothing about the guardrail test itself
         // (ops-17c review, #2115).
         'eslint.config.mjs',
+        // menu.js is a TRANSITIVE dep: pinokio-entry.test.mjs asserts on the
+        // menu() item list, which is implemented here and reached via
+        // pinokio.js. Editing it used to leave test:hooks [cached] locally,
+        // while in cloud it set pinokio=true — running test:pinokio, a
+        // DIFFERENT suite from the test that asserts on it (#2120a).
+        'pinokio-scripts/lib/menu.js',
+        // schemas.ts is reached from diff-analysis-ab.mjs, which imports it
+        // with a .js specifier per the TypeScript convention.
+        'server/src/handoff/schemas.ts',
       ],
       includeLockfiles: ['root'],
     },

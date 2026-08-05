@@ -18,6 +18,7 @@ import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+import { walk } from '../lib/module-graph.mjs';
 import {
   composeInputHash,
   decide,
@@ -632,92 +633,61 @@ test('stepTouchedByDiff: a run-golden-tests stub module is in scope for test:scr
   );
 });
 
-// --- test:hooks completeness guard (ops-18, #2115) -------------------------
+// --- test:hooks completeness guard (ops-18, #2115; transitive walk, ops-17c
+// follow-up #2120a) -----------------------------------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
 // file a hooks test depends on". This test checks that approximation against
-// reality: statically scan every scripts/tests/*.test.mjs for the producer
-// files it actually imports (relative specifiers only — bare specifiers like
-// `node:fs` or `archiver` aren't producers under test), and assert each one
-// is stepTouchedByDiff-visible to test:hooks. Without this, a producer that a
-// test imports but the cache step doesn't declare sits in the exact #1847
-// trap the extraFiles comments above describe: a producer-only diff prints
-// [cached] and the test that covers it never runs locally.
+// reality: walk the full TRANSITIVE import closure of every
+// scripts/tests/*.test.mjs entry point (not just its direct imports — a
+// producer reached two hops away is just as real a dependency) and assert
+// every file in that closure is stepTouchedByDiff-visible to test:hooks.
+// Without this, a producer that a test depends on but the cache step doesn't
+// declare sits in the exact #1847 trap the extraFiles comments above
+// describe: a producer-only diff prints [cached] and the test that covers it
+// never runs locally — including when the producer is only reached
+// transitively (#2120a: editing pinokio-scripts/lib/menu.js left test:hooks
+// [cached] locally because the old guard only looked at test files' DIRECT
+// imports, one hop short of the real edge through pinokio.js).
 const testsDir = resolve(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = resolve(testsDir, '..', '..');
 
-// Pull relative-specifier producer imports out of a test file's source: the
-// static ESM `from` form, the dynamic `import()` form, and the CJS
-// `require()` form (pinokio-entry.test.mjs uses createRequire + require()
-// deliberately, to reproduce Pinokio's own CJS kernel loader — that is a
-// genuine direct import edge the guard must see; ops-17c review, #2115).
-// Only a dot- or dot-dot-prefixed relative specifier counts as a producer
-// import — bare specifiers like `node:fs` are not producers under test. (Do
-// not spell out a literal example specifier in this comment: the patterns
-// below would extract it too, and it would then be silently discarded by
-// the on-disk existsSync check in the test below rather than caught.)
-function extractRelativeImportSpecifiers(source) {
-  const specifiers = new Set();
-  const patterns = [
-    /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
-    /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-    /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      specifiers.add(match[1]);
-    }
-  }
-  return [...specifiers];
-}
-
-// Pins the require() pattern directly. Without this, a regression that drops
-// that pattern is invisible to the completeness guard below whenever the
-// require()d producer (pinokio.js) already happens to be a declared
-// extraFiles entry — the guard would just stop scanning that edge and stay
-// silently green rather than catching the regex regression (ops-17c review,
-// #2115: verified by mutation — removing the require() pattern alone left
-// every test in this file green until this pinning test was added).
-test('extractRelativeImportSpecifiers: extracts a require() edge (pinokio-entry.test.mjs shape)', () => {
-  const source = "const config = require('../../pinokio.js');";
-  assert.deepEqual(extractRelativeImportSpecifiers(source), ['../../pinokio.js']);
-});
-
-test('test:hooks completeness guard: every producer a hooks test imports is a cache input', () => {
+test('test:hooks completeness guard: every producer a hooks test depends on is a cache input', () => {
   const hooksStep = stepByName['test:hooks'];
-  const testFiles = readdirSync(testsDir).filter((f) => f.endsWith('.test.mjs'));
-  const missing = [];
-  let producersScanned = 0;
+  const entryFiles = readdirSync(testsDir)
+    .filter((f) => f.endsWith('.test.mjs'))
+    .map((f) => join(testsDir, f));
 
-  for (const testFile of testFiles) {
-    const source = readFileSync(join(testsDir, testFile), 'utf8');
-    for (const specifier of extractRelativeImportSpecifiers(source)) {
-      const absProducer = resolve(testsDir, specifier);
-      if (!existsSync(absProducer)) continue; // not a file on disk — nothing to require as an input
-      producersScanned += 1;
-      // path.relative (not a fixed-length slice off repoRoot) so a specifier
-      // that happens to resolve outside the repo root doesn't yield garbage.
-      const repoRelative = _internals.toPosix(relative(repoRoot, absProducer));
-      if (!stepTouchedByDiff(hooksStep, [repoRelative])) {
-        missing.push(`${repoRelative} (imported by scripts/tests/${testFile})`);
-      }
-    }
-  }
+  const { files, unresolvable } = walk({ entryFiles, repoRoot });
 
-  // Anti-vacuity: if the regex above ever silently matched nothing, this
-  // guard would pass forever while proving nothing (ops-18 brief mutation
-  // (c) — the exact "absent reads as clean" failure mode). A count this low
-  // means either the extraction regex broke, or a legitimate batch of hooks
-  // tests (and their imports) was deleted — both are worth a human look
-  // before lowering this floor.
-  assert.ok(
-    producersScanned >= 30,
-    `expected to scan at least 30 relative producer imports across scripts/tests/*.test.mjs, found ${producersScanned} — either the extraction regex broke, or hooks tests/imports were legitimately removed`,
+  // Fail closed on a specifier that resolves to nothing (defect A). The old
+  // guard's existsSync-then-continue silently dropped these.
+  assert.deepEqual(
+    unresolvable,
+    [],
+    `specifier(s) that resolve to nothing:\n${unresolvable.map((u) => `${u.specifier} <- ${u.from}`).join('\n')}`,
   );
 
+  // Anti-vacuity on METRIC B (unique tracked closure files), NOT on the old
+  // occurrence counter (METRIC A) — different units, and conflating them is
+  // how the old floor came to be 30 against a real 60: that 60 counted
+  // per-test-file direct-import OCCURRENCES (duplicates across files each
+  // counted separately), not unique files. Re-measured on this branch (task
+  // 13, transitive walk over all 63 scripts/tests/*.test.mjs entries):
+  // Metric B (files.length, unique files in the closure) = 63; the
+  // equivalent direct-imports-only occurrence count (Metric A's unit) = 66.
+  // Floor 50 is set against Metric B and gives ~20% headroom below 63: a
+  // legitimate one- or two-file removal must not go red, while a collapse
+  // toward zero (broken regex or resolver) must.
+  assert.ok(
+    files.length >= 50,
+    `expected >= 50 unique files in the hooks-test closure, found ${files.length} — either extraction/resolution broke, or hooks tests were legitimately removed`,
+  );
+
+  const missing = files.filter((f) => !stepTouchedByDiff(hooksStep, [f]));
   assert.deepEqual(
     missing,
     [],
-    `producer(s) imported by a hooks test but not an input to test:hooks:\n${missing.join('\n')}`,
+    `producer(s) a hooks test depends on but not an input to test:hooks:\n${missing.join('\n')}`,
   );
 });
 
