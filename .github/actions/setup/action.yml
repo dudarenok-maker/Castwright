@@ -48,7 +48,7 @@ runs:
         path: |
           node_modules
           server/node_modules
-        key: ${{ runner.os }}-node24-modules-${{ hashFiles('package-lock.json', 'server/package-lock.json') }}
+        key: ${{ runner.os }}-node${{ inputs.node-version }}-modules-${{ hashFiles('package-lock.json', 'server/package-lock.json') }}
 
     - name: Install deps (skip on cache hit)
       if: steps.node-modules-cache.outputs.cache-hit != 'true'
