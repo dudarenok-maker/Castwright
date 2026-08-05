@@ -185,6 +185,19 @@ export const STEPS = [
     },
   },
   {
+    name: 'check:budget-poll',
+    inputs: {
+      /* Its own step rather than widening test:hooks' inputs: this scans
+         server/src/**\/*.test.ts at RUNTIME, and server tests are the hottest
+         surface in the repo. Folding them into test:hooks would bust a ~25s
+         cache on every server test edit; as its own ~1s step it costs almost
+         nothing AND it runs on a server-only staged diff, which is exactly
+         the case verify:fast:scoped used to skip. */
+      globs: ['server/src/**/*.test.ts'],
+      extraFiles: ['scripts/check-no-budget-poll.mjs'],
+    },
+  },
+  {
     name: 'test:pinokio',
     inputs: {
       globs: ['pinokio-scripts/**'],

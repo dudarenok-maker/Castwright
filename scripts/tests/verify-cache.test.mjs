@@ -513,6 +513,22 @@ test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
   }
 });
 
+// The hole this closes: verify:fast:scoped runs --steps test:hooks,test,
+// test:server --scope-staged, and test:hooks' globs exclude server/src/**.
+// So on a server-only staged diff the budgeted-poll guardrail never ran on
+// the very commit introducing the pattern (#2120b).
+test('stepTouchedByDiff: a server test diff is in scope for check:budget-poll', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['server/src/tts/foo.test.ts']), true);
+});
+
+test('stepTouchedByDiff: a server test diff still does NOT bust test:hooks', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/src/tts/foo.test.ts']), false);
+});
+
+test('stepTouchedByDiff: editing the budget-poll script is in scope for its own step', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']), true);
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['vite.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
