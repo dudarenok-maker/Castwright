@@ -956,35 +956,76 @@ async function applyReparse(
   await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
 
   const carryoverPath = castReuseCarryoverJsonPath(bookDir);
-  const existingCast = await readJson<{
-    characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
-  }>(castJsonPath(bookDir));
-  const reuseRows = (existingCast?.characters ?? [])
-    .filter((c) => typeof c.id === 'string')
-    .map((c) => {
-      const row: Record<string, unknown> = { id: c.id, name: c.name };
-      if (c.aliases !== undefined) row.aliases = c.aliases;
-      for (const key of PRESERVED_VOICE_FIELDS) {
-        if (c[key] !== undefined) row[key] = c[key];
-      }
-      return row;
-    });
-  if (reuseRows.length) {
-    await writeJsonAtomic(carryoverPath, { characters: reuseRows });
-  } else if (existsSync(carryoverPath)) {
-    await rm(carryoverPath, { force: true });
-  }
-
   const ad = audioDir(bookDir);
   await Promise.all([
+    /* #2099 — the cast read, the derived reuseRows, the carryover write/rm
+       and the cast.json delete all happen inside one withCastLock hold, as
+       one arm of this Promise.all (not a sequential step before it): none of
+       the other three arms touches cast.json or the carryover, so there is
+       no interleaving hazard, and sequencing this arm first would mean a
+       rejection here (e.g. EPERM/EBUSY on the delete) skips the other three
+       — which have already started in the same tick — while state.json above
+       was already rewritten with the new chapter slugs and
+       castConfirmed:false. That is a strictly worse inconsistent state than
+       today. This arm's rm(cast.json) is unguarded (no existsSync check):
+       the read and the delete decision now live inside the lock together, so
+       there is no longer an out-of-lock existsSync to desync from the
+       in-lock reality — of the three sibling arms below, only the revisions
+       and audio arms keep an existsSync guard (they gate an already-
+       idempotent rm and acquire no lock, so no decision of theirs crosses a
+       lock boundary); clearAnalysisCache's rm is unguarded too, same as this
+       arm's.
+
+       Behaviour change vs. main: readJson's bare JSON.parse throws on a
+       corrupt (not just missing) cast.json. On main that throw happened
+       before this Promise.all was constructed, aborting the whole reparse
+       before the sibling arms started. Now the read is one arm among four
+       already in flight, so an unhandled throw here would leave the others
+       to complete while this arm never deletes cast.json — a worse partial
+       state than either succeeding or failing cleanly. The .catch below is
+       narrowed to that one case: a JSON parse failure degrades to the same
+       path as a missing cast.json (empty reuseRows, carryover removed,
+       cast.json deleted, reparse succeeds) — a corrupt cast has nothing
+       worth carrying over and reparse exists to discard the cast anyway.
+       Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
+       otherwise-intact cast.json) is logged and re-thrown instead of being
+       silently treated as "no cast": the sibling arms have already started
+       and cannot be recalled, so the result is a 500 with cast.json left
+       intact and the siblings gone — worse than main only by the
+       already-unavoidable sibling loss, and far better than discarding an
+       intact cast because of a transient read error. Residual: an
+       EPERM/EBUSY from writeJsonAtomic(carryoverPath) inside this same
+       block still reaches the "siblings already deleted" state; closing
+       that needs the wider Promise.allSettled reshape this ticket
+       deliberately doesn't take. */
+    withCastLock(bookDir, async () => {
+      const existingCast = await readJson<{
+        characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
+      }>(castJsonPath(bookDir)).catch((err) => {
+        if (err instanceof SyntaxError || (err as { name?: string })?.name === 'SyntaxError') {
+          return null;
+        }
+        console.error('[book-state] reparse: cast.json unreadable, refusing to discard it', err);
+        throw err;
+      });
+      const reuseRows = (existingCast?.characters ?? [])
+        .filter((c) => typeof c.id === 'string')
+        .map((c) => {
+          const row: Record<string, unknown> = { id: c.id, name: c.name };
+          if (c.aliases !== undefined) row.aliases = c.aliases;
+          for (const key of PRESERVED_VOICE_FIELDS) {
+            if (c[key] !== undefined) row[key] = c[key];
+          }
+          return row;
+        });
+      if (reuseRows.length) {
+        await writeJsonAtomic(carryoverPath, { characters: reuseRows });
+      } else {
+        await rm(carryoverPath, { force: true });
+      }
+      await rm(castJsonPath(bookDir), { force: true });
+    }),
     clearAnalysisCache(state.manuscriptId),
-    /* #1981 Task 11 — this arm (only this arm) takes the cast lock around the
-       delete. A writer that acquired the lock after an unlocked delete would
-       recreate cast.json from its own stale read, resurrecting the roster
-       this reparse deliberately discards. */
-    existsSync(castJsonPath(bookDir))
-      ? withCastLock(bookDir, () => rm(castJsonPath(bookDir), { force: true }))
-      : Promise.resolve(),
     existsSync(revisionsJsonPath(bookDir))
       ? rm(revisionsJsonPath(bookDir), { force: true })
       : Promise.resolve(),
