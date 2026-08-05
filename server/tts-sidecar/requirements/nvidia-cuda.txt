@@ -65,4 +65,17 @@ kokoro-onnx>=0.5.0,<0.6.0
 # depends on private method signatures that a major bump could change silently.
 # Re-verify before bumping (see test_qwen_tts_pinned_for_raw_bypass in test_qwen3.py).
 qwen-tts==0.1.1
+
+# nvidia-ml-py — NVML bindings (importable as `pynvml`), used ONLY by
+# `PlacementController._foreign_pid_holds_device` (#2094) to enumerate the
+# OTHER processes holding VRAM on a device, so a foreign (non-sidecar)
+# process on the same card can't silently contaminate an ASR cold-bucket
+# footprint reading. Genuinely optional at runtime — `main._load_pynvml`
+# guards the import and any box without it (or without a loadable NVIDIA
+# driver) simply gets "can't attribute" (discard), never a crash — but
+# listed here so a normal NVIDIA install actually gets the attribution
+# instead of discarding every cold ASR sample forever. NOT torch's own
+# `pynvml` usage (`torch.cuda.list_gpu_processes`) — that's a separate,
+# human-readable diagnostic path with the same optional dependency.
+nvidia-ml-py>=12.0,<13.0
 -r speaker-qa.txt

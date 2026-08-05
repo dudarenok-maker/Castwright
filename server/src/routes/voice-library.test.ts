@@ -136,25 +136,20 @@ beforeEach(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
-  const [
-    { voiceLibraryRouter },
-    voiceLibMod,
-    modelPathsMod,
-    userSettings,
-    pathsMod,
-    qwenVoiceMod,
-    sampleCacheMod,
-    coquiVersionStateMod,
-  ] = await Promise.all([
-    import('./voice-library.js'),
-    import('../workspace/voice-library.js'),
-    import('../tts/model-paths.js'),
-    import('../workspace/user-settings.js'),
-    import('../workspace/paths.js'),
-    import('./qwen-voice.js'),
-    import('../tts/voice-sample-cache.js'),
-    import('../tts/coqui-version-state.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { voiceLibraryRouter } = await import('./voice-library.js');
+  const voiceLibMod = await import('../workspace/voice-library.js');
+  const modelPathsMod = await import('../tts/model-paths.js');
+  const userSettings = await import('../workspace/user-settings.js');
+  const pathsMod = await import('../workspace/paths.js');
+  const qwenVoiceMod = await import('./qwen-voice.js');
+  const sampleCacheMod = await import('../tts/voice-sample-cache.js');
+  const coquiVersionStateMod = await import('../tts/coqui-version-state.js');
   vl = voiceLibMod;
   modelPaths = modelPathsMod;
   setUserSettingsCacheForTest = userSettings._setUserSettingsCacheForTest;

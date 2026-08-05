@@ -476,6 +476,25 @@ export const KNOBS: ConfigKnob[] = [
     default: 0.6, // ← DEFAULT_ASR_THRESHOLDS.maxNoSpeechProb in tts/segment-asr-qa.ts
     apply: 'live', risk: 'low',
   },
+  {
+    key: 'qa.asr.catastrophicWer',
+    env: 'SEG_ASR_CATASTROPHIC_WER',
+    group: 'qa-gates',
+    label: 'ASR catastrophic WER override',
+    help: 'An untrustworthy transcript (low avg-logprob / high no-speech-prob) normally '
+        + 'stays inconclusive rather than becoming drift — re-recording on a guess is how '
+        + 'false-positive loops start. When its WER against the reference is at or above '
+        + 'this (always at least ASR max WER, including any per-language override) AND '
+        + 'it looks like a real collapse (long-enough reference, comparably-long heard '
+        + 'transcript, no outsized deletion run), it is treated as drift instead: a '
+        + 'wrong-language Coqui collapse forced through the book’s decode language '
+        + 'looks low-confidence too, and a mismatch this severe is compounding evidence '
+        + '(#2055). Owed on-box acceptance (register row A37) — retune here if it under- '
+        + 'or over-fires; no release needed.',
+    type: 'number', min: 0, max: 2, step: 0.05,
+    default: 0.85, // ← DEFAULT_ASR_THRESHOLDS.catastrophicWer in tts/segment-asr-qa.ts
+    apply: 'live', risk: 'low',
+  },
 
   // ── tts-batching ─────────────────────────────────────────────────────────
   {

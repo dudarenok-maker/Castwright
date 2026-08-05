@@ -164,7 +164,7 @@ def test_qwen_absent_from_cpu_overlay():
         "qwen-tts must not be in cpu.txt (Qwen is GPU-only standard)"
 
 
-def test_spacy_is_explicit_and_not_the_ja_extra():
+def test_spacy_and_sudachipy_are_explicit_and_opt_in_only():
     """spacy (#2017: `CoquiEngine._infer_from_latents` passes
     `enable_text_splitting=True`, config-faithful, mirroring `Xtts.synthesize`'s own
     build, which reaches upstream's `get_spacy_lang` — raising `ImportError` without
@@ -173,35 +173,51 @@ def test_spacy_is_explicit_and_not_the_ja_extra():
     Coqui/XTTS path, same tier as coqui-tts itself — never by Qwen or Kokoro. So it
     must NOT be in the shared manifest/overlays (same re-tier shape
     `test_coqui_absent_from_all_overlays` guards for coqui-tts): a CPU-only or
-    Kokoro-only install would otherwise pay 22.3 MB / 16 packages for a library it
-    never imports. It must instead be installed by `install-coqui.mjs`, alongside
-    the CJK phonemizers in its third pip step, and stay PLAIN `spacy` there, never
-    `spacy[ja]` — the upstream error message literally instructs
-    `pip install spacy[ja]`, but the owner's measured decision against it (22.3 MB /
-    16 packages plain vs. 92.5 MB / 18 with the extra, of which 68.9 MB is
-    `sudachidict-core` alone) is recorded in that script's `coquiPipInstallSteps`
-    rationale. Japanese cloned-voice text-splitting stays broken on purpose, tracked
-    as #2038 (fs-59's call) — this guard stops a later blind `pip install spacy[ja]`
-    "fix" from silently re-adding the 70 MB dependency the owner already declined,
-    and stops spacy drifting back into the base manifest the way it started."""
+    Kokoro-only install would otherwise pay for a library it never imports. It must
+    instead be installed by `install-coqui.mjs`, alongside the CJK phonemizers in
+    its third pip step.
+
+    #2038 (superseding the original plain-spacy-only decision this test used to
+    guard): `sudachipy` + `sudachidict-core` — the practical equivalent of the
+    `spacy[ja]` extra, installed as separate lines rather than the extras syntax
+    — now ship in that SAME opt-in step, closing the one language plain spacy left
+    broken (Japanese cloned-voice text-splitting). Cost, paid on every Coqui
+    install: +68.9 MB (`sudachidict-core` alone) — surfaced in the install label
+    and this test's own docstring rather than silently absorbed, per the review
+    that reopened #2038. Still opt-in-only: a CPU-only or Kokoro-only install pays
+    neither figure, same as spacy itself."""
     lines = _lines()
     assert not any(_pkg(l) == "spacy" for l in lines), \
         "spacy must NOT be in the manifest/overlays (#2017) — it is reached only via " \
         "the opt-in Coqui/XTTS path, so it belongs in install-coqui.mjs, not base.txt " \
-        "(a CPU-only/Kokoro-only install would otherwise pay 22.3 MB / 16 packages for " \
-        "a library it never imports)"
+        "(a CPU-only/Kokoro-only install would otherwise pay for a library it never imports)"
+    for pkg in ("sudachipy", "sudachidict-core", "sudachidict_core"):
+        assert not any(_pkg(l) == pkg for l in lines), \
+            f"{pkg} must NOT be in the manifest/overlays (#2038) — same opt-in-only " \
+            "tier as spacy itself, installed by install-coqui.mjs instead"
 
     installer = (
         Path(__file__).resolve().parent.parent / "scripts" / "install-coqui.mjs"
     ).read_text(encoding="utf-8")
     # Check the actual quoted pip-arg strings, not prose: the rationale comment
-    # legitimately *mentions* `spacy`/`spacy[ja]` in backticks to explain the
-    # opt-out, so a bare substring check on the whole file would false-positive
-    # on the comment even if the real pip argument were deleted.
-    quoted_args = re.findall(r"""['"]([^'"]*)['"]""", installer)
+    # legitimately *mentions* these package names in backticks to explain the
+    # decision, so a bare substring check on the whole file would false-positive
+    # on the comment even if the real pip argument were deleted. Extracted
+    # PER LINE, not over the whole file as one blob: a `//`/`/* */` comment
+    # line containing a natural English apostrophe (e.g. "Xtts.synthesize's
+    # own build") throws off single-quote pairing for the rest of a whole-file
+    # regex scan, silently swallowing every real arg that follows it — a line
+    # is short enough that this can't happen within one.
+    quoted_args = [
+        m for line in installer.splitlines()
+        for m in re.findall(r"""['"]([^'"]*)['"]""", line)
+    ]
     assert any(a.startswith("spacy") for a in quoted_args), \
         "install-coqui.mjs must pass a quoted spacy pip argument (#2017) — " \
         "CoquiEngine._infer_from_latents needs it for enable_text_splitting=True"
-    assert not any(a.startswith("spacy[ja]") for a in quoted_args), \
-        "spacy must NOT use the [ja] extra — SudachiPy/sudachidict-core (68.9 MB) was a " \
-        "deliberate opt-out (#2038), not an oversight to silently re-add"
+    assert "sudachipy" in quoted_args, \
+        "install-coqui.mjs must pass a quoted 'sudachipy' pip argument (#2038) — " \
+        "Japanese cloned-voice text-splitting needs it alongside spacy"
+    assert any(a in ("sudachidict-core", "sudachidict_core") for a in quoted_args), \
+        "install-coqui.mjs must pass a quoted sudachidict-core pip argument (#2038) — " \
+        "SudachiPy needs its dictionary package installed alongside it"

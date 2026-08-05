@@ -124,6 +124,37 @@ def test_transcribe_gpu_no_fit_returns_503(monkeypatch, asr_client) -> None:
     assert body["neededMb"] == 400
 
 
+def test_transcribe_gpu_resident_reserves_incremental_not_cold_peak(monkeypatch, asr_client) -> None:
+    """#2094 — an ALREADY-RESIDENT ASR model must reserve its incremental
+    per-forward footprint (the `asr.warm` seed, 128 MB), not the 400 MB
+    cold-load peak `test_transcribe_gpu_no_fit_returns_503` pins for a COLD
+    engine — residency is now consulted before booking. Drives the same
+    no-fit probe so the reservation figure surfaces in the noCapacity body's
+    `neededMb`, mirroring that test's shape; only the residency signal
+    differs (`is_resident` returns a device instead of the default None).
+
+    Mutation that must fail it — breaks the PRODUCER: revert
+    `PlacementController._resolve_admission`'s `self.footprints.peak_mb(engine,
+    model, cfg, resident is not None)` back to `peak_mb(engine, model, cfg)`
+    (i.e. residency-blind). `neededMb` then reads 400 again, identical to the
+    cold case above.
+    """
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    _swap_asr(monkeypatch, "cuda")
+    monkeypatch.setattr(
+        main._placement, "is_resident",
+        lambda engine_id: "cuda:0" if engine_id == "asr" else None,
+    )
+    monkeypatch.setattr(main._placement, "probe", lambda: NO_FIT_PROBE)
+
+    r = asr_client.post("/transcribe", content=_pcm(), headers={"X-Sample-Rate": "24000"})
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["noCapacity"] is True
+    assert body["neededMb"] == 128
+
+
 def test_transcribe_gpu_steers_to_roomier_device(monkeypatch, asr_client) -> None:
     """ASR_DEVICE=cuda (unindexed, so unpinned) + flag ON + a probe favouring
     cuda:1 -> the reservation admits onto cuda:1 and that card is threaded into

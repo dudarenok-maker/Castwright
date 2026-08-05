@@ -144,25 +144,20 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-generation-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [
-    generationModule,
-    { makeBookId },
-    cacheModule,
-    statsModule,
-    telemetryModule,
-    configMod,
-    aggMod,
-    embMod,
-  ] = await Promise.all([
-    import('./generation.js'),
-    import('../workspace/paths.js'),
-    import('../store/analysis-cache.js'),
-    import('../tts/generation-stats.js'),
-    import('../tts/resource-telemetry.js'),
-    import('../config/resolver.js'),
-    import('../audio/render-integrity/aggregate.js'),
-    import('../audio/render-integrity/embeddings-io.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const generationModule = await import('./generation.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const cacheModule = await import('../store/analysis-cache.js');
+  const statsModule = await import('../tts/generation-stats.js');
+  const telemetryModule = await import('../tts/resource-telemetry.js');
+  const configMod = await import('../config/resolver.js');
+  const aggMod = await import('../audio/render-integrity/aggregate.js');
+  const embMod = await import('../audio/render-integrity/embeddings-io.js');
   const { generationRouter } = generationModule;
   triggerScoring = generationModule.triggerScoring;
   __awaitScoringSettled = generationModule.__awaitScoringSettled;

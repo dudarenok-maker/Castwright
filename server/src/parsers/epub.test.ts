@@ -3,8 +3,31 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseEpub, UnusableEpubError, decodeEntities } from './epub.js';
+
+const { mkdtempSpy } = vi.hoisted(() => ({ mkdtempSpy: vi.fn() }));
+
+/* #2100 — the "no temp dir created when sourcePath is provided" tests need
+   to observe whether parseEpub CALLS mkdtemp, not whether a directory is
+   left behind afterward: parseEpub's own `finally` removes any tempdir it
+   creates before returning, so scanning the filesystem post-call (even a
+   directory the test privately owns, scoped away from the shared %TEMP%
+   namespace) can only ever detect a LEAKED tempdir — create AND skip
+   cleanup, a two-part mutation — not the one-part defect this test exists
+   to catch (create a tempdir at all on the sourcePath path). Spying on
+   mkdtemp observes the call directly; everything else passes through to
+   the real implementation unchanged. */
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    mkdtemp: (...args: Parameters<typeof actual.mkdtemp>) => {
+      mkdtempSpy(...args);
+      return actual.mkdtemp(...args);
+    },
+  };
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '__fixtures__/sample.epub');
@@ -153,14 +176,9 @@ describe('parseEpub', () => {
     });
 
     it('does not create a temp directory under %TEMP%/epub-* when sourcePath is provided', async () => {
-      const { readdirSync } = await import('node:fs');
-      const { tmpdir } = await import('node:os');
-      const before = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
+      mkdtempSpy.mockClear();
       await parseEpub(Buffer.alloc(0), { fileName: 'sample.epub', sourcePath: fixturePath });
-      const after = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
-      /* Some other test or process may have created an epub-* dir
-         concurrently, so we only assert this call didn't add one. */
-      expect(after).toBe(before);
+      expect(mkdtempSpy).not.toHaveBeenCalled();
     });
   });
 });
@@ -203,16 +221,13 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
   });
 
   it('reads from sourcePath verbatim (re-parse path) without a temp dir', async () => {
-    const { readdirSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const before = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
+    mkdtempSpy.mockClear();
     const out = await parseEpub(Buffer.alloc(0), {
       fileName: 'sample-opf-prefixed.epub',
       sourcePath: opfPrefixedFixturePath,
     });
-    const after = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
     expect(out.chapters.length).toBe(2);
-    expect(after).toBe(before);
+    expect(mkdtempSpy).not.toHaveBeenCalled();
   });
 });
 

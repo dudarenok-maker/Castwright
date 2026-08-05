@@ -83,6 +83,25 @@ export interface AsrThresholds {
   minAvgLogprob: number;
   /** no_speech_prob above this → transcript untrustworthy → inconclusive. */
   maxNoSpeechProb: number;
+  /** #2055 — an untrustworthy transcript (`minAvgLogprob`/`maxNoSpeechProb`
+      tripped) normally stays `inconclusive`: re-recording on a guess is how
+      false-positive loops start. When its WER against the reference is at or
+      above this — near-total mismatch, not merely over `maxWer` — AND it
+      passes the fluent-collapse shape check (see `classifyTranscript`: a
+      long-enough reference, a heard transcript comparably long, no outsized
+      deletion run — truncation is `maxDeletionRun`'s job, not this one's), the
+      untrustworthy signal and the catastrophic mismatch are compounding
+      evidence rather than a reason to skip. A REGISTRY KNOB, unlike the
+      fluent-collapse shape constants below: this is the number an on-box
+      false-positive-rate run (register row A37) is expected to retune, and a
+      judgement call already written into an acceptance row must be tunable
+      without a release (#2055 review R4). Always effectively at least
+      `maxWer` — `classifyTranscript` takes `Math.max(catastrophicWer,
+      maxWer)` so raising a language's `maxWer` (the whole point of the
+      per-language override scaffold, #1084) can never leave a WER band where
+      the trustworthy branch says "ok" but the untrustworthy branch says
+      "drift" (#2055 review R2). */
+  catastrophicWer: number;
 }
 
 export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
@@ -95,7 +114,43 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxCompressionRatio: 2.4,
   minAvgLogprob: -1.0,
   maxNoSpeechProb: 0.6,
+  catastrophicWer: 0.85,
 };
+
+/** #2055 review R1/R3 — the fluent-collapse shape check `classifyTranscript`
+    applies alongside `catastrophicWer`. WER alone cannot tell "XTTS collapsed
+    into fluent audio in the wrong language" apart from two other shapes that
+    also drive WER to ~1.0 on an untrustworthy transcript:
+
+      (a) near-silence padded with a couple of filler/hallucinated tokens
+          ("um", "um uh", or — the shape #2055 actually targets, since
+          `HALLUCINATION_PATTERNS` above is English/Latin-only — a Russian
+          Whisper near-silence hallucination like "Продолжение следует…").
+          This is TRUNCATION (heard is far shorter than expected), which
+          `longestDeletionRun`/`maxDeletionRun` already exists to catch, not a
+          content collapse — reproduced as a long deletion run;
+      (b) a genuinely SHORT reference (#2055's own 2-word repro lines,
+          "Хорошее олово." / "Тёплое море.") where two ordinary mishearings
+          are statistically indistinguishable from a wholesale collapse — on a
+          2-word reference, "both words wrong" happens by chance far more
+          often than on a 6-word one.
+
+    Both are excluded by requiring the reference to be long enough that a
+    near-total mismatch is actually rare by chance, AND the heard transcript
+    to be comparably long (a real collapse replaces the WHOLE line with
+    fluent wrong content, it doesn't pad two stray words in front of mostly
+    nothing). `CATASTROPHIC_MIN_EXPECTED_WORDS = 6`: at >= 6 words, a p≈0.3
+    per-word mishearing rate needs ALL 6 wrong to reach the WER floor —
+    0.3^6 ≈ 0.07%, negligible — versus 0.3^2 = 9% on a 2-word line, which is
+    not. `CATASTROPHIC_MIN_HEARD_RATIO = 0.5`: the heard transcript must reach
+    at least half the reference's length, so a couple of tokens can't
+    masquerade as a full-line collapse via a deletion run that's spread thin
+    enough to duck under `maxDeletionRun`. Fixed constants, not knobs — unlike
+    `catastrophicWer` these are structural validity gates (mirroring
+    `minChars`/`minRefWords`'s existing role), not a number expected to move
+    from on-box false-positive-rate evidence. */
+const CATASTROPHIC_MIN_EXPECTED_WORDS = 6;
+const CATASTROPHIC_MIN_HEARD_RATIO = 0.5;
 
 /** BCP-47 primary subtag, lower-cased ('es-ES' → 'es', '' for nullish). */
 function baseSubtag(language?: string | null): string {
@@ -130,6 +185,7 @@ export function resolveAsrThresholds(
     maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
     minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
     maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
+    catastrophicWer: configValue<number>('qa.asr.catastrophicWer'),
   };
   return { ...base, ...override };
 }
@@ -531,6 +587,12 @@ export function classifyTranscript(
     return base('inconclusive');
   }
 
+  // #2055 — pending "untrustworthy transcript" verdict: recorded here, decided
+  // once `wer` exists below (the catastrophic-mismatch override), rather than
+  // returning immediately as before. `null` = trustworthy signals, proceed
+  // normally.
+  let untrustworthyReason: string | null = null;
+
   // Loop/repeat hallucination is positive drift evidence even at low WER.
   if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
     reasons.push(
@@ -539,24 +601,14 @@ export function classifyTranscript(
       } cap (likely repeated/garbled synthesis).`,
     );
     // Still compute WER below for observability, but the verdict is drift.
-  } else {
-    // Untrustworthy transcript → inconclusive (do NOT re-record on a guess).
-    if (signals.avgLogprob != null && signals.avgLogprob < t.minAvgLogprob) {
-      reasons.push(
-        `Transcript untrustworthy — avg logprob ${signals.avgLogprob.toFixed(
-          2,
-        )} below ${t.minAvgLogprob}; not scoring.`,
-      );
-      return base('inconclusive');
-    }
-    if (signals.noSpeechProb != null && signals.noSpeechProb > t.maxNoSpeechProb) {
-      reasons.push(
-        `Transcript untrustworthy — no-speech prob ${signals.noSpeechProb.toFixed(
-          2,
-        )} above ${t.maxNoSpeechProb}; not scoring.`,
-      );
-      return base('inconclusive');
-    }
+  } else if (signals.avgLogprob != null && signals.avgLogprob < t.minAvgLogprob) {
+    untrustworthyReason = `Transcript untrustworthy — avg logprob ${signals.avgLogprob.toFixed(
+      2,
+    )} below ${t.minAvgLogprob}`;
+  } else if (signals.noSpeechProb != null && signals.noSpeechProb > t.maxNoSpeechProb) {
+    untrustworthyReason = `Transcript untrustworthy — no-speech prob ${signals.noSpeechProb.toFixed(
+      2,
+    )} above ${t.maxNoSpeechProb}`;
   }
 
   // Computed once, up front, and reused for BOTH the allowlist normalization
@@ -660,6 +712,64 @@ export function classifyTranscript(
 
   const { expectedTokens, actualTokens, sub, del, ins, longestDeletionRun, wer } = alignment;
   const metrics = { wer, sub, del, ins, longestDeletionRun };
+
+  // #2055 — decide the pending untrustworthy-transcript verdict now that `wer`
+  // exists. Below the catastrophic bar, or failing the fluent-collapse shape
+  // check: unchanged pre-#2055 behaviour, inconclusive (do not re-record on a
+  // guess). At/above the bar AND shaped like a real collapse: the transcript
+  // isn't merely low-confidence, it's a FLUENT, full-length transcript
+  // bearing almost no resemblance to the reference — treated as drift instead
+  // of silently passing a collapse through the "don't guess" backstop that
+  // exists to protect confident-but-imperfect transcripts, not ones this far
+  // gone.
+  //
+  // `catastrophicBar` (review R2) is never BELOW the effective `maxWer` — a
+  // fixed 0.85 could sit under a raised per-language cap (`qa.asr.maxWer.ru`
+  // etc., #1084's whole point is letting an operator raise one), which would
+  // have made the untrustworthy branch STRICTER than the trustworthy one: the
+  // same transcript reading `ok` on confident signals and `drift` on
+  // low-confidence ones at an identical WER.
+  //
+  // `looksLikeFluentCollapse` (review R1/R3) is the shape gate documented on
+  // `CATASTROPHIC_MIN_EXPECTED_WORDS`/`CATASTROPHIC_MIN_HEARD_RATIO` above:
+  // long-enough reference, comparably-long heard transcript, no outsized
+  // deletion run. Excludes both a near-silent/filler-padded transcript
+  // (`longestDeletionRun` too large — segment-qa.ts's dead-RMS job, not this
+  // one's) and a short reference where "both words wrong" is unremarkable.
+  if (untrustworthyReason !== null) {
+    const catastrophicBar = Math.max(t.catastrophicWer, t.maxWer);
+    const looksLikeFluentCollapse =
+      expectedTokens.length >= CATASTROPHIC_MIN_EXPECTED_WORDS &&
+      heardTokens.length >= Math.ceil(expectedTokens.length * CATASTROPHIC_MIN_HEARD_RATIO) &&
+      longestDeletionRun <= t.maxDeletionRun;
+    if (wer >= catastrophicBar && looksLikeFluentCollapse) {
+      reasons.push(
+        `${untrustworthyReason}, AND content is catastrophically wrong (WER ` +
+          `${wer.toFixed(2)} >= ${catastrophicBar.toFixed(2)} on a ` +
+          `${heardTokens.length}-word transcript against a ${expectedTokens.length}-word ` +
+          `reference, deletion run ${longestDeletionRun}) — treated as drift rather than ` +
+          `an untrustworthy guess (#2055).`,
+      );
+      return base('drift', metrics);
+    }
+    // #2055 review R12 — a DECLARED, deliberate side effect: this
+    // `inconclusive` verdict now carries the REAL computed `wer`/`sub`/`del`/
+    // `ins`/`longestDeletionRun` via `metrics`, where pre-#2055 the
+    // untrustworthy branch returned immediately with none (defaulting to the
+    // `base()` closure's zeros) — alignment used to never run for an
+    // untrustworthy transcript at all. Two real, intentional downstream
+    // effects: `synthesise-chapter.ts`'s `asrBetter` tie-break
+    // (`rank(a) !== rank(b) ? … : a.wer < b.wer`) can now distinguish two
+    // `inconclusive` best-of-N takes by how far off they actually are, where
+    // before both compared equal on a hardcoded 0; and a chapter's persisted
+    // `segments.json` ASR telemetry shows the real WER for an untrustworthy
+    // line instead of always 0. Neither is a regression — a real number is
+    // strictly more informative than a placeholder zero for both consumers —
+    // but it is a genuine behaviour change from pre-#2055, covered by
+    // `'an untrustworthy inconclusive verdict carries the REAL wer …'` below.
+    reasons.push(`${untrustworthyReason}; not scoring.`);
+    return base('inconclusive', metrics);
+  }
 
   // Compression-ratio drift was flagged above.
   if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
