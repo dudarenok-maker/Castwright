@@ -15,6 +15,9 @@ import {
   formatHonouredEcho,
   findConflictMarkers,
   checkConflictMarkers,
+  hasBOM,
+  stripBOM,
+  checkBOM,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -898,6 +901,107 @@ test('an armed marker is still echoed even when a conflict marker is what fails 
     assert.equal(out.status, 1);
     assert.match(out.stderr, /docs\/release-notes-next\.md contains 2 unresolved git conflict marker/);
     assert.match(out.stdout, /^\[allow\] docs\/release-notes-next\.md honoured 1 literal\(s\): "CAFÉ™"$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2114 — a UTF-8 byte-order mark (U+FEFF / EF BB BF bytes) must never lead
+// docs/release-notes-next.md or RELEASE_NOTES.md: the former is fed verbatim
+// into the annotated tag message, which release.yml publishes as the public
+// GitHub release body, and a leading BOM can defeat the CommonMark
+// HTML-block start condition that keeps the file's internal maintainer
+// comment invisible. Not hypothetical — a branch in the #2040 follow-up wave
+// committed exactly this (`3c 21 2d 2d` -> `ef bb bf 3c`) with every gate at
+// the time green.
+
+/** Write `text` to `path` with a REAL UTF-8 BOM prepended, as raw bytes (not
+ *  via a JS string + 'utf8' encoding) — the fixture must carry the literal
+ *  `EF BB BF` byte sequence a corrupted Windows text editor would actually
+ *  produce, so a test built on it proves the gate catches the real defect
+ *  rather than a string-level stand-in a BOM-stripping reader could
+ *  silently normalise away. */
+function writeBOMFile(path, text) {
+  writeFileSync(path, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]));
+}
+
+// Built via fromCharCode, not an embedded literal, so this test file — which
+// specifically pins detection of a stray BOM — never itself carries one as
+// raw source bytes outside of writeBOMFile's deliberate byte-level fixture.
+const BOM_CHAR = String.fromCharCode(0xfeff);
+
+test('hasBOM / stripBOM / checkBOM operate on the exact U+FEFF code point', () => {
+  assert.equal(hasBOM(`${BOM_CHAR}# Hello`), true);
+  assert.equal(hasBOM('# Hello'), false);
+  assert.equal(hasBOM(''), false);
+  assert.equal(stripBOM(`${BOM_CHAR}# Hello`), '# Hello');
+  assert.equal(stripBOM('# Hello'), '# Hello'); // no-op when absent
+  assert.equal(checkBOM(`${BOM_CHAR}# Hello`, 'test.md').ok, false);
+  assert.equal(checkBOM('# Hello', 'test.md').ok, true);
+});
+
+test('checkBOM names the file and the byte sequence, with no allowlist/--force escape', () => {
+  const res = checkBOM(`${BOM_CHAR}# v1.0.0\n`, 'docs/release-notes-next.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /docs\/release-notes-next\.md/);
+  assert.match(res.reason, /U\+FEFF/);
+  assert.match(res.reason, /EF BB BF/);
+  assert.match(res.reason, /no allowlist or --force/);
+});
+
+test('the CLI fails on a real BOM-prefixed docs/release-notes-next.md, naming the file', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    const notesNextPath = resolve(dir, 'docs', 'release-notes-next.md');
+    writeBOMFile(notesNextPath, '<!-- internal maintainer notes -->\n\n# v1.0.0\n\n- Something shipped.\n');
+
+    // Control assertion (per the test bar): the fixture on disk carries the
+    // REAL byte sequence, not a string-level stand-in.
+    const rawBytes = readFileSync(notesNextPath);
+    assert.deepEqual([...rawBytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md begins with a UTF-8 byte-order mark/);
+    assert.match(out.stderr, /EF BB BF/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI fails on a real BOM-prefixed RELEASE_NOTES.md, naming the file', () => {
+  const dir = setupGateFixture();
+  try {
+    const notesPath = resolve(dir, 'RELEASE_NOTES.md');
+    writeBOMFile(notesPath, '# v1.0.0\n\n- Something shipped.\n');
+
+    const rawBytes = readFileSync(notesPath);
+    assert.deepEqual([...rawBytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /RELEASE_NOTES\.md begins with a UTF-8 byte-order mark/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI passes on clean, BOM-free RELEASE_NOTES.md and docs/release-notes-next.md', () => {
+  const dir = setupGateFixture();
+  try {
+    const notesPath = resolve(dir, 'RELEASE_NOTES.md');
+    const notesNextPath = resolve(dir, 'docs', 'release-notes-next.md');
+    writeFileSync(notesPath, '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(notesNextPath, '# v1.0.0\n\n- Something shipped.\n');
+
+    // Control: confirm the clean fixtures genuinely carry no BOM bytes.
+    assert.notDeepEqual([...readFileSync(notesPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.notDeepEqual([...readFileSync(notesNextPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
