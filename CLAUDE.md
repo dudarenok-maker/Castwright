@@ -418,8 +418,14 @@ Design rationale:
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
   class while holding a later one, or two requests hang forever with no
   timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
-  fails the build on a new unlocked site (the one allowed exception is
-  `analysis.ts`'s five merge-base writes, deferred to #2015).
+  fails the build on a new unlocked site. Two allowlisted exceptions, each
+  keyed on file **and** count so a further unlocked write in either still
+  fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and
+  `voice-override-linked.ts`'s one write, which **is** locked but through a
+  helper the deliberately-syntactic scan cannot follow. The guard is
+  call-graph-blind by design — a new *unlocked* caller of an already-locked
+  helper adds no occurrence text and passes; its header lists that and the
+  other blind spots.
 
 ## Testing discipline (REQUIRED for every change)
 

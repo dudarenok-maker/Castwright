@@ -96,8 +96,13 @@ excluded from the lock's critical section — see below.
 
 ## Locked sites
 
-Thirty write sites across 17 modules, plus both cast.json delete sites,
-`git grep`-confirmed against the guard test's own acceptance run:
+**28 locked write sites across 15 modules, plus both cast.json delete sites**
+— 30 locked call sites in total. Counted at HEAD: 33
+`writeJsonAtomic(castJsonPath(` occurrences across 16 files, of which
+`analysis.ts`'s 5 stay unlocked (#2015). The "35 sites across 17 modules"
+figure elsewhere in this plan is the **pre-change** baseline; two sites were
+consolidated into `writeVoiceStylePersona` during the sweep, which is why the
+before and after counts do not differ by exactly the number locked.
 
 **Single-book, mechanical wrap** — `cast-aliases.ts` (`unlink-alias`,
 `repoint-alias`, `add-alias`), `cast-create.ts`, `cast-merge.ts`,
@@ -175,6 +180,7 @@ allowlist is keyed on file **and** expected count, never file alone:
 ```ts
 const ALLOWED_UNLOCKED = new Map([
   ['routes/analysis.ts', { writes: 5, rms: 0, why: 'merge-base writes deferred to #2015; the rm IS locked' }],
+  ['routes/voice-override-linked.ts', { writes: 1, rms: 0, why: 'locked via applyToBookLocked; unprovable syntactically' }],
 ]);
 ```
 

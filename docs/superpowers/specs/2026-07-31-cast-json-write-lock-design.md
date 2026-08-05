@@ -3,6 +3,14 @@
 **Status:** implemented — all 13 plan tasks complete on `feat/server-1981-cast-lock`
 (2026-08-05); see `docs/features/279-cast-json-write-lock.md` for the regression
 plan and manual acceptance walkthrough.
+**Line citations are stale — locate by symbol.** Every `file.ts:NNN` below was
+taken against the pre-merge-base tree. `origin/main` was merged into the branch
+part-way through implementation and moved everything; at least one row is known
+wrong (`voice-library.ts`'s `/assign` pair in §5/§7 point at comment prose, not
+the writes). The symbol names are correct and are what to search for. Renumbering
+was deliberately not attempted — the numbers would drift again on the next merge,
+and this document's value is the reasoning, not the offsets.
+
 **Closes:** #1981 (the filed defect), #2000 (the sweep), #2001 (§11)
 **Defers:** #2006, #2015 — the cross-scope staleness work, deliberately. Four
 mechanisms were designed for it and none survived review; see §13.
