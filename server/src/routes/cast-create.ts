@@ -60,7 +60,18 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
     return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
   }
 
-  const existingIds = new Set(cast.characters.map((c) => c.id));
+  /* `cast` is an unvalidated `readJson<CastFile>` read — `characterSchema` is
+     never applied on this route — so a row's `id` can be missing or
+     non-string on a corrupt/hand-edited cast.json. Pre-#2085 this was safe
+     because `existingIds` was only ever `.has()`-tested; review round 2
+     caught that the `normaliseIdKey` calls below now DEREFERENCE every id in
+     the set, so a non-string id would throw a `TypeError` into the route's
+     error handler instead of 500ing gracefully. Filter here, at the source —
+     the same guard `cast-resolve.ts`'s `resolve()` entry point applies for
+     the identical reason. */
+  const existingIds = new Set(
+    cast.characters.map((c) => c.id).filter((id): id is string => typeof id === 'string'),
+  );
 
   /* srv-86 (#2040 follow-up) — an id retired by a merge (cast-id-history.json's
      `supersededBy`) is still actively protecting every segment the retired
@@ -128,22 +139,45 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
 
   /* Report, not silent (issue acceptance) — mirrors the operator-visible
      log line Wave 2 added around `dropSupersededIdsReclaimedByLiveCast`,
-     though nothing is dropped here: the history entry survives untouched
-     and keeps protecting the retired id's segments. Only the id this NEW
-     character receives differs from what an unprotected mint would have
+     though nothing is dropped here: the history entry (if any) survives
+     untouched and keeps protecting whatever it protects. Only the id this
+     NEW character receives differs from what an unprotected mint would have
      picked. Computed against `existingIds` alone (not `takenIds`) so this
-     reports exactly the case the bug describes: the id a pre-fix mint
-     would have produced collided with a history entry — matched by
-     NORMALISED key (review round 1), so the report doesn't go silent in
-     exactly the new case the fix above now catches. */
+     reports exactly the delta the fix above introduces — matched by
+     NORMALISED key (review round 1).
+
+     Review round 2 (M4) — this used to fire only for a history match, so
+     the sibling defect's avoidance (a live row that normalises the same,
+     no history involved — test 5) minted a suffixed id with no stated
+     reason, even though invariant 8 documents the report firing "when the
+     avoidance fires" for both. Widened to name whichever of the two this
+     route's `isTaken` check actually caught. Deliberately NOT widened to
+     every `unprotectedId !== newId`: a live id colliding on a RAW (not
+     merely normalised) match is the ordinary, pre-#2085 "second/third
+     character shares a name" path — already silently handled before this
+     fix existed, and not part of what it reports on. */
   const unprotectedId = safeId(name, { taken: existingIds });
   const unprotectedNorm = normaliseIdKey(unprotectedId);
   const collidingHistoryKey = [...historyKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
-  if (collidingHistoryKey && unprotectedId !== newId) {
+  const collidingLiveId = !existingIds.has(unprotectedId)
+    ? [...existingIds].find((id) => normaliseIdKey(id) === unprotectedNorm)
+    : undefined;
+
+  if (unprotectedId !== newId && collidingHistoryKey) {
+    /* Review round 2 (M3) — `history.supersededBy[collidingHistoryKey]` is
+       only what was RECORDED, not a guarantee the target is still a live
+       character (a chained or since-deleted target resolves nowhere per
+       `cast-resolve.ts`'s own liveness check). Describe the recorded entry,
+       not an active redirect, so this can't claim something untrue. */
     console.log(
-      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" (collides with ` +
-        `history-protected "${collidingHistoryKey}") — cast-id-history still redirects it to ` +
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+        `history-protected "${collidingHistoryKey}", recorded as retired in favour of ` +
         `"${history.supersededBy[collidingHistoryKey]}"; minted "${newId}" instead.`,
+    );
+  } else if (unprotectedId !== newId && collidingLiveId) {
+    console.log(
+      `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — normalises the same as ` +
+        `live character id "${collidingLiveId}"; minted "${newId}" instead.`,
     );
   }
 

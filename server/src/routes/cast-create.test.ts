@@ -284,9 +284,57 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
       { id: 'the_torment', name: 'The Torment', role: 'character', color: 'unset' },
     ]);
 
-    const res = await callCreate(bookId, { name: 'The Torment' });
+    // Review round 2 (M4) — this avoidance used to be silent (the report
+    // only fired for a history match). Assert it's reported too, naming the
+    // live id it collided with, not just that a suffixed id was minted.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'The Torment' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('the-torment');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) => m.includes('normalises the same as live character id "the_torment"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('still mints ordinary same-name collisions silently — the widened report does not fire for a plain raw collision (review round 2, M4 scope)', async () => {
+    // Two live characters already sharing a name is the mundane, pre-#2085
+    // path (safeId's own hash-suffix + this route's -n loop) — unrelated to
+    // history/normalisation protection, and was never logged before this
+    // fix existed. The widened report (M4) must not start logging it now.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await callCreate(bookId, { name: 'Alden' });
+      await callCreate(bookId, { name: 'Alden' });
+      const res3 = await callCreate(bookId, { name: 'Alden' });
+      expect(res3.status).toBe(200);
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('avoided re-minting'))).toBe(false);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('creates successfully rather than 500ing when cast.json has a row with a missing/non-string id (review round 2, I1)', async () => {
+    // cast.json is read via an unvalidated readJson<CastFile> on this route
+    // — characterSchema is never applied — so a corrupt/hand-edited file can
+    // carry a row with no `id` at all. Before review round 2, the new
+    // normaliseIdKey calls this fix added would dereference that id and
+    // throw a TypeError instead of the route degrading gracefully.
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { name: 'No Id At All', role: 'character', color: 'unset' },
+      { id: 'антон', name: 'Антон', role: 'character', color: 'unset' },
+    ]);
+
+    const res = await callCreate(bookId, { name: 'Anton' });
     expect(res.status).toBe(200);
-    expect(res.body.character.id).not.toBe('the-torment');
+    expect(res.body.character.name).toBe('Anton');
   });
 
   it('does not crash and does not block minting when cast-id-history.json is malformed', async () => {

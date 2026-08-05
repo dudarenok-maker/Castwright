@@ -124,9 +124,30 @@ owner: null
    legitimately reclaimed it) so it drops the stale history entry; `cast-create`
    DOES control the mint, so it avoids the collision instead of sacrificing a
    history entry that is still protecting real rendered segments. Reported via a
-   `console.log` line, matched by the same normalised comparison, when the
-   avoidance fires — no `displaced` entry is written, because nothing is
-   dropped.
+   `console.log` line, matched by the same normalised comparison, whenever the
+   avoidance fires for either reason it can fire — a history match (raw or
+   normalised) or a live row that normalises the same with no history involved
+   (review round 2, M4; the report used to be gated on the history case only,
+   which left the sibling avoidance below silent) — but deliberately NOT for
+   an ordinary raw collision between two live ids sharing a name, which is the
+   ordinary pre-#2085 `-n`-suffix path and unrelated to this invariant. No
+   `displaced` entry is written, because nothing is dropped; the log names the
+   colliding id as a **recorded** history entry rather than an active redirect
+   (review round 2, M3), since a chained or since-deleted target can leave a
+   `supersededBy` entry pointing at an id that is no longer itself live.
+   `existingIds` is filtered to `typeof id === 'string'` before any of this
+   runs (review round 2, I1) — `cast.json` is read here without
+   `characterSchema` validation, and the normalised-comparison machinery this
+   invariant introduced calls `normaliseIdKey` on every id in `existingIds`,
+   so an unvalidated missing/non-string `id` on disk would otherwise throw a
+   `TypeError` into the route's error handler (a 500) instead of degrading
+   gracefully, mirroring the guard `cast-resolve.ts`'s `resolve()` entry point
+   already applies for the same reason. Also closes a pre-existing
+   sibling with no history involved at all: a live `the_torment` with nothing
+   retired, re-created as "The Torment", used to collide `byNormId` for both
+   spellings the instant `the-torment` landed, killing normalised-id
+   resolution for both (review round 1) — the same normalised taken-set
+   (built from `existingIds` **and** `historyKeys`) covers it.
 
 ## Deviations from the spec
 
@@ -235,10 +256,19 @@ down, each a deliberate controller ruling made during implementation:
   avoidance is logged, the history entry survives untouched; a raw spelling
   drift (the real `the_torment`/`the-torment` shape, review round 1) is caught
   by the normalised comparison whether the drifted id is in history or only in
-  the live roster; and the route neither crashes nor silently disables the
-  check when `cast-id-history.json` is genuinely absent (confirmed via
-  `existsSync`, not merely "the previous test happened not to write one") or
-  malformed (the latter also logs).
+  the live roster (and the live-only case is logged too — review round 2,
+  M4); an ordinary raw collision between two live same-named characters stays
+  silent (review round 2, M4 scope — the widened report doesn't fire for the
+  pre-#2085 case); a `cast.json` row with a missing/non-string `id` creates
+  successfully rather than 500ing (review round 2, I1); and the route neither
+  crashes nor silently disables the check when `cast-id-history.json` is
+  genuinely absent (confirmed via `existsSync`, not merely "the previous test
+  happened not to write one") or malformed (the latter also logs).
+- `server/src/store/cast-id-history.test.ts`'s "operator-visible warnings"
+  block (review round 2, M1/M2) — `loadCastIdHistory` actually calls
+  `console.warn` (not just returns the degraded value) for both the
+  wrong-shape branch and the unreadable/parse-throw branch, each naming the
+  file path, and stays silent for the common absent-file case.
 
 ### Manual acceptance walkthrough
 
