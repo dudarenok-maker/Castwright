@@ -61,9 +61,11 @@ them are wide:
   that prose in its own row bodies and will silently fall behind.
 - **The rest of the summary strip is unchecked** — oldest debt, and the
   group/blocked/unconfirmed tallies. Recompute those by hand.
-- **The published page is invisible to it.** It only ever reads the source file,
-  so "was it published at all, and was it the right file?" is procedure, not a
-  gate.
+- **The published page is invisible to `check:onbox-register`'s no-flag run.**
+  It only ever reads the two TRACKED files, so "was it published at all, and
+  was it the right file?" is procedure, not that gate — see the merge step
+  below, which gives the specific stale-snapshot race mechanical teeth via a
+  second, explicit mode, but still can't verify by itself that someone ran it.
 
 **The concurrency hazard this closes (#1931).** Before the live view was
 tracked here, on 2026-07-28 two concurrent sessions each correctly added a
@@ -73,12 +75,46 @@ session's row had landed, so the surviving page had one row present and the
 other silently gone, with nothing to notice. That was possible because the
 live view lived nowhere but a session's own build of it. Tracking both files
 in git and gating their agreement via `npm run check:onbox-register` on every
-PR closes it structurally: the live view a PR merges is no longer a
+PR closes the git-side half: the live view a PR merges is no longer a
 hand-built snapshot racing another session's, it is the file *inside* the
-merge, checked against this register before either can land — a stale
-snapshot can't reach the publish step in the first place. What that does
-**not** close is the two edges named just above: a wording-only drift, and
-whether the merged file was then actually published, and to the right URL.
+merge, checked against this register before either can land.
+
+**The residual hazard, and the merge step that closes it.** Git-side safety
+does not by itself close the ORIGINAL incident, because publishing is a step
+that happens *after* merge, outside git — so the same race reopens one level
+up. Two lanes can each merge a correct, agreeing live-view edit: git resolves
+both rows into the tracked `.html`, and `check:onbox-register` is green on
+both PRs. Lane A publishes its merge. Lane B, having fetched/built its own
+copy of the *published* page before A's merge landed, publishes from a build
+that is now stale relative to what's live — and the artifact loses A's row
+again, invisibly, exactly like 2026-07-28, because the no-flag
+`check:onbox-register` run only ever compares the two TRACKED files; the
+published page itself is outside its reach (no network access from a required
+CI check — the same call this design already made for the tracked-pair
+comparison, see the edge list above). The merge step that closes this, run
+**immediately before every publish**, not only after a suspected race:
+
+1. Fetch the page currently live at the canonical URL above and save it to a
+   local file — this is the CURRENTLY-published register, which may be ahead
+   of what you are about to publish.
+2. Run `npm run check:onbox-register -- --against-published <saved-file>`. It
+   runs the identical row-ID/per-group-count/owed-total comparison
+   `check:onbox-register`'s no-flag run already uses for the tracked pair,
+   against this saved copy instead — the same comparator, reused, not a
+   second one.
+3. **If it fails**, the tracked `.html` you are about to publish is STALE
+   relative to what is live right now — do not publish. Pull the latest
+   `main`, confirm `npm run check:onbox-register` (no flag) is green there,
+   and repeat step 1 against the now-current live page.
+4. Only once step 2 passes, publish the tracked `.html`, with the canonical
+   URL above as `url`.
+
+This is deliberately a MANUAL procedure with mechanical support, not a fully
+automatic gate: CI cannot run it (no credentials to fetch the published
+artifact, and a network dependency inside a required status check is its own
+failure mode). `--against-published` exists so step 3's "does it disagree?"
+judgement is a command's exit code, not an eyeballed diff — it does not, and
+cannot, make the four steps happen on their own.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:

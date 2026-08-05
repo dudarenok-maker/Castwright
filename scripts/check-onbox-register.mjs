@@ -8,6 +8,7 @@
 // and CLAUDE.md Before-shipping checklist step 3.
 
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -633,9 +634,6 @@ if (invokedAsCli) {
     }
   };
 
-  const text = read(REGISTER);
-  const liveViewHtml = read(LIVE_VIEW);
-
   const report = (label, errors) => {
     if (errors.length === 0) return false;
     console.error(`${label}:\n`);
@@ -643,6 +641,58 @@ if (invokedAsCli) {
     console.error('');
     return true;
   };
+
+  const text = read(REGISTER);
+
+  // --against-published <file>: the mechanical half of #1931's "re-read the
+  // live register immediately before publishing" step. CI has no credentials
+  // to fetch the published artifact itself — see this file's own header and
+  // the register's "Live view" section — so this mode takes a LOCALLY SAVED
+  // COPY of the page fetched by hand immediately before a publish, and runs
+  // the identical `checkLiveView` comparison against it. Deliberately the
+  // same comparator, not a second one: the published page IS the tracked
+  // live-view.html's own content, wrapped in a publish skeleton the
+  // class-name-anchored parsers don't look at. Run BY HAND as the last step
+  // before publishing — not wired into onbox-register-check.yml, which has
+  // no such file to read and no network access to fetch one.
+  const againstPublishedIdx = process.argv.indexOf('--against-published');
+  if (againstPublishedIdx !== -1) {
+    const publishedPath = process.argv[againstPublishedIdx + 1];
+    if (!publishedPath) {
+      console.error(
+        '--against-published requires a file path: a locally saved copy of the page ' +
+          'fetched from the published URL just now.',
+      );
+      process.exit(1);
+    }
+    let publishedHtml;
+    try {
+      publishedHtml = readFileSync(resolve(publishedPath), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        console.error(
+          `Not found: ${publishedPath} — pass the path to a locally saved copy of the ` +
+            'fetched published page.',
+        );
+        process.exit(1);
+      }
+      throw err;
+    }
+    const publishedFailed = report(
+      `${publishedPath} (the currently-PUBLISHED page, fetched just now) does not agree ` +
+        `with ${REGISTER}`,
+      checkLiveView(text, publishedHtml),
+    );
+    if (publishedFailed) {
+      console.error(
+        'The tracked live view is stale relative to what is LIVE right now — merge the ' +
+          'missing rows before publishing, per the "Live view" section of the register.',
+      );
+    }
+    process.exit(publishedFailed ? 1 : 0);
+  }
+
+  const liveViewHtml = read(LIVE_VIEW);
 
   // Both checks always run — the live-view comparison is reported even when
   // the markdown is internally inconsistent, so one PR sees both problems
