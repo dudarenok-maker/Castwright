@@ -474,6 +474,16 @@ test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
   );
 });
 
+// I1 (#2146 review): .github/actions/** is defect D's other half — the
+// composite setup action is consumed by every verify.yml job but matched no
+// scope at all, so an actions-only diff ran zero legs and printed [cached].
+test('stepTouchedByDiff: a .github/actions diff matches test:hooks via globs', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/actions/setup/action.yml']),
+    true,
+  );
+});
+
 // .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
 // (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
 // stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships

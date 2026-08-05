@@ -63,6 +63,15 @@ export const STEPS = [
            the assertion sits stale-green. Same #1847 trap as fixtures/**
            above (defect D, #2119 review). */
         '.github/workflows/**',
+        /* .github/actions/** is defect D's other half (I1, #2146 review):
+           the composite setup action is consumed by all seven verify.yml
+           jobs (`uses: ./.github/actions/setup`) but matched no scope at
+           all, so an actions-only diff ran zero legs and printed [cached] —
+           the exact defect this PR exists to close, just for a different
+           path prefix. Whether this should instead live in the broader
+           `shared` scope is an open question left for the follow-up PR;
+           mirroring `.github/workflows/**` here is the minimal fix now. */
+        '.github/actions/**',
         /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
            matcher, which A2 deletes — and it is an input to no step, so
            without this a .husky-only PR would run zero legs after A2.
