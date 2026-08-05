@@ -50,7 +50,7 @@
  * tone/gender/ageRange/attributes signal) is a RANKING signal only,
  * surfaced for a human decision, never auto-applied.
  *
- * FOUR additional guards, beyond the two tiers, gate auto-record — the
+ * THREE additional guards, beyond the two tiers, gate auto-record — the
  * first round of independent review found the first tier-A/B pass alone
  * was not safe (two Criticals: see git history / the paired report for
  * the full account):
@@ -75,9 +75,11 @@
  *      report-only — this pass repairs on-disk damage, it does not mint
  *      pre-emptive, unreviewed guesses about characters who have never
  *      spoken a rendered line.
- *   4. **Snapshot consistency** (see `snapshotsConsistent`'s own doc
- *      comment) downgrades a name match to report-only when the rendered
- *      `characterSnapshots` disagree across the chapters the id appears in.
+ *
+ * A fourth guard predates round 1 and is still real, just insufficient
+ * alone: **snapshot consistency** (see `snapshotsConsistent`'s own doc
+ * comment) downgrades a name match to report-only when the rendered
+ * `characterSnapshots` disagree across the chapters the id appears in.
  *
  * A fifth guard was added on top of these four, independently, by the
  * #2107 widening (Important 2, independent review, 2026-08-05) —
@@ -582,11 +584,16 @@ export function planBookRepairs(input, deps) {
   // construction in `collectSegmentOrphans` already defends both fields —
   // this fallback now matches it exactly, so the two constructions of "the
   // same resolver" can't disagree about what a valid `history` is. Latent
-  // today (production's `loadCastIdHistory` always returns the full shape,
-  // and every test that passes a partial `history` also passes the fake
-  // `deps.buildCastResolver`, which never reads `history` at all — see
-  // `makeFakeResolver`'s own doc comment) but a real resolver wired against
-  // a partial history would have crashed.
+  // today (production's `loadCastIdHistory` always returns the full shape),
+  // and neither of the test file's existing resolver stand-ins could have
+  // caught it either: every test that passes a partial `history` and the
+  // plain fake `deps.buildCastResolver` (`makeFakeResolver`) is safe only
+  // because that fake never reads `history` at all, and every test that
+  // uses the REAL-history-reading fake (`makeHistoryAwareFakeResolver`)
+  // defends `supersededBy` internally — see the test file's own doc comment
+  // on its dedicated round-4 regression test for the resolver stand-in that
+  // actually proves this (one that mirrors the real, undefended
+  // construction line).
   const historyResolver =
     input.historyResolver ?? buildCastResolver(liveCast, { supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] });
 
@@ -607,15 +614,20 @@ export function planBookRepairs(input, deps) {
   const skipped = [];
   // Owner-decided policy (2026-08-05, review round 2): a book with NO cache
   // evidence is safe to leave entirely alone if it has nothing this pass
-  // would otherwise have auto-recorded — the missing-cache gate right below
-  // (`!cacheAvailable`) only ever fires for an id that ALREADY passed guard
-  // 1/2 and found a Tier A/B match, i.e. a real would-be auto-record this
-  // book's blind ambiguity veto can't vouch for. Counting THAT event
-  // specifically (not merely "this book's cacheAvailable is false") is what
-  // lets `main()` refuse `--apply` only for a book with something at stake,
-  // instead of one blind-but-empty book (e.g. a real *Unlocked* cache that
-  // parses but names nobody, and which currently has zero orphaned ids to
-  // begin with) vetoing every other book in the workspace.
+  // would otherwise have auto-recorded — the missing-cache gate further
+  // down (`!cacheAvailable`, last in the guard chain) only ever fires for
+  // an id that ALREADY passed guard 1 (not reserved), guard 2 (not
+  // cross-source-ambiguous), guard 5 (current-resolution conflict, #2107
+  // widening), guard 4 (`snapshotsConsistent`), AND guard 3 (>=1 rendered
+  // segment) and found a Tier A/B match — see this function's own doc
+  // comment above for why that ordering is deliberate — i.e. a real
+  // would-be auto-record this book's blind ambiguity veto can't vouch for.
+  // Counting THAT event specifically (not merely "this book's
+  // cacheAvailable is false") is what lets `main()` refuse `--apply` only
+  // for a book with something at stake, instead of one blind-but-empty
+  // book (e.g. a real *Unlocked* cache that parses but names nobody, and
+  // which currently has zero orphaned ids to begin with) vetoing every
+  // other book in the workspace.
   let withheldForMissingCache = 0;
 
   for (const id of allIds) {
@@ -1424,10 +1436,14 @@ async function loadServerModules() {
  *  narrator regardless of tier, so a normalised-id match today says
  *  nothing about what voice rendered the frozen bytes. There is no
  *  per-segment evidence on the real workspace to discriminate a genuinely
- *  fine `'normalised-id'` match from a stale one either way —
- *  `renderedFallbackCharacterId` and `characterSnapshots` are absent from
- *  all 84,642 real segments (only `renderedFallbackEngine`, 77 segments,
- *  exists) — so this is a policy call, not something detectable from the
+ *  fine `'normalised-id'` match from a stale one either way — the
+ *  PER-SEGMENT field `renderedFallbackCharacterId` is absent from all
+ *  84,642 real segments (only `renderedFallbackEngine`, 77 segments,
+ *  exists). `characterSnapshots` is a FILE-level map, not a per-segment
+ *  field — this function reads it below, once per file, and it IS present
+ *  (497 files, 2,625 keys) — but it doesn't say which tier resolved any
+ *  ONE segment either, so it isn't per-segment discriminating evidence —
+ *  so this is still a policy call, not something detectable from the
  *  data: over-reporting is the safe failure direction for a one-shot
  *  repair tool, under-reporting tells an operator the workspace is clean
  *  when it might not be.

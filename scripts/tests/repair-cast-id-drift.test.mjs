@@ -42,7 +42,7 @@ import {
 // byte-for-byte reimplementation of normaliseForMatch/normaliseIdKey (that
 // would be exactly the "two independent matchers" hazard this task exists
 // to avoid). These only need to exercise this script's OWN algorithmic
-// decisions (ambiguity handling, tier precedence, the four auto-record
+// decisions (ambiguity handling, tier precedence, the five auto-record
 // guards); production always wires in the real ones (see main()).
 const lc = (s) => String(s).trim().toLowerCase();
 const idKey = (s) => String(s).toLowerCase().replace(/[-_\s]+/g, '-');
@@ -545,7 +545,8 @@ describe('planBookRepairs', () => {
   test('Round 4 (independent review, 2026-08-05): a PARTIAL history (no supersededBy field), no historyResolver, and a real-shaped buildCastResolver dep does not throw', () => {
     // planBookRepairs itself treats a partial history as a supported input
     // shape — it defends `history.rejected ?? []` a few lines up, and
-    // roughly 110 of this file's tests pass `history: {}`. The real
+    // `history: {}` appears 25 times across this file's 32 calls to
+    // `planBookRepairs`. The real
     // `buildCastResolver` (cast-resolve.ts) does
     // `Object.entries(history.supersededBy)` with NO internal defense —
     // TypeError on `undefined`. `planBookRepairs`'s own fallback
