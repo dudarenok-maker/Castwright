@@ -17,14 +17,20 @@
 # ops-45 / #1911 content-drift check for this run (still SKIPs everything
 # else per the usual gates); GOLDEN_REBLESS_CONTENT=1 additionally permits a
 # `--bless` to overwrite a DIFFERING recorded transcript (see
-# compare.bless_guard's G1). GOLDEN_REBLESS_THRESHOLDS=1 is the sibling flag
-# for instruct-baseline.json's tolerances/identity/loudness_dbfs blocks --
+# compare.bless_guard's G1). instruct-baseline.json's tolerances/identity/
+# loudness_dbfs blocks are guarded by TWO SEPARATE flags (split by #2060 --
+# a single shared flag let a legitimate identity re-bless silently
+# re-authorise the tolerances ceiling too): GOLDEN_REBLESS_THRESHOLDS=1 is
 # required whenever a `--bless` would move `tolerances` (any change; it's a
-# quantised THRESHOLD, #1995) or move `identity`/`loudness_dbfs` beyond a
-# noise-tolerant epsilon (they're raw stochastic measurements; a move
-# smaller than that is written and echoed to stdout, not refused, so a
-# routine re-bless doesn't need the flag -- see compare.bless_guard_thresholds
-# and compare.describe_measurement_move, #1995/#2035/#2045).
+# quantised THRESHOLD, #1995); the separate GOLDEN_REBLESS_MEASUREMENTS=1 is
+# required whenever `identity`/`loudness_dbfs` would move beyond their own
+# noise-tolerant epsilon (they're raw stochastic measurements). A move
+# smaller than that epsilon is ACCEPTED WITHOUT REWRITING the committed
+# reference (the existing block is kept as-is, so repeated noise-sized
+# re-blesses can't walk it) and echoed to stdout, so a routine re-bless
+# needs neither flag -- see compare.bless_guard_thresholds,
+# compare.should_rewrite_reference, and compare.describe_measurement_move
+# (#1995/#2035/#2045/#2060/#2061/#2062/#2069).
 #
 # ASCII-only by design (see CLAUDE.md / feedback_powershell_ascii_only).
 

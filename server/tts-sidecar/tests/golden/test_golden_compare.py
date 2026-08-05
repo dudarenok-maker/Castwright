@@ -443,12 +443,12 @@ def test_bless_guard_g2_protects_a_perfectly_transcribing_line():
 
 def test_bless_guard_thresholds_first_bless_has_nothing_to_protect():
     # A never-before-blessed baseline has no committed tolerances to protect.
-    assert bless_guard_thresholds(None, {"rtf_max": 1.31}) is None
+    assert bless_guard_thresholds(None, {"rtf_max": 1.31}, flag_name="GOLDEN_REBLESS_THRESHOLDS") is None
 
 
 def test_bless_guard_thresholds_silent_when_the_computed_value_is_unchanged():
     tol = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
-    assert bless_guard_thresholds(dict(tol), dict(tol)) is None
+    assert bless_guard_thresholds(dict(tol), dict(tol), flag_name="GOLDEN_REBLESS_THRESHOLDS") is None
 
 
 def test_bless_guard_thresholds_refuses_a_silent_change_without_the_flag():
@@ -456,7 +456,7 @@ def test_bless_guard_thresholds_refuses_a_silent_change_without_the_flag():
     # Whisper transcripts elsewhere) silently raised rtf_max 1.0 -> 1.31.
     existing = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
     computed = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.31}
-    reason = bless_guard_thresholds(existing, computed)
+    reason = bless_guard_thresholds(existing, computed, flag_name="GOLDEN_REBLESS_THRESHOLDS")
     assert reason is not None
     assert "GOLDEN_REBLESS_THRESHOLDS" in reason
 
@@ -464,7 +464,12 @@ def test_bless_guard_thresholds_refuses_a_silent_change_without_the_flag():
 def test_bless_guard_thresholds_allows_the_change_with_the_flag():
     existing = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.0}
     computed = {"identity_cosine_max": 0.15, "loudness_dbfs_abs": 4.0, "rtf_max": 1.31}
-    assert bless_guard_thresholds(existing, computed, allow_rebless_thresholds=True) is None
+    assert (
+        bless_guard_thresholds(
+            existing, computed, allow_rebless_thresholds=True, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+        )
+        is None
+    )
 
 
 def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_fails_closed():
@@ -475,14 +480,20 @@ def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_fai
     # conflict) the same state. The caller must pass `previously_blessed`
     # (its own `baseline.get("identity")` truthiness) so the two states are
     # distinguishable, and the latter must fail CLOSED.
-    reason = bless_guard_thresholds(None, {"rtf_max": 1.31}, previously_blessed=True)
+    reason = bless_guard_thresholds(
+        None, {"rtf_max": 1.31}, previously_blessed=True, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+    )
     assert reason is not None
     assert "GOLDEN_REBLESS_THRESHOLDS" in reason
 
 
 def test_bless_guard_thresholds_missing_key_on_a_previously_blessed_baseline_allows_with_the_flag():
     reason = bless_guard_thresholds(
-        None, {"rtf_max": 1.31}, previously_blessed=True, allow_rebless_thresholds=True
+        None,
+        {"rtf_max": 1.31},
+        previously_blessed=True,
+        allow_rebless_thresholds=True,
+        flag_name="GOLDEN_REBLESS_THRESHOLDS",
     )
     assert reason is None
 
@@ -496,7 +507,7 @@ def test_bless_guard_thresholds_default_epsilon_is_exact_equality():
     # legitimate noise) refusing on ANY change with no epsilon widening it.
     existing = {"rtf_max": 1.0}
     computed = {"rtf_max": 1.0001}  # a tiny float move is still a REAL move for tolerances
-    reason = bless_guard_thresholds(existing, computed)
+    reason = bless_guard_thresholds(existing, computed, flag_name="GOLDEN_REBLESS_THRESHOLDS")
     assert reason is not None
     assert "GOLDEN_REBLESS_THRESHOLDS" in reason
 
@@ -506,15 +517,20 @@ def test_bless_guard_thresholds_accepts_a_noise_sized_move_within_epsilon():
     # quantised threshold -- exact equality refuses on every honest re-bless.
     existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
     computed = {"anchor": "neutral", "cosine": {"whisper": 0.0130}, "max": 0.0130}  # 0.0005 move
-    assert bless_guard_thresholds(existing, computed, epsilon=0.015, label="identity") is None
+    reason = bless_guard_thresholds(
+        existing, computed, epsilon=0.015, label="identity", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
+    assert reason is None
 
 
 def test_bless_guard_thresholds_refuses_a_move_beyond_epsilon():
     existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
     computed = {"anchor": "neutral", "cosine": {"whisper": 0.06}, "max": 0.06}  # 0.0475 move
-    reason = bless_guard_thresholds(existing, computed, epsilon=0.015, label="identity")
+    reason = bless_guard_thresholds(
+        existing, computed, epsilon=0.015, label="identity", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
-    assert "GOLDEN_REBLESS_THRESHOLDS" in reason
+    assert "GOLDEN_REBLESS_MEASUREMENTS" in reason
     assert "identity" in reason
 
 
@@ -522,7 +538,12 @@ def test_bless_guard_thresholds_allows_a_beyond_epsilon_move_with_the_flag():
     existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
     computed = {"anchor": "neutral", "cosine": {"whisper": 0.06}, "max": 0.06}
     reason = bless_guard_thresholds(
-        existing, computed, epsilon=0.015, label="identity", allow_rebless_thresholds=True
+        existing,
+        computed,
+        epsilon=0.015,
+        label="identity",
+        allow_rebless_thresholds=True,
+        flag_name="GOLDEN_REBLESS_MEASUREMENTS",
     )
     assert reason is None
 
@@ -532,7 +553,9 @@ def test_bless_guard_thresholds_epsilon_ignores_a_missing_leaf_never_masks_it():
     # noise -- must refuse regardless of how large epsilon is set.
     existing = {"whisper": -30.0, "neutral": -20.0}
     computed = {"whisper": -30.0}  # "neutral" silently dropped
-    reason = bless_guard_thresholds(existing, computed, epsilon=1000.0, label="loudness_dbfs")
+    reason = bless_guard_thresholds(
+        existing, computed, epsilon=1000.0, label="loudness_dbfs", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
 
 
@@ -541,7 +564,9 @@ def test_bless_guard_thresholds_epsilon_ignores_a_changed_non_numeric_leaf():
     # must refuse regardless of epsilon -- it is never "noise".
     existing = {"anchor": "neutral", "cosine": {"whisper": 0.0125}, "max": 0.0125}
     computed = {"anchor": "different", "cosine": {"whisper": 0.0125}, "max": 0.0125}
-    reason = bless_guard_thresholds(existing, computed, epsilon=1000.0, label="identity")
+    reason = bless_guard_thresholds(
+        existing, computed, epsilon=1000.0, label="identity", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
 
 
@@ -549,18 +574,26 @@ def test_bless_guard_thresholds_epsilon_ignores_a_changed_non_numeric_leaf():
 
 
 def test_describe_measurement_move_none_on_first_bless():
-    assert describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4) is None
+    assert (
+        describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
+        is None
+    )
 
 
 def test_describe_measurement_move_none_when_nothing_changed():
     existing = {"whisper": -30.0, "neutral": -20.0}
-    assert describe_measurement_move(existing, dict(existing), epsilon=0.4) is None
+    assert (
+        describe_measurement_move(
+            existing, dict(existing), epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+        )
+        is None
+    )
 
 
 def test_describe_measurement_move_reports_every_moved_leaf():
     existing = {"whisper": -30.0, "neutral": -20.0}
     computed = {"whisper": -30.1, "neutral": -20.0}  # only whisper moved
-    desc = describe_measurement_move(existing, computed, epsilon=0.4)
+    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
     assert desc is not None
     assert "whisper" in desc
     assert "neutral" not in desc  # unchanged leaf isn't reported as "moved"
@@ -569,7 +602,7 @@ def test_describe_measurement_move_reports_every_moved_leaf():
 def test_describe_measurement_move_labels_a_within_epsilon_move_as_noise():
     existing = {"whisper": -30.0}
     computed = {"whisper": -30.1}  # 0.1 move, epsilon 0.4 -- genuinely noise
-    desc = describe_measurement_move(existing, computed, epsilon=0.4)
+    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
     assert desc is not None
     assert desc.startswith("within epsilon")
     assert "BEYOND" not in desc and "FORCED" not in desc
@@ -587,7 +620,7 @@ def test_describe_measurement_move_labels_a_beyond_epsilon_move_as_forced_not_no
     epsilon must say BEYOND/FORCED, never "noise"."""
     existing = {"cosine": {"whisper": 0.0125}}
     computed = {"cosine": {"whisper": 0.1425}}  # 0.13 move, 8.7x epsilon 0.015
-    desc = describe_measurement_move(existing, computed, epsilon=0.015)
+    desc = describe_measurement_move(existing, computed, epsilon=0.015, flag_name="GOLDEN_REBLESS_THRESHOLDS")
     assert desc is not None
     assert desc.startswith("BEYOND epsilon")
     assert "FORCED" in desc and "GOLDEN_REBLESS_THRESHOLDS" in desc
@@ -640,20 +673,26 @@ def test_bless_guard_thresholds_refuses_a_non_dict_existing_instead_of_crashing(
     that collapsed `"loudness_dbfs"` to a bare scalar). It already failed
     CLOSED (no write), so this pins the ERROR-QUALITY fix: the same guard
     refusal message a structural diff produces, not a traceback."""
-    reason = bless_guard_thresholds(-21.16, {"whisper": -30.0}, label="loudness_dbfs")
+    reason = bless_guard_thresholds(
+        -21.16, {"whisper": -30.0}, label="loudness_dbfs", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
     assert "loudness_dbfs" in reason
 
 
 def test_bless_guard_thresholds_refuses_a_non_dict_existing_list_shape_too():
-    reason = bless_guard_thresholds([1, 2], {"whisper": -30.0}, label="loudness_dbfs")
+    reason = bless_guard_thresholds(
+        [1, 2], {"whisper": -30.0}, label="loudness_dbfs", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
 
 
 def test_bless_guard_thresholds_refuses_a_non_dict_computed_too():
     # `computed` is always built by `_bless()`'s own code in practice, but
     # the guard must not crash if it were ever handed something malformed.
-    reason = bless_guard_thresholds({"whisper": -30.0}, -21.16, label="loudness_dbfs")
+    reason = bless_guard_thresholds(
+        {"whisper": -30.0}, -21.16, label="loudness_dbfs", flag_name="GOLDEN_REBLESS_MEASUREMENTS"
+    )
     assert reason is not None
 
 
@@ -661,7 +700,7 @@ def test_describe_measurement_move_refuses_gracefully_on_a_non_dict_existing():
     # Not reachable via a real bless (bless_guard_thresholds would already
     # have refused first), but describe_measurement_move shares _leaf_diffs
     # with the guard and must not crash either.
-    desc = describe_measurement_move(-21.16, {"whisper": -30.0}, epsilon=0.4)
+    desc = describe_measurement_move(-21.16, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS")
     assert desc is not None
     assert "BEYOND epsilon" in desc
 
@@ -676,7 +715,9 @@ def test_describe_measurement_move_forced_absent_key_speaks():
     Echoed in a shape that does not pretend to have a diff (there is no
     'before' to compare)."""
     computed = {"whisper": -30.0, "neutral": -20.0}
-    desc = describe_measurement_move(None, computed, epsilon=0.4, previously_blessed=True)
+    desc = describe_measurement_move(
+        None, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS", previously_blessed=True
+    )
     assert desc is not None
     assert desc.startswith("FORCED, key was ABSENT")
     assert "no prior reference" in desc
@@ -686,8 +727,22 @@ def test_describe_measurement_move_forced_absent_key_speaks():
 def test_describe_measurement_move_genuine_first_bless_stays_silent():
     """`existing is None` with `previously_blessed=False` (the default) is a
     GENUINE first bless -- nothing to report, same as before this change."""
-    assert describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4) is None
-    assert describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4, previously_blessed=False) is None
+    assert (
+        describe_measurement_move(
+            None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+        )
+        is None
+    )
+    assert (
+        describe_measurement_move(
+            None,
+            {"whisper": -30.0},
+            epsilon=0.4,
+            flag_name="GOLDEN_REBLESS_THRESHOLDS",
+            previously_blessed=False,
+        )
+        is None
+    )
 
 
 # ── should_rewrite_reference (#2060 / D4) ───────────────────────────────────

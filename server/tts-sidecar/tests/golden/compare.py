@@ -395,7 +395,7 @@ def describe_measurement_move(
     computed: dict,
     *,
     epsilon: float,
-    flag_name: str = "GOLDEN_REBLESS_THRESHOLDS",
+    flag_name: str,
     previously_blessed: bool = False,
 ) -> Optional[str]:
     """Human-readable summary of every leaf that moved between `existing`
@@ -416,7 +416,12 @@ def describe_measurement_move(
     ONLY; `GOLDEN_REBLESS_MEASUREMENTS` arms `identity`/`loudness_dbfs`.
     Hardcoding one name here would mislabel two of the three fields' echoes
     — the guard's loudest output naming the wrong flag is itself the kind of
-    silent-ish failure this function exists to prevent.
+    silent-ish failure this function exists to prevent. Keyword-only and
+    REQUIRED, no default (#2116 F7, independent review) — a default value
+    would silently supply a name for any caller that forgot the kwarg,
+    which is exactly the mislabelling this parameter exists to rule out;
+    with no default, a caller that forgets it fails loudly (`TypeError:
+    missing required keyword-only argument`) instead of mislabelling.
 
     `previously_blessed` (#2069 / D5): when `existing is None` and this is
     `True`, the caller's `bless_guard_thresholds` only accepted the call
@@ -496,7 +501,7 @@ def bless_guard_thresholds(
     allow_rebless_thresholds: bool = False,
     label: str = "tolerances",
     epsilon: float = 0.0,
-    flag_name: str = "GOLDEN_REBLESS_THRESHOLDS",
+    flag_name: str,
 ) -> Optional[str]:
     """Refuse a `--bless` write that would change a baseline's assertion
     reference — a THRESHOLD *or a recorded measurement an assertion is
@@ -566,7 +571,11 @@ def bless_guard_thresholds(
     arms `identity`/`loudness_dbfs` (a stochastic drift-window centre) — this
     function stays field-agnostic, so each caller passes the flag NAME that
     actually governs the field it is guarding, and this function echoes that
-    name rather than a hardcoded one.
+    name rather than a hardcoded one. Keyword-only and REQUIRED, no default
+    (#2116 F7, independent review) — the whole premise of the split is that
+    the guard's loudest output must never name the wrong flag; a default
+    would let a caller that forgot the kwarg mislabel silently instead of
+    failing loudly at the call site.
 
     Mirrors `bless_guard`'s G1 shape (refuse a silent change, escape via an
     explicit flag) but for a reference figure rather than the transcript.
