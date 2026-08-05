@@ -61,9 +61,69 @@ them are wide:
   that prose in its own row bodies and will silently fall behind.
 - **The rest of the summary strip is unchecked** — oldest debt, and the
   group/blocked/unconfirmed tallies. Recompute those by hand.
-- **The published page is invisible to it.** It only ever reads the source file,
-  so "was it published at all, and was it the right file?" is procedure, not a
-  gate.
+- **The published page is invisible to `check:onbox-register`'s no-flag run.**
+  It only ever reads the two TRACKED files, so "was it published at all, and
+  was it the right file?" is procedure, not that gate — see the merge step
+  below, which gives the specific stale-snapshot race mechanical teeth via a
+  second, explicit mode, but still can't verify by itself that someone ran it.
+
+**The concurrency hazard this closes (#1931).** Before the live view was
+tracked here, on 2026-07-28 two concurrent sessions each correctly added a
+different row (A20, E8) and republished from their own hand-built snapshot —
+the second republish was built from a snapshot taken *before* the first
+session's row had landed, so the surviving page had one row present and the
+other silently gone, with nothing to notice. That was possible because the
+live view lived nowhere but a session's own build of it. Tracking both files
+in git and gating their agreement via `npm run check:onbox-register` on every
+PR closes the git-side half: the live view a PR merges is no longer a
+hand-built snapshot racing another session's, it is the file *inside* the
+merge, checked against this register before either can land.
+
+**The residual hazard, and the merge step that closes it.** Git-side safety
+does not by itself close the ORIGINAL incident, because publishing is a step
+that happens *after* merge, outside git — so the same race reopens one level
+up. Two lanes can each merge a correct, agreeing live-view edit: git resolves
+both rows into the tracked `.html`, and `check:onbox-register` is green on
+both PRs. Lane A publishes its merge. Lane B, having fetched/built its own
+copy of the *published* page before A's merge landed, publishes from a build
+that is now stale relative to what's live — and the artifact loses A's row
+again, invisibly, exactly like 2026-07-28, because the no-flag
+`check:onbox-register` run only ever compares the two TRACKED files; the
+published page itself is outside its reach (no network access from a required
+CI check — the same call this design already made for the tracked-pair
+comparison, see the edge list above). The merge step that closes this, run
+**immediately before every publish**, not only after a suspected race:
+
+1. Fetch the page currently live at the canonical URL above and save it to a
+   local file — this is the CURRENTLY-published register, which may be ahead
+   of what you are about to publish.
+2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
+   Unlike `check:onbox-register`'s no-flag run, this comparison is
+   deliberately ONE-DIRECTIONAL: your register having rows the live page
+   doesn't have yet is the normal reason you're publishing, not a defect, so
+   it is never reported here. It fails ONLY when the live page has a row (or
+   group) your register does not — the signature of another lane having
+   already published ahead of you.
+3. **If it fails**, do NOT publish — your register is BEHIND what is already
+   live. Pull the latest `main` (the row that's already live should already
+   be merged there via its own PR), confirm `npm run check:onbox-register`
+   (no flag) is green, and re-run step 2 against the SAME saved copy from
+   step 1 to confirm it now passes. It should — main pulling in the missing
+   row is what resolves this, not another fetch of the live page.
+4. Only once step 2 passes, publish the tracked `.html`, with the canonical
+   URL above as `url`.
+
+This is deliberately a MANUAL procedure with mechanical support, not a fully
+automatic gate: CI cannot run it (no credentials to fetch the published
+artifact, and a network dependency inside a required status check is its own
+failure mode). `--against-published` exists so step 3's "does the live page
+have something I don't?" judgement is a command's exit code, not an
+eyeballed diff — it does not, and cannot, make the four steps happen on
+their own. An early version of this check compared both directions
+symmetrically, which inverted the diagnosis (failed on every ordinary
+publish and told the operator to delete the rows they were about to ship) —
+fixed before this landed; see the `checkLiveView` function's own header
+comment in `scripts/check-onbox-register.mjs` for the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -1218,25 +1278,39 @@ weights can prove, and neither was exercised on real hardware for this PR:
   **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
   contention warning should print nothing). Confirm it completes and writes
   `kokoro-baseline.json` / `instruct-baseline.json` **without**
-  `GOLDEN_REBLESS_CONTENT=1` or `GOLDEN_REBLESS_THRESHOLDS=1` set on a
-  routine, uncontended re-bless. **Amended by #2045 F1/F2** (`instruct-
-  baseline.json`'s `identity`/`loudness_dbfs` guard, added by #2035 after
-  this row was written, is noise-tolerant, not silent-or-refuse like
-  `tolerances`): `kokoro-baseline.json`'s `transcript`/`text_edits` and
-  `instruct-baseline.json`'s `tolerances` block must stay BYTE-IDENTICAL
-  (or the guard is broken); `instruct-baseline.json`'s `identity`/
-  `loudness_dbfs` figures MAY move by run-to-run noise — confirm each
-  moved figure is small (well under `IDENTITY_COSINE_EPSILON`=**0.005** /
-  `LOUDNESS_DBFS_EPSILON`=0.4 in `compare.py`) and that the console output
-  printed a `[golden-bless] identity moved ... within epsilon ... (noise)`
-  / `[golden-bless] loudness_dbfs moved ...` line for each one that did —
-  the echo is the part a `git diff` alone can't confirm, and it's the
-  accept-path half of the guard real hardware is uniquely placed to
-  exercise (both the ROUTINE-bless-doesn't-need-the-flag half AND the
-  noise-gets-echoed half need a REAL measurement pair with real noise
-  between them — a synthetic fixture can only assert the arithmetic, never
-  that actual noise clears epsilon on a real box). `blessed_at`-adjacent
-  housekeeping fields may also move as before.
+  `GOLDEN_REBLESS_CONTENT=1`, `GOLDEN_REBLESS_THRESHOLDS=1`, or
+  `GOLDEN_REBLESS_MEASUREMENTS=1` set on a routine, uncontended re-bless.
+  **Amended by #2045 F1/F2, then again by #2060/#2061/#2062/#2069** (the
+  `identity`/`loudness_dbfs` guard, added by #2035 after this row was
+  written, was noise-tolerant-and-WRITTEN as of #2045; #2060/D4 later
+  changed the WRITE side, not the accept side): `kokoro-baseline.json`'s
+  `transcript`/`text_edits`, `instruct-baseline.json`'s `tolerances` block,
+  AND — since #2060/D4 — `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures too must ALL stay BYTE-IDENTICAL on a routine
+  re-bless (or the guard is broken). "Figures MAY move by run-to-run
+  noise" was true before D4 and is **no longer a meaningful thing to
+  check** — a within-epsilon noise-sized move is still ACCEPTED (not
+  refused, no flag needed), it just no longer REWRITES the committed
+  reference, so the file staying byte-identical is now the EXPECTED
+  outcome for `identity`/`loudness_dbfs` too, not evidence on its own that
+  anything happened. What real hardware is uniquely placed to confirm
+  instead is the ECHO: the console should still print a `[golden-bless]
+  identity moved within epsilon ... (noise -- reference unchanged) -- ...`
+  / `[golden-bless] loudness_dbfs moved ...` line whenever this run's raw
+  measurement differs AT ALL from the committed figure (real hardware
+  noise makes a nonzero diff near-certain, even though the file itself
+  won't change) — the echo is the part a `git diff` alone can't confirm,
+  and it's the accept-path half of the guard real hardware is uniquely
+  placed to exercise (both the ROUTINE-bless-doesn't-need-the-flag half
+  AND the noise-gets-echoed-but-not-written half need a REAL measurement
+  pair with real noise between them — a synthetic fixture can only assert
+  the arithmetic, never that actual noise clears epsilon on a real box). A
+  byte-identical block with an echo present is the guard working; a
+  byte-identical block with NO echo at all just means this run's raw
+  measurement happened to land exactly on the committed figure — don't
+  read bare byte-identical output alone as proof the guard fired; the
+  echo is the falsifiable signal. `blessed_at`-adjacent housekeeping
+  fields may still move as before.
 - **This run is also the only thing that retires the identity epsilon's
   open question** (#2066). `IDENTITY_COSINE_EPSILON` moved 0.015 → 0.005
   because 0.015 was derived from an unrelated ceiling (`identity_cosine_max`
@@ -1254,15 +1328,16 @@ weights can prove, and neither was exercised on real hardware for this PR:
   byte-identical to before the attempt — then revert the hand-edit.
   This is the "#2003/#1995 shape, on a real file, via the real CLI entry
   point" check the unit tests can only approximate with `tmp_path` fixtures.
-- **Amended by #2045 F1/F2:** also force one WINDOW-sized refusal on
-  `instruct-baseline.json`'s `identity` block (hand-edit one committed
-  `identity.cosine.<emotion>` figure by clearly more than
+- **Amended by #2045 F1/F2, then #2060/D1:** also force one WINDOW-sized
+  refusal on `instruct-baseline.json`'s `identity` block (hand-edit one
+  committed `identity.cosine.<emotion>` figure by clearly more than
   `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
   command, and confirm it refuses (not just accepts-and-echoes) with the
-  expected `GOLDEN_REBLESS_THRESHOLDS` message and leaves the file
-  byte-identical — then revert the hand-edit. This is the boundary the
-  noise-tolerant epsilon exists to draw; the routine-bless bullet above
-  only exercises the accept side.
+  expected `GOLDEN_REBLESS_MEASUREMENTS` message — **not**
+  `GOLDEN_REBLESS_THRESHOLDS`, which the #2060 flag split now reserves for
+  `tolerances` alone — and leaves the file byte-identical — then revert
+  the hand-edit. This is the boundary the noise-tolerant epsilon exists to
+  draw; the routine-bless bullet above only exercises the accept side.
 - Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
   (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
   normally (expect pass), then deliberately break the engine (e.g. rename
@@ -1430,9 +1505,9 @@ live against dummy listeners (see `task-18-report.md`) — but nothing has ever
 exercised the actual `--apply` write path against the real
 `C:\AudiobookWorkspace\books` tree.
 
-**Dry-run result (round-2 review fixes applied, re-measured 2026-08-05 with
-`CACHE_DIR` correctly pointed at the checkout that ran this workspace's
-analysis — confirmed no drift since):**
+**Dry-run result (independent-review Critical C1 fix applied, re-measured
+2026-08-05 with `CACHE_DIR` correctly pointed at the checkout that ran this
+workspace's analysis):**
 
 - **3 auto-recordable aliases, 27 segments** — `mayrin` → `mairin` (8 segments)
   and `coalfall` → `coalfall-dragon` (13 segments), both in *Заказ Коалфолла*;
@@ -1465,23 +1540,74 @@ analysis — confirmed no drift since):**
   disk. This, not the report-only total above, is the actual damage figure.
 - **0 books modified, 0 `cast-id-history.json` files written** — confirmed by
   a workspace-wide file search before and after every dry run.
-- **0 books missing analysis-cache evidence** — the round-2 review's
-  fail-closed fix (see the precondition bullet below): a dry run from a
-  worktree whose own `server/handoff/cache` doesn't hold these 20 real books
-  reports **20** books missing cache evidence and **0** auto-recordable
-  aliases instead, since the cross-source ambiguity veto can't see cache
-  ambiguity without the file. Confirm this line reads `0` before trusting any
-  of the numbers above, and before `--apply`.
+- **1 book missing analysis-cache evidence, 0 books with an auto-record
+  withheld because of it** — these are now two DIFFERENT numbers (owner-
+  decided policy, review round 2, 2026-08-05), and **only the second one
+  gates `--apply`**. *Unlocked*'s cache file
+  (`server/handoff/cache/mns_dLurz4I544.json`) exists and parses as valid
+  JSON, but names **zero** characters (neither `stage1.characters` nor any
+  `chapterCast` entry — both are optional per the schema, and this file
+  happens to have neither populated) — found by independent review (Critical
+  C1) after the #2093 residual-1 fix first shipped gating only on "exists and
+  parses": the cross-source ambiguity veto doesn't consume "did it parse", it
+  consumes the cache's actual name/id entries, so a validly-parsing,
+  evidence-free file is exactly as blind to the veto as a missing one.
+  `isCacheAvailable` now also requires at least one name/id entry that
+  `buildNameIndex` itself would keep, not merely one `cacheEntriesOf` treats
+  as string-shaped (pre-merge review I1 closed a further gap — an entry
+  like `{id:"sandor", name:""}` used to pass the raw `cacheEntriesOf` check
+  while `buildNameIndex`, what guard 2 actually reads, silently drops it;
+  zero of the real workspace's 80 cache files exhibit this shape today).
+  Re-measuring the SAME real cache directory (76 files parse, 0 unparseable,
+  10 parse with zero character entries) surfaces this one book. **This is
+  expected and does NOT block `--apply`** — but **not because *Unlocked* has
+  nothing orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed both by a live pre-merge-review scan and by the real `--apply`
+  run above). The reason it doesn't block: `unknown-male` is a **reserved
+  fold-bucket SOURCE id**, and guard 1 refuses to auto-record from a
+  reserved source unconditionally, firing *before* the cache-availability
+  gate is ever reached — so *Unlocked*'s blind ambiguity veto never actually
+  stood between the pass and a real candidate. `--apply` refuses only when a
+  book's blind veto DID withhold a real candidate — that count is separately
+  reported and currently reads `0`. The trigger that WOULD change this: a
+  **non-reserved** orphaned id in *Unlocked* with a real Tier A/B name/id
+  match (from a future re-render or re-analysis) — and, per pre-merge review
+  I2, a match with **zero rendered segments** would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached). Re-check before trusting the `0` if *Unlocked* changes.
 
 - **Precondition: `CACHE_DIR` must point at the real analysis cache**, not a
   fresh worktree's own (git-ignored, per-checkout — see the script's module
   doc comment). Run the dry run first and confirm the summary reads `books
-  missing analysis-cache evidence: 0` — `--apply` now refuses outright
-  otherwise (round-2 review fail-closed fix for the cross-source ambiguity
-  veto's blind spot when cache evidence is absent).
+  with an auto-record withheld for missing cache evidence: 0` — `--apply`
+  now refuses outright otherwise (round-2 review fail-closed fix for the
+  cross-source ambiguity veto's blind spot when cache evidence is absent;
+  #2093 residual 1, strengthened by independent-review Critical C1,
+  tightened `isCacheAvailable` to require the file exist, parse, AND name at
+  least one character; then re-scoped by owner-decided policy, review round
+  2, so the refusal gates on an actual withheld candidate, not merely a book
+  whose cache happens to be unusable). **A nonzero `books missing
+  analysis-cache evidence` count is expected and does NOT by itself block
+  `--apply`** — as measured today it reads `1` (*Unlocked*, see above), while
+  the gating `books with an auto-record withheld…` line reads `0`, so this
+  precondition IS currently satisfied. Don't stop just because the first
+  number is nonzero — check the second one.
+- **Precondition (#2108): `WORKSPACE_DIR` must actually point at the real
+  20-book workspace.** Confirm the summary reads `books scanned: 20`
+  alongside the cache-evidence lines above — a wrong `WORKSPACE_DIR` (the
+  script defaults to `<home>/AudiobookWorkspace`, which does not exist)
+  scans **0** books and, before this fix, printed a clean-looking `books
+  missing analysis-cache evidence: 0` and exited `--apply` with code `0`
+  having written nothing — an empty tree reading as a healthy one, on
+  exactly the line this precondition told the operator to trust. `--apply`
+  now refuses outright when `books scanned` is `0`, and the dry-run summary
+  calls out a zero-book scan explicitly instead of rendering a row of clean
+  zeros.
 - Stop any real server bound to the configured probe port(s) (default `8080`
-  and the LAN HTTPS `8443`) — `--apply` refuses outright while either answers,
-  since the write is out-of-process and no in-process lock covers it. Confirm
+  and the LAN HTTPS `8443`) **or their auto-rebind range** (up to 19 ports
+  above each default, matching `listenWithAutoRebind` — #2090) — `--apply`
+  refuses outright while any of them answers, since the write is
+  out-of-process and no in-process lock covers it. Confirm
   the refusal fires first, against the *real* dev server (not only a dummy
   listener): start `cd server && npm run dev`, run `--apply`, confirm it exits
   1 naming the reachable port and writes nothing, then stop the server.

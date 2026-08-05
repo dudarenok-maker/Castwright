@@ -277,12 +277,41 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
 - **17 re-render rows, 120 segments** (unconditional on auto-record status) —
   the actual damage figure.
 - **0 books modified.**
-- **0 books missing analysis-cache evidence** — confirm this reads `0` before
-  trusting any number above or running `--apply` (see §8.3's `CACHE_DIR`
-  precondition); a dry run from a worktree with no cache of its own for these
-  20 books instead reports 20 books missing cache evidence and 0
-  auto-recordable aliases, since the cross-source ambiguity veto can't see
-  cache ambiguity without the file (round-2 review fail-closed fix).
+- **1 book missing analysis-cache evidence, 0 books with an auto-record
+  withheld because of it** — two DIFFERENT numbers as of owner-decided
+  policy, review round 2 (2026-08-05); **only the second gates `--apply`,
+  and it currently reads `0`, so `--apply` is NOT blocked.** A dry run from
+  a worktree with no cache of its own for these 20 books instead reports 20
+  books missing cache evidence, since the cross-source ambiguity veto can't
+  see cache ambiguity without the file (round-2 review fail-closed fix).
+  #2093 residual 1 first strengthened the underlying gate from "the file is
+  present at that path" to "the file exists AND parses"; independent review
+  then found even that was insufficient — the ambiguity veto doesn't
+  consume "did it parse", it consumes the cache's actual character-name
+  entries, and a validly-parsing cache that names nobody is exactly as
+  blind to it as a missing file. The gate now also requires at least one
+  name/id entry that `buildNameIndex` itself would keep, not merely one
+  `cacheEntriesOf` treats as string-shaped (pre-merge review I1 closed a
+  further gap — see below), and against the real cache directory this
+  surfaces exactly one book: *Unlocked*'s cache file (`mns_dLurz4I544.json`)
+  parses fine but names zero characters (no `stage1.characters`, no
+  populated `chapterCast`) — real, not a `CACHE_DIR` misconfiguration.
+  **This no longer blocks the run — but not because *Unlocked* has nothing
+  orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed by a live pre-merge-review scan, and independently by the real
+  `--apply` run — see §8.6). The reason it doesn't block: `unknown-male` is
+  a **reserved fold-bucket SOURCE id**, and guard 1 refuses to auto-record
+  from a reserved source unconditionally, firing *before* the
+  cache-availability gate is ever reached — so *Unlocked*'s blind ambiguity
+  veto never actually stood between the pass and a real candidate. `--apply`
+  refuses only when a book's blind veto DID withhold a real candidate; that
+  count is reported separately and currently reads `0`. **Do not stop just
+  because "books missing analysis-cache evidence" reads nonzero** — check
+  the withheld-count line instead. The trigger that WOULD change this: a
+  non-reserved orphaned id in *Unlocked* with a real Tier A/B match — and,
+  per pre-merge review I2, a zero-segment match would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached).
 
 ### 8.2 Fixture
 
@@ -309,14 +338,50 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
 - [ ] `CACHE_DIR` set to the checkout that ran this workspace's analysis —
       default `<repo>/server/handoff/cache` is git-ignored and per-checkout, so
       a fresh worktree's copy is empty for these real books. Run the dry run
-      and confirm its summary reads `books missing analysis-cache evidence: 0`
-      before doing anything else — `--apply` now refuses outright otherwise
-      (round-2 review fail-closed fix: a missing cache file silently defeats
-      the cross-source ambiguity veto, since an empty cache index reads as
-      "confirmed unambiguous" rather than "unknown").
+      and confirm its summary reads `books with an auto-record withheld for
+      missing cache evidence: 0` before doing anything else — `--apply` now
+      refuses outright otherwise (round-2 review fail-closed fix: a missing
+      cache file silently defeats the cross-source ambiguity veto, since an
+      empty cache index reads as "confirmed unambiguous" rather than
+      "unknown"; #2093 residual 1 strengthened the underlying gate to ALSO
+      refuse a present-but-corrupt/unparseable cache file, and
+      independent-review Critical C1 strengthened it once more to ALSO
+      refuse a validly-parsing cache file that names zero characters, and a
+      later pre-merge review pass (I1) closed a further gap in that same
+      check — all used to slip past as "available"). **Owner-decided
+      policy, review round 2 (2026-08-05): this precondition is about
+      WITHHELD candidates, not the raw missing-cache count** — a nonzero
+      `books missing analysis-cache evidence` line is EXPECTED and does NOT
+      block `--apply` by itself; only a nonzero `books with an auto-record
+      withheld…` line does. **As measured 2026-08-05, this precondition IS
+      satisfied**: `books missing analysis-cache evidence` reads `1`
+      (*Unlocked* — see §8.1: it DOES have an orphaned id, `unknown-male`
+      with 34 segments, but guard 1 refuses to auto-record from it as a
+      reserved fold-bucket source before the cache gate is ever reached, so
+      nothing was ever withheld for it), and `books with an auto-record
+      withheld…` reads `0`. Don't stop at the first number.
+- [ ] `WORKSPACE_DIR` must actually point at the real 20-book workspace
+      (#2108) — confirm the summary reads `books scanned: 20` alongside the
+      cache-evidence lines above. A wrong `WORKSPACE_DIR` (the script's
+      default, `<home>/AudiobookWorkspace`, does not exist) scans **0**
+      books and, before this fix, printed a clean-looking `books missing
+      analysis-cache evidence: 0` and exited `--apply` with code `0` having
+      written nothing — an empty tree read as a healthy one, on exactly the
+      line this precondition told the operator to trust. `--apply` now
+      refuses outright when `books scanned` is `0`.
 - [ ] No Castwright server reachable on the configured probe port(s) — default
-      `8080` and the LAN HTTPS `8443`. `--apply` refuses outright otherwise
-      (it writes out-of-process; no in-process lock covers the write).
+      `8080` and the LAN HTTPS `8443` — **or their auto-rebind range** (up to
+      19 ports above each, matching `listenWithAutoRebind` — #2090). `--apply`
+      refuses outright otherwise (it writes out-of-process; no in-process lock
+      covers the write). The probe is a plain "is anything listening" TCP
+      connect, not a Castwright health check — it refuses on **any**
+      listener in `8080`–`8099` or `8443`–`8462`, including an unrelated dev
+      service that happens to be bound in that range. A refusal is not proof
+      the Castwright server itself is still up — confirmed live on the
+      2026-08-05 run below: a plain `npm run dev` bound LAN HTTPS `8443`
+      only and never opened `8080`, and it was the `LAN_HTTPS_PORT` half of
+      the widened probe that caught it — a probe covering only the default
+      `8080` would have missed it entirely.
 - [ ] The real workspace is present and untouched since the last dry run.
 - [ ] SHA and a clean tree recorded below.
 
@@ -343,12 +408,23 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
    run.
 
 Expected console output: `mode: APPLY (writing cast-id-history.json)`,
-`auto-recordable aliases: 3 (27 segment(s))`, and
-`books missing analysis-cache evidence: 0` — matching the dry-run numbers in
-§8.1 exactly (a diverging number here means the workspace changed since the
-last dry run — stop and re-measure before trusting anything below; if the
-cache-evidence line is nonzero, `--apply` refuses outright instead — fix
-`CACHE_DIR` per §8.3 and re-run the dry run first).
+`auto-recordable aliases: 3 (27 segment(s))`, `books missing analysis-cache
+evidence: 1` (*Unlocked* — expected, not a blocker, see §8.1/§8.3), and
+`books with an auto-record withheld for missing cache evidence: 0` —
+matching the dry-run numbers in §8.1 exactly (a diverging number here means
+the workspace changed since the last dry run — stop and re-measure before
+trusting anything below; if the WITHHELD-count line is nonzero, `--apply`
+refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
+first; a nonzero missing-cache-evidence line alone does NOT refuse).
+**Revision-sensitive: the numbers above are against the pre-#2102 gate** —
+see the callout below the Result for what changes once #2102 lands. **As
+measured 2026-08-05 (pre-#2102), this precondition WAS satisfied and this
+step WAS run** — see the Result immediately below, which is no longer
+pending (the repo owner's decision, review round 2: *Unlocked* DOES have an
+orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
+auto-record from it as a reserved fold-bucket source before the cache gate
+is ever reached, so it has nothing at stake and no longer blocks the
+workspace run).
 
 Result (console summary matches §8.1): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exact match.** `mode: APPLY (writing cast-id-history.json)`; books scanned **20**; auto-recordable aliases **3 (27 segment(s))**; reported for human decision **93 id(s) / 161 segment(s)**; re-render candidates **17**; books missing analysis-cache evidence **0**.
 

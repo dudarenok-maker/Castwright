@@ -1,7 +1,7 @@
 // scripts/deps-watch.mjs
-// Pure helpers for the ops-17 deps-watch (#790). NO IO here — see
-// scripts/deps-watch-run.mjs for the orchestrator. Unit-tested under
-// scripts/tests/deps-watch.test.mjs (npm run test:hooks).
+// Pure helpers for the ops-17 deps-watch (#790). NO IO here — `publish` below
+// takes `gh` as an injected dependency and calls it, but never performs IO
+// itself. Unit-tested under scripts/tests/deps-watch.test.mjs (npm run test:hooks).
 
 export const KGP_PLUGINS = ['audio_session', 'flutter_foreground_task', 'mobile_scanner'];
 export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
@@ -11,6 +11,11 @@ export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
  * Known limitation: collapses prerelease ordering, so `1.0.0` vs `1.0.0-beta`
  * compares EQUAL (stable-over-prerelease is under-reported). Safe for the three
  * KGP plugins (all pinned at stable). Revisit if a plugin pins a `-beta`/`-dev`.
+ * Build metadata is dropped too, so `10.1.0+1` vs `10.1.0` also compares EQUAL.
+ * Unlike the prerelease case this IS reachable here: the workflow runs
+ * `flutter pub outdated --json --show-all` with no `--prereleases`, so
+ * prereleases never reach `latest`, but a `+N`-only republish does — and
+ * won't fire a transition even though the observed `latest` string changed.
  */
 export function compareSemver(a, b) {
   const core = (v) => String(v).split('+')[0].split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
@@ -90,9 +95,29 @@ export function buildState(pluginStatus) {
   return state;
 }
 
-/** Plugins that are ahead now but were not ahead in the prior state. */
+/** Plugins whose OBSERVED LATEST changed since the prior state, not merely
+ *  whose `ahead` flag flipped (ops-17b, #2104) — an edge detector on `ahead`
+ *  alone fires once per plugin ever, then goes permanently silent for every
+ *  subsequent release once a plugin is ahead of its pin (the normal case for
+ *  an evaluated-and-rejected KGP release, where the pin is deliberately left
+ *  alone). Firing rule per prior record for the plugin:
+ *   - absent, or `ahead: false` -> fire iff `ahead` now (unchanged edge case).
+ *   - `ahead: true` with a usable recorded `latest` -> fire iff the new
+ *     `latest` is STRICTLY greater (a downgrade/yank must never fire).
+ *   - `ahead: true` with `latest` missing/null/non-string -> fire. A prior
+ *     record in that shape is corrupt or pre-ops-17b legacy state, not a
+ *     clean "nothing changed" — staying silent there is the exact defect
+ *     this issue is about, one level down. */
 export function computeTransitions(pluginStatus, priorState) {
-  return pluginStatus.filter((s) => s.ahead && !priorState[s.name]?.ahead).map((s) => s.name);
+  return pluginStatus
+    .filter((s) => {
+      if (!s.ahead) return false;
+      const prior = priorState[s.name];
+      if (!prior?.ahead) return true; // absent, or at-pin -> ahead edge
+      if (typeof prior.latest !== 'string' || !prior.latest) return true; // fail loud, don't stay silent
+      return compareSemver(s.latest, prior.latest) > 0;
+    })
+    .map((s) => s.name);
 }
 
 /** The single sticky comment (by marker), or null. Found even if a human
@@ -107,6 +132,24 @@ export function stickyRequest(existing, repo, issue) {
   return existing
     ? { method: 'PATCH', path: `repos/${repo}/issues/comments/${existing.id}` }
     : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
+}
+
+/** Posts the A2 transition comment (if any) FIRST, then writes the sticky —
+ *  never the reverse. The sticky body embeds the new `latest` for every
+ *  plugin, so writing it first would let a failed transition POST (rate
+ *  limit, transient `gh`/network fault) commit state for a notification that
+ *  never went out, permanently suppressing it (ops-17c, #2113). State is
+ *  committed only after the notification it implies has been delivered.
+ *  `gh` is injected here, so `publish` calls it but does no IO itself. */
+export function publish({ gh, repo, issue, existing, stickyBody, transitionComment }) {
+  if (transitionComment) {
+    // `-f` (not `-F`) — same rationale as the runner's `gh` helper (gh
+    // community #148257): raw field bytes transmit as-is, so a leading
+    // `@mention` isn't mistaken for a file. Do not "fix" this to `-F`.
+    gh(['api', `repos/${repo}/issues/${issue}/comments`, '--method', 'POST', '-f', `body=${transitionComment}`]);
+  }
+  const req = stickyRequest(existing, repo, issue);
+  gh(['api', req.path, '--method', req.method, '-f', `body=${stickyBody}`]);
 }
 
 /** The human-visible markdown (used for both the job summary and sticky body). */
@@ -157,6 +200,8 @@ export function renderTransitionComment(transitions, pluginStatus, mention = '@d
     '',
     ...items,
     '',
-    'Recipe: bump locally → `flutter build apk --release` → if the KGP warning is gone, bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
+    'Recipe: bump locally → `flutter build apk --release`.',
+    '- If the KGP warning is gone: bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
+    '- If the warning is still there: leave the pin alone — it is no longer what arms this notification, so the next release still pings you regardless.',
   ].join('\n');
 }

@@ -8,6 +8,7 @@
 // and CLAUDE.md Before-shipping checklist step 3.
 
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -459,7 +460,29 @@ function parseLiveViewSections(html) {
 // Every extraction failure below is an error rather than a skip. A regex that
 // stops matching after a markup change would otherwise turn this whole check
 // into a vacuous pass — which is the exact shape of bug it exists to catch.
-export function checkLiveView(markdownText, rawLiveViewHtml) {
+//
+// `direction`:
+//   - 'both' (default): the original, symmetric tracked-pair comparison —
+//     the register and the tracked live-view.html are supposed to be in
+//     permanent lockstep, so EITHER side having something the other lacks
+//     is a defect. Used for the no-flag `check:onbox-register` run.
+//   - 'extraOnly': the `--against-published` comparison (#1931 review round
+//     2/3). Comparing the register you are ABOUT TO PUBLISH against the page
+//     that is ALREADY live is not symmetric: the register having rows the
+//     live page lacks is the NORMAL, INTENDED pre-publish state — that is
+//     the entire reason you are publishing — not evidence of anything wrong.
+//     Only the live page having content the register lacks is evidence the
+//     register is stale relative to what is already live (e.g. another lane
+//     published first). Reporting both directions here inverts the
+//     diagnosis: it fires on every genuine publish and tells the operator to
+//     delete the very rows they were about to publish. So in this mode, any
+//     check whose failure direction is "the register has X, the live page
+//     doesn't" is skipped outright — not reworded, not softened — and only
+//     "the live page has X, the register doesn't" checks fire. Extraction
+//     failures, malformed markup and duplicates are unaffected: they are not
+//     about direction, they are about whether the live page can be trusted
+//     at all, so they fire in both modes.
+export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both' } = {}) {
   const errors = [];
   const liveViewHtml = stripHtmlComments(rawLiveViewHtml);
   const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
@@ -486,7 +509,11 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
     errors.push(
       'Live view: no `<div class="n owed">NN</div>` found — the summary strip\'s owed total could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
     );
-  } else if (mdTotal !== null && Number(owedMatch[1]) !== mdTotal) {
+  } else if (direction === 'both' && mdTotal !== null && Number(owedMatch[1]) !== mdTotal) {
+    // Scalar, not directional: a total mismatch can't say WHICH rows differ,
+    // only that they do — so in 'extraOnly' mode it is dropped in favour of
+    // the precise, directional per-row `extra` checks below, rather than
+    // guessed at from the sign of the difference.
     errors.push(
       `Live view says ${owedMatch[1]} owed but the register says ${mdTotal}. Update the live view's summary strip.`,
     );
@@ -515,12 +542,15 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
     }
     for (const [letter, mdCount] of mdGroups) {
       if (!lvGroups.has(letter)) {
-        if (!malformedLetters.includes(letter)) {
+        // "the register has a group the live page doesn't" is the normal
+        // pre-publish state (a brand-new group not yet published) — not
+        // evidence of staleness. Skip in 'extraOnly' mode.
+        if (direction === 'both' && !malformedLetters.includes(letter)) {
           errors.push(`Live view: Group ${letter} is missing from the glance table.`);
         }
         continue;
       }
-      if (lvGroups.get(letter) !== mdCount) {
+      if (direction === 'both' && lvGroups.get(letter) !== mdCount) {
         errors.push(
           `Live view: glance table says Group ${letter} has ${lvGroups.get(letter)} rows, the register says ${mdCount}.`,
         );
@@ -529,7 +559,9 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
     for (const letter of lvGroups.keys()) {
       if (!mdGroups.has(letter)) {
         errors.push(
-          `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
+          direction === 'extraOnly'
+            ? `The live page's glance table has a Group ${letter} row that this register does not — the register is BEHIND what is already published. Add the group to the register before publishing.`
+            : `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
         );
       }
     }
@@ -560,14 +592,18 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
   for (const [letter, mdNumbers] of mdBodyGroups) {
     const section = lvSections.get(letter);
     if (!section) {
-      errors.push(`Live view: no group section for Group ${letter}.`);
+      // Normal pre-publish state in 'extraOnly' mode — see the function
+      // header comment.
+      if (direction === 'both') errors.push(`Live view: no group section for Group ${letter}.`);
       continue;
     }
     if (section.headerCount === null) {
+      // An extraction failure, not a directional comparison — the header IS
+      // there, its `gcount` span just couldn't be read. Fires in both modes.
       errors.push(
         `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
       );
-    } else if (section.headerCount !== mdNumbers.length) {
+    } else if (direction === 'both' && section.headerCount !== mdNumbers.length) {
       errors.push(
         `Live view: Group ${letter}'s header says ${section.headerCount} rows, the register's body has ${mdNumbers.length}.`,
       );
@@ -579,14 +615,20 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
     // Both messages name the SECTION the comparison was made in. Without it a
     // row filed under the wrong group reads as two contradicting errors — "X is
     // missing" and "X is extra" — with nothing saying where it actually sits.
-    if (missing.length > 0) {
+    // `missing` (register has, live page doesn't) is the normal pre-publish
+    // state in 'extraOnly' mode — see the function header comment — so it is
+    // skipped there; `extra` (live page has, register doesn't) is the ONLY
+    // directional signal that mode exists to surface, so it always fires.
+    if (direction === 'both' && missing.length > 0) {
       errors.push(
         `Live view's Group ${letter} section is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from that section.`,
       );
     }
     if (extra.length > 0) {
       errors.push(
-        `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
+        direction === 'extraOnly'
+          ? `The live page's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${extra.length === 1 ? 'it' : 'them'} in before publishing.`
+          : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
     if (section.rowIds.length !== found.size) {
@@ -598,7 +640,9 @@ export function checkLiveView(markdownText, rawLiveViewHtml) {
   for (const letter of lvSections.keys()) {
     if (!mdBodyGroups.has(letter)) {
       errors.push(
-        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+        direction === 'extraOnly'
+          ? `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`
+          : `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
       );
     }
   }
@@ -633,9 +677,6 @@ if (invokedAsCli) {
     }
   };
 
-  const text = read(REGISTER);
-  const liveViewHtml = read(LIVE_VIEW);
-
   const report = (label, errors) => {
     if (errors.length === 0) return false;
     console.error(`${label}:\n`);
@@ -643,6 +684,79 @@ if (invokedAsCli) {
     console.error('');
     return true;
   };
+
+  const text = read(REGISTER);
+
+  // --against-published <file>: the mechanical half of #1931's "re-read the
+  // live register immediately before publishing" step. CI has no credentials
+  // to fetch the published artifact itself — see this file's own header and
+  // the register's "Live view" section — so this mode takes a LOCALLY SAVED
+  // COPY of the page fetched by hand immediately before a publish, and runs
+  // the identical `checkLiveView` comparison against it, with `direction:
+  // 'extraOnly'` — see that function's own header comment for why this
+  // comparison is NOT symmetric like the no-flag tracked-pair run below: the
+  // register having rows the live page doesn't is the normal pre-publish
+  // state, not a defect, and reporting it here would tell the operator to
+  // delete the very rows they are about to publish (#1931 review round 3).
+  // Deliberately the same comparator, not a second one: the published page
+  // IS the tracked live-view.html's own content, wrapped in a publish
+  // skeleton the class-name-anchored parsers don't look at. Run BY HAND as
+  // the last step before publishing — not wired into
+  // onbox-register-check.yml, which has no such file to read and no network
+  // access to fetch one.
+  const againstPublishedIdx = process.argv.indexOf('--against-published');
+  if (againstPublishedIdx !== -1) {
+    const publishedPath = process.argv[againstPublishedIdx + 1];
+    if (!publishedPath) {
+      console.error(
+        '--against-published requires a file path: a locally saved copy of the page ' +
+          'fetched from the published URL just now.',
+      );
+      process.exit(1);
+    }
+    let publishedHtml;
+    try {
+      publishedHtml = readFileSync(resolve(publishedPath), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        console.error(
+          `Not found: ${publishedPath} — pass the path to a locally saved copy of the ` +
+            'fetched published page.',
+        );
+        process.exit(1);
+      }
+      // A directory (EISDIR) or a permissions failure (EACCES) is also a
+      // "can't read this" case, not just ENOENT — report it the same way
+      // rather than letting a raw stack trace stand in for the friendly
+      // message. Still fails closed either way.
+      if (err.code === 'EISDIR' || err.code === 'EACCES') {
+        console.error(`Cannot read ${publishedPath} (${err.code}) — pass a readable file path.`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    const publishedFailed = report(
+      `${publishedPath} (the currently-PUBLISHED page, fetched just now) shows the ` +
+        `register is BEHIND what is already live`,
+      checkLiveView(text, publishedHtml, { direction: 'extraOnly' }),
+    );
+    if (publishedFailed) {
+      console.error(
+        'Do not publish. Merge the rows named above — already live, not yet in this ' +
+          'register — then re-run this command against a fresh copy of the (still-current) ' +
+          'published page before publishing, per the "Live view" section of the register.',
+      );
+    } else {
+      // A prior version of this mode was silent on success — indistinguishable
+      // at the console (and to a test asserting only on the exit code) from
+      // the CLI block never having run at all. Echo explicitly, mirroring
+      // release-notes-gate.mjs's own `[…] OK — …` convention.
+      console.log(`check:onbox-register: OK — ${REGISTER} is not behind ${publishedPath}.`);
+    }
+    process.exit(publishedFailed ? 1 : 0);
+  }
+
+  const liveViewHtml = read(LIVE_VIEW);
 
   // Both checks always run — the live-view comparison is reported even when
   // the markdown is internally inconsistent, so one PR sees both problems
@@ -652,6 +766,14 @@ if (invokedAsCli) {
     `${LIVE_VIEW} does not agree with ${REGISTER}`,
     checkLiveView(text, liveViewHtml),
   );
+
+  // Same silent-success gap as --against-published above, closed the same
+  // way: a broken `invokedAsCli` and a genuine pass both used to read as
+  // "exit 0, no output" — indistinguishable to a test asserting only on the
+  // exit code.
+  if (!registerFailed && !liveViewFailed) {
+    console.log(`check:onbox-register: OK — ${REGISTER} and ${LIVE_VIEW} agree.`);
+  }
 
   process.exit(registerFailed || liveViewFailed ? 1 : 0);
 }
