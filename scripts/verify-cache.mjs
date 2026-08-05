@@ -53,7 +53,7 @@ export const STEPS = [
          — no module-graph edge, so without this a fixture-only diff (the
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
-      globs: ['scripts/tests/*.test.mjs', 'scripts/tests/fixtures/**'],
+      globs: ['scripts/**/*.{mjs,cjs}', 'scripts/tests/fixtures/**'],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
          RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs
@@ -84,6 +84,16 @@ export const STEPS = [
         'scripts/check-onbox-register.mjs',
         'docs/testing/onbox-acceptance-register.md',
         'docs/testing/onbox-acceptance-register-live-view.html',
+        // launch.mjs lives at the repo root, outside scripts/**, so the
+        // widened glob above doesn't reach it — launch.test.mjs imports it
+        // directly (ops-18, #2115).
+        'launch.mjs',
+        // install-qwen3.mjs lives under server/tts-sidecar/scripts/, outside
+        // scripts/**; the sidecar step's own globs only cover **/*.py +
+        // requirements*.txt, so nothing else picks this up either.
+        // install-qwen3-base17.test.mjs and install-qwen3-flash-attn.test.mjs
+        // both import it (ops-18, #2115).
+        'server/tts-sidecar/scripts/install-qwen3.mjs',
       ],
       includeLockfiles: ['root'],
     },

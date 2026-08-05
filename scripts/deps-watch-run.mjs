@@ -1,8 +1,9 @@
 // scripts/deps-watch-run.mjs
 // ops-17 deps-watch IO orchestrator (#790). Pure logic lives in
 // scripts/deps-watch.mjs (unit-tested); this file does only IO:
-// read pubspec + the pub-outdated JSON, fetch/refresh the sticky comment via
-// `gh api`, write the job summary, post the A2 transition comment, set exit code.
+// read pubspec + the pub-outdated JSON, fetch the existing sticky comment via
+// `gh api`, write the job summary, post the A2 transition comment, then
+// refresh the sticky comment, set exit code.
 // Exercised by the workflow_dispatch acceptance run, not by node --test.
 import { readFileSync, appendFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

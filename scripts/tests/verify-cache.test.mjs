@@ -5,9 +5,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import {
@@ -447,6 +448,70 @@ test('stepTouchedByDiff: the server lockfile is in scope for server legs only', 
 
 test('stepTouchedByDiff: an empty diff touches nothing', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], []), false);
+});
+
+// --- test:hooks completeness guard (ops-18, #2115) -------------------------
+// The globs + extraFiles above are a hand-maintained approximation of "every
+// file a hooks test depends on". This test checks that approximation against
+// reality: statically scan every scripts/tests/*.test.mjs for the producer
+// files it actually imports (relative specifiers only — bare specifiers like
+// `node:fs` or `archiver` aren't producers under test), and assert each one
+// is stepTouchedByDiff-visible to test:hooks. Without this, a producer that a
+// test imports but the cache step doesn't declare sits in the exact #1847
+// trap the extraFiles comments above describe: a producer-only diff prints
+// [cached] and the test that covers it never runs locally.
+const testsDir = resolve(dirname(fileURLToPath(import.meta.url)));
+const repoRoot = resolve(testsDir, '..', '..');
+
+// Pull relative-specifier producer imports out of a test file's source: both
+// the static `from '../x.mjs'` form and the dynamic `import('../x.mjs')`
+// form. Only `./`- or `../`-prefixed specifiers are producer imports.
+function extractRelativeImportSpecifiers(source) {
+  const specifiers = new Set();
+  const patterns = [
+    /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
+    /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      specifiers.add(match[1]);
+    }
+  }
+  return [...specifiers];
+}
+
+test('test:hooks completeness guard: every producer a hooks test imports is a cache input', () => {
+  const hooksStep = stepByName['test:hooks'];
+  const testFiles = readdirSync(testsDir).filter((f) => f.endsWith('.test.mjs'));
+  const missing = [];
+  let producersScanned = 0;
+
+  for (const testFile of testFiles) {
+    const source = readFileSync(join(testsDir, testFile), 'utf8');
+    for (const specifier of extractRelativeImportSpecifiers(source)) {
+      const absProducer = resolve(testsDir, specifier);
+      if (!existsSync(absProducer)) continue; // not a file on disk — nothing to require as an input
+      producersScanned += 1;
+      const repoRelative = _internals.toPosix(absProducer.slice(repoRoot.length + 1));
+      if (!stepTouchedByDiff(hooksStep, [repoRelative])) {
+        missing.push(`${repoRelative} (imported by scripts/tests/${testFile})`);
+      }
+    }
+  }
+
+  // Anti-vacuity: if the regex above ever silently matched nothing, this
+  // guard would pass forever while proving nothing (ops-18 brief mutation
+  // (c) — the exact "absent reads as clean" failure mode).
+  assert.ok(
+    producersScanned >= 30,
+    `expected to scan at least 30 relative producer imports across scripts/tests/*.test.mjs, found ${producersScanned} — extraction regex may be broken`,
+  );
+
+  assert.deepEqual(
+    missing,
+    [],
+    `producer(s) imported by a hooks test but not an input to test:hooks:\n${missing.join('\n')}`,
+  );
 });
 
 test('computeShared is true for a root manifest/lockfile change', () => {
