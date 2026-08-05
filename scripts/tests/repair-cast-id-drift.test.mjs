@@ -543,6 +543,83 @@ describe('planBookRepairs', () => {
     assert.equal(plan.skipped[0].reason, 'already-recorded');
   });
 
+  test('Round 4, MUST 2 (independent review, 2026-08-05): the historyResolver fallback threads rejectedPairs through — a pair-rejected alias must NOT read as already-recorded', () => {
+    // The bug this pins: the fallback (`planBookRepairs`'s `historyResolver`
+    // default, when `input.historyResolver` is omitted) built
+    // `{ supersededBy, rejected }` without `rejectedPairs` — correct on
+    // `main`, where the field didn't exist yet, and wrong the moment
+    // #2092/#2089 merged, since the real `buildCastResolver` now also
+    // reads it. A resolver missing `rejectedPairs` resolves 'mayrin' via
+    // the 'history' tier despite the pair reject below, which trips the
+    // already-recorded skip a few lines down (`aliasHit.via === 'history'
+    // | 'normalised-history'`) and hides the id from BOTH `autoRecord` AND
+    // `reportOnly` — a false skip, the exact under-report class the #2107
+    // widening exists to prevent, reintroduced one guard over.
+    //
+    // A PARTIAL history — `rejected` omitted entirely, exercising the same
+    // "planBookRepairs supports a partial history" contract the sibling
+    // test below pins — carrying `rejectedPairs` and no `historyResolver`.
+    // `makeRejectedPairsAwareFakeResolver` (unlike the shared
+    // `makeHistoryAwareFakeResolver`, which ignores `rejectedPairs`
+    // entirely — see its own doc comment) actually consults it, so
+    // whether the fallback threads the field through is observable here.
+    const makeRejectedPairsAwareFakeResolver = (idKeyFn) =>
+      function buildRejectedPairsAwareFakeResolver(cast, history = {}) {
+        const byId = new Map(cast.map((c) => [c.id, c]));
+        const byNormId = new Map(cast.map((c) => [idKeyFn(c.id), c]));
+        const supersededBy = history.supersededBy ?? {};
+        const rejectedPairs = history.rejectedPairs ?? [];
+        return {
+          resolve(id) {
+            if (byId.has(id)) return { character: byId.get(id), via: 'exact' };
+            if (id in supersededBy) {
+              const targetId = supersededBy[id];
+              const rejected = rejectedPairs.some((p) => p.from === id && p.to === targetId);
+              if (rejected) return undefined; // D2: pair-rejected, no fall-through
+              const target = byId.get(targetId);
+              if (target) return { character: target, viaAlias: id, via: 'history' };
+            }
+            const normId = byNormId.get(idKeyFn(id));
+            if (normId) return { character: normId, viaAlias: id, via: 'normalised-id' };
+            return undefined;
+          },
+        };
+      };
+    const localDeps = { ...deps, buildCastResolver: makeRejectedPairsAwareFakeResolver(idKey) };
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { supersededBy: { mayrin: 'mairin' }, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] },
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+      },
+      localDeps,
+    );
+    // NOT already-recorded — the pair reject correctly blocks the stale
+    // alias, so the id reaches Tier A/B matching instead of being silently
+    // hidden from both `autoRecord` and `reportOnly`.
+    assert.equal(
+      plan.skipped.some((s) => s.id === 'mayrin' && s.reason === 'already-recorded'),
+      false,
+    );
+    // It DOES reach Tier A (the cache name "Мэйрин" unambiguously matches
+    // live 'mairin'), and is THEN correctly declined by the pair-reject
+    // guard specifically — proving the false skip's damage concretely
+    // (with the fallback fix REMOVED, this whole scenario collapses to the
+    // single 'already-recorded' skip asserted absent above, and neither
+    // this specific reason nor the Tier A match is ever reached) rather
+    // than merely asserting an absence.
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].id, 'mayrin');
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+  });
+
   test('Round 4 (independent review, 2026-08-05): a PARTIAL history (no supersededBy field), no historyResolver, and a real-shaped buildCastResolver dep does not throw', () => {
     // planBookRepairs itself treats a partial history as a supported input
     // shape — it defends `history.rejected ?? []` a few lines up, and

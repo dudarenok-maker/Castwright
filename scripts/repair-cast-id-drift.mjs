@@ -617,13 +617,20 @@ export function planBookRepairs(input, deps) {
   // straight through — but `planBookRepairs` treats a PARTIAL history as a
   // supported shape (it defends `history.rejected ?? []` just above), while
   // the real `buildCastResolver` does `Object.entries(history.supersededBy)`
-  // (`cast-resolve.ts`), which throws on `undefined`. The sibling
-  // construction in `collectSegmentOrphans` already defends both fields —
-  // this fallback now matches it exactly, so the two constructions of "the
-  // same resolver" can't disagree about what a valid `history` is. Latent
-  // today (production's `loadCastIdHistory` always returns the full shape),
-  // and neither of the test file's existing resolver stand-ins could have
-  // caught it either: every test that passes a partial `history` and the
+  // (`cast-resolve.ts`), which throws on `undefined`. So this fallback
+  // explicitly defends every field `buildCastResolver` reads, unlike its
+  // sibling construction in `collectSegmentOrphans` — that one passes
+  // `history` UNMODIFIED (#2092/#2089 Task 9), which is correct there
+  // because its only production caller (`main()`, via `loadCastIdHistory`)
+  // always supplies the full, valid `CastIdHistory` shape; this fallback
+  // cannot make that same assumption, since it exists specifically to cover
+  // a caller — this function's OWN other, non-production callers, per this
+  // whole doc paragraph's I-A finding — that might not. The two
+  // constructions therefore look different on purpose: one trusts its
+  // single caller's contract, the other can't. Latent today (production's
+  // `loadCastIdHistory` always returns the full shape), and neither of the
+  // test file's existing resolver stand-ins could have caught a missing
+  // field either way: every test that passes a partial `history` and the
   // plain fake `deps.buildCastResolver` (`makeFakeResolver`) is safe only
   // because that fake never reads `history` at all, and every test that
   // uses the REAL-history-reading fake (`makeHistoryAwareFakeResolver`)
@@ -631,8 +638,24 @@ export function planBookRepairs(input, deps) {
   // on its dedicated round-4 regression test for the resolver stand-in that
   // actually proves this (one that mirrors the real, undefended
   // construction line).
+  //
+  // Round 4, MUST 2 (independent review, 2026-08-05): `rejectedPairs` was
+  // missing from this defended object — correct on `main` (where the field
+  // didn't exist yet) and wrong the moment #2092/#2089 merged, since
+  // `buildCastResolver` now also reads it. A resolver missing
+  // `rejectedPairs` resolves an id whose pair-reject blocks its target, so
+  // the already-recorded skip just below (`aliasHit.via === 'history' |
+  // 'normalised-history'`) fires and the id vanishes from BOTH `autoRecord`
+  // and `reportOnly` — a false skip, the exact under-report class the
+  // #2107 widening exists to prevent, reintroduced one guard over. Added
+  // alongside the other two defended fields.
   const historyResolver =
-    input.historyResolver ?? buildCastResolver(liveCast, { supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] });
+    input.historyResolver ??
+    buildCastResolver(liveCast, {
+      supersededBy: history.supersededBy ?? {},
+      rejected: history.rejected ?? [],
+      rejectedPairs: history.rejectedPairs ?? [],
+    });
 
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
