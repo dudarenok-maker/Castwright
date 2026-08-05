@@ -98,9 +98,26 @@ test('resolveSpecifier returns null when nothing resolves', () => {
   assert.equal(resolveSpecifier(join(d, 'a.mjs'), './nope.mjs'), null);
 });
 
+// `existsSync` is true for directories: the literal-match candidate ('' in
+// CANDIDATES) is tried before any `/index.*` candidate, so an unguarded
+// resolver would return the directory itself here — a bogus path the
+// transitive walk would then treat as a file safe to read.
+test('resolveSpecifier resolves a directory specifier via its index file, never the directory itself', () => {
+  const d = tree({ 'a.mjs': '', 'dir/index.ts': '' });
+  assert.equal(resolveSpecifier(join(d, 'a.mjs'), './dir'), join(d, 'dir', 'index.ts'));
+});
+
+test('resolveSpecifier returns null for a directory with no index candidate, not the directory itself', () => {
+  const d = tree({ 'a.mjs': '', 'dir/other.ts': '' });
+  assert.equal(resolveSpecifier(join(d, 'a.mjs'), './dir'), null);
+});
+
 // Anti-vacuity on the extractor itself: every real hooks test must parse.
 // A parse regression would otherwise surface only as a mysteriously shrunken
-// closure. Measured at authoring time: 59 files, 0 failures.
+// closure. This count is a point-in-time measurement, not an invariant — it
+// grows as hooks tests are added, which is why the floor below is a loose
+// `>= 40` rather than tracking it exactly. Measured on this branch when this
+// test was authored: 63 files, 0 failures.
 test('every hooks test file parses', () => {
   const dir = resolve(import.meta.dirname);
   const files = readdirSync(dir).filter((f) => f.endsWith('.test.mjs'));
