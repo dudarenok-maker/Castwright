@@ -169,7 +169,7 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
-    writes (`analysis.ts:3630`, `:3840`, `:5607`). Same as
+    writes (`analysis.ts:3633`, `:3845`, `:5613`). Same as
     `mergeAnalysisResultWithExistingCast` MINUS the id-drift name-fallback: an
     interim roster is partial by construction (`buildInterimCast` only folds
     chapters already analysed), so a prior character who simply hasn't been
@@ -187,7 +187,7 @@ export function overlayInterimCastForLiveView<T extends { id: string }>(
 }
 
 /** Shared core for both entry points above. `nameFallback` gates the id-drift
-    same-name match (`:257-281`-shaped block below) — when false, `old` is only
+    same-name match (`:281-305`-shaped block below) — when false, `old` is only
     ever resolved by exact id, `claimedByName` stays empty, and the
     carry-forward loop at the end unconditionally rescues every voiced prior
     row instead of treating any of them as already claimed. */
@@ -292,7 +292,7 @@ function mergeCore<T extends { id: string }>(
       // Safe to exclude unconditionally: the narrator id is code-seeded
       // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
       // legitimate id-drift case here for the fallback to rescue, and
-      // :263-269 already carries the narrator name forward on its own path.
+      // :323-332 already carries the narrator name forward on its own path.
       if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
         const cand = dropMatchCandidateByName.get(key);
         // A notLinkedTo edge between this specific pair is the user's

@@ -107,14 +107,14 @@ owner: null
    (see "Deviations from the spec").
 8. **An interim `cast.json` write never removes an id from the persisted
    roster** (srv-87, #2086). The three interim ("Cast so far") writes
-   (`analysis.ts:3630`, `:3840`, `:5607`) go through
+   (`analysis.ts:3633`, `:3845`, `:5613`) go through
    `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
    which has no id-drift name-fallback and produces no `retirements` — there is
    nothing in its return type for a caller to discard. Only the two
-   authoritative end-of-run writes (`:4880`, `:6142`) apply identity merges and
+   authoritative end-of-run writes (`:4885`, `:6148`) apply identity merges and
    call `retireCharacterId`. Before this fix, a mid-run death — **or a
    completed run whose `phase1DriftExceeded` gate skipped the authoritative
-   write** (`analysis.ts:4863`; `attributionDriftExceeded` is a normal, logged,
+   write** (`analysis.ts:4868`; `attributionDriftExceeded` is a normal, logged,
    non-crash outcome, not only a process kill) — could leave a character's id
    durably swapped in `cast.json` with no history record, orphaning that
    character's frozen `<slug>.segments.json` entries to the narrator. Residual

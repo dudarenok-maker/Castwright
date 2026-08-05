@@ -413,7 +413,11 @@ describe('overlayInterimCastForLiveView (srv-87, #2086)', () => {
   it('parity: on a no-drift fixture, matches mergeAnalysisResultWithExistingCast(...).characters exactly', () => {
     // The anti-drift guard for the two code paths not silently diverging
     // later — with no id drift there is nothing for the name-fallback to
-    // do, so both entry points must produce byte-identical output.
+    // do, so both entry points must produce byte-identical output. Covers
+    // alias union and the narrator-name carry-forward too — not just the
+    // exact-id overlay + preserved-voice-fields path — so a future change to
+    // either of those branches inside mergeCore can't silently diverge the
+    // two entry points without this test noticing.
     const existing: C[] = [
       {
         id: 'berrin',
@@ -421,17 +425,27 @@ describe('overlayInterimCastForLiveView (srv-87, #2086)', () => {
         voiceState: 'generated',
         overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
         lines: 58,
+        aliases: ['B'],
       },
       { id: 'wisp', name: 'Wisp', voiceId: 'wisp', voiceState: 'reused' },
+      { id: 'narrator', name: 'The Bard', voiceStyle: 'crisp herald' },
     ];
     const fresh: C[] = [
-      { id: 'berrin', name: 'Berrin', lines: 61 },
+      { id: 'berrin', name: 'Berrin', lines: 61, aliases: ['Berrin B.'] },
       { id: 'wisp', name: 'Wisp', lines: 12 },
       { id: 'new-char', name: 'New Char', lines: 3 },
+      { id: 'narrator', name: 'Erzähler', role: 'narrator', color: 'narrator' },
     ];
     const interim = overlayInterimCastForLiveView(existing, fresh);
     const authoritative = mergeAnalysisResultWithExistingCast(existing, fresh).characters;
     expect(interim).toEqual(authoritative);
+    // Sanity: confirm the widened fixture actually exercises what it claims to
+    // — a vacuous parity check (e.g. both sides silently ignoring aliases)
+    // would still pass the equality assertion above.
+    const berrin = interim.find((c) => c.id === 'berrin')!;
+    expect(berrin.aliases).toEqual(expect.arrayContaining(['B', 'Berrin B.']));
+    const narrator = interim.find((c) => c.id === 'narrator')!;
+    expect(narrator.name).toBe('The Bard'); // non-default prior name carried forward
   });
 });
 
