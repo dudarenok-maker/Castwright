@@ -664,15 +664,18 @@ describe('planBookRepairs', () => {
   });
 
   test('OWNER-DECIDED POLICY (review round 2, 2026-08-05): a book with cacheAvailable=false but NO Tier A/B candidate withholds NOTHING — withheldForMissingCache stays 0', () => {
-    // This is the exact *Unlocked* real-world shape the policy exists for:
-    // a book whose cache is unusable (cacheAvailable: false) but which has
-    // no orphaned id that would have matched anything anyway (no name/id
-    // signal at all — 'silveny' matches neither Tier A name nor Tier B
-    // id-shape against any live cast row here). Such a book has NOTHING at
-    // stake — no auto-record was ever going to happen for it, cache or no
-    // cache — so it must not count toward the signal that blocks --apply
-    // for the WHOLE workspace, even though `booksMissingCache` (main()'s
-    // separate, still-reported count) is unaffected by this distinction.
+    // A book whose cache is unusable (cacheAvailable: false) but which has
+    // an orphaned id with no name/id signal at all — 'silveny' matches
+    // neither Tier A name nor Tier B id-shape against any live cast row
+    // here — never even reaches the cacheAvailable gate, so it has NOTHING
+    // at stake and must not count toward the signal that blocks --apply for
+    // the WHOLE workspace. (NOTE: this is NOT *Unlocked*'s real shape — a
+    // live scan found *Unlocked* actually has one orphaned id,
+    // `unknown-male`/34 segments, refused by guard 1 as a reserved
+    // fold-bucket SOURCE — see the dedicated guard-1 test below, which
+    // mirrors the real book. This test pins the OTHER way
+    // withheldForMissingCache can legitimately stay 0: no match at all,
+    // not guard 1 refusing a match.)
     const orphans = new Map([
       [
         'silveny',
@@ -691,6 +694,50 @@ describe('planBookRepairs', () => {
     assert.equal(plan.reportOnly.length, 1);
     assert.equal(plan.reportOnly[0].id, 'silveny');
     assert.match(plan.reportOnly[0].reason, /no display name found/); // NOT the cacheAvailable reason — never reached it
+    assert.equal(plan.withheldForMissingCache, 0);
+  });
+
+  test('I5 correction (pre-merge review, 2026-08-05): the REAL *Unlocked* shape — a reserved SOURCE id refused by guard 1 withholds NOTHING, even with cacheAvailable=false and real bak evidence', () => {
+    // A live re-scan (pre-merge review) found *Unlocked* is NOT a
+    // no-orphaned-ids book — it has one, `unknown-male` (34 segments across
+    // 2 chapters), and it's guard 1 (reserved fold-bucket source refusal),
+    // firing BEFORE the cacheAvailable gate is ever reached, that keeps its
+    // blind ambiguity veto from ever standing between the pass and a real
+    // candidate — not an absence of orphans. This test pins that mechanism
+    // directly: unambiguous bak evidence naming one occurrence, cache
+    // unavailable, and STILL withheldForMissingCache stays 0 because guard
+    // 1 refuses first.
+    const bakNameIndex = buildNameIndex([{ id: 'unknown-male', name: 'Lord Cassius' }], lc);
+    const orphans = new Map([['unknown-male', renderedOrphan(34, [{ chapterId: 63, chapterTitle: 'Sophie', segments: 34, durationSec: 90 }])]]);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex: new Map(), bakNameIndex, orphans, cacheAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'unknown-male');
+    assert.match(plan.reportOnly[0].reason, /reserved fold-bucket\/narrator id/); // guard 1's reason, NOT the cacheAvailable one
+    assert.equal(plan.withheldForMissingCache, 0);
+  });
+
+  test('I2 (pre-merge review, 2026-08-05): a Tier A match with ZERO rendered segments and cacheAvailable=false withholds NOTHING — guard 3 refuses first', () => {
+    // Before I2, the cacheAvailable gate sat AHEAD of guard 3 (the
+    // zero-segment scope guard), so an id like this one — matched, but with
+    // nothing rendered — would have incremented withheldForMissingCache
+    // even though guard 3 was always going to refuse it regardless of cache
+    // evidence. A single such id in an otherwise-fine book could have
+    // falsely blocked --apply for the WHOLE workspace. The cacheAvailable
+    // gate now sits AFTER guard 3, so this case reaches guard 3's own
+    // "zero rendered segments" reason and withholds nothing.
+    const cacheNameIndex = buildNameIndex([{ id: 'never-rendered-guy', name: 'Timkin' }], lc);
+    const plan = planBookRepairs(
+      { liveCast, history: {}, cacheNameIndex, bakNameIndex: new Map(), orphans: new Map(), cacheAvailable: false },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 1);
+    assert.equal(plan.reportOnly[0].id, 'never-rendered-guy');
+    assert.match(plan.reportOnly[0].reason, /zero rendered segments/); // guard 3's reason, NOT the cacheAvailable one
     assert.equal(plan.withheldForMissingCache, 0);
   });
 
@@ -841,14 +888,14 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
   test('missing manuscriptId -> null / unavailable', () => {
     withTempCacheDir((dir) => {
       assert.equal(readAnalysisCache(dir, undefined), null);
-      assert.equal(isCacheAvailable(dir, undefined), false);
+      assert.equal(isCacheAvailable(dir, undefined, lc), false);
     });
   });
 
   test('no file at that path -> null / unavailable', () => {
     withTempCacheDir((dir) => {
       assert.equal(readAnalysisCache(dir, 'nonexistent-book'), null);
-      assert.equal(isCacheAvailable(dir, 'nonexistent-book'), false);
+      assert.equal(isCacheAvailable(dir, 'nonexistent-book', lc), false);
     });
   });
 
@@ -857,7 +904,7 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
       const contents = { stage1: { characters: [{ id: 'mairin', name: 'Мэйрин' }] } };
       fs.writeFileSync(path.join(dir, 'good-book.json'), JSON.stringify(contents));
       assert.deepEqual(readAnalysisCache(dir, 'good-book'), contents);
-      assert.equal(isCacheAvailable(dir, 'good-book'), true);
+      assert.equal(isCacheAvailable(dir, 'good-book', lc), true);
     });
   });
 
@@ -878,7 +925,7 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
       assert.equal(fs.existsSync(p), true);
       // ...but the pass must refuse to trust it.
       assert.equal(readAnalysisCache(dir, 'corrupt-book'), null);
-      assert.equal(isCacheAvailable(dir, 'corrupt-book'), false);
+      assert.equal(isCacheAvailable(dir, 'corrupt-book', lc), false);
     });
   });
 
@@ -901,7 +948,7 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
       const parsed = readAnalysisCache(dir, 'empty-book');
       assert.notEqual(parsed, null); // it DID parse...
       assert.deepEqual(parsed, {});
-      assert.equal(isCacheAvailable(dir, 'empty-book'), false); // ...but is not usable evidence
+      assert.equal(isCacheAvailable(dir, 'empty-book', lc), false); // ...but is not usable evidence
     });
   });
 
@@ -915,7 +962,36 @@ describe('readAnalysisCache / isCacheAvailable (#2093 residual 1)', () => {
       fs.writeFileSync(p, JSON.stringify({ chapterCast: { 1: [] } }));
       const parsed = readAnalysisCache(dir, 'empty-chapters-book');
       assert.notEqual(parsed, null);
-      assert.equal(isCacheAvailable(dir, 'empty-chapters-book'), false);
+      assert.equal(isCacheAvailable(dir, 'empty-chapters-book', lc), false);
+    });
+  });
+
+  test('I1 (pre-merge review, 2026-08-05): a cache whose only character has an EMPTY-STRING name reads as unavailable — cacheEntriesOf alone would have said "available"', () => {
+    // This is the gap I1 found one field deeper than C1: `cacheEntriesOf`
+    // only checks `typeof === 'string'`, so `{id:"sandor", name:""}` — a
+    // shape a truncated analyzer write could plausibly produce — passes it
+    // and used to make `isCacheAvailable` return `true`. But guard 2 (the
+    // cross-source ambiguity veto) doesn't consume `cacheEntriesOf`'s raw
+    // output — it consumes `cacheNameIndex`, built by `buildNameIndex`,
+    // which drops this SAME entry (falsy name). So the gate and the guard
+    // it protects were measuring two different quantities: `cacheAvailable
+    // === true` while `cacheNameIndex` is empty — guard 2 exactly as blind
+    // as with a missing file. `isCacheAvailable` now builds the real
+    // `cacheNameIndex` (via the same `buildNameIndex`) and checks THAT.
+    withTempCacheDir((dir) => {
+      const contents = { stage1: { characters: [{ id: 'sandor', name: '' }] } };
+      fs.writeFileSync(path.join(dir, 'empty-name-book.json'), JSON.stringify(contents));
+      const parsed = readAnalysisCache(dir, 'empty-name-book');
+      assert.notEqual(parsed, null); // it DID parse, and cacheEntriesOf sees a "string" name...
+      assert.equal(isCacheAvailable(dir, 'empty-name-book', lc), false); // ...but it is not usable evidence
+    });
+  });
+
+  test('I1: a cache whose only character has an EMPTY-STRING id also reads as unavailable', () => {
+    withTempCacheDir((dir) => {
+      const contents = { stage1: { characters: [{ id: '', name: 'Timkin' }] } };
+      fs.writeFileSync(path.join(dir, 'empty-id-book.json'), JSON.stringify(contents));
+      assert.equal(isCacheAvailable(dir, 'empty-id-book', lc), false);
     });
   });
 });
@@ -969,10 +1045,84 @@ describe('probePortRangeRefused (#2090)', () => {
     throw new Error(`could not find ${rangeSize} consecutive free ports after 25 attempts`);
   }
 
+  test('I3 (pre-merge review, 2026-08-05): AUTO_REBIND_RANGE is exactly 20 — matches listenWithAutoRebind\'s own maxAttempts default (server/src/crash-logging.ts)', () => {
+    // Deliberately a hardcoded literal, not derived from anything else: this
+    // is the one place the constant's actual VALUE gets pinned. The two
+    // boundary tests below import AUTO_REBIND_RANGE (correctly, to avoid a
+    // driftable copy of their OWN fixture sizing — see M5's rationale) —
+    // but that means a change to the constant's value moves both the
+    // production code AND those tests' expectations in lockstep, so they
+    // can only catch a LOOP bug (e.g. an off-by-one in how the constant is
+    // used), never a change to the constant itself. Confirmed by mutation:
+    // AUTO_REBIND_RANGE 20 -> 19 left both boundary tests green. This test
+    // is what actually catches that mutation.
+    assert.equal(AUTO_REBIND_RANGE, 20);
+  });
+
   test('every port in the range gives a clean ECONNREFUSED when nothing is listening', async () => {
     const base = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
     const notRefused = await probePortRangeRefused(base, '127.0.0.1');
     assert.deepEqual(notRefused, []);
+  });
+
+  test('I3 (pre-merge review, 2026-08-05): a listener at the EXACT configured port is caught — pins that the range starts at i=0, not i=1', async () => {
+    // Mutation-tested by pre-merge review: changing `startPort + i` to
+    // `startPort + i + 1` inside probePortRangeRefused — which stops
+    // probing the configured port ITSELF, reopening the pre-#2090 bug in a
+    // worse form — passed all 79 existing tests, because none of them put
+    // a listener on the exact configured port; the CRITICAL (#2090) test
+    // above only covers configuredPort+5. This test closes that hole
+    // directly: a listener on the configured port itself must be caught.
+    const configuredPort = await findVerifiedFreeRange(1, '127.0.0.1');
+    const server = net.createServer();
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(configuredPort, '127.0.0.1', resolve);
+    });
+    try {
+      const notRefused = await probePortRangeRefused(configuredPort, '127.0.0.1');
+      assert.ok(notRefused.includes(configuredPort), `expected ${configuredPort} to be in ${JSON.stringify(notRefused)}`);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test('I3 (pre-merge review, 2026-08-05): the LAST port in the range is caught, but the port just past it is NOT — pins both AUTO_REBIND_RANGE and the loop bound together', async () => {
+    // Mutation-tested by pre-merge review: shrinking AUTO_REBIND_RANGE from
+    // 20 to 19 also passed all 79 existing tests, because none of them
+    // pinned the range's own size. This test binds a listener at exactly
+    // `configuredPort + AUTO_REBIND_RANGE - 1` (the last port the range
+    // SHOULD cover) and another at `configuredPort + AUTO_REBIND_RANGE`
+    // (the first port it should NOT) — a range-size mutation in either
+    // direction moves which one the probe actually reaches, so either
+    // assertion below catches it.
+    const configuredPort = await findVerifiedFreeRange(AUTO_REBIND_RANGE + 1, '127.0.0.1');
+    const lastInRangePort = configuredPort + AUTO_REBIND_RANGE - 1;
+    const justPastRangePort = configuredPort + AUTO_REBIND_RANGE;
+    const lastServer = net.createServer();
+    const pastServer = net.createServer();
+    await new Promise((resolve, reject) => {
+      lastServer.once('error', reject);
+      lastServer.listen(lastInRangePort, '127.0.0.1', resolve);
+    });
+    await new Promise((resolve, reject) => {
+      pastServer.once('error', reject);
+      pastServer.listen(justPastRangePort, '127.0.0.1', resolve);
+    });
+    try {
+      const notRefused = await probePortRangeRefused(configuredPort, '127.0.0.1');
+      assert.ok(
+        notRefused.includes(lastInRangePort),
+        `expected the last in-range port ${lastInRangePort} to be in ${JSON.stringify(notRefused)}`,
+      );
+      assert.ok(
+        !notRefused.includes(justPastRangePort),
+        `expected the just-past-range port ${justPastRangePort} to NOT be in ${JSON.stringify(notRefused)}`,
+      );
+    } finally {
+      await new Promise((resolve) => lastServer.close(resolve));
+      await new Promise((resolve) => pastServer.close(resolve));
+    }
   });
 
   test('CRITICAL (#2090): refuses when a server occupies a port INSIDE the auto-rebind range but NOT the exact configured port', async () => {
@@ -1013,6 +1163,20 @@ describe('probePortRangeRefused (#2090)', () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  test('minor (pre-merge review, 2026-08-05): a configured port near the top of the 16-bit range does not throw — clamps at 65535 instead of overflowing', async () => {
+    // Before the clamp, PORT=65530 + AUTO_REBIND_RANGE (20) walks the
+    // candidate list up to 65549 — past the valid TCP port ceiling — and
+    // `net.connect` throws SYNCHRONOUSLY on an out-of-range port number,
+    // so the operator would see a raw stack trace instead of this script's
+    // own refusal message. This must resolve cleanly, not throw or reject.
+    await assert.doesNotReject(probePortRangeRefused(65530, '127.0.0.1'));
+    const notRefused = await probePortRangeRefused(65530, '127.0.0.1');
+    // Every candidate probed (65530-65535) should read as refused (nothing
+    // listening there in a test environment) — the clamp excludes
+    // 65536-65549 from the probed set entirely rather than crashing on them.
+    assert.deepEqual(notRefused, []);
   });
 });
 

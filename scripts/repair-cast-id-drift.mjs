@@ -414,17 +414,25 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  (already recorded, or explicitly rejected by the user — #2040 Task 17's
  *  `rejected` list). Returns `{ autoRecord, reportOnly, skipped,
  *  withheldForMissingCache }` — the last is a COUNT (owner-decided policy,
- *  review round 2, 2026-08-05), not a boolean or a re-derivation of
- *  `!cacheAvailable`: it only increments when an id actually reached and
- *  passed guards 1/2 (a real Tier A/B match, not reserved, not
- *  cross-source-ambiguous) and was THEN withheld solely because
- *  `cacheAvailable` was false. A book can have `cacheAvailable: false` and
- *  `withheldForMissingCache === 0` at the same time — e.g. a book whose
- *  cache parses but names nobody, and which simply has no orphaned id that
- *  would have matched anything anyway; that book has nothing at stake and
- *  `main()` must not let it veto every other book's `--apply` run. This is
- *  the signal `main()` gates the global `--apply` refusal on, not the
- *  broader "this book's cache is unusable" fact (which stays reported, via
+ *  review round 2, 2026-08-05; ordering fixed by pre-merge review I2,
+ *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
+ *  only increments when an id would have reached `autoRecord.push` on
+ *  cache evidence alone — i.e. it already passed guard 1 (not reserved),
+ *  guard 2 (not cross-source-ambiguous), guard 4 (`snapshotsConsistent`),
+ *  AND guard 3 (>=1 rendered segment) — and was refused SOLELY because
+ *  `cacheAvailable` was false. The cache-availability check sits LAST in
+ *  the guard chain for exactly this reason (I2): an id guard 3 or 4 would
+ *  have refused ANYWAY, cache evidence or not, must not inflate this
+ *  count — a single bak entry naming a retired, never-rendered id in a
+ *  cache-blind book must not read as "a real auto-record was withheld
+ *  here" when nothing was ever going to be auto-recorded for it. A book
+ *  can have `cacheAvailable: false` and `withheldForMissingCache === 0` at
+ *  the same time — e.g. a book whose cache parses but names nobody, and
+ *  which simply has no orphaned id that would have matched (or reached)
+ *  anything anyway; that book has nothing at stake and `main()` must not
+ *  let it veto every other book's `--apply` run. This is the signal
+ *  `main()` gates the global `--apply` refusal on, not the broader "this
+ *  book's cache is unusable" fact (which stays reported, via
  *  `booksMissingCache`, but no longer gates).
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
@@ -608,32 +616,6 @@ export function planBookRepairs(input, deps) {
     }
 
     if (matchedId) {
-      // --- round-2 review, Important 1: fail-closed cache-availability
-      // gate. Guard 2 (the cross-source ambiguity veto, above) can only see
-      // an id as ambiguous through `cacheNameIndex` — if this book's
-      // analysis-cache file was never found (missing `CACHE_DIR`, a fresh
-      // worktree with no cache of its own), `cacheNameIndex` is silently
-      // EMPTY, not "confirmed unambiguous". That is exactly the gap that
-      // would have re-opened the bak-unambiguous x cache-ambiguous cell the
-      // Critical fix closed — so a match is never auto-recorded for a book
-      // whose cache evidence is missing, no matter how clean the bak-only
-      // evidence looks. `cacheAvailable` is computed once per book (main())
-      // from whether the file both exists AND parses (#2093 residual 1 —
-      // see `main()`'s own comment on this), not from whether this
-      // PARTICULAR id happens to appear in it.
-      if (!cacheAvailable) {
-        withheldForMissingCache += 1;
-        reportOnly.push({
-          id,
-          segments: orphan.segments,
-          chapters: orphan.chapters,
-          reason: `name/id-matched "${matchedId}" (${evidence}) but this book's analysis-cache file was not ` +
-            `found — the cross-source ambiguity veto (guard 2) cannot rule out cache ambiguity without it, so ` +
-            `auto-record is withheld until CACHE_DIR points at the checkout that ran this book's analysis`,
-          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
-        });
-        continue;
-      }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
       // own doc comment for its narrowed scope post round-1).
       if (!snapshotsConsistent(orphan.snapshots)) {
@@ -697,6 +679,48 @@ export function planBookRepairs(input, deps) {
             candidates: [],
           });
         }
+        continue;
+      }
+      // --- round-2 review, Important 1: fail-closed cache-availability
+      // gate. Guard 2 (the cross-source ambiguity veto, above) can only see
+      // an id as ambiguous through `cacheNameIndex` — if this book's
+      // analysis-cache file was never found (missing `CACHE_DIR`, a fresh
+      // worktree with no cache of its own), `cacheNameIndex` is silently
+      // EMPTY, not "confirmed unambiguous". That is exactly the gap that
+      // would have re-opened the bak-unambiguous x cache-ambiguous cell the
+      // Critical fix closed — so a match is never auto-recorded for a book
+      // whose cache evidence is missing, no matter how clean the bak-only
+      // evidence looks. `cacheAvailable` is computed once per book (main())
+      // from whether the file both exists AND parses (#2093 residual 1 —
+      // see `main()`'s own comment on this), not from whether this
+      // PARTICULAR id happens to appear in it.
+      //
+      // --- I2 (pre-merge review, 2026-08-05): this gate is deliberately
+      // LAST, immediately before `autoRecord.push`, not first — moved down
+      // past guards 3 and 4 above. Before this fix it sat ahead of both, so
+      // an id that guard 3 (zero segments) or guard 4 (inconsistent
+      // snapshots) would have refused ANYWAY — cache evidence or not —
+      // still incremented `withheldForMissingCache`, the count that gates
+      // the WHOLE workspace's `--apply` run (see `shouldRefuseApplyForWithheldAutoRecord`).
+      // A single bak entry naming a retired, never-rendered id in a
+      // cache-blind book would have printed `withheld: 1` and refused
+      // `--apply` for all twenty books — the exact false-block the
+      // round-2 policy change exists to prevent, one guard over. Ordering
+      // this last means `withheldForMissingCache` only ever counts an id
+      // that would otherwise have reached `autoRecord.push` — an exact
+      // count, not an over-count — and its own reason string is only ever
+      // shown for a candidate that was genuinely about to be recorded.
+      if (!cacheAvailable) {
+        withheldForMissingCache += 1;
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this book's analysis-cache file was not ` +
+            `found — the cross-source ambiguity veto (guard 2) cannot rule out cache ambiguity without it, so ` +
+            `auto-record is withheld until CACHE_DIR points at the checkout that ran this book's analysis`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
         continue;
       }
       autoRecord.push({ id, to: matchedId, tier, evidence, segments: orphan.segments, chapters: orphan.chapters });
@@ -901,27 +925,36 @@ function analysisCacheFileExists(cacheDir, manuscriptId) {
 }
 
 /** #2093 residual 1 fix (widened by independent-review Critical C1,
- *  2026-08-05): the actual `cacheAvailable` gate. A book's analysis-cache
- *  evidence counts as available only when the file EXISTS, PARSES, **and
- *  names at least one character** — not merely "exists and parses" (that
- *  narrower check was C1's own finding: guard 2, the cross-source
- *  ambiguity veto, doesn't consume "it parsed", it consumes
- *  `cacheEntriesOf(cache)`, and BOTH `stage1.characters` and `chapterCast`
- *  are OPTIONAL per the schema — `server/src/store/analysis-cache.ts:69-77`
- *  — so a validly-parsing cache that names nobody used to pass this gate,
- *  produce an EMPTY `cacheNameIndex`, and leave guard 2 exactly as blind as
- *  a missing file would, without `booksMissingCache` ever counting it.
+ *  2026-08-05, and again by pre-merge review I1, 2026-08-05): the actual
+ *  `cacheAvailable` gate. A book's analysis-cache evidence counts as
+ *  available only when the file EXISTS, PARSES, **and produces at least
+ *  one USABLE name/id entry in the same index guard 2 actually consumes**
+ *  — not merely "exists, parses, and `cacheEntriesOf` returns something
+ *  non-empty" (that narrower check was I1's own finding: `cacheEntriesOf`
+ *  only checks `typeof === 'string'`, so an entry like `{id:"sandor",
+ *  name:""}` — one truncated analyzer write — passes it and made
+ *  `isCacheAvailable` return `true`, while `buildNameIndex` (what guard 2,
+ *  the cross-source ambiguity veto, actually reads as `cacheNameIndex`)
+ *  drops that SAME entry for its falsy name — round 1's Critical reopened
+ *  one field deeper). This now calls `buildNameIndex` with the SAME
+ *  `normaliseFn` production wires in (`main()` passes
+ *  `mods.normaliseForMatch`, the real server function) rather than
+ *  re-deriving a parallel "is this entry usable" check — the exact
+ *  "don't duplicate the resolver" principle this whole script already
+ *  follows for id resolution, applied here to name-index construction too.
  *  Measured against the real workspace's cache dir: 76 files parse, 0 are
- *  unparseable, and **10 parse with zero character entries** — one of them
- *  a real book (*Unlocked*, `mns_dLurz4I544`) that also carries bak-only
- *  name evidence guard 2 must not treat as uncontested without the cache's
- *  corroboration/veto. All three refusal states — missing, unparseable,
- *  parses-but-names-nobody — now read the same way here; `main()`'s
- *  diagnostic line still distinguishes them for the operator (see its own
- *  comment). */
-export function isCacheAvailable(cacheDir, manuscriptId) {
+ *  unparseable, 10 parse with zero character entries, and 0 exhibit the
+ *  empty-string-field shape this residual fixes — one of the 10 zero-entry
+ *  books (*Unlocked*, `mns_dLurz4I544`) also carries bak-only name evidence
+ *  guard 2 must not treat as uncontested without the cache's
+ *  corroboration/veto. All refusal states — missing, unparseable,
+ *  parses-but-produces-no-usable-entry — now read the same way here;
+ *  `main()`'s diagnostic line still distinguishes the first two for the
+ *  operator (see its own comment). */
+export function isCacheAvailable(cacheDir, manuscriptId, normaliseFn) {
   const cache = readAnalysisCache(cacheDir, manuscriptId);
-  return cache !== null && cacheEntriesOf(cache).length > 0;
+  if (cache === null) return false;
+  return buildNameIndex(cacheEntriesOf(cache), normaliseFn).size > 0;
 }
 
 function cacheEntriesOf(cache) {
@@ -1028,9 +1061,20 @@ export const AUTO_REBIND_RANGE = 20;
  *  way for the widened range to become LESS fail-closed than the original
  *  single-port probe by taking longer. Returns every port in the range
  *  that did NOT resolve a clear `ECONNREFUSED` — an empty array means every
- *  candidate gave a definitive "nothing is listening". */
+ *  candidate gave a definitive "nothing is listening".
+ *
+ *  Clamps to the valid TCP port range (minor, pre-merge review, 2026-08-05):
+ *  without this, `PORT`/`LAN_HTTPS_PORT` set near the top of the 16-bit
+ *  range (e.g. `PORT=65530`) makes `startPort + i` overflow past `65535`
+ *  for the last few candidates, and `net.connect` throws SYNCHRONOUSLY on
+ *  an out-of-range port number — the operator would see a raw stack trace
+ *  instead of this script's own refusal message. A port number above
+ *  `65535` cannot exist, so it cannot have a listener; excluding it from
+ *  the probed set loses no real safety coverage — every port that COULD
+ *  exist in the rebind range is still fully probed, and the fail-closed
+ *  property is unaffected either way. */
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
-  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i);
+  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) => p <= 65535);
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
 }
@@ -1253,17 +1297,21 @@ async function main() {
     // Round-2 review, Important 1: the cross-source ambiguity veto (guard 2
     // in planBookRepairs) can only see cache ambiguity through this file —
     // a MISSING, UNPARSEABLE, or (#2093 residual 1, widened by
-    // independent-review Critical C1) VALIDLY-PARSING-BUT-NAMES-NOBODY
-    // cache file must never silently read as "confirmed unambiguous".
-    // `cacheAvailable` is a per-book fact — does the file exist, parse, AND
-    // supply usable evidence — computed independently of whether THIS
-    // book's cache happens to name any of its orphaned ids specifically.
-    // Gated on `isCacheAvailable` (exists+parses+non-empty), not
-    // `analysisCacheFileExists` (exists only, which read a
+    // independent-review Critical C1, widened again by pre-merge review I1)
+    // PARSES-BUT-PRODUCES-NO-USABLE-NAME/ID-ENTRY cache file must never
+    // silently read as "confirmed unambiguous". `cacheAvailable` is a
+    // per-book fact — does the file exist, parse, AND supply usable
+    // evidence — computed independently of whether THIS book's cache
+    // happens to name any of its orphaned ids specifically. Gated on
+    // `isCacheAvailable`, passed the SAME `normaliseForMatch` used to build
+    // `cacheNameIndex` below so the gate and the guard it protects measure
+    // the identical quantity (I1: the gate used to accept an entry with an
+    // empty-string id/name that `buildNameIndex` would silently drop) —
+    // never `analysisCacheFileExists` (exists only, which read a
     // present-but-corrupt OR present-but-empty file as "available" — the
     // exact fail-open shape the round-2 fix closed one level up, reopened
-    // here twice).
-    const cacheAvailable = isCacheAvailable(cacheDir, book.state.manuscriptId);
+    // here three times now).
+    const cacheAvailable = isCacheAvailable(cacheDir, book.state.manuscriptId, mods.normaliseForMatch);
     if (!cacheAvailable) booksMissingCache += 1;
     const cache = readAnalysisCache(cacheDir, book.state.manuscriptId);
     const cacheNameIndex = buildNameIndex(cacheEntriesOf(cache), mods.normaliseForMatch);
