@@ -1912,6 +1912,13 @@ def test_qwen_tts_pinned_for_raw_bypass() -> None:
     # This reads the REAL installed qwen-tts package's own distribution
     # metadata — qwen-tts itself (not just torch) is absent from the lean
     # CI venv (it lives in the vendor overlay, pulling torch/transformers).
+    # M4 (#2146 review): because of that, this importorskip means the pin can
+    # now NEVER run in CI (server/tts-sidecar/requirements/nvidia-cuda.txt and
+    # amd-rocm.txt, where a qwen-tts bump would actually land, are not
+    # installed in CI's lean venv either) — a green CI run is not evidence
+    # this pin held. Not a regression from this PR: CI previously ran no
+    # sidecar tests at all. Re-verify by running this suite against the full
+    # vendor overlay before bumping qwen-tts.
     pytest.importorskip("qwen_tts")
     from importlib.metadata import version
 
