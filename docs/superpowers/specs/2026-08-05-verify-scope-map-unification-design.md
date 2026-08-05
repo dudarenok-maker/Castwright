@@ -282,8 +282,26 @@ leg's.
 
 ### Completeness guard, hardened (#2120)
 
-1. **Strip comments before extraction.** Load-bearing, not cosmetic:
-   `verify-cache.mjs:107` contains a literal `require('../../pinokio.js')`
+1. **Extract specifiers by PARSING, not by regex over stripped text.**
+
+   > **Superseded (plan review round 2).** This item originally specified a
+   > comment-stripping step. Two hand-rolled lexers were written for it and
+   > **both were defective** — the second retained a *re-closing* desync
+   > (`return /a\/*b/;` is read as division, `/*` opens a phantom comment, a
+   > later `*/` closes it) that silently swallowed imports while the terminal
+   > state finished clean, so the whole-repo detector could not see it.
+   > `acorn` is already resolvable (8.16.0, via eslint) and ignores comments
+   > natively. Measured: 0 parse failures across 59 hooks tests, and the only
+   > delta from the regex approach is that acorn correctly declines to
+   > extract `../../pinokio.js` from inside a **string literal** — a false
+   > positive that also happened to be the sole trigger of `check-ignore`'s
+   > exit-128 path. Parsing removes the desync class, the false positive and
+   > the 128 trigger together. **Parse failure throws** rather than yielding
+   > no edges.
+
+   The original rationale, retained because it explains what the parser
+   makes moot: `verify-cache.mjs:107` contains a literal
+   `require('../../pinokio.js')`
    inside a comment that resolves *outside the repo root*. Under fail-closed
    resolution (step 5) that is a false failure. Stripping also retires the
    rule at `verify-cache.test.mjs:498-500` ("do not spell out a literal

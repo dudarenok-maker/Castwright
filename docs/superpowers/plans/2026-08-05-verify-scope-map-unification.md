@@ -20,7 +20,7 @@ about how scope is *computed* changes) and de-circularises A2. **A2** rewrites
 `verify.yml` to derive per-step scope from `STEPS[]` via a new
 `scripts/ci-scope.mjs`, guarded by four assertions over the parsed workflow.
 **B** hardens `scripts/tests/verify-cache.test.mjs`'s completeness guard with
-comment-stripping, a TS-aware resolver, a transitive walk stopped at
+AST-based extraction, a TS-aware resolver, a transitive walk stopped at
 gitignored paths, and splits `check-no-budget-poll` into its own step.
 
 **Tech Stack:** Node 20 ESM (`.mjs`), `node:test` + `node:assert/strict`,
@@ -65,7 +65,7 @@ verbatim from the spec.
 | `scripts/ci-scope.mjs` | A2 | **new** — derive per-step CI scope from `STEPS[]`; emit `scopes` JSON + `ok` sentinel |
 | `scripts/tests/ci-scope.test.mjs` | A2 | **new** — unit tests for the above (fail-safe, dispatch, shared) |
 | `scripts/tests/workflow-wiring.test.mjs` | A2 | **new** — the four assertions over parsed `verify.yml` |
-| `scripts/lib/module-graph.mjs` | B | **new** — comment-strip, resolve, `check-ignore` classify, transitive walk |
+| `scripts/lib/module-graph.mjs` | B | **new** — AST extract, resolve, `check-ignore` classify, transitive walk |
 | `scripts/tests/module-graph.test.mjs` | B | **new** — synthetic-fixture unit tests incl. M17 |
 | `.github/workflows/verify.yml` | A1, A2 | scope detection + per-step gating |
 | `scripts/verify-cache.mjs` | A1, A2, B | `STEPS[]` — the single source of truth |
@@ -126,6 +126,20 @@ test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
     true,
   );
 });
+
+// .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
+// (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
+// stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
+// defect D again for .husky, on the very PR that fixes it for .github, and
+// none of the four wiring assertions can see it (they check key existence
+// and job membership, not whether a derived condition still covers what the
+// legacy one did). release-manifest.test.mjs:95 reads .husky/pre-commit at
+// runtime, so this is a real edge, not a theoretical one.
+test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
+  for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
+    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);
+  }
+});
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -149,6 +163,12 @@ In `scripts/verify-cache.mjs`, the `test:hooks` entry, extend `globs`
            the assertion sits stale-green. Same #1847 trap as fixtures/**
            above (defect D, #2119 review). */
         '.github/workflows/**',
+        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
+           matcher, which A2 deletes — and it is an input to no step, so
+           without this a .husky-only PR would run zero legs after A2.
+           release-manifest.test.mjs reads .husky/pre-commit at runtime
+           (plan review round 2). */
+        '.husky/**',
       ],
 ```
 
@@ -394,12 +414,29 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
     return 0;
   }
 
+  // run-tests.ps1 also probes for pytest itself and SKIPs when a venv exists
+  // but requirements-dev.txt was never installed. Without this, that box goes
+  // from green-skip to RED on `npm run verify` and pre-push — a regression
+  // dressed up as "local behaviour is unchanged".
+  const probe = spawnSync(python, ['-m', 'pytest', '--version'], { encoding: 'utf8' });
+  if ((probe.status ?? 1) !== 0) {
+    const msg = 'sidecar pytest -- venv present but pytest is not installed';
+    if (requireVenv) {
+      process.stderr.write(`ERROR: ${msg}\n`);
+      return 1;
+    }
+    process.stdout.write(`\nSKIP: ${msg}\n`);
+    process.stdout.write('        .venv/bin/python -m pip install -r requirements-dev.txt\n\n');
+    return 0;
+  }
+
   // -m "not golden" mirrors the existing runner: the opt-in golden-audio tier
-  // must never load a model here.
+  // must never load a model here. `--tb=short -q` and the explicit tests/ path
+  // also mirror it, so output is comparable to the PowerShell runner's.
   const passthrough = argv.filter((a) => a !== '--require-venv');
   const result = spawnSync(
     python,
-    ['-m', 'pytest', '-m', 'not golden', ...passthrough],
+    ['-m', 'pytest', '-m', 'not golden', '--tb=short', '-q', 'tests', ...passthrough],
     { cwd: sidecarDir, stdio: 'inherit' },
   );
   if (result.error) {
@@ -510,6 +547,13 @@ Insert after the `server-tests` job in `.github/workflows/verify.yml`:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Every other job uses this; without it this job relies on whatever Node
+      # ubuntu-latest happens to ship and pins no version. `npm run
+      # test:sidecar` needs Node but no node_modules, so the composite's
+      # `npm ci` is cheap insurance rather than a requirement.
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
 
       - name: Setup Python
         if: needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
@@ -919,7 +963,11 @@ bash branch must go.
 
 But the `git merge-base` / `git diff` lines below it would then run on a
 dispatch with empty `BASE`/`HEAD` and fail under `set -e`. Guard them.
-Replace the entire `run:` body (`:113` through `:180`) with:
+Replace the `run:` body — **`:114` through `:180`**. Not `:113`: that line is
+`        id: changes`, and deleting it removes the step id that
+`steps.changes.outputs.*` resolves through, so both outputs would silently
+resolve empty. (Task 9's sentinel catches it — fail-closed — but as a
+red run costing a debugging cycle rather than an obvious error.)
 
 ```yaml
         run: |
@@ -1031,12 +1079,18 @@ today. `openapi.yaml` needs no special handling: it is already in `test`'s
 
 Preserve today's behaviour explicitly rather than narrowing by accident:
 
+**`# leg:` must be the LAST comment line before `- name:`.** Task 8's regex
+is `# leg: X\n\s*- name:`, and `\s*` does not span other comment lines — an
+earlier draft of this very snippet put four comment lines in between, so
+`# leg: test` matched nothing and the leg silently vanished from the binding
+map. Put explanatory prose *above* the marker:
+
 ```yaml
-      # leg: test
       # test:e2e is a deliberate extra trigger: this step also runs
       # `npm run test:a11y`, which has no STEP of its own, and an e2e-only
       # diff should still exercise the a11y battery. Dropping it would be a
       # silent narrowing of what runs today.
+      # leg: test
       - name: Frontend tests + a11y
         if: fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
 ```
@@ -1115,16 +1169,20 @@ const referenced = [...source.matchAll(/fromJSON\(needs\.detect\.outputs\.scopes
   .map((m) => m[1]);
 
 test('anti-vacuity: the workflow scan finds references', () => {
-  // UNITS: this counts REFERENCES, not `if:` sites. Measured on the
-  // pre-derivation workflow: 17 `if:` lines but 55 scope references, and A1's
-  // sidecar job adds ~6 more. An earlier draft of this plan set the floor to
-  // 20 while reasoning about "~20 if: sites" — the exact unit conflation the
-  // spec's Measurements section warns about, and the same mistake that left
-  // the old guard's floor at 30 against a real 60. Floor 50 gives ~18%
-  // headroom against ~61.
+  // UNITS: this counts REFERENCES, not `if:` sites — and the two are not
+  // convertible. This floor has now been wrong TWICE for that reason:
+  //   * 20, reasoned from "~20 if: sites" (the regex counts references);
+  //   * 50, reasoned as 55 pre-derivation refs + 6 for A1's sidecar job —
+  //     which assumes conversion preserves refs-per-site. It does not. The
+  //     pre-derivation workflow averages 2.9 refs/site because legacy scope
+  //     names are broader; every derived site is exactly 2 (3 for the two
+  //     union sites). Constructed post-A2: 23 sites, **49 references** —
+  //     BELOW the old floor of 50, i.e. guaranteed spurious red.
+  // Floor 35 gives ~29% headroom under 49. Re-measure against the real
+  // workflow once Task 7 is done rather than trusting this number.
   assert.ok(
-    referenced.length >= 50,
-    `expected >= 50 fromJSON references, found ${referenced.length} — either the regex broke or the workflow lost wiring`,
+    referenced.length >= 35,
+    `expected >= 35 fromJSON references, found ${referenced.length} — either the regex broke or the workflow lost wiring`,
   );
 });
 
@@ -1196,8 +1254,13 @@ test('setup steps depend on the same scope keys as the leg they support', () => 
     /# supports: ([a-z:0-9-]+)\n\s*- name: ([^\n]+)\n\s*if: ([^\n]+)\n/g,
   )];
 
-  assert.ok(setups.length >= 7, `expected >= 7 '# supports:' declarations, found ${setups.length}`);
-  assert.ok(legs.size >= 7, `expected >= 7 '# leg:' declarations, found ${legs.size}`);
+  // 9, not 7: A1 adds two more if:-bearing setup steps (Setup Python,
+  // Bootstrap sidecar venv) on top of the original 3x Install ffmpeg,
+  // 2x Cache Playwright, 2x Install Playwright. The plan's prose said seven
+  // because it was written pre-A1 — a stale constant carried across a phase
+  // boundary. Re-count after Task 7 rather than trusting either number.
+  assert.ok(setups.length >= 9, `expected >= 9 '# supports:' declarations, found ${setups.length}`);
+  assert.ok(legs.size >= 11, `expected >= 11 '# leg:' declarations, found ${legs.size}`);
 
   const mismatched = [];
   for (const [, leg, stepName, condition] of setups) {
@@ -1212,6 +1275,116 @@ test('setup steps depend on the same scope keys as the leg they support', () => 
   assert.deepEqual(mismatched, [], `setup step(s) diverged from their leg:\n${mismatched.join('\n')}`);
 });
 ```
+
+- [ ] **Step 1b: The coverage-parity assertion (the fifth, and the one that matters most)**
+
+The four assertions above check *wiring* — that keys exist, are referenced,
+and live in gated jobs. **None of them checks that a derived condition still
+covers what the legacy condition covered.** That is a different property, and
+it is the one the derivation actually puts at risk: legacy bash matchers are
+broader than the `STEPS[]` inputs replacing them. Measured across a probe
+corpus, **8 of 12 sites narrow**, including `.husky/**` losing coverage
+entirely (fixed in Task 1) and `openapi.yaml` no longer triggering Typecheck.
+
+Some narrowings are correct — Pester should not run on a non-PowerShell diff.
+The defect is having no record of which are intended and no guard against the
+next one. Add to `scripts/tests/workflow-wiring.test.mjs`:
+
+```js
+// Replays the PRE-derivation scope matchers against the POST-derivation
+// conditions over a fixed corpus. Every path that used to run a leg must
+// still run it, unless the narrowing is listed and justified below.
+//
+// This is the only assertion that can see a coverage regression; the other
+// four are blind to it by construction.
+const LEGACY_MATCHERS = {
+  frontend: /^(src\/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)/,
+  server: /^(server\/src\/|server\/package(-lock)?\.json$|server\/tsconfig\.json$|server\/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server\/\.env\.example$|server\/scripts\/sync-env-example\.ts$|scripts\/tests\/fixtures\/)/,
+  sidecar: /^server\/tts-sidecar\//,
+  e2e: /^(e2e\/|playwright\.config\.ts$)/,
+  scripts: /^scripts\//,
+  hooks: /^(\.husky\/|\.github\/workflows\/|scripts\/run-hooks-tests\.mjs$|scripts\/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs\/release-notes-next\.md$|scripts\/release-notes-gate\.mjs$|docs\/testing\/onbox-acceptance-register\.md$|docs\/testing\/onbox-acceptance-register-live-view\.html$)/,
+  pinokio: /^(pinokio\.js$|pinokio-scripts\/|scripts\/run-pinokio-tests\.mjs$)/,
+  openapi: /^openapi\.yaml$/,
+};
+
+// Legacy step name -> the scopes that used to gate it, from git history of
+// verify.yml immediately before A2. Copy these from the pre-A2 file; do not
+// re-derive them from memory.
+const LEGACY_GATES = {
+  'Lint': ['frontend', 'server', 'scripts'],
+  'Typecheck': ['frontend', 'server'],
+  'Config check': ['server'],
+  'Hooks tests': ['hooks', 'scripts'],
+  'PowerShell-helper tests (Pester)': ['scripts'],
+  'Pinokio tests': ['pinokio'],
+  'Frontend tests + a11y': ['frontend', 'e2e', 'openapi'],
+  'Server tests (fast + slow)': ['server', 'sidecar'],
+  'E2E (chromium)': ['frontend', 'e2e'],
+  'E2E visual baselines (chromium)': ['frontend', 'e2e'],
+  'Build': ['frontend', 'server'],
+};
+
+// Narrowings judged CORRECT. Each needs a reason — an unexplained entry here
+// is how a real regression gets waved through.
+const ACCEPTED_NARROWINGS = [
+  // [step name, path, why it is right to stop running]
+  ['PowerShell-helper tests (Pester)', 'scripts/ci-scope.mjs',
+   'Pester covers scripts/lib/*.ps1 only; a .mjs change cannot affect it'],
+  ['Server tests (fast + slow)', 'server/tts-sidecar/main.py',
+   'server TS suite mocks the sidecar; a sidecar-only diff runs pytest instead'],
+];
+
+const PROBE_CORPUS = [
+  'src/app.tsx', 'index.html', 'tailwind.config.ts', 'tsconfig.json',
+  'eslint.config.mjs', 'vite.config.ts', 'openapi.yaml',
+  'server/src/tts/mp3.ts', 'server/package.json', 'server/tts-sidecar/main.py',
+  'e2e/smoke.spec.ts', 'playwright.config.ts',
+  'scripts/ci-scope.mjs', 'scripts/lib/log.ps1', 'scripts/tests/fixtures/x.json',
+  '.husky/pre-commit', '.github/workflows/verify.yml',
+  'pinokio.js', 'pinokio-scripts/lib/menu.js',
+  'launch.mjs', 'server/tts-sidecar/scripts/install-qwen3.mjs',
+  'RELEASE_NOTES.md', 'docs/release-notes-next.md',
+];
+
+test('coverage parity: no derived condition silently narrows a leg', () => {
+  const accepted = new Set(ACCEPTED_NARROWINGS.map(([s, p]) => `${s} ${p}`));
+  const regressions = [];
+
+  for (const [stepName, legacyScopes] of Object.entries(LEGACY_GATES)) {
+    // The derived condition now attached to this step, by `# leg:` marker or
+    // by step name.
+    const m = source.match(
+      new RegExp(`- name: ${stepName.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&')}\\n\\s*if: ([^\\n]+)\\n`),
+    );
+    assert.ok(m, `no if: found for step '${stepName}' — did it get renamed?`);
+    const derivedKeys = [...m[1].matchAll(/fromJSON\(needs\.detect\.outputs\.scopes\)\.([A-Za-z0-9_]+)/g)]
+      .map((x) => x[1]);
+
+    for (const path of PROBE_CORPUS) {
+      const ranBefore = legacyScopes.some((s) => LEGACY_MATCHERS[s].test(path));
+      const scopes = computeScopes([path], { eventName: 'pull_request' });
+      const runsNow = derivedKeys.some((k) => scopes[k]);
+      if (ranBefore && !runsNow && !accepted.has(`${stepName} ${path}`)) {
+        regressions.push(`${stepName} no longer runs for ${path}`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    regressions,
+    [],
+    `derivation silently narrowed coverage:\n${regressions.join('\n')}\n\n` +
+    `Either widen the step's inputs in verify-cache.mjs, or add an entry to ` +
+    `ACCEPTED_NARROWINGS with a reason.`,
+  );
+});
+```
+
+**Working through the failures this produces is Task 7's real work**, not the
+mechanical `if:` rewriting. Each one is a decision: widen the STEP's inputs,
+or accept and document. Do not add blanket `ACCEPTED_NARROWINGS` entries to
+get to green.
 
 - [ ] **Step 2: Run to verify each assertion can fail**
 
@@ -1350,7 +1523,30 @@ Branch: `fix/ops-verify-cache-completeness-guard`, cut after A2 merges.
 
 ---
 
-### Task 10: Comment stripping and the resolver
+### Task 10: AST-based specifier extraction and the resolver
+
+> **Revised after plan review round 2.** An earlier draft hand-rolled a
+> comment-stripping lexer. Two versions of it were written and **both were
+> defective**: the first desynced on regex literals containing quotes; the
+> second closed that but retained a *re-closing* desync — `return /a\/*b/;`
+> is read as division, then `/*` opens a phantom block comment that a later
+> `*/` closes, silently swallowing every import in between while the
+> terminal state finishes at `code`. Demonstrated:
+>
+> ```
+> onDesync reported : null          <- the whole-repo guard sees nothing
+> lexer extracted   : ["./other.mjs"]   <- './real.mjs' vanished
+> ```
+>
+> That fail-open is **not closable by another test case**, because the
+> detector (terminal state) cannot observe it. `acorn` is already resolvable
+> (8.16.0, via eslint) and ignores comments natively, so the entire class
+> disappears. Measured on `scripts/tests/*.test.mjs`: **0 parse failures
+> across 59 files**, and the only difference from the regex approach is that
+> acorn correctly does **not** extract `../../pinokio.js` from inside a
+> string literal — a false positive the regex produced, and the very
+> specifier that resolves outside the repo and triggers `check-ignore`'s
+> exit 128.
 
 **Files:**
 - Create: `scripts/lib/module-graph.mjs`
@@ -1358,8 +1554,8 @@ Branch: `fix/ops-verify-cache-completeness-guard`, cut after A2 merges.
 
 **Interfaces:**
 - Produces:
-  - `stripComments(source)` → string
-  - `extractRelativeSpecifiers(source)` → string[]
+  - `extractRelativeSpecifiers(source)` → string[], or **throws** on unparseable input
+  - `candidatePaths(fromFile, specifier)` → string[] (pure path math)
   - `resolveSpecifier(fromFile, specifier)` → absolute path or `null`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1369,106 +1565,70 @@ Create `scripts/tests/module-graph.test.mjs`:
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-// `resolve` and `relative` are needed by the whole-repo desync test below AND
-// by Task 11's out-of-repo case — imported here once for the whole file.
-import { join, resolve, relative, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { stripComments, extractRelativeSpecifiers, resolveSpecifier } from '../lib/module-graph.mjs';
+import { join, resolve } from 'node:path';
+import { extractRelativeSpecifiers, resolveSpecifier } from '../lib/module-graph.mjs';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-// Minimal recursive walker: fast-glob is a dependency of the runner, not of
-// this test — node:test files here stay dependency-free.
-function walkDir(dir, exts, acc = []) {
-  if (!existsSync(dir)) return acc;
-  for (const entry of readdirSync(dir)) {
-    if (entry === 'node_modules' || entry === '.git') continue;
-    const p = join(dir, entry);
-    if (statSync(p).isDirectory()) walkDir(p, exts, acc);
-    else if (exts.some((x) => p.endsWith(x))) acc.push(p);
-  }
-  return acc;
-}
-
-test('stripComments removes line comments', () => {
-  assert.equal(stripComments("const a = 1; // require('../x.js')\n").includes('../x.js'), false);
-});
-
-test('stripComments removes block comments', () => {
-  assert.equal(stripComments("/* require('../x.js') */\nconst a = 1;\n").includes('../x.js'), false);
-});
-
-// Guard against over-stripping: a // inside a string literal is not a comment.
-test('stripComments preserves // inside string literals', () => {
-  const out = stripComments(`const url = "https://example.com/x"; // gone\n`);
-  assert.ok(out.includes('https://example.com/x'), 'URL must survive');
-  assert.ok(!out.includes('gone'), 'trailing comment must be removed');
-});
-
-// --- regex literals: the failure mode that makes this a FAIL-OPEN ---------
-// A regex with an odd number of quotes sends a naive scanner into a phantom
-// string state it never leaves, so the REST OF THE FILE goes unscanned and
-// any import in that tail is invisible to the completeness guard. Measured
-// against an earlier draft: 3 real files desynced, including
-// release-notes-gate.mjs, itself a declared test:hooks input.
-test('stripComments survives a regex literal containing quotes', () => {
-  const src = `const r = /media-type="[^"]+"/;\nimport x from './real.mjs';\n`;
-  assert.ok(
-    stripComments(src).includes('./real.mjs'),
-    'an import after a quote-bearing regex must survive',
-  );
-});
-
-test('stripComments survives a regex literal ending in an escaped slash', () => {
-  const src = `if (/^refs\\/heads\\//.test(p)) {}\nconst y = require('./real.js');\n`;
-  assert.ok(stripComments(src).includes('./real.js'));
-});
-
-// The other direction: division must NOT be mistaken for a regex, or
-// everything up to the next / is eaten.
-test('stripComments treats / as division after a value', () => {
-  const src = `const a = (x + 1) / 2; const b = 3 / 4;\nimport z from './real.mjs';\n`;
-  assert.ok(stripComments(src).includes('./real.mjs'));
-});
-
-// The real guard: whole-repo desync detection. The targeted cases above only
-// catch shapes someone thought of; this catches the class. Verified at
-// authoring time — 166 files, 0 desyncs.
-test('stripComments does not desync on any real script in the repo', () => {
-  const roots = [
-    ...walkDir(resolve(repoRoot, 'scripts'), ['.mjs', '.cjs']),
-    ...walkDir(resolve(repoRoot, 'pinokio-scripts'), ['.js']),
-  ];
-  assert.ok(roots.length >= 100, `expected >= 100 scripts to scan, found ${roots.length}`);
-
-  const desynced = [];
-  for (const file of roots) {
-    stripComments(readFileSync(file, 'utf8'), {
-      onDesync: (state) => desynced.push(`${relative(repoRoot, file)} -> ended in '${state}'`),
-    });
-  }
-  assert.deepEqual(desynced, [], `stripComments desynced on:\n${desynced.join('\n')}`);
-});
-
-// This is why stripping is load-bearing rather than cosmetic:
-// verify-cache.mjs:107 has a literal require('../../pinokio.js') in a COMMENT
-// which resolves OUTSIDE the repo root. Under fail-closed resolution that is
-// a false failure.
-test('extractRelativeSpecifiers ignores a specifier inside a comment', () => {
-  const src = "// loads it via createRequire + require('../../pinokio.js')\nimport x from './real.mjs';\n";
-  assert.deepEqual(extractRelativeSpecifiers(src), ['./real.mjs']);
-});
-
-test('extractRelativeSpecifiers finds import, dynamic import and require', () => {
+test('extracts static, dynamic and require specifiers', () => {
   const src = `
 import a from './a.mjs';
 const b = await import('./b.mjs');
 const c = require('./c.js');
-import d from 'node:fs';
+export { d } from './d.mjs';
+export * from './e.mjs';
+import fs from 'node:fs';
+import pkg from 'archiver';
 `;
-  assert.deepEqual(extractRelativeSpecifiers(src).sort(), ['./a.mjs', './b.mjs', './c.js']);
+  assert.deepEqual(
+    extractRelativeSpecifiers(src).sort(),
+    ['./a.mjs', './b.mjs', './c.js', './d.mjs', './e.mjs'],
+  );
+});
+
+// Comments are invisible to a parser — no stripping step, no desync class.
+// verify-cache.mjs:107 has a literal require('../../pinokio.js') in a comment
+// that resolves OUTSIDE the repo; under fail-closed resolution the regex
+// approach turned that into a check-ignore exit-128 crash.
+test('ignores a specifier inside a comment', () => {
+  const src = `// loads it via createRequire + require('../../pinokio.js')\nimport x from './real.mjs';\n`;
+  assert.deepEqual(extractRelativeSpecifiers(src), ['./real.mjs']);
+});
+
+// The regex approach extracted this; acorn does not. It is fixture DATA in a
+// test, not an edge — a false positive that inflated the closure.
+test('ignores a specifier inside a string literal', () => {
+  const src = `const source = "const config = require('../../pinokio.js');";\nimport y from './real.mjs';\n`;
+  assert.deepEqual(extractRelativeSpecifiers(src), ['./real.mjs']);
+});
+
+// The exact shape that defeated the hand-rolled lexer: `return /a\/*b/;` is
+// read as division, `/*` opens a phantom comment, a later `*/` closes it, and
+// every import in between is swallowed with NO desync signal.
+test('a keyword-preceded regex literal does not swallow later imports', () => {
+  const src = [
+    'function f() { return /a\\/*b/; }',
+    "import x from './real.mjs';",
+    '/* ordinary comment */',
+    "import y from './other.mjs';",
+  ].join('\n');
+  assert.deepEqual(extractRelativeSpecifiers(src).sort(), ['./other.mjs', './real.mjs']);
+});
+
+test('handles CJS scripts that are not valid ESM', () => {
+  const src = `const x = require('./a.js');\nmodule.exports = x;\n`;
+  assert.deepEqual(extractRelativeSpecifiers(src), ['./a.js']);
+});
+
+test('handles a hashbang', () => {
+  const src = `#!/usr/bin/env node\nimport a from './a.mjs';\n`;
+  assert.deepEqual(extractRelativeSpecifiers(src), ['./a.mjs']);
+});
+
+// FAIL CLOSED: unparseable input must be reported, never treated as "no
+// edges". Silently returning [] is the "absent reads as clean" shape.
+test('throws on unparseable source rather than returning no edges', () => {
+  assert.throws(() => extractRelativeSpecifiers('function ( { >>> ;'), /parse/i);
 });
 
 function tree(files) {
@@ -1502,12 +1662,29 @@ test('resolveSpecifier returns null when nothing resolves', () => {
   const d = tree({ 'a.mjs': '' });
   assert.equal(resolveSpecifier(join(d, 'a.mjs'), './nope.mjs'), null);
 });
+
+// Anti-vacuity on the extractor itself: every real hooks test must parse.
+// A parse regression would otherwise surface only as a mysteriously shrunken
+// closure. Measured at authoring time: 59 files, 0 failures.
+test('every hooks test file parses', () => {
+  const dir = resolve(import.meta.dirname);
+  const files = readdirSync(dir).filter((f) => f.endsWith('.test.mjs'));
+  assert.ok(files.length >= 40, `expected >= 40 hooks tests, found ${files.length}`);
+  const failures = [];
+  for (const f of files) {
+    try { extractRelativeSpecifiers(readFileSync(join(dir, f), 'utf8')); }
+    catch (err) { failures.push(`${f}: ${err.message}`); }
+  }
+  assert.deepEqual(failures, [], `unparseable hooks test(s):\n${failures.join('\n')}`);
+});
 ```
+
+Add `readdirSync, readFileSync` to the `node:fs` import for the last test.
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `node --test scripts/tests/module-graph.test.mjs`
-Expected: FAIL — module not found.
+Expected: FAIL — `Cannot find module '../lib/module-graph.mjs'`.
 
 - [ ] **Step 3: Implement**
 
@@ -1516,122 +1693,89 @@ Create `scripts/lib/module-graph.mjs`:
 ```js
 // Static module-graph helpers for the test:hooks completeness guard.
 //
-// Split out of verify-cache.test.mjs so each piece is independently
-// unit-testable: the guard's previous inline regexes could only be exercised
-// through the whole-repo assertion, which meant a synthetic case (an
-// unresolvable specifier, a depth-2 edge) had nowhere to live.
+// Specifiers are extracted by PARSING, not by regex over stripped text. Two
+// hand-rolled comment-stripping lexers were written for this and both had a
+// fail-open: a regex literal could open a phantom comment state that a later
+// `*/` closed, swallowing imports with no detectable signal. A parser has no
+// such failure mode — comments and string literals are simply not expressions.
+//
+// acorn is already a transitive dependency (via eslint) and is used here for
+// its parser only; no plugin, no walker package.
 
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import { createRequire } from 'node:module';
 
-// Remove comments before extracting specifiers. Load-bearing: the extraction
-// regexes below match inside comments, and verify-cache.mjs's own comment
-// contains a literal require('../../pinokio.js') that resolves outside the
-// repo. Under fail-closed resolution that would be a false failure — and it
-// is exactly the git check-ignore exit-128 case.
-// Regex literals MUST be consumed atomically. Two ways they break a naive
-// scanner, both live in this repo:
-//   * /media-type="[^"]+"/ has an ODD number of quotes, so the scanner enters
-//     a phantom string state and never leaves — the rest of the file is
-//     silently unscanned (a fail-OPEN: imports in that tail become invisible).
-//     Real: scripts/lib/slim-epub-cover.mjs, wt-merge.mjs, release-notes-gate.mjs
-//     (the last is itself a declared test:hooks input).
-//   * /^refs\/heads\// ends in an escaped slash, so `//` reads as a comment
-//     start and truncates the line. Real: code-stats.mjs, wt-list.mjs.
-// A `/` starts a regex (rather than being division) when the previous
-// significant character is one that cannot end an expression.
-const REGEX_PRECEDERS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '\n', '+', '-', '*', '%', '<', '>', '~', '^', undefined]);
+const require = createRequire(import.meta.url);
+const acorn = require('acorn');
 
-// `onDesync` is how the whole-repo test detects the failure above. It cannot
-// be detected from the OUTPUT — a desynced scan still emits the text, and
-// re-running it desyncs identically, so the result is stable and looks fine.
-// Only the terminal state reveals it.
-export function stripComments(source, { onDesync } = {}) {
-  let out = '';
-  let i = 0;
-  let prev; // last significant code char
-  let state = 'code'; // code | line | block | single | double | template
-  while (i < source.length) {
-    const c = source[i];
-    const next = source[i + 1];
-    if (state === 'code') {
-      if (c === '/' && next === '/') { state = 'line'; i += 2; continue; }
-      if (c === '/' && next === '*') { state = 'block'; i += 2; continue; }
-      if (c === '/' && REGEX_PRECEDERS.has(prev)) {
-        // Consume the whole literal, honouring escapes and [...] classes,
-        // where an unescaped '/' does NOT terminate.
-        out += c; i += 1;
-        let inClass = false;
-        while (i < source.length) {
-          const r = source[i];
-          if (r === '\\') { out += r + (source[i + 1] ?? ''); i += 2; continue; }
-          if (r === '[') inClass = true;
-          else if (r === ']') inClass = false;
-          else if (r === '/' && !inClass) { out += r; i += 1; break; }
-          else if (r === '\n') break; // unterminated — bail rather than run away
-          out += r; i += 1;
-        }
-        prev = '/';
-        continue;
-      }
-      if (c === "'") state = 'single';
-      else if (c === '"') state = 'double';
-      else if (c === '`') state = 'template';
-      if (!/\s/.test(c)) prev = c;
-      else if (c === '\n') prev = '\n';
-      out += c; i += 1; continue;
-    }
-    if (state === 'line') {
-      if (c === '\n') { state = 'code'; out += c; }
-      i += 1; continue;
-    }
-    if (state === 'block') {
-      if (c === '*' && next === '/') { state = 'code'; i += 2; continue; }
-      if (c === '\n') out += c; // preserve line numbering
-      i += 1; continue;
-    }
-    // inside a string literal
-    if (c === '\\') { out += c + (next ?? ''); i += 2; continue; }
-    if ((state === 'single' && c === "'") || (state === 'double' && c === '"') || (state === 'template' && c === '`')) {
-      state = 'code';
-    }
-    out += c; i += 1;
-  }
-  // A scan that ends anywhere but `code` ran off the rails — most often on a
-  // regex literal with an odd quote count, after which the remainder of the
-  // file was treated as string content and never scanned for imports.
-  if (state !== 'code' && onDesync) onDesync(state);
-  return out;
-}
+const PARSE_OPTIONS = {
+  ecmaVersion: 'latest',
+  allowReturnOutsideFunction: true,
+  allowAwaitOutsideFunction: true,
+  allowHashBang: true,
+};
 
-const PATTERNS = [
-  /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
-  /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-];
+const isRelative = (v) => typeof v === 'string' && /^\.\.?\//.test(v);
 
-// Only dot- or dot-dot-prefixed specifiers are producers under test; bare
-// specifiers (node:fs, archiver) are dependencies, not code under test, and
-// following them would walk into node_modules.
+// Returns the relative specifiers this source depends on.
+//
+// THROWS on unparseable input rather than returning []. An empty result from a
+// broken parse is the "absent reads as clean" shape: the guard would report a
+// file has no dependencies precisely when it cannot tell.
 export function extractRelativeSpecifiers(source) {
-  const stripped = stripComments(source);
-  const found = new Set();
-  for (const pattern of PATTERNS) {
-    for (const match of stripped.matchAll(pattern)) found.add(match[1]);
+  let ast = null;
+  let lastErr = null;
+  // .mjs/.cjs/.js all appear in the closure; try ESM first, then script.
+  for (const sourceType of ['module', 'script']) {
+    try {
+      ast = acorn.parse(source, { ...PARSE_OPTIONS, sourceType });
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  if (!ast) {
+    throw new Error(`module-graph: parse failed (${lastErr?.message ?? 'unknown'})`);
+  }
+
+  const found = new Set();
+  (function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+    switch (node.type) {
+      case 'ImportDeclaration':
+      case 'ExportNamedDeclaration':
+      case 'ExportAllDeclaration':
+      case 'ImportExpression':
+        if (isRelative(node.source?.value)) found.add(node.source.value);
+        break;
+      case 'CallExpression':
+        if (node.callee?.name === 'require' && isRelative(node.arguments?.[0]?.value)) {
+          found.add(node.arguments[0].value);
+        }
+        break;
+      default:
+        break;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'type' || key === 'start' || key === 'end' || key === 'loc') continue;
+      visit(node[key]);
+    }
+  })(ast);
   return [...found];
 }
 
 const CANDIDATES = ['', '.js', '.mjs', '.cjs', '/index.js', '/index.mjs'];
 
-// Returns the candidate paths a specifier could denote, WITHOUT touching the
-// filesystem. Exported so the stop rule can classify each candidate before
-// any existence probe (see walk()).
+// Candidate paths a specifier could denote, WITHOUT touching the filesystem.
+// Exported so the stop rule can classify each candidate before any existence
+// probe (see walk()).
 export function candidatePaths(fromFile, specifier) {
   const base = resolve(dirname(fromFile), specifier);
   const paths = CANDIDATES.map((ext) => base + ext);
   // TypeScript convention: `./x.js` in source resolves to `./x.ts` on disk.
-  if (specifier.endsWith('.js')) paths.push(base.slice(0, -3) + '.ts');
+  if (specifier.endsWith('.js')) paths.push(`${base.slice(0, -3)}.ts`);
   return paths;
 }
 
@@ -1648,14 +1792,25 @@ export function resolveSpecifier(fromFile, specifier) {
 Run: `node --test scripts/tests/module-graph.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Confirm acorn resolves from this location**
+
+`acorn` is a transitive dependency, not a direct one — it resolves today via
+eslint, but nothing pins that.
+
+Run: `node -e "console.log(require('acorn').version)"`
+Expected: a version string (8.x).
+
+If it ever stops resolving, add `acorn` to `devDependencies` explicitly
+rather than reinstating a hand-rolled lexer. **Do not** re-derive the
+stripping approach; §Task 10's header records why.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add scripts/lib/module-graph.mjs scripts/tests/module-graph.test.mjs
-git commit -m "feat(scripts): comment-stripping and TS-aware specifier resolution"
+git commit -m "feat(scripts): AST-based specifier extraction with TS-aware resolution"
 ```
 
----
 
 ### Task 11: The `check-ignore` stop rule
 
@@ -2092,20 +2247,41 @@ Expected: PASS.
 
 Only meaningful here, now that the guard actually consumes `classifyIgnored`.
 
-Temporarily reimplement `classifyIgnored` using `git ls-files` ("untracked")
-instead of `git check-ignore` ("ignored"), then simulate a fresh clone:
+**Write the mutation's code, not its name.** "Use `git ls-files`" read
+literally means *not in the index ⇒ stop*, under which `server/dist/**` is
+untracked whether or not it exists on disk — so renaming the directory
+changes nothing, the mutation stays green, and the implementer reports it as
+a placebo. The predicate that actually reproduces the clone-state divergence
+is *present on disk but untracked*:
+
+```js
+// MUTATION ONLY — the "untracked" predicate this design rejects.
+export function classifyIgnored(absPaths, cwd) {
+  const tracked = new Set(
+    execFileSync('git', ['ls-files'], { cwd, encoding: 'utf8', maxBuffer: 1e8 })
+      .split('\n').filter(Boolean),
+  );
+  return new Map(absPaths.map((p) => [p, !tracked.has(toPosix(relative(cwd, p)))]));
+}
+```
+
+Then simulate a fresh clone:
 
 ```powershell
-Rename-Item server/dist server/dist.bak
+# node_modules/.cache is gitignored; server/dist.bak is NOT, and would
+# litter ~1,812 untracked files into `git status`.
+Rename-Item server/dist ../dist-mutation-stash
 node --test scripts/tests/verify-cache.test.mjs
-Rename-Item server/dist.bak server/dist
+Rename-Item ../dist-mutation-stash server/dist
 ```
 
 (Windows: this moves ~1,812 files and fails if a server process holds any of
-them — stop `npm start` first. On POSIX, `mv server/dist server/dist.bak`.)
+them — stop `npm start` first. On POSIX, `mv server/dist ../dist-mutation-stash`.)
 
 Expected under "untracked": **7 unresolvable specifiers** from
-`scripts/repair-cast-id-drift.mjs:1203-1209`'s `../server/dist/**` imports —
+`scripts/repair-cast-id-drift.mjs`'s `../server/dist/**` dynamic imports
+(currently `:1379-1385`; **grep rather than trusting the line numbers** —
+they moved once already between commits) —
 red on a fresh clone, green on this box. Under `check-ignore`: identical
 either way. Revert the reimplementation.
 
@@ -2372,7 +2548,7 @@ regresses.
 | M4 | wiring floor is not vacuous | Task 8 Step 4 | run it |
 | M5 | a dropped declaration is caught | Task 13 Step 5 | run it |
 | M6 | depth-1 is GREEN against the real repo — so M5 alone cannot prove recursion | Task 12 Step 5 (the inverse: killing recursion reddens the *fixture*) | pinned by test |
-| M7 | comment-stripping is load-bearing | Task 10 Step 1, `extractRelativeSpecifiers ignores a specifier inside a comment` | pinned by test |
+| M7 | comments/strings are not edges, and a keyword-preceded regex literal cannot swallow later imports | Task 10 Step 1 — three tests (comment, string literal, regex-literal) | pinned by test |
 | M8 | the ignored-vs-untracked *predicate* is load-bearing | Task 11 Step 4b | run it |
 | M9 | unresolvable specifiers fail closed | Task 12 Step 1, `walk reports an unresolvable specifier` | pinned by test |
 | M10 | `ci-scope.mjs` fails safe, not silent | Task 5 Steps 5 + 5b | run it |
