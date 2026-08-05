@@ -937,7 +937,7 @@ def test_cuda_vram_mb_per_device_empty_when_cuda_unavailable(monkeypatch):
     device -> {} rather than a raise. Patches the real `torch.cuda.is_
     available` (never touches an allocator) so this stays a pure guard-clause
     check with no real CUDA call underneath it."""
-    import torch
+    torch = pytest.importorskip("torch")
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     assert main._cuda_vram_mb_per_device() == {}
@@ -954,7 +954,7 @@ def test_cuda_vram_mb_per_device_reads_per_index_reserved_and_properties(monkeyp
     (deliberately unlike `_cuda_vram_mb()`'s no-arg, current-device-only
     form — the whole reason this function exists, per its own docstring),
     and the `1_000_000.0` MB divisor."""
-    import torch
+    torch = pytest.importorskip("torch")
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
@@ -983,7 +983,7 @@ def test_cuda_vram_mb_reads_current_device_total_not_device_zero(monkeypatch):
     `torch.cuda` attributes (same technique as the per-device test above,
     never a fake module) with `current_device()` returning 1: `total` must
     come from device 1's properties, not device 0's."""
-    import torch
+    torch = pytest.importorskip("torch")
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
@@ -1013,7 +1013,7 @@ def test_debug_memory_cuda_total_mb_reads_current_device(monkeypatch):
     0's total, so an operator diagnosing a multi-GPU box would see the two
     endpoints disagree. Same patch-real-`torch.cuda`-attributes technique as
     the test above, driven through the real endpoint via `TestClient`."""
-    import torch
+    torch = pytest.importorskip("torch")
 
     monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
     monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())

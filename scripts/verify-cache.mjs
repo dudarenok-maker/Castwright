@@ -11,6 +11,7 @@ import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
+import { resolveVenvPython } from './run-sidecar-tests.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -53,7 +54,35 @@ export const STEPS = [
          — no module-graph edge, so without this a fixture-only diff (the
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
-      globs: ['scripts/**/*.{mjs,cjs}', 'scripts/tests/fixtures/**'],
+      globs: [
+        'scripts/**/*.{mjs,cjs}',
+        'scripts/tests/fixtures/**',
+        /* .github/workflows/** is an input because this step's own tests
+           (verify-cache.test.mjs) assert stepTouchedByDiff against real
+           workflow paths, so a workflow-only diff must stay in scope for the
+           step that exercises those assertions. Without this, a
+           workflow-only diff — precisely the edit that breaks the wiring —
+           prints [cached] and the assertion sits stale-green. Same #1847
+           trap as fixtures/** above (defect D, #2119 review). */
+        '.github/workflows/**',
+        /* .github/actions/** is defect D's other half (I1, #2146 review):
+           the composite setup action is consumed by all seven verify.yml
+           jobs (`uses: ./.github/actions/setup`) but matched no scope at
+           all, so an actions-only diff ran zero legs and printed [cached] —
+           the exact defect this PR exists to close, just for a different
+           path prefix. Whether this should instead live in the broader
+           `shared` scope is an open question left for the follow-up PR;
+           mirroring `.github/workflows/**` here is the minimal fix now. */
+        '.github/actions/**',
+        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
+           matcher, which A2 deletes — and it is an input to no step, so
+           without this a .husky-only PR would run zero legs after A2.
+           release-manifest.test.mjs's sample-path array includes
+           .husky/pre-commit as a literal string fed to a pure classifier —
+           it does not read the file from disk (plan review round 2 named
+           the wrong file/mechanism; M1, #2146 review). */
+        '.husky/**',
+      ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
          RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs
@@ -210,8 +239,28 @@ export const STEPS = [
   {
     name: 'test:sidecar',
     inputs: {
-      globs: ['server/tts-sidecar/**/*.py', 'server/tts-sidecar/requirements*.txt'],
-      extraFiles: ['server/tts-sidecar/run-tests.ps1'],
+      /* M3 (#2146 review): 'requirements*.txt' compiles to
+         requirements[^/]*\.txt$ — a single-segment `*` that cannot cross a
+         `/`, so it never matched anything under the requirements/
+         SUBDIRECTORY. requirements/base.txt became load-bearing in this PR
+         (the CI bootstrap installs from it directly), so a base.txt-only
+         diff must bust this step's cache. Added as its own glob rather than
+         widening the existing one, to keep the miss visible in the diff. */
+      globs: [
+        'server/tts-sidecar/**/*.py',
+        'server/tts-sidecar/requirements*.txt',
+        'server/tts-sidecar/requirements/*.txt',
+      ],
+      extraFiles: [
+        'server/tts-sidecar/run-tests.ps1',
+        // The npm script now invokes this instead; run-tests.ps1 is retained
+        // for direct local/PowerShell use, so BOTH are inputs.
+        'scripts/run-sidecar-tests.mjs',
+        // M3 (#2146 review): '**/*.py' misses this — it has no .py extension
+        // — so a pytest.ini-only diff (e.g. changing markers or addopts)
+        // printed [cached] locally with nothing to invalidate the step.
+        'server/tts-sidecar/pytest.ini',
+      ],
       includeLockfiles: [],
     },
     toolFingerprint: sidecarFingerprint,
@@ -610,9 +659,21 @@ function pesterFingerprint() {
   return (r.stdout ?? '').trim() || 'unavailable';
 }
 
-function sidecarFingerprint() {
-  const py = 'server/tts-sidecar/.venv/Scripts/python.exe';
-  if (!existsSync(py)) return 'unavailable';
+// I2 (#2146 review): this used to hardcode the Windows venv layout
+// (server/tts-sidecar/.venv/Scripts/python.exe), so on a POSIX box the
+// fingerprint was the literal string 'unavailable' forever — bootstrapping
+// the venv there never changed the fingerprint, so this step would report
+// [cached] and never actually run post-bootstrap. Reuses
+// run-sidecar-tests.mjs's own platform branch (resolveVenvPython) instead of
+// duplicating the win32/posix ternary here. sidecarDir/platform are
+// parameters (not read from process.cwd()/process.platform inline) purely so
+// the test suite can pin the POSIX path without needing to run on POSIX.
+export function sidecarFingerprint(
+  sidecarDir = join(process.cwd(), 'server', 'tts-sidecar'),
+  platform = process.platform,
+) {
+  const py = resolveVenvPython(sidecarDir, platform);
+  if (!py) return 'unavailable';
   let mtime = '';
   try {
     mtime = String(statSync(py).mtimeMs);

@@ -309,6 +309,10 @@ def test_qwen_base_synth_not_gated_by_vd_kokoro_arbiter(monkeypatch):
 def test_design_voice_holds_arbiter_and_evicts_resident_kokoro(monkeypatch):
     """design_voice must take arb.design() around its VoiceDesign forward and,
     if Kokoro is resident, unload it first so the 1.7B load has headroom."""
+    # design_voice() -> _ensure_device_resolved() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     import main
 
     qeng = main.QwenEngine()
@@ -363,6 +367,10 @@ def test_design_voice_emits_phase_timing_line(monkeypatch, caplog):
     (load / design_fwd / distil / audition / total), so a slow design is
     diagnosable from the log without guesswork — and so the progress UX has a
     real per-phase signal to drive instead of a fake bar."""
+    # design_voice() -> _ensure_device_resolved() does an unconditional
+    # `import torch` (main.py), and this test also monkeypatches the real
+    # `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     import logging
     import tempfile
 

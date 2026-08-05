@@ -167,7 +167,11 @@ jobs:
           # check-onbox-register.test.mjs reads both at runtime and asserts the
           # live view still agrees with the markdown, so a register-only diff —
           # exactly the shape that drifts them apart — must run this leg too.
-          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
+          # .github/actions/: the composite setup action (I1, #2146 review) —
+          # consumed by every job (`uses: ./.github/actions/setup`) but
+          # matched by no scope, so an actions-only PR ran zero legs. Same
+          # defect D shape as .github/workflows/ above, mirrored verbatim.
+          match '^(\.husky/|\.github/workflows/|\.github/actions/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
           match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
           # openapi.yaml is a frontend input too (it generates
           # src/lib/api-types.ts, and api.clone-voice.test.ts pins the
@@ -323,6 +327,50 @@ jobs:
             npx vitest run --config vitest.config.slow.ts
           fi
 
+  sidecar-tests:
+    name: Sidecar tests (pytest)
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Every other job uses this; without it this job relies on whatever Node
+      # ubuntu-latest happens to ship and pins no version. `npm run
+      # test:sidecar` needs Node but no node_modules, so the composite's
+      # `npm ci` is cheap insurance rather than a requirement.
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      - name: Setup Python
+        if: needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # The LEAN dependency set only: requirements/base.txt is vendor-neutral
+      # (fastapi/uvicorn/numpy/psutil) and requirements-dev.txt is pytest +
+      # httpx. The heavy ML stack (torch, coqui-tts, speechbrain) lives in the
+      # vendor overlay and speaker-qa.txt and is deliberately NOT installed —
+      # tests needing it use pytest.importorskip and report as skipped.
+      - name: Bootstrap sidecar venv
+        if: needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
+        run: |
+          cd server/tts-sidecar
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements/base.txt -r requirements-dev.txt
+
+      # --require-venv turns "no venv" from a SKIP into a hard failure: on CI a
+      # missing venv means the bootstrap above broke. Without it this leg would
+      # be vacuously green, which is worse than the hole it closes (#2119
+      # review, defect C).
+      - name: Sidecar tests
+        if: needs.detect.outputs.sidecar == 'true' || needs.detect.outputs.shared == 'true'
+        run: npm run test:sidecar -- --require-venv
+
   # E2E functional battery (~110 spec files) is the long pole of the whole
   # workflow — CI intentionally pins Playwright to `workers: 1` (playwright.
   # config.ts) so parallel Chromium instances can't thundering-herd the
@@ -438,7 +486,7 @@ jobs:
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
-    needs: [lint-and-checks, frontend-tests, server-tests, e2e, e2e-visual, build]
+    needs: [lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
     runs-on: ubuntu-latest
     if: always()
     steps:

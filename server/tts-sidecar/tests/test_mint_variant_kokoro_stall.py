@@ -107,6 +107,10 @@ def test_mint_variant_does_not_stall_kokoro_while_waiting_on_an_in_flight_design
     the simulated design stays in flight, because `_VD_KOKORO._design_active`
     is set BEFORE `unload_design()` ever starts waiting.
     """
+    # mint_variant() -> _ensure_base17_for_mint() does an unconditional
+    # `import torch` (main.py), and `_wire_mint_variant_internals` also
+    # monkeypatches the real `torch.save` — both need the real package.
+    pytest.importorskip("torch")
     qeng = main.QwenEngine()
     _quiet_kokoro()
     qeng._design = object()  # resident — unload_design() won't no-op immediately
