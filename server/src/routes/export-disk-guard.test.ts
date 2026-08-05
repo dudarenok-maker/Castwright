@@ -55,12 +55,15 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-export-guard-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ exportRouter, _resetExportJobs }, { makeBookId }, { _resetUserSettingsCache }] =
-    await Promise.all([
-      import('./export.js'),
-      import('../workspace/paths.js'),
-      import('../workspace/user-settings.js'),
-    ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factory above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { exportRouter, _resetExportJobs } = await import('./export.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const { _resetUserSettingsCache } = await import('../workspace/user-settings.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   resetJobs = _resetExportJobs;
   _resetUserSettingsCache();
