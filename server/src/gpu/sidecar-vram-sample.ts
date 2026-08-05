@@ -54,7 +54,22 @@ export async function maybeSampleSidecarEngine(key: SidecarVramKey): Promise<voi
   if (process.env.CASTWRIGHT_VRAM_SAMPLE === '0') return;
   try {
     const health = await probeSidecarHealthIfRegistered();
-    if (!health) return;
+    if (!health) {
+      /* #2052 R6 review fix (PR #2126) — trading the old self-bootstrapping
+         dynamic import for a registration-order dependency on
+         sidecar-health-gate.ts means THIS branch's failure mode is a SILENT
+         loss of fs-45 VRAM-footprint data, not a crash. Safe in the real
+         server (app.ts statically imports routes/sidecar-health.ts well
+         before any generation call reaches here), but a future entry point
+         that mounts synthesis without also mounting the routes would stop
+         sampling with zero signal otherwise. One line, not an alarm — this
+         branch is the EXPECTED path on every test run that doesn't register
+         a provider, and is otherwise harmless. */
+      console.warn(
+        `[sidecar-vram-sample] no sample recorded for ${key} — sidecar-health-gate has nothing registered yet.`,
+      );
+      return;
+    }
     await sampleSidecarEngineVram(key, health);
   } catch {
     /* best-effort */

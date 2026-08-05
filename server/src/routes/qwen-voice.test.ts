@@ -1566,9 +1566,19 @@ describe('srv-43 mint + collision regression', () => {
 });
 
 describe('#2088 — withDesignLock actually serializes ensureCharacterVoiceUuid on the series branch', () => {
-  /* srv-85 (#2088) — withDesignLock (tts/design-lock.ts) had ZERO test
-     coverage. Neutralising it to `return fn();` left every other test in
-     this 1600-line file fully green (80/80 at the time the issue was filed).
+  /* srv-85 (#2088) — CORRECTION (independent review of PR #2126, R3): the
+     original issue and this file's earlier version of this comment claimed
+     withDesignLock (tts/design-lock.ts) had ZERO test coverage. That is
+     false — server/src/tts/design-lock.test.ts has existed on main since
+     53a30df4 with three direct tests, one of which ("serializes overlapping
+     designs for the SAME book") reddens on its own when the primitive is
+     neutralised to `return fn();`. The accurate statement: qwen-voice.test.ts
+     had NO coverage of it, and the series-branch double-mint property below
+     was untested ANYWHERE (design-lock.test.ts's coverage is of the
+     primitive in isolation, not of any real caller). Neutralising it to
+     `return fn();` left every other test in this 1600-line file fully green
+     (80/80 at the time the issue was filed) — which is still true and is
+     what makes the new test below worth having.
 
      Why the SERIES branch specifically, not a self-vs-self race on the
      no-seriesFilter path used just above: ensureCharacterVoiceUuid's whole

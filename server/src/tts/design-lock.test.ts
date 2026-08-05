@@ -15,6 +15,7 @@ import {
   clearDesignBusy,
   isDesignBusy,
   isOtherBookDesignBusy,
+  _designChainsSizeForTests,
 } from './design-lock.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -66,6 +67,33 @@ describe('withDesignLock', () => {
       ran = true;
     });
     expect(ran).toBe(true);
+  });
+
+  it('R5: cleans up the per-book chain entry once it settles, for a lone call (no permanent leak)', async () => {
+    /* Independent review finding (R5, PR #2126): the tail-cleanup check
+       compared the map's stored value against `gate`, but the map actually
+       stores `prior.then(() => gate, () => gate)` — a DIFFERENT promise
+       object — so the comparison was always false and the entry was never
+       deleted. One settled promise accumulated per book, forever. */
+    const bookDir = 'design-lock-cleanup-lone-R5';
+    const before = _designChainsSizeForTests();
+    await withDesignLock(bookDir, async () => {});
+    expect(_designChainsSizeForTests()).toBe(before);
+  });
+
+  it('R5: cleans up after a chain of overlapping waiters for the same book, not just a lone call', async () => {
+    const bookDir = 'design-lock-cleanup-chain-R5';
+    const before = _designChainsSizeForTests();
+    const a = withDesignLock(bookDir, async () => {
+      await tick();
+    });
+    const b = withDesignLock(bookDir, async () => {
+      await tick();
+    });
+    await Promise.all([a, b]);
+    /* Both waiters have settled — the chain tail must clean up, leaving no
+       trace of this bookDir in the map. */
+    expect(_designChainsSizeForTests()).toBe(before);
   });
 });
 
