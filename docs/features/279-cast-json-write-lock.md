@@ -336,6 +336,28 @@ clearing CLAUDE.md's fix-now bar:
   critical section (not just that its write survived) — the survival-only
   assertion depends on the racer's full read+write losing outright against
   an 80ms head start, which a slow-enough unlocked write can still beat.
+  `#2123` also closed the sweep's last gap: two single-book sites,
+  `cast-add-from-roster.ts` and `voice-library-usage.ts`'s
+  `clearLibraryVoiceReferences`, had been measured as detector-less by
+  neutralising `withCastLocks` (plural) and finding their specs green — but
+  both actually call `withCastLock` (singular; `cast-add-from-roster.ts`
+  locks only the source book it writes, and `clearLibraryVoiceReferences`
+  holds at most one book's lock at a time), which that mutation never
+  touches. A sweep-wide mutation of ONE primitive silently exempts every
+  site built on the OTHER; confirm the primitive a site actually calls by
+  reading the module, don't assume it from the site's shape (one-book vs.
+  two-book). Each now carries its own `runLockDetector`-style test, racing a
+  genuine `withCastLock` writer instead: `cast-add-from-roster.test.ts`
+  against the route's in-lock `sourceCast` read (no separate unlocked
+  pre-lock read of that path to confuse the gate with — `findBookByBookId`
+  only reads state.json); `voice-library-usage.test.ts` against
+  `clearLibraryVoiceReferences`'s in-lock read, which is genuinely the
+  SECOND read of that book's cast.json (`walkConfirmedCasts()`'s own
+  unlocked scan reads it first), so that gate intercepts by occurrence
+  count rather than first-match, to avoid gating the wrong one. Three
+  modules now carry behavioural lock-existence detectors from this sweep:
+  `cast-not-linked-to.ts` (POST + DELETE), `cast-add-from-roster.ts`, and
+  `voice-library-usage.ts`.
 - `server/src/routes/analysis.fresh-cast-lock.test.ts` and
   `server/src/routes/book-state.reparse.test.ts` — race the two delete
   sites against `cast-aliases`, which re-reads inside its own lock and
