@@ -145,6 +145,12 @@ beforeEach(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = join(dir, 'audio-voices');
   vi.resetModules();
 
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
   const { voiceLibraryRouter } = await import('./voice-library.js');
   const voiceLibMod = await import('../workspace/voice-library.js');
   const modelPathsMod = await import('../tts/model-paths.js');

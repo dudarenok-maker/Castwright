@@ -31,6 +31,17 @@ beforeAll(async () => {
   process.env.CASTWRIGHT_VRAM_SAMPLE = '1';
   stats = await import('../analyzer/model-vram-stats.js');
   mod = await import('./ensure-sidecar-loaded.js');
+  /* #2052 — gpu/sidecar-vram-sample.ts now reaches probeSidecarHealth via
+     the sidecar-health-gate.ts leaf gate instead of a self-bootstrapping
+     dynamic import inside maybeSampleSidecarEngine's own try/catch. In the
+     real server, routes/sidecar-health.ts registers with the gate at route-
+     mount time (server startup), well before any generation call reaches
+     maybeSampleSidecarEngine. This test's module graph never mounts routes,
+     so it must register the same way explicitly — this import is the only
+     thing that changed here; routes/sidecar-health.ts's own module graph was
+     already being exercised (for real, unmocked) via the old dynamic import,
+     just later (inside the try/catch) rather than up front. */
+  await import('../routes/sidecar-health.js');
 });
 beforeEach(async () => { await rm(stats.vramStatsFilePath(), { force: true }); });
 const realFetch = global.fetch;

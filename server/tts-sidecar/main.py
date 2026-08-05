@@ -3539,6 +3539,29 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     "qwen.1.7b.design": 6144,
     "coqui": 3584,
     "asr": 400,
+    # #2094 — a conservative cold-start prior for an ALREADY-RESIDENT ASR
+    # model's incremental per-forward cost (feature extraction + attention
+    # buffers for one short sentence), not weight materialisation. No on-box
+    # measurement exists yet for this specific figure (the observed 3707 MB
+    # that motivated #2094 was the CONTAMINATED cold "asr" learned estimate,
+    # not a warm one) — deliberately conservative rather than measured. Unlike
+    # the OTHER seeds here, this one previously had NO real path to being
+    # learned from: `_observed_mb` reads torch's caching-allocator peak, but
+    # CTranslate2 (faster-whisper's backend) allocates entirely outside it, so
+    # a warm ASR forward measured that way read ~0 (dropped by `record()`'s
+    # `<= 0` guard) and never accumulated real `asr.warm` samples. `reservation()`
+    # now measures ASR specifically via a device-wide free-memory DELTA
+    # (`PlacementController._device_free_mb`) instead, which DOES see
+    # CTranslate2's allocations — guarded against attributing a concurrent
+    # OTHER engine's allocation to ASR (`ledger.engines_holding`) and against
+    # an implausible warm reading above this same cold seed (a resident
+    # forward should never need more than a cold load would). With that fix,
+    # the SAME learning mechanism as every other key here genuinely supersedes
+    # this seed once real `asr.warm` observations accumulate
+    # (`_FOOTPRINT_MIN_SAMPLES`) — see `_device_free_mb`'s docstring for the
+    # residual: a foreign, non-sidecar process on the same card is still
+    # invisible to the ledger-based contamination guard.
+    "asr.warm": 128,
     "spk": 200,
 }
 
@@ -3569,7 +3592,7 @@ class FootprintTable:
         self._obs: dict[str, deque[int]] = {}
 
     @staticmethod
-    def _key(engine: str, model: Optional[str], cfg: Optional[dict]) -> str:
+    def _key(engine: str, model: Optional[str], cfg: Optional[dict], resident: bool = False) -> str:
         model_str = (model or "").lower()
         cfg = cfg or {}
         if engine == "qwen" and "1.7b" in model_str:
@@ -3582,6 +3605,15 @@ class FootprintTable:
             if op == "design":
                 return "qwen.1.7b.design"
             return "qwen.1.7b"
+        # #2094 — an already-resident ASR model needs only its per-call
+        # activation footprint for the forward, not the cold-load peak (weights
+        # materialisation + first CUDA-context touch) that "asr" otherwise books
+        # UNCONDITIONALLY regardless of residency. Tracked under its own key so
+        # its learned p95 warms independently of — and can't be diluted by, or
+        # (per #2094's still-open device-wide `max_memory_allocated`
+        # contamination question) leak contamination into — the cold-load pool.
+        if engine == "asr" and resident:
+            return "asr.warm"
         return engine
 
     @staticmethod
@@ -3600,17 +3632,21 @@ class FootprintTable:
         idx = min(len(s) - 1, int(math.ceil(_FOOTPRINT_PERCENTILE / 100 * len(s))) - 1)
         return s[idx]
 
-    def peak_mb(self, engine: str, model: Optional[str], cfg: Optional[dict] = None) -> int:
-        key = self._key(engine, model, cfg)
+    def peak_mb(
+        self, engine: str, model: Optional[str], cfg: Optional[dict] = None, resident: bool = False,
+    ) -> int:
+        key = self._key(engine, model, cfg, resident)
         learned = self._learned_mb(key)
         if learned > 0:
             return learned
         return self._seed_mb(key, engine, cfg)
 
-    def record(self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int) -> None:
+    def record(
+        self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int, resident: bool = False,
+    ) -> None:
         if observed_mb <= 0:
             return
-        key = self._key(engine, model, cfg)
+        key = self._key(engine, model, cfg, resident)
         self._obs.setdefault(key, deque(maxlen=_FOOTPRINT_WINDOW)).append(int(observed_mb))
 
 
@@ -3807,6 +3843,22 @@ def _reclaim_device_cache(device_key: str) -> None:
 # make), just a guard against the retry-storm shape below. See
 # `PlacementController._reclaim_stranded_cache` for why it exists.
 _RECLAIM_COOLDOWN_SECONDS = 30.0
+
+
+def _load_pynvml():
+    """#2094 — lazy, guarded import of the optional `pynvml` (package name
+    `nvidia-ml-py`) dependency `PlacementController._foreign_pid_holds_device`
+    uses for per-process VRAM attribution. A separate top-level function (not
+    inlined into the caller) so tests can monkeypatch it directly to script
+    "NVML unavailable" or a fake module's process list, without needing the
+    real optional dependency installed or a real device to query. Returns the
+    module, or `None` when it isn't importable — never raises."""
+    try:
+        import pynvml  # type: ignore
+
+        return pynvml
+    except Exception:
+        return None
 
 
 class PlacementController:
@@ -4035,8 +4087,12 @@ class PlacementController:
         (2) It's unnecessary: `admit()` holds NO reservation (see above), so
         it cannot double-book anything the lock would need to protect — it's
         a pure decision, always re-checked live by its caller."""
-        peak = self.footprints.peak_mb(engine, model, cfg)
+        # #2094 review R11 — consult residency before booking, same as
+        # `_resolve_admission`/`reservation()` (the binding decision this
+        # advisory `admit()` must not disagree with, e.g. for a resident ASR
+        # engine's `neededMb`).
         resident = self.is_resident(engine)
+        peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
         constraint = resident if resident is not None else pinned
         reserve_cap = self.reserve_mb()
         devices = self.probe()
@@ -4113,6 +4169,90 @@ class PlacementController:
         except Exception:
             pass
 
+    @staticmethod
+    def _device_free_mb(device_key: Optional[str]) -> Optional[int]:
+        """#2094 — device-level free VRAM (`torch.cuda.mem_get_info`), in MB.
+
+        `_observed_mb`/`_reset_peak_mb` above read torch's OWN caching
+        allocator peak — which is exactly right for a torch-resident engine
+        (Qwen, Coqui, ECAPA), but blind to an allocation torch never sees.
+        faster-whisper's CTranslate2 backend allocates via its own CUDA
+        context, entirely outside torch's allocator, so a warm ASR forward
+        measured via `_observed_mb` reads ~0 (dropped by `record()`'s `<= 0`
+        guard) and a cold one reads whatever residual torch activity happened
+        to be co-resident — this is the root cause `asr.warm` was never
+        expected to learn from, and a plausible source of the contaminated
+        3707 MB `asr` figure that motivated #2094 in the first place.
+
+        A before/after DELTA of this device-wide free-memory reading — not a
+        single snapshot — is what `_resolve_admission`/`reservation()` use for
+        the `asr` engine specifically (see there): it sees ANY allocation on
+        the device, CTranslate2's included, at the cost of also seeing every
+        OTHER engine's. That attribution problem is NOT fully solved here —
+        `reservation()`'s ASR branch discards a measurement instead of trusting
+        it whenever another engine holds a concurrent reservation on the same
+        device, which narrows but cannot eliminate it (a foreign, non-sidecar
+        process on the same card is invisible to the ledger). Returns `None`
+        (not 0) on any failure so callers can tell "measured a real value" from
+        "couldn't measure" — 0 would look like a legitimate delta."""
+        if not device_key or not device_key.startswith(("cuda:", "rocm:")):
+            return None
+        try:
+            import torch  # type: ignore
+
+            index = int(device_key.split(":", 1)[1])
+            free_b, _total_b = torch.cuda.mem_get_info(index)
+            return int(free_b // 1_048_576)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _foreign_pid_holds_device(device_key: Optional[str]) -> Optional[bool]:
+        """#2094 — per-process VRAM attribution via NVML, closing the
+        cold-bucket gap the two existing guards leave open: Guard 1
+        (`ledger.engines_holding`) only knows about SIDECAR-tracked
+        reservations, and Guard 2 (the implausible-delta ceiling in
+        `reservation()`) is WARM-only. A foreign, non-sidecar process on the
+        same card — a concurrent worktree's pytest suite holding VRAM is the
+        documented failure mode — is invisible to both, and a COLD ASR
+        reservation's delta has no ceiling at all, so it can be contaminated
+        exactly like #2094's own 3707 MB finding.
+
+        Enumerates the device's compute processes via
+        `nvmlDeviceGetComputeRunningProcesses` and reports whether any PID
+        OTHER than this process currently holds memory there.
+
+        Returns:
+          - `True`  — a foreign PID is present; the caller must discard the
+            sample.
+          - `False` — NVML was queried successfully and every process
+            holding memory on the device (if any) is this one; a positive
+            confirmation the reading is attributable.
+          - `None`  — could not determine (non-CUDA device, `pynvml` not
+            installed, NVML init/query failure, an unexpected shape). The
+            caller MUST treat `None` exactly like `True` (discard) — an
+            unattributable reading must never become a learned p95.
+
+        Never raises. NVML covers NVIDIA only — a `rocm:` device_key returns
+        `None` (AMD's equivalent is `amdsmi`, out of scope here)."""
+        if not device_key or not device_key.startswith("cuda:"):
+            return None
+        pynvml = _load_pynvml()
+        if pynvml is None:
+            return None
+        try:
+            index = int(device_key.split(":", 1)[1])
+            pynvml.nvmlInit()
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            finally:
+                pynvml.nvmlShutdown()
+            own_pid = os.getpid()
+            return any(getattr(p, "pid", None) != own_pid for p in procs)
+        except Exception:
+            return None
+
     async def _resolve_admission(
         self,
         engine: str,
@@ -4121,15 +4261,35 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
         pinned: Optional[str],
-    ) -> tuple[dict, Optional[tuple]]:
+    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
-        the lock. Returns `(admission, held)`; `held` is the ledger token
-        `reservation()` must release on exit, or None (cpu / noCapacity —
-        nothing was held)."""
-        peak = self.footprints.peak_mb(engine, model, cfg)
+        the lock. Returns `(admission, held, resident, mem_before_mb,
+        foreign_before)`; `held` is the ledger token `reservation()` must
+        release on exit, or None (cpu / noCapacity — nothing was held).
+        `resident` (#2094) is whether `engine` was already loaded BEFORE this
+        reservation — `reservation()` threads it through to
+        `footprints.record()` so the observation lands in the same peak-mb
+        bucket (`FootprintTable._key`) the reservation itself was booked
+        under. `mem_before_mb` (#2094 review) is the `_device_free_mb`
+        snapshot taken for `engine == "asr"` specifically — `None` for every
+        other engine, and `None` when the snapshot itself failed — so
+        `reservation()` can measure ASR's peak via a device-wide free-memory
+        DELTA instead of torch's allocator, which CTranslate2 (faster-whisper's
+        backend) allocates entirely outside of. `foreign_before` (#2094
+        per-process attribution) is whether `_foreign_pid_holds_device`
+        reported (or could not rule out) a non-sidecar process on the device
+        at this SAME snapshot point — `False` for every non-ASR engine;
+        `reservation()` ORs it with an equivalent after-snapshot check so a
+        foreign process present at either end of the window discards the
+        sample."""
         resident = self.is_resident(engine)
+        # #2094 — consult residency BEFORE booking: an already-resident engine
+        # (currently only distinguished for "asr", see `FootprintTable._key`)
+        # needs an incremental forward-only reservation, not the cold-load peak
+        # unconditionally booked before this.
+        peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
         constraint = resident if resident is not None else pinned
         reserve_cap = self.reserve_mb()
         devices = self.probe()
@@ -4166,6 +4326,8 @@ class PlacementController:
                         self._gpu_candidates(devices, constraint), peak, reserve_cap, engine
                     )
 
+        mem_before_mb: Optional[int] = None
+        foreign_before = False
         if held is not None:
             admission: dict = {"device": held[0]}
             # Device-wide reset, not scoped to this op — a concurrent op on the
@@ -4173,12 +4335,28 @@ class PlacementController:
             # only ever UNDER-estimates the peak (never over-reserves), and the
             # reserve cushion + p95 windowing absorb the noise.
             self._reset_peak_mb(held[0])
+            # #2094 review — ASR-specific: snapshot device-wide free VRAM here,
+            # at the SAME point `_reset_peak_mb` brackets from, so `reservation()`
+            # can pair it with an after-snapshot into a delta. See
+            # `_device_free_mb`'s docstring for why ASR needs this instead of
+            # the torch-allocator peak every other engine uses.
+            if engine == "asr":
+                mem_before_mb = self._device_free_mb(held[0])
+                # #2094 per-process attribution — only bother querying NVML
+                # when the free-mb snapshot itself succeeded; a failed
+                # snapshot already discards the sample downstream (see
+                # `reservation()`'s `mem_before_mb is not None` guard), so
+                # there's nothing for this to protect. `True` (foreign PID
+                # present) AND `None` (couldn't determine) both mean
+                # "discard"; only a positive `False` clears this snapshot.
+                if mem_before_mb is not None:
+                    foreign_before = self._foreign_pid_holds_device(held[0]) is not False
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
-        return admission, held
+        return admission, held, resident is not None, mem_before_mb, foreign_before
 
     @asynccontextmanager
     async def reservation(
@@ -4216,15 +4394,75 @@ class PlacementController:
         real hazard for tests, which must therefore each drive this
         `PlacementController` under exactly one `asyncio.run()`."""
         async with self._admit_lock:
-            admission, held = await self._resolve_admission(
+            admission, held, resident, mem_before_mb, foreign_before = await self._resolve_admission(
                 engine, model, cfg, cpu_capable, heavy, pinned
             )
         try:
             yield admission
         finally:
             if held is not None:
+                device_key = held[0]
+                # #2094 review — ASR-specific free-memory-DELTA measurement,
+                # captured BEFORE releasing our own hold (so `engines_holding`
+                # still includes it and the "any OTHER engine" check below is
+                # correct) and BEFORE the generic torch-allocator path runs.
+                # `mem_before_mb` is only ever non-None for engine == "asr"
+                # (see `_resolve_admission`).
+                asr_observed_mb: Optional[int] = None
+                if engine == "asr" and mem_before_mb is not None:
+                    mem_after_mb = self._device_free_mb(device_key)
+                    other_engines = self.ledger.engines_holding(device_key) - {engine}
+                    # #2094 per-process attribution — the AFTER-snapshot's own
+                    # NVML check. `foreign_before` (captured in
+                    # `_resolve_admission`) covers the start of the window;
+                    # this covers the end. A foreign PID present at EITHER
+                    # point contaminates the delta, since it may have
+                    # allocated/freed at any point during the window.
+                    foreign_after = self._foreign_pid_holds_device(device_key) is not False
+                    if (
+                        mem_after_mb is not None
+                        and not other_engines
+                        and not foreign_before
+                        and not foreign_after
+                    ):
+                        delta = mem_before_mb - mem_after_mb
+                        # Conservative, not optimistic (review): a resident
+                        # ("warm") forward should NEVER need more than a cold
+                        # load would — a delta above the cold seed is almost
+                        # certainly contamination (a foreign, non-ledger
+                        # process on the same card; see #2094's own 3707 MB
+                        # finding) rather than genuine ASR demand, so it's
+                        # discarded rather than trusted. A negative/zero delta
+                        # (the device gained free memory during the op — e.g.
+                        # a concurrent unload elsewhere) is already dropped by
+                        # `record()`'s own `<= 0` guard below; the ceiling
+                        # here only matters for the WARM bucket, where "more
+                        # than a cold load" is the implausible direction.
+                        warm_ceiling = SEED_FOOTPRINTS_MB.get("asr", 0)
+                        if not (resident and warm_ceiling > 0 and delta > warm_ceiling):
+                            asr_observed_mb = delta
+                    # else: another engine holds a concurrent reservation on
+                    # this device, the after-snapshot itself failed, or a
+                    # foreign (non-sidecar) PID was seen holding memory on the
+                    # device at either snapshot point (`_foreign_pid_holds_
+                    # device`, #2094 per-process attribution — closes the
+                    # residual this comment used to describe as unsolved: a
+                    # concurrent worktree's pytest suite on the same card is
+                    # no longer invisible) — the measurement is contaminated
+                    # or unattributable, so it is discarded (asr_observed_mb
+                    # stays None -> record() below sees 0 via the `or 0` and
+                    # its own `<= 0` guard drops it) rather than attributed to
+                    # ASR.
                 self.ledger.release(held)
-                self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
+                # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
+                # booked the reservation under — recording under that same key
+                # (not a freshly re-checked residency) keeps the observation in
+                # the bucket its own peak_mb() estimate came from. ASR uses the
+                # free-memory-delta measurement above (or is dropped, per the
+                # guards there); every other engine keeps the torch-allocator
+                # peak unchanged.
+                observed_mb = asr_observed_mb if engine == "asr" else self._observed_mb(device_key)
+                self.footprints.record(engine, model, cfg, observed_mb or 0, resident)
 
 
 # Task 4 (vram-aware-placement plan) — capacity-aware admission for every heavy
@@ -4550,6 +4788,19 @@ class VoiceLanguageUnsupportedError(VoiceNotDesignedError):
     re-cloning cannot add a language to the model's config."""
 
 
+class DesignContentionTimeoutError(RuntimeError):
+    """A synth needed to evict the transient VoiceDesign model, but a design
+    stayed in flight past `unload_design()`'s bounded wait (#2070).
+
+    The eviction-policy call (design wins): a design is short, user-initiated
+    and interactive — someone is watching it render in cast review — so
+    killing it destroys visible work with no recovery path. A synth is
+    batch/background and can absorb a wait instead. Reaching this error means
+    the design outlived even that bounded wait (sized above its own ~120s
+    cold-design server budget, see `unload_design`), i.e. it is genuinely
+    wedged, not merely slow — the caller should retry the synth shortly."""
+
+
 class Base17UnavailableError(Exception):
     """The 1.7B-Base model can't be used for an anchored mint for a
     deterministic reason the separate VoiceDesign model won't share. The
@@ -4561,6 +4812,22 @@ class Base17UnavailableError(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(f"Qwen 1.7B-Base unavailable ({reason}).")
         self.reason = reason
+
+
+# #2070 — how long `unload_design()` waits for an in-flight `design_voice()`
+# call to clear before giving up and raising `DesignContentionTimeoutError`
+# instead of silently nulling `_design` out from under it. Sized ABOVE the
+# documented ~120s cold-design server budget (design_voice's own comment:
+# "pushed cold designs past the 120s server budget") because #2064's review
+# found the race window contains a FULL 0.6B cold load — a bound tighter than
+# a design's own request budget would trip on a design that is merely slow,
+# not wedged, defeating the "design wins" policy this exists to implement. A
+# design still running past its OWN budget is wedged, not slow, so only that
+# case reaches the timeout. Not exposed as an env knob (deliberately — see
+# CLAUDE.md's "new env var MUST be a knob" rule this avoids triggering; a
+# fixed conservative bound is simpler and this is the only caller).
+_DESIGN_CONTENTION_WAIT_S_DEFAULT = 150.0
+_DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
 
 
 class QwenEngine(Engine):
@@ -5576,12 +5843,39 @@ class QwenEngine(Engine):
             else:
                 log.info("Qwen models unloaded.")
 
-    def unload_design(self) -> None:
+    def unload_design(
+        self,
+        wait_seconds: float = _DESIGN_CONTENTION_WAIT_S_DEFAULT,
+        poll_seconds: float = _DESIGN_CONTENTION_POLL_S_DEFAULT,
+    ) -> None:
         """Drop only the heavy VoiceDesign model, keeping the resident Base
         synth model loaded. Lock-guarded so it can't null the model out from
         under a concurrent design/synth forward (which holds `_synth_lock` —
         we wait for it). MUST NOT be called while already holding `_synth_lock`:
-        it is a non-reentrant threading.Lock. Idempotent."""
+        it is a non-reentrant threading.Lock. Idempotent.
+
+        #2070 — `synthesize()`/`synthesize_batch()` call this UNCONDITIONALLY
+        whenever a design is resident, with no regard for whether that design
+        is still rendering: an ordinary synth on another voice used to be able
+        to null `_design` mid-`design_voice()`, which then failed loud with
+        "VoiceDesign model was unloaded before this design could render" —
+        silently killing visible, user-initiated work for a batch job that
+        could simply have waited. The eviction-policy call is that the DESIGN
+        WINS: this waits (bounded by `wait_seconds`, polling every
+        `poll_seconds`) for `_design_in_flight` to clear before evicting,
+        rather than nulling it out from under an active forward. The wait is
+        bounded, never unbounded — a genuinely wedged design must not hang
+        every subsequent render forever — so a design still in flight past
+        `wait_seconds` raises `DesignContentionTimeoutError` instead."""
+        deadline = time.monotonic() + wait_seconds
+        while self._design_in_flight.busy:
+            if time.monotonic() >= deadline:
+                raise DesignContentionTimeoutError(
+                    f"Qwen VoiceDesign has been in flight for over "
+                    f"{wait_seconds:.0f}s — refusing to evict it out from "
+                    "under an active design. Retry the synth shortly."
+                )
+            time.sleep(poll_seconds)
         with self._synth_lock:
             if self._design is None:
                 return
@@ -5766,14 +6060,20 @@ class QwenEngine(Engine):
                         # itself hold `_synth_lock` for the whole cold load.
                         design = self._design
                         if design is None:
-                            # see #2070 — `unload_design()` is called
-                            # unconditionally from synthesize()/
-                            # synthesize_batch() (not gated on
-                            # `_design_in_flight`), so an ordinary render of
-                            # another voice can land here mid-design, and the
-                            # gap this raise closes spans a full 0.6B cold
-                            # load (seconds to tens of seconds), not a narrow
-                            # Stop-only race.
+                            # #2070 fixed the ordinary-synth race this used to
+                            # cover: `unload_design()` now waits (bounded) on
+                            # `_design_in_flight` before nulling `_design`, and
+                            # THIS call is what holds it busy, so a concurrent
+                            # /synthesize's unload_design can no longer land
+                            # here mid-design. What remains is a genuinely
+                            # explicit action — a full /unload landing in the
+                            # gap between `_ensure_design_loaded()` above and
+                            # this lock acquire — which deliberately is NOT
+                            # gated by the design-wins policy (an explicit
+                            # Stop must still be able to free the model). Raise
+                            # loud rather than silently absorbing that race
+                            # with an in-lock re-pull that would itself hold
+                            # `_synth_lock` for the whole cold load.
                             raise RuntimeError(
                                 "Qwen VoiceDesign model was unloaded before "
                                 "this design could render — reload it and "
@@ -6036,20 +6336,33 @@ class QwenEngine(Engine):
         _kok_pre = ENGINES.get("kokoro")
         if isinstance(_kok_pre, KokoroEngine) and _kok_pre._kokoro is not None:
             _phase("freeing-vram")
+        # The 1.7B VoiceDesign model (used by design_voice) and this 1.7B-Base
+        # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+        # designs a base (leaving _design resident) then mints its variants
+        # here — evict the lingering VoiceDesign before the 1.7B-Base load,
+        # mirroring the synth path's unload_design(). mint_variant never uses
+        # _design, so this is safe. Without it the two heavy 1.7B models stack
+        # and trip the VRAM recycle ceiling once per voice (the OOM sawtooth).
+        #
+        # #2070 review R5 — deliberately OUTSIDE the card_lock/base17_activity/
+        # Kokoro-design-arbiter block below, not inside it. Since #2070,
+        # unload_design() can wait up to ~150s for an in-flight design to
+        # clear (the design-wins policy). `_VD_KOKORO.design()` sets
+        # `_design_active` for its ENTIRE span, and `kokoro_synth()` blocks
+        # while that's set — so a wait held inside that block would stall
+        # EVERY Kokoro synth for up to 150s during exactly the bulk
+        # "Design full cast" run this eviction exists to support. Evicting
+        # here keeps any such wait off the arbiter (and the card lock)
+        # entirely; the only real ordering requirement — evict-before-load —
+        # still holds, since the 1.7B-Base load happens later in this same
+        # function, still inside the block below.
+        if self._design is not None:
+            log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
+            self.unload_design()
         with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
             kok = ENGINES.get("kokoro")
             if kok is not None and hasattr(kok, "unload"):
                 kok.unload()
-            # The 1.7B VoiceDesign model (used by design_voice) and this 1.7B-Base
-            # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-            # designs a base (leaving _design resident) then mints its variants
-            # here — evict the lingering VoiceDesign before the 1.7B-Base load,
-            # mirroring the synth path's unload_design(). mint_variant never uses
-            # _design, so this is safe. Without it the two heavy 1.7B models stack
-            # and trip the VRAM recycle ceiling once per voice (the OOM sawtooth).
-            if self._design is not None:
-                log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
-                self.unload_design()
             _phase("loading-model")
             # Capacity-aware placement (task 3, vram-aware-placement plan):
             # mirrors design_voice — a concrete `device` from an admitted
@@ -6835,6 +7148,22 @@ class WhisperEngine:
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
         self._requested_device = self._device  # preserved for /health fell_back detection
         self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
+        # #2047 — optional HuggingFace revision pin for the resolved weights
+        # repo (e.g. faster-whisper's "base" -> Systran/faster-whisper-base).
+        # Unset by default: production ASR compares a fresh transcript against
+        # the MANUSCRIPT text at a real (non-zero) WER tolerance, so an
+        # upstream checkpoint move is harmless there — a pin has upgrade-path
+        # consequences (stale weights never auto-refresh) production doesn't
+        # need to pay for. The golden content-drift gate is the one consumer
+        # that DOES need this: it diffs against a RECORDED transcript at
+        # tolerance 0 (#1911/#2004), so an unpinned revision is a silent input
+        # to that gate — `tests/golden/test_golden_regression.py`'s
+        # `_make_whisper()` sets this env var outright the same way it pins
+        # ASR_MODEL/ASR_DEVICE/ASR_COMPUTE_TYPE. Deliberately NOT a config-
+        # registry knob (CLAUDE.md's "new env var MUST be a knob" applies to
+        # operator-facing settings; this mirrors the already-unregistered
+        # golden-tier-only env vars like GOLDEN_BLESS/GOLDEN_REBLESS_CONTENT).
+        self._model_revision = (os.environ.get("ASR_MODEL_REVISION", "").strip() or None)
 
     def _compute_type(self, device: Optional[str] = None) -> str:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
@@ -6875,10 +7204,24 @@ class WhisperEngine:
                 "in server/tts-sidecar."
             ) from e
         log.info(
-            "Loading Whisper ASR model=%s device=%s compute=%s ...",
-            self._model_name, dev, self._compute_type(dev),
+            "Loading Whisper ASR model=%s device=%s compute=%s revision=%s ...",
+            self._model_name, dev, self._compute_type(dev), self._model_revision or "(unpinned)",
         )
-        self._model = WhisperModel(self._model_name, **_ct2_kwargs(dev, self._compute_type(dev)))
+        # #2047/R8 — `revision` is passed CONDITIONALLY, not as
+        # `revision=self._model_revision` unconditionally: `WhisperModel.__init__`
+        # forwards **model_kwargs straight through to
+        # `ctranslate2.models.Whisper`, and `requirements/base.txt` only floors
+        # faster-whisper at >=1.0 — a 1.0.x release without the named `revision`
+        # parameter would raise `TypeError` on `revision=None` and break EVERY
+        # ASR load, pinned or not. Omitting the kwarg entirely when unset (the
+        # common case) is what actually makes this a byte-for-byte no-op for a
+        # caller that doesn't set ASR_MODEL_REVISION, rather than just
+        # "harmless on the faster-whisper version this was tested against."
+        self._model = WhisperModel(
+            self._model_name,
+            **({"revision": self._model_revision} if self._model_revision else {}),
+            **_ct2_kwargs(dev, self._compute_type(dev)),
+        )
         # Reflect the resolved card for /health fell_back detection once loaded.
         self._device = dev
         log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, dev)
@@ -9790,6 +10133,18 @@ async def qwen_mint_variant(req: Request) -> Response:
                 voice_uuid,
                 _report,
             )
+    except DesignContentionTimeoutError as exc:
+        # #2070 review R6 — mint_variant() also calls unload_design() (to
+        # evict a lingering VoiceDesign before its own 1.7B-Base load, see
+        # QwenEngine.mint_variant), so it can raise this the same way
+        # /synthesize and /synthesize-batch can. Same non-poisoned, retry-safe
+        # 503 shape as those two — this route was missing the arm entirely and
+        # fell into the generic 500 below.
+        log.warning("/qwen/mint-variant: design contention timeout: %s", exc)
+        return JSONResponse(
+            {"detail": str(exc), "code": "design_in_flight"},
+            status_code=503,
+        )
     except VoiceNotDesignedError as exc:
         log.warning("/qwen/mint-variant: base voice not designed — %s", exc)
         return JSONResponse(
@@ -10221,6 +10576,18 @@ async def synthesize(req: Request) -> Response:
             {"detail": f"Voice '{voice}' has not been designed yet.", "code": "voice_not_designed"},
             status_code=409,
         )
+    except DesignContentionTimeoutError as exc:
+        # #2070 — the design-wins eviction policy timed out. Non-poisoned 503
+        # (mirrors the srv-17c drain fence above): transient, safe to retry,
+        # not a CUDA/process fault.
+        log.warning(
+            "/synthesize: design contention timeout — engine=%s voice=%s: %s",
+            engine_id, voice, exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "design_in_flight"},
+            status_code=503,
+        )
     except Exception as e:
         # Internal-only — feeds CUDA-poison detection + the server-side log,
         # never a response body (the body stays generic below).
@@ -10538,6 +10905,16 @@ async def synthesize_batch(req: Request) -> Response:
         # (potentially multi-second) batched forward runs on a worker thread.
         result = await asyncio.to_thread(
             engine.synthesize_batch, model, items, live_instruct
+        )
+    except DesignContentionTimeoutError as exc:
+        # #2070 — same design-wins eviction policy as /synthesize.
+        log.warning(
+            "/synthesize-batch: design contention timeout (model=%s items=%d): %s",
+            model, len(items), exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "design_in_flight"},
+            status_code=503,
         )
     except Exception as e:
         # Internal-only — forensic log + CUDA-poison detection, never a body.

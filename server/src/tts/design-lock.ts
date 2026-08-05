@@ -31,20 +31,37 @@ export async function withDesignLock<T>(bookDir: string, fn: () => Promise<T>): 
   });
   /* The next waiter chains onto `gate` (resolved in our finally), so it can't
      start until we're done. Swallow prior rejections so one failed design
-     doesn't reject the whole chain. `mine` is what actually goes in the map —
-     comparing the cleanup against `gate` (as before) compares against a
-     promise that was never stored, so the delete below never ran and the map
-     grew one entry per bookDir for the process lifetime. */
-  const mine = prior.then(() => gate, () => gate);
-  designChains.set(bookDir, mine);
+     doesn't reject the whole chain.
+
+     #2088 R5 review fix (PR #2126) — the map must store (and the tail check
+     below must compare against) THIS SAME promise object, not `gate` itself.
+     `prior.then(() => gate, () => gate)` constructs a NEW promise every call
+     — one that resolves to `gate`'s value once `gate` settles, but is never
+     `===` to `gate`. The tail check at the bottom used to compare against
+     `gate`, which is a different object than whatever the map actually
+     holds, so it was always false and the map entry for this bookDir was
+     NEVER deleted — one settled promise accumulated per book, forever, for
+     the life of the process. */
+  const chained = prior.then(() => gate, () => gate);
+  designChains.set(bookDir, chained);
   await prior.catch(() => undefined);
   try {
     return await fn();
   } finally {
     release();
-    /* Tidy up when we're the chain tail, so the map doesn't grow unbounded. */
-    if (designChains.get(bookDir) === mine) designChains.delete(bookDir);
+    /* Tidy up when we're the chain tail (nobody queued behind us), so the
+       map doesn't grow unbounded. Compare against `chained` — the object
+       actually stored above — not `gate`. */
+    if (designChains.get(bookDir) === chained) designChains.delete(bookDir);
   }
+}
+
+/** #2088 R5 review fix — test-only introspection of the chain map's size, so
+    a test can assert the tail-cleanup actually fires instead of leaking one
+    entry per book forever. Mirrors the `_reset*ForTests` / `_*ForTests`
+    convention used elsewhere (e.g. `gpu/engine-device-state.ts`). */
+export function _designChainsSizeForTests(): number {
+  return designChains.size;
 }
 
 /* ── Cross-operation busy registry (mutual exclusion) ───────────────────── */

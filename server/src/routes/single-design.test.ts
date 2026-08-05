@@ -104,6 +104,12 @@ beforeAll(async () => {
 
   // All imports are dynamic so WORKSPACE_DIR (above) is set before paths.ts
   // reads process.env.WORKSPACE_DIR at module load time.
+  // #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+  // imports races the async vi.mock factories above (module-under-test can
+  // receive the real binding instead of the mock). Measured latent for this
+  // file — 0 failures in 14 runs (#2083's own survey) — not the live
+  // ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+  // fixed under #2046.
   const { singleDesignRouter } = await import('./single-design.js');
   const { makeBookId } = await import('../workspace/paths.js');
   const lock = await import('../tts/design-lock.js');
