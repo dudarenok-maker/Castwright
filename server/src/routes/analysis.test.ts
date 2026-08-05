@@ -39,6 +39,7 @@ import {
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
+import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -3661,6 +3662,258 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         await clearAnalysisCache(manuscriptId);
         rmSync(bookDir, { recursive: true, force: true });
         process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persisted character id (srv-87, #2086)', () => {
+  /* Clone of the harness at :3148 — real bookDir, real file I/O, no mocked
+     cast-id-history. The three interim writes (`analysis.ts:3630`, `:3840`,
+     `:5607`) used to call `mergeAnalysisResultWithExistingCast` and discard
+     its `.retirements`. When the id-drift name-fallback fired at one of
+     those writes, the prior character's id was durably removed from
+     cast.json with no history record — if the run then died before the
+     authoritative end-of-run write, the swap was never undone.
+
+     This test drives a real mid-run death: chapter 1's Phase-0 stub returns
+     a fresh roster that name-matches the pre-seeded prior cast under a
+     DIFFERENT id (the drift), so interim write #1 is where the old fix would
+     have swapped the id; chapter 2's stub then throws
+     GeminiContentBlockedError, which is whole-book-fatal and rethrown at
+     `analysis.ts:3523` — the run terminates after the interim write and
+     before the authoritative write at `:4880`. No process kill, no timing
+     race, no `phase1DriftExceeded` fixture. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(_manuscriptId: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        if (chapterId === 2) {
+          // Deterministic, whole-book-fatal — rethrown at analysis.ts:3523.
+          throw new GeminiContentBlockedError('phase0-model', 'RECITATION');
+        }
+        // Chapter 1 mints 'anton-y' for the same character the pre-seeded
+        // cast.json already has voiced under 'anton-x' — the id-drift the
+        // name-fallback matches on.
+        return {
+          characters: [
+            { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+            {
+              id: 'anton-y',
+              name: 'Anton Prime',
+              role: 'lead',
+              color: '#111111',
+              gender: 'male',
+              evidence: [{ quote: 'Anton asked' }],
+            },
+          ],
+        };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    // The run dies inside Phase 0 before Phase 1 is ever dispatched for any
+    // chapter (default ANALYZER_PHASE1_MIN_LAG_CHAPTERS=10 parks every
+    // Phase 1 chapter on the watermark, which never advances past this
+    // 2-chapter book's failure). Still required: `phase1Selection` is
+    // resolved up-front in `runMainAnalyzerJob`, before the Phase 0 loop
+    // even starts, so an unset selection would hit the real
+    // `selectAnalyzerForPhase` and fail before this test's fixture ever runs.
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      runStage2Chapter: () => Promise.reject(new Error('Phase 1 should never dispatch in this test')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-interim-cast-write-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_interim_cast_write_test',
+        manuscriptId,
+        title: 'Interim Cast Write Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [
+      { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
+      { id: 2, title: 'Chapter Two', body: CHAPTER_BODY },
+    ];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Interim Cast Write Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  it(
+    'a mid-run GeminiContentBlockedError leaves the interim-swapped prior id, its voice, and cast-id-history.json untouched',
+    async () => {
+      const manuscriptId = `test-interim-cast-write-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      const originalConcurrency = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      // Deterministic chapter dispatch order: chapter 1 (and its interim
+      // write) must fully complete before chapter 2 is even dispatched, or
+      // the death could race the interim write that is this test's whole
+      // point.
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+      seedStateJson(bookDir, manuscriptId);
+      registerManuscript(manuscriptId, bookDir);
+
+      // A pre-existing, unrelated history entry — must survive BYTE-IDENTICAL.
+      // This is the assertion that catches the refused naive fix: if the
+      // interim write's name-fallback match had been recorded, this file
+      // would have gained an 'anton-x' key.
+      const seededHistory = { schema: 1, supersededBy: { 'alden-old': 'alden' } };
+      writeFileSync(castIdHistoryPath(bookDir), JSON.stringify(seededHistory));
+
+      // Prior cast.json: 'anton-x' is voiced ('tuned', with a voiceUuid) —
+      // the row an unfixed interim write would durably swap out for the
+      // freshly-detected 'anton-y'.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'anton-x',
+              name: 'Anton Prime',
+              voiceUuid: 'U-anton',
+              voiceState: 'tuned',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+            },
+          ],
+        }),
+      );
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // GeminiContentBlockedError is caught by runMainAnalyzerJob's own
+        // outer try/catch and reported via an `error` SSE event — it does
+        // NOT reject the returned promise.
+        await expect(
+          runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+            requestedFresh: false,
+            allowStage1Shrink: true,
+            requestedModel: undefined,
+          }),
+        ).resolves.toBeUndefined();
+
+        const castAfter = JSON.parse(
+          readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+        ) as { characters: Array<{ id: string; name: string; voiceUuid?: string }> };
+        const idsAfter = castAfter.characters.map((c) => c.id);
+
+        // Assertion 1 (RED today — only 'anton-y' is present): the prior
+        // voiced row survives the interim write, voice intact.
+        const antonX = castAfter.characters.find((c) => c.id === 'anton-x');
+        expect(antonX).toBeDefined();
+        expect(antonX!.voiceUuid).toBe('U-anton');
+
+        // Assertion 2: the interim write still does its job — the
+        // freshly-detected row is there too (mid-run duplicate, by design;
+        // see the interim-write comment in analysis.ts).
+        expect(idsAfter).toContain('anton-y');
+
+        // Assertion 3: cast-id-history.json is BYTE-IDENTICAL to the seed —
+        // no provisional retirement was recorded, and the pre-existing
+        // 'alden-old' -> 'alden' entry was not touched. This is the guard
+        // that the *naive* "record interim retirements too" fix — refused
+        // in the ticket — was not what shipped.
+        const historyAfterRaw = readFileSync(castIdHistoryPath(bookDir), 'utf8');
+        expect(historyAfterRaw).toBe(JSON.stringify(seededHistory));
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        if (originalConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+        else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalConcurrency;
       }
     },
     60_000,

@@ -70,11 +70,9 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-rerecord-qa-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ chapterSpliceRouter }, { makeBookId }, mp3] = await Promise.all([
-    import('./chapter-splice.js'),
-    import('../workspace/paths.js'),
-    import('../tts/mp3.js'),
-  ]);
+  const { chapterSpliceRouter } = await import('./chapter-splice.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const mp3 = await import('../tts/mp3.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);

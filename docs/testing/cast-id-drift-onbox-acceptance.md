@@ -275,14 +275,47 @@ ran this workspace's analysis) against `C:\AudiobookWorkspace\books`:
   so this doesn't move the re-render/damage total below (still 120) — 161 is
   no longer a proxy for "segments still needing repair".
 - **17 re-render rows, 120 segments** (unconditional on auto-record status) —
-  the actual damage figure.
+  the actual damage figure at the time this section was written. **Superseded
+  by the #2107 widened fix — see step 9a below: the current figure is 23
+  rows/188 segments**, and `the-torment`/`lightning-dave` (68 of those
+  segments) also move from "auto-reconciles, no alias needed" into a genuine
+  auto-record. This bullet is left as originally measured.
 - **0 books modified.**
-- **0 books missing analysis-cache evidence** — confirm this reads `0` before
-  trusting any number above or running `--apply` (see §8.3's `CACHE_DIR`
-  precondition); a dry run from a worktree with no cache of its own for these
-  20 books instead reports 20 books missing cache evidence and 0
-  auto-recordable aliases, since the cross-source ambiguity veto can't see
-  cache ambiguity without the file (round-2 review fail-closed fix).
+- **1 book missing analysis-cache evidence, 0 books with an auto-record
+  withheld because of it** — two DIFFERENT numbers as of owner-decided
+  policy, review round 2 (2026-08-05); **only the second gates `--apply`,
+  and it currently reads `0`, so `--apply` is NOT blocked.** A dry run from
+  a worktree with no cache of its own for these 20 books instead reports 20
+  books missing cache evidence, since the cross-source ambiguity veto can't
+  see cache ambiguity without the file (round-2 review fail-closed fix).
+  #2093 residual 1 first strengthened the underlying gate from "the file is
+  present at that path" to "the file exists AND parses"; independent review
+  then found even that was insufficient — the ambiguity veto doesn't
+  consume "did it parse", it consumes the cache's actual character-name
+  entries, and a validly-parsing cache that names nobody is exactly as
+  blind to it as a missing file. The gate now also requires at least one
+  name/id entry that `buildNameIndex` itself would keep, not merely one
+  `cacheEntriesOf` treats as string-shaped (pre-merge review I1 closed a
+  further gap — see below), and against the real cache directory this
+  surfaces exactly one book: *Unlocked*'s cache file (`mns_dLurz4I544.json`)
+  parses fine but names zero characters (no `stage1.characters`, no
+  populated `chapterCast`) — real, not a `CACHE_DIR` misconfiguration.
+  **This no longer blocks the run — but not because *Unlocked* has nothing
+  orphaned.** It does: **`unknown-male`, 34 segments across ch63/ch67**
+  (confirmed by a live pre-merge-review scan, and independently by the real
+  `--apply` run — see §8.6). The reason it doesn't block: `unknown-male` is
+  a **reserved fold-bucket SOURCE id**, and guard 1 refuses to auto-record
+  from a reserved source unconditionally, firing *before* the
+  cache-availability gate is ever reached — so *Unlocked*'s blind ambiguity
+  veto never actually stood between the pass and a real candidate. `--apply`
+  refuses only when a book's blind veto DID withhold a real candidate; that
+  count is reported separately and currently reads `0`. **Do not stop just
+  because "books missing analysis-cache evidence" reads nonzero** — check
+  the withheld-count line instead. The trigger that WOULD change this: a
+  non-reserved orphaned id in *Unlocked* with a real Tier A/B match — and,
+  per pre-merge review I2, a zero-segment match would NOT trigger it either
+  (guard 3 refuses those regardless of cache evidence, before the cache gate
+  is reached).
 
 ### 8.2 Fixture
 
@@ -309,14 +342,50 @@ No `.audiobook/cast-id-history.json` exists yet for either book.
 - [ ] `CACHE_DIR` set to the checkout that ran this workspace's analysis —
       default `<repo>/server/handoff/cache` is git-ignored and per-checkout, so
       a fresh worktree's copy is empty for these real books. Run the dry run
-      and confirm its summary reads `books missing analysis-cache evidence: 0`
-      before doing anything else — `--apply` now refuses outright otherwise
-      (round-2 review fail-closed fix: a missing cache file silently defeats
-      the cross-source ambiguity veto, since an empty cache index reads as
-      "confirmed unambiguous" rather than "unknown").
+      and confirm its summary reads `books with an auto-record withheld for
+      missing cache evidence: 0` before doing anything else — `--apply` now
+      refuses outright otherwise (round-2 review fail-closed fix: a missing
+      cache file silently defeats the cross-source ambiguity veto, since an
+      empty cache index reads as "confirmed unambiguous" rather than
+      "unknown"; #2093 residual 1 strengthened the underlying gate to ALSO
+      refuse a present-but-corrupt/unparseable cache file, and
+      independent-review Critical C1 strengthened it once more to ALSO
+      refuse a validly-parsing cache file that names zero characters, and a
+      later pre-merge review pass (I1) closed a further gap in that same
+      check — all used to slip past as "available"). **Owner-decided
+      policy, review round 2 (2026-08-05): this precondition is about
+      WITHHELD candidates, not the raw missing-cache count** — a nonzero
+      `books missing analysis-cache evidence` line is EXPECTED and does NOT
+      block `--apply` by itself; only a nonzero `books with an auto-record
+      withheld…` line does. **As measured 2026-08-05, this precondition IS
+      satisfied**: `books missing analysis-cache evidence` reads `1`
+      (*Unlocked* — see §8.1: it DOES have an orphaned id, `unknown-male`
+      with 34 segments, but guard 1 refuses to auto-record from it as a
+      reserved fold-bucket source before the cache gate is ever reached, so
+      nothing was ever withheld for it), and `books with an auto-record
+      withheld…` reads `0`. Don't stop at the first number.
+- [ ] `WORKSPACE_DIR` must actually point at the real 20-book workspace
+      (#2108) — confirm the summary reads `books scanned: 20` alongside the
+      cache-evidence lines above. A wrong `WORKSPACE_DIR` (the script's
+      default, `<home>/AudiobookWorkspace`, does not exist) scans **0**
+      books and, before this fix, printed a clean-looking `books missing
+      analysis-cache evidence: 0` and exited `--apply` with code `0` having
+      written nothing — an empty tree read as a healthy one, on exactly the
+      line this precondition told the operator to trust. `--apply` now
+      refuses outright when `books scanned` is `0`.
 - [ ] No Castwright server reachable on the configured probe port(s) — default
-      `8080` and the LAN HTTPS `8443`. `--apply` refuses outright otherwise
-      (it writes out-of-process; no in-process lock covers the write).
+      `8080` and the LAN HTTPS `8443` — **or their auto-rebind range** (up to
+      19 ports above each, matching `listenWithAutoRebind` — #2090). `--apply`
+      refuses outright otherwise (it writes out-of-process; no in-process lock
+      covers the write). The probe is a plain "is anything listening" TCP
+      connect, not a Castwright health check — it refuses on **any**
+      listener in `8080`–`8099` or `8443`–`8462`, including an unrelated dev
+      service that happens to be bound in that range. A refusal is not proof
+      the Castwright server itself is still up — confirmed live on the
+      2026-08-05 run below: a plain `npm run dev` bound LAN HTTPS `8443`
+      only and never opened `8080`, and it was the `LAN_HTTPS_PORT` half of
+      the widened probe that caught it — a probe covering only the default
+      `8080` would have missed it entirely.
 - [ ] The real workspace is present and untouched since the last dry run.
 - [ ] SHA and a clean tree recorded below.
 
@@ -343,12 +412,23 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
    run.
 
 Expected console output: `mode: APPLY (writing cast-id-history.json)`,
-`auto-recordable aliases: 3 (27 segment(s))`, and
-`books missing analysis-cache evidence: 0` — matching the dry-run numbers in
-§8.1 exactly (a diverging number here means the workspace changed since the
-last dry run — stop and re-measure before trusting anything below; if the
-cache-evidence line is nonzero, `--apply` refuses outright instead — fix
-`CACHE_DIR` per §8.3 and re-run the dry run first).
+`auto-recordable aliases: 3 (27 segment(s))`, `books missing analysis-cache
+evidence: 1` (*Unlocked* — expected, not a blocker, see §8.1/§8.3), and
+`books with an auto-record withheld for missing cache evidence: 0` —
+matching the dry-run numbers in §8.1 exactly (a diverging number here means
+the workspace changed since the last dry run — stop and re-measure before
+trusting anything below; if the WITHHELD-count line is nonzero, `--apply`
+refuses outright instead — fix `CACHE_DIR` per §8.3 and re-run the dry run
+first; a nonzero missing-cache-evidence line alone does NOT refuse).
+**Revision-sensitive: the numbers above are against the pre-#2102 gate** —
+see the callout below the Result for what changes once #2102 lands. **As
+measured 2026-08-05 (pre-#2102), this precondition WAS satisfied and this
+step WAS run** — see the Result immediately below, which is no longer
+pending (the repo owner's decision, review round 2: *Unlocked* DOES have an
+orphaned id, `unknown-male` with 34 segments, but guard 1 refuses to
+auto-record from it as a reserved fold-bucket source before the cache gate
+is ever reached, so it has nothing at stake and no longer blocks the
+workspace run).
 
 Result (console summary matches §8.1): **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS — exact match.** `mode: APPLY (writing cast-id-history.json)`; books scanned **20**; auto-recordable aliases **3 (27 segment(s))**; reported for human decision **93 id(s) / 161 segment(s)**; re-render candidates **17**; books missing analysis-cache evidence **0**.
 
@@ -386,6 +466,138 @@ Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **
 
 Result: **2026-08-05, Claude Code session on the dev box (dudarenok-maker).** **PASS on the stated criteria, but it surfaced a defect.** Auto-recordable aliases **3 → 0**; skipped (already recorded) **0 → 3**; report-only **93 ids / 161 segments — unchanged**. The write is durable. **However** the re-render list moved **17 rows / 120 segments → 13 rows / 93 segments**: the 4 rows covered by the 3 new aliases (`mayrin` ch2 8 seg, `coalfall` ch2 13 seg, `lady-alina` ch55 4 seg + ch61 2 seg = 27 segments) dropped off it. That audio is still narrator-substituted on disk, and `buildRerenderRows`' own doc comment plus register row A33 both state the list is unconditional on auto-record status. Filed as [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107).
 
+**#2107 fix (`fix/scripts-2107-rerender-rows`), then WIDENED by an independent
+review + owner decision:** `collectSegmentOrphans`'s resolver reads
+`cast-id-history.json` off disk, and any id resolving via ANY successful tier
+used to hit the same blanket `continue` as a genuine live match. A first-round
+fix moved only the `'history'`/`'normalised-history'` tiers into `orphans` —
+both depend on `supersededBy`, which can gain an entry (as it just had, from
+this very `--apply` run) strictly after the segment's audio was rendered —
+while keeping `'normalised-id'` exempt, reasoned as depending only on the
+current live cast, never on `supersededBy`. **Independent review found that
+reasoning a non-sequitur**, using §8.1's OWN evidence: `the-torment`/
+`lightning-dave` recover under `'normalised-id'` today but were rendered
+*before Wave 1's resolver existed at all* (§1's `resolveGroup` substituted the
+narrator regardless of tier), so a `'normalised-id'` match today proves no
+*rename* happened, not that the rendered bytes are correct. There is no
+per-segment evidence on the real workspace to tell the two cases apart —
+`renderedFallbackCharacterId`/`characterSnapshots` are absent from all 84,642
+real segments. The owner's decision: **only `'exact'` counts as "audio is
+fine"; the other three tiers all list, unconditionally.** This ALSO changes
+what `--apply` *writes*, not merely the re-render list — an id that used to
+silently "auto-reconcile" with no alias ever recorded (the `autoReconciled`
+bucket, now removed entirely) can reach a real Tier A/B auto-record instead.
+A related gap closed alongside: the "already recorded" skip compared raw
+strings against `supersededBy` while the resolver itself also matches on a
+normalised key — now a widened id can reach that skip with real segments
+behind it, so it checks the same normalised footing the resolver does
+(confirmed latent, not live, on the real workspace: all three recorded
+aliases are already normalised fixed points). Pinned by a cross-run
+regression test in `scripts/tests/repair-cast-id-drift.test.mjs`
+(`buildOrphansFromSegments` describe block) reproducing the before/after-alias
+sequence over a synthetic fixture, plus a `planBookRepairs` test pinning the
+write-set change and one pinning the normalised-footing skip. **That
+cross-run test uses two independent `buildOrphansFromSegments` calls with
+hand-written fake resolvers — it does not call `collectSegmentOrphans`, build
+a real `buildCastResolver`, or read a `cast-id-history.json` file, so the
+actual cross-run coupling (this script threading `history.supersededBy` into
+the resolver on each run) is verified only by the re-run below, not by the
+unit-test suite.**
+
+9a. Re-run the script in dry-run mode again, now on top of the widened #2107
+    fix (`cd server && npm run build` off the fixed branch first).
+
+Expected: **auto-recordable aliases, skipped, and report-only do NOT stay the
+same as step 9** — the widened fix changes the write-set, not merely the
+re-render list (I2, independent review, 2026-08-05; the earlier version of
+this run sheet claimed otherwise — that claim was false and has been
+corrected here). `the-torment`/`lightning-dave` move from invisible
+(auto-reconciled, no alias recorded) into a real 2-alias auto-record; the
+report-only total drops by exactly their 68 segments; the re-render list
+grows past the original 17/120 baseline, since `'normalised-id'` matches with
+real rendered segments (Exile/Unlocked's reserved-bucket ids, `sir-harding`,
+`silveny`, `pool-player-2`) now list too.
+
+Result: **RUN 2026-08-05** (`server/dist` rebuilt off `fix/scripts-2107-rerender-rows`
+@ `1dbc340f`, dry run only, `WORKSPACE_DIR=C:/AudiobookWorkspace
+CACHE_DIR=C:/Claude/Projects/Audiobook-Generator/server/handoff/cache node
+scripts/repair-cast-id-drift.mjs`, no `--apply`). **Matches the corrected
+expectation above.** Auto-recordable aliases **0 → 2 (68 segments)**
+(`lightning-dave -> lightning_dave` 1 segment Tier A, `the-torment ->
+the_torment` 67 segments Tier B); skipped (already-recorded) **3, unchanged**
+(`mayrin`, `coalfall`, `lady-alina` — all three real aliases from step 4/5
+onward); reported for human decision **93 ids/161 segments → 91 ids/93
+segments** (161 − 68 = 93, 93 − 2 = 91 — the whole delta is
+`the-torment`/`lightning-dave` moving out); re-render candidates **13 rows/93
+segments (the #2107-regressed figure) → 23 rows/188 segments** — 188 is the
+original full-workspace orphan count (§1), the arithmetic check that this is
+now the complete set. Books scanned **20**; books missing analysis-cache
+evidence **1** (*Unlocked*, unchanged); books with an auto-record withheld
+**0** (unchanged, `--apply` not blocked). Full console output archived with
+the PR.
+
+**Fix round 2 (independent review, 2026-08-05) found two more defects in the
+#2107 fix itself:** the round-1 already-recorded fix (`supersededByNormKey`,
+a hand-built normalised map) diverged from the real resolver on normalised
+collisions, tier precedence, and dead alias targets — each a false skip that
+would drop an id off the human-decision list. Deleted; the guard now asks the
+real, history-aware resolver directly (threaded from `main()`, not
+reconstructed) whether an id resolves via `'history'`/`'normalised-history'`.
+Separately, the widening opened an undeclared write path: Tier A (name) runs
+before Tier B (id shape) with nothing checking a Tier A candidate against
+what the id already resolves to today — a stale cache entry naming a
+different character could otherwise repoint real segments' attribution onto
+the wrong live character, durably. A new guard withholds and reports that
+conflict instead of writing it.
+
+9b. Re-run the script in dry-run mode a third time, on top of the fix-round-2
+    changes, to confirm neither defect is live on the real workspace.
+
+Expected: **identical numbers to step 9a** — both defects were verified
+latent (not live) on the real workspace: the "already recorded" divergence
+never triggers because all three recorded aliases are already normalised
+fixed points; the Tier A/id-shape conflict never triggers because both real
+auto-records (`lightning-dave -> lightning_dave` Tier A, `the-torment ->
+the_torment` Tier B) already agree with their own live id-shape resolution.
+
+Result: **RUN 2026-08-05** (same branch, dry run only, same invocation as
+step 9a — `server/dist` unchanged, only the `.mjs` script and its tests
+changed this round). **Identical to step 9a**: auto-recordable aliases
+**2 (68 segments)**; skipped **3**; reported for human decision **91
+ids/93 segments**; re-render candidates **23 rows/188 segments**. Confirms
+both fix-round-2 defects are latent on this workspace today, as expected.
+
+**Fix round 3 (independent review, 2026-08-05) found the round-2 fix's own
+`historyResolver` default was fail-OPEN, closed:** an omitted resolver
+defaulted to `{ resolve: () => undefined }` — but `planBookRepairs` no
+longer reads `history.supersededBy` directly at all, so a caller that
+omitted the resolver while passing a fully populated `history` got zero
+protection from either the already-recorded skip or the round-2 conflict
+guard, silently. Fixed the same way `cacheAvailable`'s own pre-#2093
+fail-open default was fixed: default to building the real resolver from
+`liveCast`/`history` (the identical construction `collectSegmentOrphans`
+uses), so a missing `historyResolver` is a redundant optimisation for the
+production path — which always threads the real one anyway — never a
+correctness hole for any other caller. Also: the summary line now prints
+the re-render list's segment total (`188`) alongside the row count (`23`),
+which previously required summing every row by hand.
+
+9c. Re-run the script in dry-run mode a fourth time, on top of the
+    fix-round-3 changes, to confirm the fail-closed default doesn't move
+    the real workspace's figures.
+
+Expected: identical numbers to steps 9a/9b, now with the segment total
+printed directly in the summary line instead of needing to be hand-summed.
+
+Result: **RUN 2026-08-05** (same branch, dry run only, same invocation).
+**Identical to steps 9a/9b**: `re-render candidates: 23 chapter row(s) /
+188 segment(s)` (the new segment-total print, matching the hand-summed
+figure from every prior run); auto-recordable aliases **2 (68 segments)**;
+reported for human decision **91 ids/93 segments**; skipped **3**. Confirms
+the fail-closed default is latent on this workspace today, as expected —
+the production path in `main()` always threaded the real resolver through
+explicitly, so this fix protects a future/test caller, not today's run.
+
 ### 8.7 Confirm the fix reaches actual audio
 
 10. Re-render *Заказ Коалфолла* chapter 2 (the chapter carrying the
@@ -417,7 +629,10 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
 - [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply`), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0)
+- [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
+- [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
+- [x] Step 9c run — **2026-08-05**, PASS: fix-round-3's fail-closed `historyResolver` default confirmed latent on the real workspace — identical numbers, segment total now printed directly (`23 rows / 188 segments`)
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across three independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a, 9b and 9c), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real

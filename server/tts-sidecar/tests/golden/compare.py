@@ -357,13 +357,24 @@ def _is_number(v: object) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def _leaf_diffs(existing: dict, computed: dict) -> dict:
+def _leaf_diffs(existing: object, computed: object) -> dict:
     """Per-leaf absolute difference between two (possibly one-level-nested)
     dicts, dotted-key flattened. A leaf present on only one side, or whose
     value isn't numeric on BOTH sides (e.g. `identity`'s `anchor` string
     leaf, if it ever changed), is reported as `float('inf')` — never
     mistaken for in-tolerance noise, however large `epsilon` is set, and
-    never silently dropped from the comparison."""
+    never silently dropped from the comparison.
+
+    #2061 / D2: `existing` or `computed` can itself be a non-dict — a
+    hand-resolved merge conflict collapsing e.g. `"loudness_dbfs"` to a bare
+    scalar or list is exactly as plausible as it dropping a single leaf key.
+    Before this guard, `_flatten_leaves(existing)` crashed with
+    `AttributeError` on `.items()`. That still failed CLOSED (no write), so
+    this is an error-quality fix, not a hole: a non-dict on either side is
+    reported as a single `{"<root>": inf}` leaf, routing it through the same
+    refusal path as any other never-in-tolerance diff."""
+    if not isinstance(existing, dict) or not isinstance(computed, dict):
+        return {"<root>": math.inf}
     e_flat = _flatten_leaves(existing)
     c_flat = _flatten_leaves(computed)
     diffs: dict = {}
@@ -379,7 +390,14 @@ def _leaf_diffs(existing: dict, computed: dict) -> dict:
     return diffs
 
 
-def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsilon: float) -> Optional[str]:
+def describe_measurement_move(
+    existing: Optional[dict],
+    computed: dict,
+    *,
+    epsilon: float,
+    flag_name: str,
+    previously_blessed: bool = False,
+) -> Optional[str]:
     """Human-readable summary of every leaf that moved between `existing`
     and `computed`, for the caller to print when a noise-tolerant
     (`epsilon > 0`) bless field is WRITTEN despite `existing != computed` —
@@ -388,27 +406,55 @@ def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsil
     that it cannot pass unnoticed"), and the accept path is the half of a
     guard that mutation testing routinely leaves uncovered (see #2025 in a
     sibling lane). Returns `None` when there is nothing to report: `existing`
-    is `None` (first bless, nothing to compare against) or every leaf is
-    identical. Lists every moved leaf, not just the largest, so an operator
-    scanning bless output sees exactly which keys moved.
+    is `None` on a genuine first bless (`previously_blessed=False` — nothing
+    to compare against) or every leaf is identical. Lists every moved leaf,
+    not just the largest, so an operator scanning bless output sees exactly
+    which keys moved.
+
+    `flag_name` (#2060 root cause / D1): the env var this call's forced
+    branch should name. `GOLDEN_REBLESS_THRESHOLDS` now arms `tolerances`
+    ONLY; `GOLDEN_REBLESS_MEASUREMENTS` arms `identity`/`loudness_dbfs`.
+    Hardcoding one name here would mislabel two of the three fields' echoes
+    — the guard's loudest output naming the wrong flag is itself the kind of
+    silent-ish failure this function exists to prevent. Keyword-only and
+    REQUIRED, no default (#2116 F7, independent review) — a default value
+    would silently supply a name for any caller that forgot the kwarg,
+    which is exactly the mislabelling this parameter exists to rule out;
+    with no default, a caller that forgets it fails loudly (`TypeError:
+    missing required keyword-only argument`) instead of mislabelling.
+
+    `previously_blessed` (#2069 / D5): when `existing is None` and this is
+    `True`, the caller's `bless_guard_thresholds` only accepted the call
+    because the write was FORCED — a previously-blessed baseline that lost
+    this field's key entirely (e.g. a hand-resolved merge conflict),
+    resurrected blind under the flag. That is the single highest-stakes case
+    the guard handles, and — before this parameter existed — the only one
+    that printed nothing at all, because there is no "before" to diff
+    against. Echoed in a shape that does not pretend to have a diff, rather
+    than silently falling through the normal `existing is None -> None`
+    first-bless path.
 
     **The label reflects the ACTUAL move, not the caller's intent** (fix for
     an independent review finding on #2045 F1 itself: the first revision
     unconditionally printed "within epsilon ... (noise)" for every move this
     function was called on, including a move `bless_guard_thresholds` only
-    let through because `allow_rebless_thresholds` was set — a window-sized
-    or larger move, mislabelled as noise the one place an operator would
-    have caught it). This function only ever runs on a move the guard already
-    decided to WRITE, but that decision has two distinct reasons: the move
-    was genuinely `<= epsilon` (real noise), or it was forced through despite
+    let through because the flag was set — a window-sized or larger move,
+    mislabelled as noise the one place an operator would have caught it).
+    This function only ever runs on a move the guard already decided to
+    WRITE, but that decision has two distinct reasons: the move was
+    genuinely `<= epsilon` (real noise), or it was forced through despite
     being beyond epsilon via the flag. Recomputing `max(moved.values()) <=
     epsilon` here — independently of whatever the guard decided — tells the
-    two apart and labels accordingly: `within epsilon` for a real noise-sized
-    move, or an unmistakably loud `BEYOND epsilon ... (FORCED by
-    GOLDEN_REBLESS_THRESHOLDS)` for a forced one, so the flag's one intended
-    use (a genuine `tolerances`-only re-bless) can never quietly launder an
+    two apart and labels accordingly: `within epsilon ... (noise --
+    reference unchanged)` for a real noise-sized move (#2060 / D4: a
+    within-epsilon move no longer rewrites the reference, so the wording
+    says so rather than implying a write that didn't happen), or an
+    unmistakably loud `BEYOND epsilon ... (FORCED by {flag_name})` for a
+    forced one, so the flag's one intended use can never quietly launder an
     unrelated large identity/loudness move as noise."""
     if existing is None:
+        if previously_blessed:
+            return f"FORCED, key was ABSENT -- no prior reference; wrote {computed!r}"
         return None
     diffs = _leaf_diffs(existing, computed)
     moved = {k: v for k, v in diffs.items() if v > 0}
@@ -417,8 +463,34 @@ def describe_measurement_move(existing: Optional[dict], computed: dict, *, epsil
     parts = ", ".join(f"{k}: +/-{v:.4f}" for k, v in sorted(moved.items(), key=lambda kv: -kv[1]))
     max_diff = max(moved.values())
     if max_diff <= epsilon:
-        return f"within epsilon {epsilon} (noise) -- {parts}"
-    return f"BEYOND epsilon {epsilon} (FORCED by GOLDEN_REBLESS_THRESHOLDS) -- {parts}"
+        return f"within epsilon {epsilon} (noise -- reference unchanged) -- {parts}"
+    return f"BEYOND epsilon {epsilon} (FORCED by {flag_name}) -- {parts}"
+
+
+def should_rewrite_reference(existing: Optional[dict], computed: dict, *, epsilon: float) -> bool:
+    """Whether a `--bless` run should overwrite `existing` with the fresh
+    `computed` block for a guarded field ALREADY ACCEPTED by
+    `bless_guard_thresholds` (#2060 / D4 — this is not itself a guard, it
+    has nothing to refuse; it decides what a call already approved for
+    writing actually writes).
+
+    A first bless (`existing is None`) always writes — there is nothing to
+    keep. Otherwise the fresh measurement is written only when it moved
+    BEYOND `epsilon`: at this point in the call sequence that can only be
+    true because `bless_guard_thresholds` was FORCED through via the flag
+    (an unforced beyond-epsilon move would already have raised before this
+    is ever called). A within-epsilon move is noise, and noise carries no
+    information — writing it back would discard a known-good reference in
+    favour of one run's jitter, which is exactly what let ten successive
+    0.39 dB moves walk a loudness centre 3.90 dB with no refusal (#2060's
+    repro). Keeping `existing` here makes that walk impossible rather than
+    merely bounded: the reference only ever moves on a first bless or a
+    loudly-flagged forced one."""
+    if existing is None:
+        return True
+    diffs = _leaf_diffs(existing, computed)
+    max_diff = max(diffs.values()) if diffs else 0.0
+    return max_diff > epsilon
 
 
 def bless_guard_thresholds(
@@ -429,6 +501,7 @@ def bless_guard_thresholds(
     allow_rebless_thresholds: bool = False,
     label: str = "tolerances",
     epsilon: float = 0.0,
+    flag_name: str,
 ) -> Optional[str]:
     """Refuse a `--bless` write that would change a baseline's assertion
     reference — a THRESHOLD *or a recorded measurement an assertion is
@@ -457,34 +530,52 @@ def bless_guard_thresholds(
     exceeds any `epsilon`. The default `epsilon=0.0` makes this EXACTLY the
     old equality check for `tolerances` (a diff of 0 on every leaf, or
     refuse) — `tolerances` is quantised (`max(0.15, id_max+0.10)`, a flat
-    `4.0`, `max(1.0, rtf*1.5)`), so an exact match IS the correct bar there;
-    a re-bless with the same inputs computes byte-identical tolerances.
+    `4.0`, `max(1.0, rtf*1.5)` rounded up to the nearest 0.05 step since
+    #2062 / D3), so an exact match IS the correct bar there; a re-bless with
+    the same inputs computes byte-identical tolerances **as long as the
+    underlying `rtf` measurement stays under ~0.667** (`test_instruct_
+    golden.py`'s `"rtf_max": max(1.0, measured["rtf"] * 1.5)`) — below that,
+    `rtf_max` is pinned to its `1.0` floor and no amount of `rtf` noise moves
+    it; above it, `rtf_max` tracks the measurement, and the 0.05 quantisation
+    step (not exact equality on the raw float) is what keeps two honest
+    re-blesses byte-identical despite sub-step `rtf` noise. A `rtf` regression
+    or a slower box that clears 0.667 still moves `rtf_max` across a 0.05
+    boundary eventually — the guard refuses exactly as designed at that point,
+    same as any other genuine threshold change.
     `identity`/`loudness_dbfs` are raw stochastic measurements with real
     run-to-run noise (`instruct-baseline.json`'s own `metadata.notes`:
     ~0.0014 identity spread) — an exact-equality guard on THOSE refuses on
     every honest re-bless, which is worse than the #1995 hole this whole
-    mechanism exists to close: it trains an operator to reach for
-    `GOLDEN_REBLESS_THRESHOLDS=1` on a ROUTINE bless, and that flag also
-    covers `tolerances`, so the routine habit re-opens #1995 one flag deep.
-    Callers pass a field-specific `epsilon` (`compare.IDENTITY_COSINE_EPSILON`,
-    `compare.LOUDNESS_DBFS_EPSILON`) for those two; a within-epsilon move is
-    WRITTEN, not refused — the caller is expected to also call
-    `describe_measurement_move` and print its result so the move is loud,
-    per #2035's Acceptance ("surfaced loudly enough that it cannot pass
-    unnoticed"), even though this function itself only decides refuse/accept
-    and never prints.
+    mechanism exists to close: it trains an operator to reach for the escape
+    flag on a ROUTINE bless. Callers pass a field-specific `epsilon`
+    (`compare.IDENTITY_COSINE_EPSILON`, `compare.LOUDNESS_DBFS_EPSILON`) for
+    those two; a within-epsilon move is WRITTEN, not refused — but, since
+    #2060 / D4, without rewriting `existing` (see `should_rewrite_reference`)
+    — the caller is expected to also call `describe_measurement_move` and
+    print its result so the move is loud, per #2035's Acceptance ("surfaced
+    loudly enough that it cannot pass unnoticed"), even though this function
+    itself only decides refuse/accept and never prints.
 
     `existing` is the CURRENTLY COMMITTED dict for `label` (or None when
     there is no committed block at all for it); `computed` is what this
-    bless run would write. Pure: the caller reads
-    `GOLDEN_REBLESS_THRESHOLDS` from the environment and passes it as
-    `allow_rebless_thresholds` — this function never touches os.environ.
-    #2035 deliberately reuses this single flag rather than minting a second
-    one: `identity`/`loudness_dbfs` live in the same baseline file, are
-    guarded by this same function, and are the same *kind* of judgement
-    call ("I know this bless run legitimately changed the reference point
-    by more than noise") as a `tolerances` change — splitting the escape
-    hatch per-field would add a flag without adding a distinct decision.
+    bless run would write. Pure: the caller reads the relevant env var and
+    passes it as `allow_rebless_thresholds` — this function never touches
+    os.environ. `flag_name` is the env var name to ECHO in a refusal
+    (#2035 root cause / D1): `GOLDEN_REBLESS_THRESHOLDS` originally armed
+    `tolerances`, `identity`, AND `loudness_dbfs` together, on the theory
+    that all three are "the same kind of judgement call". That theory is
+    what turned an over-tight guard into a re-opening of #1995: an operator
+    setting the flag for a legitimate `identity` re-bless silently
+    re-authorised the `rtf_max` ceiling too. `GOLDEN_REBLESS_THRESHOLDS` now
+    arms `tolerances` ONLY (a quantised ceiling); `GOLDEN_REBLESS_MEASUREMENTS`
+    arms `identity`/`loudness_dbfs` (a stochastic drift-window centre) — this
+    function stays field-agnostic, so each caller passes the flag NAME that
+    actually governs the field it is guarding, and this function echoes that
+    name rather than a hardcoded one. Keyword-only and REQUIRED, no default
+    (#2116 F7, independent review) — the whole premise of the split is that
+    the guard's loudest output must never name the wrong flag; a default
+    would let a caller that forgot the kwarg mislabel silently instead of
+    failing loudly at the call site.
 
     Mirrors `bless_guard`'s G1 shape (refuse a silent change, escape via an
     explicit flag) but for a reference figure rather than the transcript.
@@ -529,7 +620,7 @@ def bless_guard_thresholds(
             f"refusing to bless: baseline has been blessed before but its "
             f"'{label}' key is missing (e.g. a hand-resolved merge "
             f"conflict) -- computed {computed!r} would be written blind -- "
-            "set GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
+            f"set {flag_name}=1 to confirm this is intentional"
         )
     diffs = _leaf_diffs(existing, computed)
     max_diff = max(diffs.values()) if diffs else 0.0
@@ -545,5 +636,5 @@ def bless_guard_thresholds(
     return (
         f"refusing to bless: {label} would move beyond epsilon {epsilon} "
         f"({changed}) -- was {existing!r}, now {computed!r} -- set "
-        "GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional"
+        f"{flag_name}=1 to confirm this is intentional"
     )

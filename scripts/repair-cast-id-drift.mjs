@@ -34,12 +34,18 @@
  *            `normaliseIdKey` comparison; see `resolveTierBId`'s doc
  *            comment for why a second matcher with its own tie rule was a
  *            real bug caught in review round 1.
- * A segment orphan that Tier A/B-matches a LIVE cast id would already have
- * resolved through `buildCastResolver`'s own normalised-id tier and so
- * never reaches this script's orphan set at all — Tier B only has
- * theoretical bite here for a cache-only orphan that was never rendered,
- * and even then (review round 1, Important 2 below) a cache-only match
- * never auto-records anyway. Anything else (including every book's
+ * #2107 (widened by owner decision, 2026-08-05): a segment orphan whose raw
+ * characterId normalised-matches a LIVE cast id DOES still resolve through
+ * `buildCastResolver`'s own `'normalised-id'` tier at collection time — but
+ * that only proves no RENAME happened, not that the rendered bytes are
+ * correct (`buildOrphansFromSegments`'s doc comment has the full argument
+ * and the real counter-example, register row A32), so it lands in this
+ * script's orphan set anyway rather than being silently excluded. Tier B
+ * re-runs the same id-shape match with an EMPTY history and re-confirms the
+ * same target, so it is this script's live path for auto-recording that
+ * exact case — not merely theoretical bite for a cache-only orphan that was
+ * never rendered, which (review round 1, Important 2 below) still never
+ * auto-records regardless of tier. Anything else (including every book's
  * `cast.json.bak.*` name and the frozen `characterSnapshots`
  * tone/gender/ageRange/attributes signal) is a RANKING signal only,
  * surfaced for a human decision, never auto-applied.
@@ -75,6 +81,28 @@
  * comment) downgrades a name match to report-only when the rendered
  * `characterSnapshots` disagree across the chapters the id appears in.
  *
+ * A fifth guard was added on top of these four, independently, by the
+ * #2107 widening (Important 2, independent review, 2026-08-05) —
+ * **current-resolution conflict veto**: widening #2107 to list a
+ * `'normalised-id'` match as an orphan (spec: see
+ * `buildOrphansFromSegments`'s doc comment) means an id that ALREADY
+ * resolves live to one character can now also reach Tier A/B matching —
+ * and Tier A (a NAME match) is tried before Tier B (the SAME id-shape
+ * resolution), with nothing checking whether they agree. A stale cache
+ * entry naming a different character can otherwise repoint real segments'
+ * attribution onto the WRONG live character, durably (`'history'`
+ * outranks `'normalised-id'` at resolve time once written). Before
+ * trusting a Tier A/B match, this guard asks the SAME real resolver
+ * `historyResolver` what `id` resolves to today — if that is
+ * `'normalised-id'` to a DIFFERENT live character than the match found,
+ * that is two evidence sources disagreeing, not a repair: report it for a
+ * human, never write it. A genuine Tier B match can never trip this (Tier
+ * B and the resolver's own `'normalised-id'` tier are the identical
+ * computation over the same live cast); only Tier A can. Named "guard 5"
+ * in the code, not "guard 4" — added after guard 4 existed, though it
+ * happens to run before it (guard numbering here tracks when a guard was
+ * added, not execution order; guard 3 already runs after guard 4 today).
+ *
  * This script reuses the server's own id-resolution logic rather than
  * re-implementing it (#2040 Wave 3 review already caught one Critical
  * caused by two independent matchers disagreeing — round 1 of THIS
@@ -95,7 +123,21 @@
  *
  * Env:
  *   BASE                 workspace root (overrides everything)
- *   WORKSPACE_DIR        workspace root (same var the server's .env uses)
+ *   WORKSPACE_DIR        workspace root (same var the server's .env uses —
+ *                        but this script does NOT read server/.env itself,
+ *                        deliberately: it must be pointed at the workspace
+ *                        explicitly, the same way CACHE_DIR is. #2108: a
+ *                        bare invocation on a box whose real workspace is
+ *                        configured only in server/.env silently falls
+ *                        through to the <home>/AudiobookWorkspace default
+ *                        below, scanning ZERO books — `--apply` now refuses
+ *                        outright on a zero-book scan rather than reading
+ *                        that as a clean, fully-examined workspace (see
+ *                        `shouldRefuseApplyForEmptyScan`). Resolving
+ *                        WORKSPACE_DIR from server/.env automatically was
+ *                        considered and deliberately deferred — a design
+ *                        call about where this script's own configuration
+ *                        comes from, not a safety fix.
  *   AUDIOBOOK_WORKSPACE  workspace root
  *   default              <home>/AudiobookWorkspace
  *   CACHE_DIR            analysis-cache root — default `<repo>/server/handoff/cache`.
@@ -112,19 +154,46 @@
  *                        book with no cache evidence can auto-record on
  *                        bak-only evidence alone even if the (unseen) cache
  *                        would have vetoed it. Round-2 review made this
- *                        fail-closed: the script now counts every scanned
- *                        book whose cache file is missing, prints the count
- *                        in the summary every run, and refuses `--apply`
- *                        outright whenever that count is nonzero (dry run
- *                        still runs and reports it) — see `main()`'s
- *                        `booksMissingCache` and `planBookRepairs`'s
- *                        `cacheAvailable` gate.
+ *                        fail-closed: the script counts every scanned book
+ *                        whose cache file is missing, fails to parse, OR
+ *                        parses but names zero characters (#2093 residual 1,
+ *                        widened by independent-review Critical C1 — a
+ *                        present-but-corrupt file, or one that validly
+ *                        parses but names nobody, both used to read as
+ *                        "available"; it now requires the file to exist,
+ *                        parse, AND supply at least one name/id entry, via
+ *                        `isCacheAvailable`) and prints that count
+ *                        (`booksMissingCache`) in the summary every run —
+ *                        but (owner-decided policy, review round 2,
+ *                        2026-08-05) that count no longer by itself refuses
+ *                        `--apply`. Per-book, `planBookRepairs`'s
+ *                        `cacheAvailable` gate still withholds every
+ *                        auto-record for a book with unusable cache
+ *                        evidence, unconditionally — that safety property
+ *                        is unchanged. What DOES refuse the whole `--apply`
+ *                        run is `booksWithheldForMissingCache`: the count of
+ *                        books where that per-book gate actually withheld a
+ *                        REAL auto-record candidate, not merely "this book's
+ *                        cache happens to be unusable" — a book with no
+ *                        cache evidence and nothing that would have
+ *                        auto-recorded anyway (e.g. zero orphaned ids) has
+ *                        nothing at stake and must not veto every other
+ *                        book's run. See `main()`'s `booksMissingCache` /
+ *                        `booksWithheldForMissingCache` and
+ *                        `planBookRepairs`'s `cacheAvailable` gate /
+ *                        `withheldForMissingCache` return field.
  *   PORT                 loopback port the --apply liveness probe checks (default
  *                        8080, matches server/src/index.ts's own default).
+ *                        #2090: the probe also covers this port's own
+ *                        auto-rebind range (port..port+19, matching
+ *                        listenWithAutoRebind's default maxAttempts) — a
+ *                        server that started while PORT was held and
+ *                        rebound to PORT+N is otherwise invisible.
  *   LAN_HTTPS_PORT       LAN HTTPS port the --apply liveness probe ALSO checks
  *                        (default 8443, matches server/src/index.ts's own
  *                        default) — npm run dev:lan / start:lan listens here
  *                        too, and is otherwise invisible to the probe.
+ *                        Same auto-rebind-range coverage as PORT above.
  *
  * Usage:
  *   node scripts/repair-cast-id-drift.mjs                       # dry run
@@ -385,36 +454,149 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  plain data, decides for every orphaned id whether to auto-record a
  *  `cast-id-history.json` alias, or report it for a human, or skip it
  *  (already recorded, or explicitly rejected by the user — #2040 Task 17's
- *  `rejected` list).
+ *  `rejected` list). Returns `{ autoRecord, reportOnly, skipped,
+ *  withheldForMissingCache }` — the last is a COUNT (owner-decided policy,
+ *  review round 2, 2026-08-05; ordering fixed by pre-merge review I2,
+ *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
+ *  only increments when an id would have reached `autoRecord.push` on
+ *  cache evidence alone — i.e. it already passed guard 1 (not reserved),
+ *  guard 2 (not cross-source-ambiguous), guard 5 (current-resolution
+ *  conflict, #2107 widening), guard 4 (`snapshotsConsistent`), AND guard 3
+ *  (>=1 rendered segment) — and was refused SOLELY because `cacheAvailable`
+ *  was false. The cache-availability check sits LAST in the guard chain for
+ *  exactly this reason (I2): an id any earlier guard would have refused
+ *  ANYWAY, cache evidence or not, must not inflate this count — a single
+ *  bak entry naming a retired, never-rendered id in a
+ *  cache-blind book must not read as "a real auto-record was withheld
+ *  here" when nothing was ever going to be auto-recorded for it. A book
+ *  can have `cacheAvailable: false` and `withheldForMissingCache === 0` at
+ *  the same time — e.g. a book whose cache parses but names nobody, and
+ *  which simply has no orphaned id that would have matched (or reached)
+ *  anything anyway; that book has nothing at stake and `main()` must not
+ *  let it veto every other book's `--apply` run. This is the signal
+ *  `main()` gates the global `--apply` refusal on, not the broader "this
+ *  book's cache is unusable" fact (which stays reported, via
+ *  `booksMissingCache`, but no longer gates).
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
  *  reserved id (guard 1), neither source is ambiguous for this id (guard
- *  2), the id has at least one rendered segment (guard 3), and every
- *  rendered `characterSnapshots` entry for the id agrees (guard 4,
- *  `snapshotsConsistent`) — see the module doc comment for why round 1
- *  found guard 4 alone insufficient and added the other three.
+ *  2), the id has at least one rendered segment (guard 3), every rendered
+ *  `characterSnapshots` entry for the id agrees (guard 4,
+ *  `snapshotsConsistent`), and the id doesn't already resolve live to a
+ *  DIFFERENT character (guard 5, #2107 widening) — see the module doc
+ *  comment for why round 1 found guard 4 alone insufficient and added the
+ *  other three, and why the #2107 widening later added guard 5 on top.
  *
  *  `deps.normaliseForMatch` and `deps.buildCastResolver` are always the
  *  real server functions in production (dynamically imported from
  *  `server/dist` in `main()`); tests inject their own stand-ins so this
- *  function's OWN logic (ambiguity handling, tier precedence, the four
+ *  function's OWN logic (ambiguity handling, tier precedence, the five
  *  guards) is verifiable with no build step — see the module doc comment's
- *  Tests section. `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
+ *  Tests section. `input.historyResolver` (built once per book, in
+ *  `collectSegmentOrphans`, and threaded through `main()` — see the
+ *  `historyResolver` local's own doc comment just below) drives guards
+ *  `already-recorded` and 5; a test may omit it, but the default is
+ *  fail-closed (I-A, independent review, 2026-08-05) — it builds the REAL
+ *  resolver from `liveCast`/`history`, not "nothing resolves via history,
+ *  nothing conflicts". `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
  *  two fold-bucket ids (imported for real in `main()`), checked on BOTH
  *  the source id (guard 1) and the matched target (a match is never
  *  auto-recorded ONTO a reserved id either — that would misattribute a
  *  real, now-dead character's segments onto a shared slot instead of a
- *  specific person). */
+ *  specific person) — both checks go through `normalisedReservedIds`
+ *  (#2093 residual 4: the target-side checks used to be a raw
+ *  `reservedIds.has(...)`, so a live cast row whose id had drifted to a
+ *  case/separator variant of a reserved bucket id, e.g. `Unknown_Male`,
+ *  stayed an eligible alias TARGET even though guard 1 already normalises
+ *  the SOURCE side the same way).
+ *
+ *  `input.cacheAvailable` defaults to `false` (#2093 residual 3) — the same
+ *  fail-closed posture as every other guard here: an omitted flag reads as
+ *  "unknown, refuse", not "confirmed available". The one production caller
+ *  (`main()`) always passes it explicitly, computed from whether the book's
+ *  analysis-cache file exists AND parses (see `main()`'s `cacheAvailable`
+ *  and the module doc comment's `CACHE_DIR` entry) — this default is a
+ *  safety net for any future caller that forgets to. */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = true, autoReconciled } = input;
+  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false } = input;
   const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
   const rejectedSet = new Set(history.rejected ?? []);
-  const supersededBy = history.supersededBy ?? {};
   // Tier B's own resolver — id-shape only, empty history on purpose (see
   // resolveTierBId's doc comment). Built once per book, not once per id.
   const idOnlyResolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+
+  // Important 1 (independent review, 2026-08-05, on the earlier I2 fix): the
+  // "already recorded" question — and, per Important 2 below, the "does
+  // this id already resolve live" question — is a RESOLVER question, not
+  // something to re-derive with a hand-built normalised map. A prior fix
+  // (I2) closed a raw-vs-normalised gap in the already-recorded skip by
+  // building `supersededByNormKey`, a SECOND normalised map answering "does
+  // this id's normalised form appear ANYWHERE in supersededBy" — which
+  // diverges from what `cast-resolve.ts`'s real resolver actually decides in
+  // three ways: (a) a normalised COLLISION (two different `from` keys
+  // normalising the same with different targets) is a deliberate `undefined`
+  // in the real resolver (`cast-resolve.ts`'s `put()` nulls the slot) but a
+  // last-wins guess in a `Map.set`; (b) the real resolver checks
+  // `'normalised-id'` (against the LIVE cast) before `'normalised-history'`
+  // (against the alias table) — a flat map has no such precedence, so it
+  // can "already-record"-skip an id that is actually a live match today;
+  // (c) the real resolver drops a history entry whose target is no longer a
+  // live cast id at CONSTRUCTION time — a flat map built from raw
+  // `supersededBy` entries does not. Every one of those divergences is a
+  // FALSE SKIP: the id vanishes from both `autoRecord` and `reportOnly`,
+  // exactly the under-reporting the #2107 widening exists to prevent.
+  // `historyResolver` — built with the REAL `history` (unlike
+  // `idOnlyResolver` above, which must stay empty-history) — is threaded in
+  // from `main()`, which receives it from `collectSegmentOrphans` (which
+  // already built one for this exact book); NOT reconstructed in the
+  // production path, so there is only ever one real resolver instance per
+  // book, never two that could drift apart.
+  //
+  // I-A (independent review, 2026-08-05, on the Important 1 fix above):
+  // this used to default a MISSING resolver to `{ resolve: () => undefined
+  // }` — fail-OPEN, the tenth instance of this wave's shape, one level up
+  // from the one Important 1 just fixed. `undefined` from `.resolve()`
+  // means both "asked, nothing resolves" AND "never asked" — and since this
+  // function no longer reads `history.supersededBy` directly at all (that
+  // was the whole point of Important 1), a caller that omits
+  // `historyResolver` while still passing a fully populated `history` got
+  // ZERO protection from either the already-recorded skip or guard 5, with
+  // no error. Measured: omitting the resolver on the guard-5 probe fixture
+  // (live `the_torment` + `timkin`, orphan `the-torment` 67 real segments,
+  // cache names it "Timkin") auto-recorded a 67-segment durable repoint
+  // onto the wrong character; with `history.supersededBy` also populated,
+  // the already-recorded skip went silently dead too. Exactly the defect
+  // `cacheAvailable`'s doc comment above already describes for a DIFFERENT
+  // guard ("an omitted flag reads as 'unknown, refuse', not 'confirmed
+  // available'") — this one just had the opposite posture. Fixed the same
+  // way: default to building the REAL resolver from the args this function
+  // already receives (`liveCast`, `history`, `deps.buildCastResolver`) —
+  // the identical construction `collectSegmentOrphans` uses — so an omitted
+  // `historyResolver` is a (redundant) optimisation for the production
+  // path, never a silent correctness hole for any other caller.
+  // Round 4 (independent review, 2026-08-05): this used to pass `history`
+  // straight through — but `planBookRepairs` treats a PARTIAL history as a
+  // supported shape (it defends `history.rejected ?? []` just above), while
+  // the real `buildCastResolver` does `Object.entries(history.supersededBy)`
+  // (`cast-resolve.ts`), which throws on `undefined`. The sibling
+  // construction in `collectSegmentOrphans` already defends both fields —
+  // this fallback now matches it exactly, so the two constructions of "the
+  // same resolver" can't disagree about what a valid `history` is. Latent
+  // today (production's `loadCastIdHistory` always returns the full shape),
+  // and neither of the test file's existing resolver stand-ins could have
+  // caught it either: every test that passes a partial `history` and the
+  // plain fake `deps.buildCastResolver` (`makeFakeResolver`) is safe only
+  // because that fake never reads `history` at all, and every test that
+  // uses the REAL-history-reading fake (`makeHistoryAwareFakeResolver`)
+  // defends `supersededBy` internally — see the test file's own doc comment
+  // on its dedicated round-4 regression test for the resolver stand-in that
+  // actually proves this (one that mirrors the real, undefended
+  // construction line).
+  const historyResolver =
+    input.historyResolver ?? buildCastResolver(liveCast, { supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] });
+
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
   // `Unknown-Male` — precisely the drift class #2040 exists to catch, and the
@@ -430,6 +612,23 @@ export function planBookRepairs(input, deps) {
   const autoRecord = [];
   const reportOnly = [];
   const skipped = [];
+  // Owner-decided policy (2026-08-05, review round 2): a book with NO cache
+  // evidence is safe to leave entirely alone if it has nothing this pass
+  // would otherwise have auto-recorded — the missing-cache gate further
+  // down (`!cacheAvailable`, last in the guard chain) only ever fires for
+  // an id that ALREADY passed guard 1 (not reserved), guard 2 (not
+  // cross-source-ambiguous), guard 5 (current-resolution conflict, #2107
+  // widening), guard 4 (`snapshotsConsistent`), AND guard 3 (>=1 rendered
+  // segment) and found a Tier A/B match — see this function's own doc
+  // comment above for why that ordering is deliberate — i.e. a real
+  // would-be auto-record this book's blind ambiguity veto can't vouch for.
+  // Counting THAT event specifically (not merely "this book's
+  // cacheAvailable is false") is what lets `main()` refuse `--apply` only
+  // for a book with something at stake, instead of one blind-but-empty
+  // book (e.g. a real *Unlocked* cache that parses but names nobody, and
+  // which currently has zero orphaned ids to begin with) vetoing every
+  // other book in the workspace.
+  let withheldForMissingCache = 0;
 
   for (const id of allIds) {
     if (liveIds.has(id)) continue; // not an orphan at all
@@ -438,8 +637,19 @@ export function planBookRepairs(input, deps) {
       skipped.push({ id, reason: 'rejected', detail: 'user explicitly rejected this reconciliation (Task 17 banner)' });
       continue;
     }
-    if (id in supersededBy) {
-      skipped.push({ id, reason: 'already-recorded', detail: `cast-id-history.json already maps this to "${supersededBy[id]}"` });
+    // Important 1: "does an alias already cover this id" IS the question
+    // `historyResolver`'s `'history'`/`'normalised-history'` tiers answer —
+    // ask it, rather than re-deriving the decision (see the doc comment on
+    // `historyResolver` above for why a hand-rolled second map diverges).
+    const aliasHit = historyResolver.resolve(id);
+    if (aliasHit && (aliasHit.via === 'history' || aliasHit.via === 'normalised-history')) {
+      skipped.push({
+        id,
+        reason: 'already-recorded',
+        detail:
+          `cast-id-history.json already maps this to "${aliasHit.character.id}"` +
+          (aliasHit.via === 'normalised-history' ? ' (via a normalised-spelling match, not an exact key)' : ''),
+      });
       continue;
     }
 
@@ -514,7 +724,12 @@ export function planBookRepairs(input, deps) {
 
     if (nameCandidate) {
       const tierAMatch = resolveTierAName(nameCandidate, liveCast, normaliseForMatch);
-      if (tierAMatch && !reservedIds.has(tierAMatch)) {
+      // #2093 residual 4: normalised, not raw-string — a live cast row whose
+      // id drifted to a case/separator variant of a reserved bucket id
+      // (`Unknown_Male`) must still be refused as an alias TARGET, the same
+      // way guard 1 already refuses it as a SOURCE (`normalisedReservedIds`
+      // built once above, shared by both checks below).
+      if (tierAMatch && !normalisedReservedIds.has(normaliseIdKey(tierAMatch))) {
         matchedId = tierAMatch;
         tier = 'A';
         const liveName = liveCast.find((c) => c.id === tierAMatch)?.name;
@@ -523,7 +738,14 @@ export function planBookRepairs(input, deps) {
     }
     if (!matchedId) {
       const tierBMatch = resolveTierBId(id, idOnlyResolver);
-      if (tierBMatch && !reservedIds.has(tierBMatch)) {
+      // #2093 residual 4 (same normalisation, Tier B side). In practice this
+      // branch is defensive rather than independently reachable: a Tier B
+      // match means `id` itself normalises the same as `tierBMatch`, so an
+      // orphan id that could ever land here would already have tripped
+      // guard 1's SOURCE-side reserved check (same normaliser, same key) —
+      // kept for symmetry with the Tier A check above, not because a live
+      // repro exists.
+      if (tierBMatch && !normalisedReservedIds.has(normaliseIdKey(tierBMatch))) {
         matchedId = tierBMatch;
         tier = 'B';
         evidence = `id "${id}" normalises the same as live id "${tierBMatch}"`;
@@ -531,26 +753,28 @@ export function planBookRepairs(input, deps) {
     }
 
     if (matchedId) {
-      // --- round-2 review, Important 1: fail-closed cache-availability
-      // gate. Guard 2 (the cross-source ambiguity veto, above) can only see
-      // an id as ambiguous through `cacheNameIndex` — if this book's
-      // analysis-cache file was never found (missing `CACHE_DIR`, a fresh
-      // worktree with no cache of its own), `cacheNameIndex` is silently
-      // EMPTY, not "confirmed unambiguous". That is exactly the gap that
-      // would have re-opened the bak-unambiguous x cache-ambiguous cell the
-      // Critical fix closed — so a match is never auto-recorded for a book
-      // whose cache evidence is missing, no matter how clean the bak-only
-      // evidence looks. `cacheAvailable` is computed once per book from the
-      // actual file's presence on disk (main()), not from whether this
-      // PARTICULAR id happens to appear in it.
-      if (!cacheAvailable) {
+      // --- guard 5 (Important 2, independent review on the #2107
+      // widening, 2026-08-05): does `id` already resolve LIVE, today, to a
+      // DIFFERENT character than this match found? Widening #2107 means an
+      // id that resolves via `'normalised-id'` now reaches this matching
+      // pipeline (it used to silently reconcile with no write at all) — and
+      // Tier A (name) is tried before Tier B (the SAME id-shape check this
+      // guard re-asks), so nothing previously stopped a stale cache name
+      // from out-voting a live id-shape match. `historyResolver` is the
+      // SAME resolver the already-recorded skip above already asked — a
+      // Tier-B-sourced match can never trip this (Tier B and this tier are
+      // the identical computation over the same live cast, so they always
+      // agree); only a Tier A name match can disagree with what `id`
+      // already resolves to.
+      const currentResolution = historyResolver.resolve(id);
+      if (currentResolution?.via === 'normalised-id' && currentResolution.character.id !== matchedId) {
         reportOnly.push({
           id,
           segments: orphan.segments,
           chapters: orphan.chapters,
-          reason: `name/id-matched "${matchedId}" (${evidence}) but this book's analysis-cache file was not ` +
-            `found — the cross-source ambiguity veto (guard 2) cannot rule out cache ambiguity without it, so ` +
-            `auto-record is withheld until CACHE_DIR points at the checkout that ran this book's analysis`,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id already resolves via id-shape to a ` +
+            `DIFFERENT live character, "${currentResolution.character.id}" — two evidence sources disagree; ` +
+            `needs a human decision rather than trusting the name match over the live id-shape resolution`,
           candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
         });
         continue;
@@ -575,41 +799,67 @@ export function planBookRepairs(input, deps) {
       // rendered line in this book, with no wrong audio on disk to
       // justify it and no reviewer in the loop (spec §4.7 scopes this
       // pass to REPAIR, not pre-emptive cache-only aliasing).
+      //
+      // #2107, widened by owner decision (2026-08-05): this used to also
+      // need to special-case an id that HAD real rendered segments but
+      // wasn't in `orphans` because it "already auto-reconciled" through
+      // the resolver's normalised-id tier — that bucket (`autoReconciled`)
+      // no longer exists. Only `'exact'` skips `orphans` now (see
+      // `buildOrphansFromSegments`'s doc comment), so `orphan.segments ===
+      // 0` here can only mean one thing: this id genuinely has zero
+      // rendered segments anywhere in the book.
       if (orphan.segments === 0) {
-        // --- round-2 review, MINOR finding 4: `orphan.segments === 0` also
-        // covers an id that DOES have real rendered segments but was never
-        // added to `orphans` because it already auto-reconciles through the
-        // resolver's own normalised-id tier (the Cast banner already shows
-        // it under "auto-reconciled", not "needs your decision"). Reporting
-        // that case with the same "zero rendered segments / no damage to
-        // repair" wording is FALSE — it contradicts the banner and inflates
-        // the reported segment total with a phantom zero. `autoReconciled`
-        // (built alongside `orphans` in `collectSegmentOrphans`) carries the
-        // real count and target for exactly this case; only ids genuinely
-        // absent from BOTH maps (truly never rendered) get the original
-        // reason.
-        const reconciled = autoReconciled?.get(id);
-        if (reconciled) {
-          reportOnly.push({
-            id,
-            segments: reconciled.segments,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id already auto-reconciles to ` +
-              `"${reconciled.resolvedTo}" via the normalised-id tier at render time (${reconciled.segments} real ` +
-              `rendered segment(s) already carry the reconciled voice, per the Cast banner's auto-reconciled ` +
-              `section) — already fixed, no separate alias needed`,
-            candidates: [],
-          });
-        } else {
-          reportOnly.push({
-            id,
-            segments: 0,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
-              `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
-            candidates: [],
-          });
-        }
+        reportOnly.push({
+          id,
+          segments: 0,
+          chapters: [],
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
+            `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
+          candidates: [],
+        });
+        continue;
+      }
+      // --- round-2 review, Important 1: fail-closed cache-availability
+      // gate. Guard 2 (the cross-source ambiguity veto, above) can only see
+      // an id as ambiguous through `cacheNameIndex` — if this book's
+      // analysis-cache file was never found (missing `CACHE_DIR`, a fresh
+      // worktree with no cache of its own), `cacheNameIndex` is silently
+      // EMPTY, not "confirmed unambiguous". That is exactly the gap that
+      // would have re-opened the bak-unambiguous x cache-ambiguous cell the
+      // Critical fix closed — so a match is never auto-recorded for a book
+      // whose cache evidence is missing, no matter how clean the bak-only
+      // evidence looks. `cacheAvailable` is computed once per book (main())
+      // from whether the file both exists AND parses (#2093 residual 1 —
+      // see `main()`'s own comment on this), not from whether this
+      // PARTICULAR id happens to appear in it.
+      //
+      // --- I2 (pre-merge review, 2026-08-05): this gate is deliberately
+      // LAST, immediately before `autoRecord.push`, not first — moved down
+      // past guards 3, 4 and (added later, #2107 widening) 5 above. Before
+      // this fix it sat ahead of guards 3/4, so an id that guard 3 (zero
+      // segments) or guard 4 (inconsistent snapshots) would have refused
+      // ANYWAY — cache evidence or not — still incremented
+      // `withheldForMissingCache`, the count that gates
+      // the WHOLE workspace's `--apply` run (see `shouldRefuseApplyForWithheldAutoRecord`).
+      // A single bak entry naming a retired, never-rendered id in a
+      // cache-blind book would have printed `withheld: 1` and refused
+      // `--apply` for all twenty books — the exact false-block the
+      // round-2 policy change exists to prevent, one guard over. Ordering
+      // this last means `withheldForMissingCache` only ever counts an id
+      // that would otherwise have reached `autoRecord.push` — an exact
+      // count, not an over-count — and its own reason string is only ever
+      // shown for a candidate that was genuinely about to be recorded.
+      if (!cacheAvailable) {
+        withheldForMissingCache += 1;
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this book's analysis-cache file was not ` +
+            `found — the cross-source ambiguity veto (guard 2) cannot rule out cache ambiguity without it, so ` +
+            `auto-record is withheld until CACHE_DIR points at the checkout that ran this book's analysis`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
         continue;
       }
       autoRecord.push({ id, to: matchedId, tier, evidence, segments: orphan.segments, chapters: orphan.chapters });
@@ -629,7 +879,7 @@ export function planBookRepairs(input, deps) {
     });
   }
 
-  return { autoRecord, reportOnly, skipped };
+  return { autoRecord, reportOnly, skipped, withheldForMissingCache };
 }
 
 /** Flatten one book's orphan-id -> chapter map into the re-render list's
@@ -654,6 +904,143 @@ export function buildRerenderRows(bookLabel, orphans) {
     }
   }
   return rows;
+}
+
+/** #2093 residual 2: `main()`'s global `--apply` refusal — extracted to a
+ *  pure decision. **Renamed and re-scoped (owner-decided policy, review
+ *  round 2, 2026-08-05):** originally `shouldRefuseApplyForMissingCache`,
+ *  gated on ANY scanned book lacking cache evidence (`booksMissingCache >
+ *  0`) — but that let one book with unusable cache evidence and NOTHING to
+ *  repair (e.g. a real book whose cache validly parses but names nobody,
+ *  and which has zero orphaned ids to begin with) veto `--apply` for every
+ *  OTHER book in the workspace too, which inverted the point of this pass:
+ *  it exists to unblock a real repair run, not add a new way to block one
+ *  that was never at risk. Gated instead on `booksWithheldForMissingCache`
+ *  — the count of books where `planBookRepairs` actually withheld a real
+ *  auto-record candidate specifically because `cacheAvailable` was false
+ *  (see `planBookRepairs`'s own `withheldForMissingCache` doc comment). The
+ *  safety property is unchanged: `planBookRepairs`'s per-book
+ *  `cacheAvailable` gate already guarantees no alias is EVER auto-recorded
+ *  for a book whose ambiguity veto is blind, whether or not this global
+ *  refusal fires — this function only decides whether the WHOLE run stops
+ *  dead or merely proceeds around a book with genuinely nothing at stake.
+ *  `booksMissingCache` stays reported in the summary (an operator-visible
+ *  fact worth knowing), it just no longer gates.
+ *
+ *  Scope correction (independent review I3, 2026-08-05, carried over):
+ *  this makes the DECISION itself directly unit testable; it does NOT make
+ *  `main()`'s WIRING of that decision (that it's actually called with the
+ *  right arguments, and that `main()` actually exits 1 on `true`)
+ *  testable — `main` isn't exported (it needs `server/dist` built; see the
+ *  module doc comment's Tests section), so that wiring remains verified
+ *  only by the live dry run. **#2111 narrows, but does not close, this gap
+ *  — see `planApplyRefusal`'s own doc comment immediately below.** */
+export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache) {
+  return apply === true && booksWithheldForMissingCache > 0;
+}
+
+/** #2111: the smallest orchestration seam `main()`'s per-workspace `--apply`
+ *  refusal can be pulled through a test without needing `server/dist` or a
+ *  live book scan. `main()` calls this ONCE, right after its per-book loop,
+ *  with `bookWithholds` — one `{ label, withheldForMissingCache }` entry per
+ *  scanned book, built by pushing `plan.withheldForMissingCache` straight
+ *  from each iteration's `planBookRepairs` result. This is a single source
+ *  of truth, not a second computation of the same fact re-derived in a test
+ *  (`cast-resolve.ts`'s own doc comment explains why this codebase avoids
+ *  that shape) — `main()`'s loop-tail accumulation that used to inline this
+ *  logic now calls this function instead of hand-rolling it a second time.
+ *
+ *  What this closes, on top of `shouldRefuseApplyForWithheldAutoRecord`
+ *  alone: the ACCUMULATION across multiple books — only a book with
+ *  `withheldForMissingCache > 0` counts, the label text is built correctly,
+ *  and the threshold crossing is driven through the same function `main()`
+ *  calls, not a hand-reimplemented copy in the test.
+ *
+ *  What this does NOT close, named explicitly rather than overclaimed (the
+ *  #2102 pre-merge review caught exactly this shape once already — an
+ *  extraction that moves the untested boundary down a level and then reads
+ *  as "wiring covered" when it isn't):
+ *    1. That `main()`'s per-book loop actually pushes the REAL
+ *       `plan.withheldForMissingCache` it computed into `bookWithholds` — a
+ *       one-line push, visible by inspection, not exercised by any
+ *       automated test in this file.
+ *    2. That `main()` actually acts on the returned `.refuse` by setting
+ *       `process.exitCode = 1` and returning before the write phase.
+ *       Unreachable from `test:hooks`: exercising it needs `apply === true`,
+ *       which `main()` gates behind a live TCP port-probe
+ *       (`probePortRangeRefused`) and a `server/dist` import, neither of
+ *       which exist in this harness — the same wall `shouldRefuseApplyFor
+ *       EmptyScan`'s own "Ie" test-file comment already documents for the
+ *       sibling `--apply`-gated refusal.
+ *  Both remain verified only by the on-box acceptance run (register row
+ *  A33, `docs/testing/onbox-acceptance-register.md`), never by an automated
+ *  test in this file. */
+export function planApplyRefusal(apply, bookWithholds) {
+  let booksWithheldForMissingCache = 0;
+  const withheldBookLabels = [];
+  for (const b of bookWithholds) {
+    if (b.withheldForMissingCache > 0) {
+      booksWithheldForMissingCache += 1;
+      withheldBookLabels.push(`${b.label} (${b.withheldForMissingCache} id(s))`);
+    }
+  }
+  return {
+    booksWithheldForMissingCache,
+    withheldBookLabels,
+    refuse: shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache),
+  };
+}
+
+/** Formats one `reportOnly` row for the console listing (main()). Extracted
+ *  as a pure function so its "(N segment(s) across M chapter(s))" suffix is
+ *  directly testable — #2093 residual 5 (cosmetic): a matched id with zero
+ *  rendered segments (`planBookRepairs`'s "never rendered, no damage to
+ *  repair" branch) reports `chapters: []` by construction — no chapter can
+ *  carry a segment that was never rendered. The chapter-count clause is
+ *  omitted entirely when `chapters` is empty, rather than printing the
+ *  vacuous "across 0 chapter(s))" every such row would otherwise get. */
+export function formatReportRowSummary(r) {
+  return r.chapters.length > 0
+    ? `${r.id} (${r.segments} segment(s) across ${r.chapters.length} chapter(s))`
+    : `${r.id} (${r.segments} segment(s))`;
+}
+
+/** #2108: `--apply` must refuse outright when nothing was scanned. A wrong
+ *  `WORKSPACE_DIR` (this script does not read `server/.env`, so a bare
+ *  invocation defaults to `<home>/AudiobookWorkspace`, not necessarily
+ *  where the real books live) scans ZERO books — and absent this check,
+ *  that reads as "clean" rather than "unknown": `booksMissingCache` stays
+ *  `0` (nothing to be missing evidence when nothing was scanned), so the
+ *  round-2 fail-closed guard can never fire, and `--apply` would exit `0`
+ *  having written nothing, reporting an empty tree as a healthy workspace
+ *  on the exact summary line A33's precondition tells an operator to
+ *  trust. There is no legitimate `--apply` against an empty workspace.
+ *  Extracted as a pure decision, matching
+ *  `shouldRefuseApplyForWithheldAutoRecord`'s own shape — same caveat: this
+ *  covers the DECISION only, not `main()`'s wiring of it (untestable
+ *  without `server/dist`; verified only by the live dry run). */
+export function shouldRefuseApplyForEmptyScan(apply, booksScanned) {
+  return apply === true && booksScanned === 0;
+}
+
+/** #2108: formats the `--- Summary ---` block's "books scanned" line,
+ *  calling out a zero-book scan explicitly instead of letting it render as
+ *  a plain "books scanned: 0" indistinguishable from any other count in the
+ *  summary — every OTHER line in that block would also read `0`, which
+ *  looks exactly like "a fully-scanned, perfectly clean workspace" unless
+ *  something says otherwise. Dry-run only in practice: `--apply` refuses
+ *  before ever reaching the summary when `booksScanned === 0` (see
+ *  `shouldRefuseApplyForEmptyScan`), so an operator only ever sees this
+ *  callout in dry-run output — exactly where they need to see it, before
+ *  trusting any other zero in the same block. */
+export function formatBooksScannedLine(booksScanned) {
+  return (
+    `books scanned: ${booksScanned}` +
+    (booksScanned === 0
+      ? ' — WARNING: nothing was examined; every count below is a row of clean zeros because NOTHING WAS ' +
+        'SCANNED, not because the workspace is healthy. Check WORKSPACE_DIR before trusting anything else here.'
+      : '')
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -733,7 +1120,12 @@ function collectBakNameEntries(audiobookDir) {
   return entries;
 }
 
-function readAnalysisCache(cacheDir, manuscriptId) {
+/** Exported (#2093 residual 1) so the fix below — `cacheAvailable` gated on
+ *  this function's return value, not mere file existence — is directly unit
+ *  testable against a real, deliberately corrupt file on disk, with no
+ *  `server/dist` build needed (see the module doc comment's Tests section;
+ *  `main()` itself stays unexported/untestable that way). */
+export function readAnalysisCache(cacheDir, manuscriptId) {
   if (!manuscriptId) return null;
   // Deliberately a plain read, not the server's `loadAnalysisCache` — that
   // function hardcodes CACHE_DIR relative to its own compiled location with
@@ -745,16 +1137,73 @@ function readAnalysisCache(cacheDir, manuscriptId) {
   return readJsonSync(p);
 }
 
-/** Round-2 review, Important 1: does this book's analysis-cache file actually
- *  exist on disk? Deliberately independent of `readAnalysisCache`'s return
- *  value — that function also returns `null` on a present-but-corrupt file,
- *  which is a different failure (and already visible as an empty
- *  `cacheNameIndex`, same as today); this check is specifically the
- *  "was there ever any evidence to consult" fact the fail-closed guard in
- *  `planBookRepairs` needs. */
+/** #2093 residual 1: does this book's analysis-cache file exist on disk?
+ *  Existence ONLY — deliberately weaker than `isCacheAvailable` below.
+ *  Retained solely so `main()`'s per-book diagnostic line can tell an
+ *  operator "no file at all" apart from "file present but failed to parse"
+ *  (the corrupt-file case `isCacheAvailable` also refuses on); it must
+ *  never again be the thing that GATES `cacheAvailable` — that was exactly
+ *  the fail-open bug: a present-but-corrupt file read as "exists" here even
+ *  though `readAnalysisCache` already swallowed the parse failure to
+ *  `null`, so the empty `cacheNameIndex` built from that `null` looked
+ *  "confirmed unambiguous" to guard 2 instead of "unknown". */
 function analysisCacheFileExists(cacheDir, manuscriptId) {
   if (typeof manuscriptId !== 'string' || !manuscriptId) return false;
   return fs.existsSync(path.join(cacheDir, `${manuscriptId}.json`));
+}
+
+/** #2093 residual 1 fix (widened by independent-review Critical C1,
+ *  2026-08-05, and again by pre-merge review I1, 2026-08-05): the actual
+ *  `cacheAvailable` gate. A book's analysis-cache evidence counts as
+ *  available only when the file EXISTS, PARSES, **and produces at least
+ *  one USABLE name/id entry in the same index guard 2 actually consumes**
+ *  — not merely "exists, parses, and `cacheEntriesOf` returns something
+ *  non-empty" (that narrower check was I1's own finding: `cacheEntriesOf`
+ *  only checks `typeof === 'string'`, so an entry like `{id:"sandor",
+ *  name:""}` — one truncated analyzer write — passes it and made
+ *  `isCacheAvailable` return `true`, while `buildNameIndex` (what guard 2,
+ *  the cross-source ambiguity veto, actually reads as `cacheNameIndex`)
+ *  drops that SAME entry for its falsy name — round 1's Critical reopened
+ *  one field deeper). This now calls `buildNameIndex` with the SAME
+ *  `normaliseFn` production wires in (`main()` passes
+ *  `mods.normaliseForMatch`, the real server function) rather than
+ *  re-deriving a parallel "is this entry usable" check — the exact
+ *  "don't duplicate the resolver" principle this whole script already
+ *  follows for id resolution, applied here to name-index construction too.
+ *  Measured against the real workspace's cache dir: 76 files parse, 0 are
+ *  unparseable, 10 parse with zero character entries, and 0 exhibit the
+ *  empty-string-field shape this residual fixes — one of the 10 zero-entry
+ *  books (*Unlocked*, `mns_dLurz4I544`) also carries bak-only name evidence
+ *  guard 2 must not treat as uncontested without the cache's
+ *  corroboration/veto. All refusal states — missing, unparseable,
+ *  parses-but-produces-no-usable-entry — now read the same way here;
+ *  `main()`'s diagnostic line still distinguishes the first two for the
+ *  operator (see its own comment). */
+export function isCacheAvailable(cacheDir, manuscriptId, normaliseFn) {
+  const cache = readAnalysisCache(cacheDir, manuscriptId);
+  return cacheAvailableFromParsed(cache, normaliseFn);
+}
+
+/** Pure core of `isCacheAvailable`, operating on an already-parsed `cache`
+ *  value (whatever `readAnalysisCache` returns — the raw object, or `null`
+ *  on missing/unparseable) rather than re-reading the file itself. Minor,
+ *  pre-merge review, 2026-08-05: `main()` used to call `isCacheAvailable`
+ *  (which reads the file once internally) and THEN call `readAnalysisCache`
+ *  again itself for `cacheNameIndex` — two reads of the same path per book,
+ *  and a theoretical window where the two reads could observe different
+ *  filesystem states (a concurrent write between them). `main()` now reads
+ *  once via `readAnalysisCache` and passes that same parsed value to both
+ *  this function and `cacheEntriesOf`, so the gate and the guard it
+ *  protects are guaranteed to measure the identical parse, not merely the
+ *  identical NORMALISER (which `isCacheAvailable`'s own doc comment above
+ *  already required). `isCacheAvailable` itself keeps its original
+ *  `(cacheDir, manuscriptId, normaliseFn)` signature — real fs fixtures
+ *  test the read-through path (missing file, corrupt JSON, empty
+ *  characters) via that signature, and changing it would lose that
+ *  coverage for no benefit `main()` doesn't already get from this split. */
+export function cacheAvailableFromParsed(cache, normaliseFn) {
+  if (cache === null) return false;
+  return buildNameIndex(cacheEntriesOf(cache), normaliseFn).size > 0;
 }
 
 function cacheEntriesOf(cache) {
@@ -790,8 +1239,30 @@ function cacheEntriesOf(cache) {
  *  refused, i.e. "possibly live, refuse the write"). A server that is
  *  running but unresponsive within the timeout window (mid-generation, a
  *  blocked event loop, a model load) must not read as absent just because
- *  it missed the window. */
-function probePortRefused(port, host = 'localhost') {
+ *  it missed the window.
+ *
+ *  **M6 (independent review, 2026-08-05): the default host is `127.0.0.1`,
+ *  NOT `'localhost'`.** `'localhost'` is a hostname Node resolves at
+ *  connect time, and on Windows can resolve `::1` (IPv6 loopback) before
+ *  `127.0.0.1` — so an IPv4-only server would answer on `127.0.0.1` while
+ *  this probe's `::1` connection collects a clean `ECONNREFUSED` and reads
+ *  "safe", with a live server actually listening. Verified against
+ *  `server/src/bind-host.ts`'s `selectBindHost`: the server's default plain-
+ *  HTTP bind (no `BIND_HOST`/`HOST` override, the mode `PORT`/8080 targets)
+ *  is literally `'127.0.0.1'`, and its LAN-HTTPS bind (`LAN_HTTPS_PORT`/8443)
+ *  is `'0.0.0.0'` (all interfaces, which includes `127.0.0.1`) — so probing
+ *  `127.0.0.1` explicitly is correct for both configured ports, not a
+ *  narrowing. Deliberately NOT also probing `::1` in parallel: on an
+ *  IPv6-less box (or one with IPv6 disabled) that would resolve `ENETUNREACH`
+ *  for every run, and under this probe's own fail-closed rule (only a
+ *  definitive `ECONNREFUSED` counts as safe) that would make `--apply`
+ *  refuse unconditionally, everywhere, forever — a worse failure mode than
+ *  the narrow, Windows-specific, dual-stack-server gap this leaves: an
+ *  IPv6-ONLY server (no IPv4 listener at all) is still invisible to this
+ *  probe. Not exploitable via `selectBindHost` above (neither of its two
+ *  outputs is IPv6-only), so this residual is real only for a server
+ *  started some other way that binds `::1` exclusively. */
+function probePortRefused(port, host = '127.0.0.1') {
   return new Promise((resolveP) => {
     const socket = net.connect({ host, port, timeout: 4000 });
     socket.once('connect', () => {
@@ -806,6 +1277,72 @@ function probePortRefused(port, host = 'localhost') {
       resolveP(err.code === 'ECONNREFUSED');
     });
   });
+}
+
+/** How many ports past a configured start port a `listenWithAutoRebind`
+ *  server (srv-60, `server/src/crash-logging.ts`) can land on after an
+ *  EADDRINUSE — one less than its own `maxAttempts` default of 20
+ *  (`opts.maxAttempts ?? 20`; that default isn't itself an exported
+ *  constant this script could import, so this mirrors it — keep the two in
+ *  sync if that default ever changes). #2090: a server that started while
+ *  the configured port (8080 / 8443) was held, and rebound to port+N, was
+ *  invisible to a probe that only checked the exact configured port. Both
+ *  `PORT`/`LAN_HTTPS_PORT` go through `listenWithAutoRebind` in
+ *  `server/src/index.ts`, so both need the widened probe below. */
+// Exported so scripts/tests/repair-cast-id-drift.test.mjs can size its own
+// fixtures off the real value instead of a hardcoded, driftable copy of 20.
+export const AUTO_REBIND_RANGE = 20;
+
+/** Probes every port a `listenWithAutoRebind` server could be bound to
+ *  starting from `startPort` (spec §10 / #2090) — the exact configured port
+ *  plus every port its own EADDRINUSE rebind could have walked up to.
+ *  Reuses `probePortRefused` per candidate port, so it inherits the SAME
+ *  fail-closed rule per port (only a definitive `ECONNREFUSED` counts as
+ *  "safe"; a timeout, `ENOTFOUND`, `EHOSTUNREACH`, or a non-HTTP listener
+ *  all refuse). All `AUTO_REBIND_RANGE` candidates are probed IN PARALLEL,
+ *  not serially — the documented answer to "what happens if the range
+ *  probe is slow": since every probe races its own independent 4s
+ *  `timeout` and they all run concurrently, the WHOLE range probe still
+ *  costs at most ~4s wall-clock, not `AUTO_REBIND_RANGE` timeouts stacked
+ *  up — and a slow/ambiguous outcome for even one candidate port still
+ *  makes the range probe as a whole read as "possibly live, refuse" (a
+ *  timeout resolves `false` = not refused, same as today), so there is no
+ *  way for the widened range to become LESS fail-closed than the original
+ *  single-port probe by taking longer. Returns every port in the range
+ *  that did NOT resolve a clear `ECONNREFUSED` — an empty array means every
+ *  candidate gave a definitive "nothing is listening".
+ *
+ *  Clamps to the valid TCP port range (minor, pre-merge review, 2026-08-05):
+ *  without this, `PORT`/`LAN_HTTPS_PORT` set near the top of the 16-bit
+ *  range (e.g. `PORT=65530`) makes `startPort + i` overflow past `65535`
+ *  for the last few candidates, and `net.connect` throws SYNCHRONOUSLY on
+ *  an out-of-range port number — the operator would see a raw stack trace
+ *  instead of this script's own refusal message. A port number above
+ *  `65535` cannot exist, so it cannot have a listener; excluding it from
+ *  the probed set loses no real safety coverage — every port that COULD
+ *  exist in the rebind range is still fully probed, and the fail-closed
+ *  property is unaffected either way. */
+export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
+  // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
+  // building the candidate list, not merely clamp the list. main() derives
+  // startPort from `Number(process.env.PORT ?? 8080)` with no validation —
+  // `Number('abc')` is NaN, and `NaN <= 65535` is false for every
+  // candidate, so the old `.filter()` alone silently emptied `ports` to
+  // `[]` for a malformed PORT. `Promise.all([])` resolves `[]`, and
+  // main() reads an empty `notRefused` as "every candidate definitively
+  // refused" — indistinguishable from a genuinely clean 20-port scan, so
+  // main() proceeded to WRITE. On main (pre this branch) the same input
+  // reached `net.connect({ port: NaN })`, which throws synchronously and
+  // crashes the run closed; the earlier clamp here turned that crash into
+  // a silent pass-through. A bad startPort is returned as its own
+  // one-element "not refused" result instead, so main() refuses and NAMES
+  // the bad value rather than reading "nothing to probe" as "all clear".
+  // Two-sided on purpose — the old one-sided `<= 65535` clamp let a
+  // negative startPort (e.g. PORT=-1) through to net.connect uncaught.
+  if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return [startPort];
+  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) => p <= 65535);
+  const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
+  return ports.filter((_, i) => !results[i]);
 }
 
 async function loadServerModules() {
@@ -859,30 +1396,64 @@ async function loadServerModules() {
   };
 }
 
-/* Walk every rendered segments file for a book and collect, per orphaned
-   characterId (i.e. `resolver.resolve(characterId)` misses), the segment
-   count / per-chapter breakdown (with an approximate affected duration
-   summed from each segment's own startSec/endSec) / every non-empty
-   characterSnapshot seen. Uses the REAL resolver — never re-derives "does
-   this id resolve" locally.
-
-   Also returns `autoReconciled` (round-2 review, MINOR finding 4): a raw
-   characterId can reach `allIds` in `planBookRepairs` (via a cache/bak name
-   entry) WITHOUT ever landing in `orphans`, because it already resolves
-   through the resolver's own normalised-id tier — the exact id the Cast
-   banner already shows as "auto-reconciled", with real rendered segments
-   behind it. Without this map, `planBookRepairs` can only see `orphans.get(id)
-   ?? { segments: 0, ... }` for such an id and wrongly reports it as
-   never-rendered. `resolver.resolve()` is deterministic per id per book, so
-   an id can never appear in both `orphans` and `autoReconciled`. */
-async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
-  const resolver = mods.buildCastResolver(cast.characters, {
-    supersededBy: history.supersededBy ?? {},
-    rejected: history.rejected ?? [],
-  });
-  const segs = await mods.loadSegmentsFiles(bookDir, chapters);
+/** Pure core of `collectSegmentOrphans` (#2093 residual 6). Given already-
+ *  loaded segments-file records (`segs`, the shape `mods.loadSegmentsFiles`
+ *  returns) and a resolver (the real `buildCastResolver` result in
+ *  production, a fake with the same `.resolve()` contract in tests), walks
+ *  every rendered segment and buckets it into `orphans` — the rendered
+ *  bytes on disk may be stale — per-chapter breakdown, approximate affected
+ *  duration from each segment's own startSec/endSec, every non-empty
+ *  characterSnapshot.
+ *
+ *  Exported so the collector's pure core — previously proven only by a live
+ *  dry run against the real workspace, since `planBookRepairs`'s own tests
+ *  only ever injected a fake `orphans` map — has a direct unit test with no
+ *  fs/`server/dist` dependency (see the module doc comment's Tests
+ *  section). `collectSegmentOrphans` itself stays the thin I/O wrapper that
+ *  loads `segs` and calls this.
+ *
+ *  #2107, widened by an explicit owner decision after independent review
+ *  (2026-08-05): a frozen `characterId` that is not literally a live cast
+ *  id today — via `cast-resolve.ts`'s `'exact'` tier — may have been
+ *  rendered against a different resolution than the one it resolves to
+ *  now, so it is listed as an orphan. That covers a genuine miss AND every
+ *  one of the other three resolver tiers (`'normalised-id'`, `'history'`,
+ *  `'normalised-history'`) alike — ONLY `'exact'` means the rendered bytes
+ *  are fine.
+ *
+ *  This replaces a narrower first version of this fix that kept
+ *  `'normalised-id'` out of `orphans`, reasoned as: an id that still
+ *  normalised-matches a live id with no history entry for it can't depend
+ *  on the mutable `history.supersededBy` table, so it can't have started
+ *  resolving after the render. True as far as it goes, but a non-sequitur
+ *  — it proves only that no RENAME happened, not that the bytes are
+ *  correct. Register row A32 (`docs/testing/onbox-acceptance-register.md`)
+ *  records the counter-example: *Playing with Fire*'s `the-torment` (67
+ *  segments, cast id `the_torment`) and `lightning-dave` (1 segment, cast
+ *  id `lightning_dave`) both recover under the `'normalised-id'` tier
+ *  today, but their audio was rendered BEFORE Wave 1's resolver existed at
+ *  all — `resolveGroup` did a bare `castById.get()` and substituted the
+ *  narrator regardless of tier, so a normalised-id match today says
+ *  nothing about what voice rendered the frozen bytes. There is no
+ *  per-segment evidence on the real workspace to discriminate a genuinely
+ *  fine `'normalised-id'` match from a stale one either way — the
+ *  PER-SEGMENT field `renderedFallbackCharacterId` is absent from all
+ *  84,642 real segments (only `renderedFallbackEngine`, 77 segments,
+ *  exists). `characterSnapshots` is a FILE-level map, not a per-segment
+ *  field — this function reads it below, once per file, and it IS present
+ *  (497 files, 2,625 keys) — but it doesn't say which tier resolved any
+ *  ONE segment either, so it isn't per-segment discriminating evidence —
+ *  so this is still a policy call, not something detectable from the
+ *  data: over-reporting is the safe failure direction for a one-shot
+ *  repair tool, under-reporting tells an operator the workspace is clean
+ *  when it might not be.
+ *
+ *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
+ *  being empty for an id must mean "resolves via `'exact'`", never merely
+ *  "resolver.resolve() returned something" — that laxer reading is the bug
+ *  this comment exists to prevent from coming back. */
+export function buildOrphansFromSegments(segs, resolver) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
-  const autoReconciled = new Map(); // id -> { segments, resolvedTo }
   for (const seg of segs) {
     const perChapterCount = new Map(); // id -> count
     const perChapterDuration = new Map(); // id -> seconds
@@ -890,14 +1461,10 @@ async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
       const id = s.characterId;
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
-      if (resolution) {
-        if (resolution.via === 'normalised-id') {
-          const entry = autoReconciled.get(id) ?? { segments: 0, resolvedTo: resolution.character.id };
-          entry.segments += 1;
-          autoReconciled.set(id, entry);
-        }
-        continue; // resolves (exact/history/normalised) — not an orphan
-      }
+      if (resolution?.via === 'exact') continue; // fine — literally the live cast id today, not orphaned
+      // Everything else — a genuine miss, or a match via 'normalised-id' /
+      // 'history' / 'normalised-history' — is listed (see the doc comment
+      // above for why only 'exact' is exempt).
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
         perChapterDuration.set(id, (perChapterDuration.get(id) ?? 0) + Math.max(0, s.endSec - s.startSec));
@@ -917,7 +1484,23 @@ async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
       if (snapshot) entry.snapshots.push(snapshot);
     }
   }
-  return { orphans, autoReconciled };
+  return { orphans };
+}
+
+/** Also returns the real, history-aware `resolver` it built — Important 1
+ *  (independent review, 2026-08-05): `planBookRepairs`'s "already recorded"
+ *  and current-resolution-conflict guards need to ask this SAME resolver,
+ *  not reconstruct a second instance from the same inputs (see
+ *  `planBookRepairs`'s `historyResolver` local for the full reasoning).
+ *  `main()` threads it straight through. */
+async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
+  const resolver = mods.buildCastResolver(cast.characters, {
+    supersededBy: history.supersededBy ?? {},
+    rejected: history.rejected ?? [],
+  });
+  const segs = await mods.loadSegmentsFiles(bookDir, chapters);
+  const { orphans } = buildOrphansFromSegments(segs, resolver);
+  return { orphans, resolver };
 }
 
 function backupCastIdHistory(historyPath) {
@@ -942,28 +1525,88 @@ async function main() {
   console.log(`  (git-ignored + per-checkout — override with CACHE_DIR if this book's analysis ran elsewhere)`);
 
   if (apply) {
-    console.log(`probing localhost:${port} (HTTP) and localhost:${lanPort} (LAN HTTPS) for a live server...`);
-    const [httpRefused, lanRefused] = await Promise.all([probePortRefused(port), probePortRefused(lanPort)]);
-    const notRefused = [
-      ...(httpRefused ? [] : [port]),
-      ...(lanRefused ? [] : [lanPort]),
-    ];
+    // #2090: probes the WHOLE auto-rebind range (the configured port plus
+    // every port `listenWithAutoRebind` could have walked up to on
+    // EADDRINUSE), not just the exact configured port — a server that
+    // started while 8080/8443 was held, and rebound to port+N, used to be
+    // invisible to this probe.
+    console.log(
+      `probing 127.0.0.1:${port}-${port + AUTO_REBIND_RANGE - 1} (HTTP, incl. auto-rebind range) and ` +
+        `127.0.0.1:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} (LAN HTTPS, incl. auto-rebind range) for a ` +
+        `live server...`,
+    );
+    const [httpNotRefused, lanNotRefused] = await Promise.all([
+      probePortRangeRefused(port),
+      probePortRangeRefused(lanPort),
+    ]);
+    const notRefused = [...httpNotRefused, ...lanNotRefused];
     if (notRefused.length) {
       console.error(
         `\nRefusing --apply: port(s) ${notRefused.join(', ')} did not return a clear ECONNREFUSED — treating as ` +
           `possibly-live (spec §10: this script writes cast-id-history.json out-of-process, no in-process lock ` +
           `covers it; a slow-but-alive server — mid-generation, a blocked event loop, loading a model — must ` +
-          `refuse, not read as absent just because it missed the probe window). Stop the server on ${port} ` +
-          `(and LAN HTTPS ${lanPort} if running), or point PORT/LAN_HTTPS_PORT elsewhere.`,
+          `refuse, not read as absent just because it missed the probe window, and a rebound server on any port ` +
+          `in the auto-rebind range must refuse the same as one on the exact configured port). Stop the server ` +
+          `on ${port}-${port + AUTO_REBIND_RANGE - 1} (and LAN HTTPS ${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} ` +
+          `if running), or point PORT/LAN_HTTPS_PORT elsewhere.`,
       );
       process.exitCode = 1;
       return;
     }
   }
 
-  const mods = await loadServerModules();
+  // Ie (pre-merge review, 2026-08-05): collectBooks + the empty-scan refusal
+  // are deliberately ordered BEFORE loadServerModules() — collectBooks needs
+  // no compiled server module at all, and putting the refusal ahead of the
+  // one thing in this function that DOES need `server/dist` built means a
+  // wrong WORKSPACE_DIR + `--apply` is caught (and named specifically)
+  // before an unrelated "missing compiled server module" error would
+  // otherwise mask it, AND means THAT combination's exit path needs no
+  // build step. (A subprocess test of it was considered and deliberately
+  // NOT added: the review that requested this reorder also forbade this
+  // repair pass from ever invoking `--apply`, and a DRY run against zero
+  // books does not exercise this refusal at all — `shouldRefuseApplyForEmptyScan`
+  // only fires when `apply === true` — so it still falls through to
+  // `loadServerModules()` below either way, which needs `server/dist`
+  // built and is NOT built in the `test:hooks` CI job that runs this
+  // script's test file; see that file's own note on this.) Behaviour is
+  // unchanged for every case that reaches this point with books.length > 0
+  // or apply === false — only the zero-book + --apply combination now
+  // short-circuits earlier.
   const books = collectBooks(workspaceDir);
-  console.log(`books scanned: ${books.length}\n`);
+  // #2108, minor (pre-merge review, 2026-08-05): this early line now goes
+  // through the same formatBooksScannedLine() the summary block already
+  // used — previously this printed a bare `books scanned: 0` with none of
+  // the summary's explicit warning, so a zero-book dry run's FIRST visible
+  // line still looked like an unremarkable count rather than the "nothing
+  // was examined" callout #2108 added further down.
+  console.log(`${formatBooksScannedLine(books.length)}\n`);
+
+  // #2108: a wrong WORKSPACE_DIR (the script does not read server/.env, so a
+  // bare invocation defaults to <home>/AudiobookWorkspace, not necessarily
+  // where the real books live) scans ZERO books — and without this check,
+  // that reads as "clean" rather than "unknown": booksMissingCache stays 0
+  // (there is nothing to be missing evidence when nothing was scanned), so
+  // the round-2 fail-closed guard can never fire, and --apply would run to
+  // completion, exit 0, and write nothing — reporting an empty tree as a
+  // healthy workspace on the exact summary line A33's precondition tells an
+  // operator to trust. There is no legitimate --apply against an empty
+  // workspace, so this refuses outright; a dry run still completes (so the
+  // operator can see WHERE it looked), but the summary below calls the zero
+  // out explicitly instead of rendering a row of clean zeros that reads as
+  // "nothing needs fixing".
+  if (shouldRefuseApplyForEmptyScan(apply, books.length)) {
+    console.error(
+      `\nRefusing --apply: 0 books found at workspace (${workspaceDir}). This usually means ` +
+        `WORKSPACE_DIR is wrong — this script does not read server/.env, so a bare invocation ` +
+        `defaults to <home>/AudiobookWorkspace, which may not be where the real workspace lives. ` +
+        `Point WORKSPACE_DIR (or BASE/AUDIOBOOK_WORKSPACE) at the real workspace root and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const mods = await loadServerModules();
 
   let totalAuto = 0;
   let totalAutoSegments = 0;
@@ -971,6 +1614,11 @@ async function main() {
   let totalReportSegments = 0;
   let totalSkipped = 0;
   let booksMissingCache = 0;
+  // #2111: fed to `planApplyRefusal` once, after the loop, instead of
+  // hand-accumulating `booksWithheldForMissingCache`/`withheldBookLabels`
+  // inline here — see that function's doc comment for what this does and
+  // does not close of the wiring-untested gap.
+  const bookWithholds = []; // { label, withheldForMissingCache }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -978,7 +1626,7 @@ async function main() {
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const { orphans: segmentOrphans, autoReconciled } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans, resolver: historyResolver } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -990,13 +1638,28 @@ async function main() {
 
     // Round-2 review, Important 1: the cross-source ambiguity veto (guard 2
     // in planBookRepairs) can only see cache ambiguity through this file —
-    // a MISSING cache file must never silently read as "confirmed
-    // unambiguous". `cacheAvailable` is a per-book fact (does the file
-    // exist at all), computed independently of whether THIS book's cache
-    // happens to name any of its orphaned ids.
-    const cacheAvailable = analysisCacheFileExists(cacheDir, book.state.manuscriptId);
-    if (!cacheAvailable) booksMissingCache += 1;
+    // a MISSING, UNPARSEABLE, or (#2093 residual 1, widened by
+    // independent-review Critical C1, widened again by pre-merge review I1)
+    // PARSES-BUT-PRODUCES-NO-USABLE-NAME/ID-ENTRY cache file must never
+    // silently read as "confirmed unambiguous". `cacheAvailable` is a
+    // per-book fact — does the file exist, parse, AND supply usable
+    // evidence — computed independently of whether THIS book's cache
+    // happens to name any of its orphaned ids specifically. Gated on
+    // `isCacheAvailable`, passed the SAME `normaliseForMatch` used to build
+    // `cacheNameIndex` below so the gate and the guard it protects measure
+    // the identical quantity (I1: the gate used to accept an entry with an
+    // empty-string id/name that `buildNameIndex` would silently drop) —
+    // never `analysisCacheFileExists` (exists only, which read a
+    // present-but-corrupt OR present-but-empty file as "available" — the
+    // exact fail-open shape the round-2 fix closed one level up, reopened
+    // here three times now).
+    // Minor (pre-merge review, 2026-08-05): read the cache file exactly
+    // once per book and reuse the same parsed value for both the
+    // availability gate and cacheNameIndex, rather than reading it twice
+    // (see cacheAvailableFromParsed's own doc comment).
     const cache = readAnalysisCache(cacheDir, book.state.manuscriptId);
+    const cacheAvailable = cacheAvailableFromParsed(cache, mods.normaliseForMatch);
+    if (!cacheAvailable) booksMissingCache += 1;
     const cacheNameIndex = buildNameIndex(cacheEntriesOf(cache), mods.normaliseForMatch);
     const bakNameIndex = buildNameIndex(collectBakNameEntries(book.audiobookDir), mods.normaliseForMatch);
 
@@ -1008,7 +1671,7 @@ async function main() {
         bakNameIndex,
         orphans: segmentOrphans,
         cacheAvailable,
-        autoReconciled,
+        historyResolver,
       },
       {
         normaliseForMatch: mods.normaliseForMatch,
@@ -1018,6 +1681,8 @@ async function main() {
       },
     );
 
+    bookWithholds.push({ label: book.label, withheldForMissingCache: plan.withheldForMissingCache });
+
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
     allRerenderRows.push(...rerenderRows);
 
@@ -1025,9 +1690,27 @@ async function main() {
 
     console.log(`--- ${book.label} ---`);
     if (!cacheAvailable) {
+      // #2093 residual 1, widened by independent-review Critical C1:
+      // distinguish all THREE refusal states for the operator — "no file at
+      // all", "file present but failed to parse", and "file present, parses
+      // fine, but names zero characters" — even though `isCacheAvailable`
+      // now refuses all three identically. `cache` (read above, in scope
+      // here) already tells us whether it parsed; `analysisCacheFileExists`
+      // (a diagnostic-only helper, never the gate) distinguishes the two
+      // parse-failure sub-cases. `cacheAvailable === false` here always
+      // means one of these three, never a fourth case.
+      let desc, suffix;
+      if (cache === null) {
+        const fileExists = analysisCacheFileExists(cacheDir, book.state.manuscriptId);
+        desc = fileExists ? 'analysis-cache file exists but failed to parse' : 'no analysis-cache file found';
+        suffix = fileExists ? ' is not valid JSON' : ' does not exist';
+      } else {
+        desc = 'analysis-cache file parses but names zero characters';
+        suffix = ' has no usable stage1.characters or chapterCast entries';
+      }
       console.log(
-        `  (! no analysis-cache file found for this book — ` +
-          `${path.join(cacheDir, `${book.state.manuscriptId ?? '<no manuscriptId>'}.json`)} does not exist. ` +
+        `  (! ${desc} for this book — ${path.join(cacheDir, `${book.state.manuscriptId ?? '<no manuscriptId>'}.json`)}` +
+          `${suffix}. ` +
           `The cross-source ambiguity veto cannot see cache evidence for this book, so auto-record is withheld ` +
           `for every matched id below until CACHE_DIR points at the checkout that ran this book's analysis.)`,
       );
@@ -1044,7 +1727,7 @@ async function main() {
     if (plan.reportOnly.length) {
       console.log('  REPORTED (needs a human decision):');
       for (const r of plan.reportOnly) {
-        console.log(`    ${r.id} (${r.segments} segment(s) across ${r.chapters.length} chapter(s))`);
+        console.log(`    ${formatReportRowSummary(r)}`);
         console.log(`      ${r.reason}`);
         if (r.candidates.length) {
           const top = r.candidates
@@ -1071,6 +1754,10 @@ async function main() {
     }
   }
 
+  // #2111: single call, right after the loop — see `planApplyRefusal`'s
+  // own doc comment for exactly what this does and does not prove tested.
+  const { booksWithheldForMissingCache, withheldBookLabels, refuse: refuseApply } = planApplyRefusal(apply, bookWithholds);
+
   if (allRerenderRows.length) {
     console.log('--- Re-render list (book / chapter / orphaned id / segments / ~duration) ---');
     for (const row of allRerenderRows) {
@@ -1082,35 +1769,58 @@ async function main() {
   }
 
   console.log('--- Summary ---');
-  console.log(`books scanned: ${books.length}`);
+  console.log(formatBooksScannedLine(books.length));
   console.log(`auto-recordable aliases: ${totalAuto} (${totalAutoSegments} segment(s))${apply ? '' : ' — dry run, nothing written'}`);
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);
-  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s)`);
+  // M-3 (independent review, 2026-08-05): the row count alone forces an
+  // operator to sum every row's `segments` by hand to get the figure the
+  // register/run-sheet/live-view all quote as "the arithmetic check that
+  // the set is complete" (e.g. 188) — print it here instead.
+  const totalRerenderSegments = allRerenderRows.reduce((sum, row) => sum + row.segments, 0);
+  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s) / ${totalRerenderSegments} segment(s)`);
+  // Owner-decided policy, review round 2 (2026-08-05): these are now TWO
+  // distinct numbers, only one of which gates --apply — printed together,
+  // explicitly labelled, so neither reads as the other.
   console.log(
     `books missing analysis-cache evidence: ${booksMissingCache}` +
       (booksMissingCache
-        ? ' — the cross-source ambiguity veto cannot see cache evidence for these books; auto-record was withheld for every matched id in them (see CACHE_DIR)'
+        ? ' — the cross-source ambiguity veto cannot see cache evidence for these books, so no auto-record can ' +
+          'be recorded for a matched id in them; informational only, does NOT by itself block --apply (see below)'
         : ''),
   );
+  console.log(
+    `books with an auto-record withheld for missing cache evidence: ${booksWithheldForMissingCache}` +
+      (booksWithheldForMissingCache
+        ? ` — THIS is what blocks --apply: ${withheldBookLabels.join('; ')}`
+        : ' — --apply is not blocked by cache evidence'),
+  );
 
-  // Round-2 review, Important 1: refuse --apply outright when ANY scanned
-  // book had no analysis-cache file. planBookRepairs already withholds
-  // auto-record per-book for exactly this reason (see its cacheAvailable
-  // gate), so nothing unsafe would be written even without this check — but
-  // the refusal must be explicit and visible, not merely a smaller number
-  // silently produced by the algorithm, per the review finding. A single
-  // missing-cache book blocks the WHOLE apply run, matching the same
-  // conservative "ambiguous means refuse" posture as the liveness probe
-  // above (spec §10) rather than writing a partial, cache-blind result.
-  if (apply && booksMissingCache > 0) {
+  // Round-2 review, Important 1 (original): refuse --apply outright when a
+  // scanned book's blind ambiguity veto actually had something at stake.
+  // Re-scoped by owner-decided policy, review round 2 (2026-08-05): the
+  // ORIGINAL version of this refusal fired on ANY book missing cache
+  // evidence (booksMissingCache > 0), which let one book with unusable
+  // cache evidence and NOTHING to repair veto every other book's --apply
+  // run — inverting the point of this pass. planBookRepairs's per-book
+  // cacheAvailable gate already guarantees no alias is EVER auto-recorded
+  // for a book whose ambiguity veto is blind (see its own doc comment) —
+  // that safety property does not depend on this global refusal at all.
+  // This refusal now fires only when withholding actually happened
+  // (booksWithheldForMissingCache > 0), so a blind-but-empty book no longer
+  // blocks a run it was never going to affect.
+  if (refuseApply) {
     console.error(
-      `\nRefusing --apply: ${booksMissingCache} scanned book(s) had no analysis-cache file at CACHE_DIR (${cacheDir}). ` +
-        `The cross-source ambiguity veto (guard 2) can only see an id as ambiguous through the cache — a missing ` +
-        `cache file makes every id in that book look unambiguous whether or not it actually is, silently re-opening ` +
-        `the exact bak-unambiguous x cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. ` +
-        `Point CACHE_DIR at the checkout that actually ran these books' analysis (see the module doc comment) and ` +
-        `re-run — the dry run above must report "books missing analysis-cache evidence: 0" before --apply is safe.`,
+      `\nRefusing --apply: ${booksWithheldForMissingCache} scanned book(s) had a real auto-record candidate ` +
+        `withheld because their analysis-cache evidence is unusable at CACHE_DIR (${cacheDir}): ` +
+        `${withheldBookLabels.join('; ')}. The cross-source ambiguity veto (guard 2) can only see an id as ` +
+        `ambiguous through the cache — unusable cache evidence makes every matched id in that book look ` +
+        `unambiguous whether or not it actually is, silently re-opening the exact bak-unambiguous x ` +
+        `cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. Point CACHE_DIR at the ` +
+        `checkout that actually ran these books' analysis (see the module doc comment) and re-run — the dry run ` +
+        `above must report "books with an auto-record withheld for missing cache evidence: 0" before --apply is ` +
+        `safe. (A nonzero "books missing analysis-cache evidence" count alone does NOT block --apply — only a ` +
+        `book with a real withheld candidate does.)`,
     );
     process.exitCode = 1;
     return;

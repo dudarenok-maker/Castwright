@@ -40,6 +40,16 @@ export interface SidecarHealthSnapshot {
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;
+  /** #2052 — added so `gpu/sidecar-vram-sample.ts` can read the sampler's
+      clean-process gate + peak reading through this gate instead of a
+      dynamic import reaching into `routes/sidecar-health.ts` directly. Both
+      fields are already present on that module's real `SidecarHealthResult`
+      (a structural superset of this snapshot), so widening the type here
+      changes no runtime behaviour for the existing `capacity-retry.ts`
+      consumer — it simply ignores the two new optional fields it doesn't
+      read. */
+  qwenDesignEverLoaded?: boolean;
+  vramReservedMb?: number | null;
 }
 
 let provider: (() => Promise<SidecarHealthSnapshot>) | null = null;
