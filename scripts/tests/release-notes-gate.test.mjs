@@ -250,6 +250,24 @@ test('the committed RELEASE_NOTES.md is free of mojibake', () => {
   assert.equal(res.ok, true, res.reason);
 });
 
+// #2114 — same rationale as the mojibake pair above: asserting against the
+// ACTUAL COMMITTED files means this guard fires pre-commit (npm run
+// test:hooks), not only at tag time, if a BOM ever comes back — e.g. from a
+// PowerShell Out-File/>/>> redirect touching either file. Reads raw BYTES
+// (no 'utf8' decode) so the assertion can't be satisfied by a reader that
+// silently normalises a BOM away; a fixture-only test can't catch this by
+// construction, since nothing forces a throwaway fixture to be exercised
+// against what's actually committed.
+test('the committed docs/release-notes-next.md has no leading UTF-8 BOM', () => {
+  const bytes = readFileSync(resolve(repoRoot, 'docs/release-notes-next.md'));
+  assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+});
+
+test('the committed RELEASE_NOTES.md has no leading UTF-8 BOM', () => {
+  const bytes = readFileSync(resolve(repoRoot, 'RELEASE_NOTES.md'));
+  assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+});
+
 // #1973 follow-up: the suggested allowlist literal must be the full token, not just the core
 test('checkMojibake suggests the full whitespace-delimited token, not just the mojibake core', () => {
   // CAFE = 'CAFÉ™', chunk detected = 'É™', core length = 2, so core = 'É™'
