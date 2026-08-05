@@ -479,16 +479,29 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
    with no BEHAVIOURAL lock detector: the #1981 AB/BA test above defends
    ordering (a lock-order inversion), not the lock's existence — neutralise
    `withCastLocks` down to `return fn();`, or keep the wrapper in place but
-   hoist `sourceCast`'s read back outside it (a rule-2 regression, the exact
-   shape that bit library-cast-override.ts on this branch), and that test
-   stays green either way.
+   hoist `sourceCast`'s read back outside it (a rule-2 regression — the same
+   stale-snapshot clobber OUTCOME as the `library-cast-override.ts` defect
+   fixed elsewhere on this branch, though that one was a same-book
+   same-character-vs-different-character aliasing bug with zero concurrency
+   involved; the two share an outcome, not a shape), and that test stayed
+   green either way.
 
-   The racer here is a genuine `withCastLocks([bookDir], ...)` writer — the
-   SAME primitive this route calls, not a different one (`withCastLock`
-   singular has no reduceRight chain to bypass and this route never calls
-   it) — touching a field this route never reads: `narrator.raceProbe`.
-   Orthogonal by construction, so its survival (or loss) is a clean signal
-   independent of the route's own notLinkedTo bookkeeping.
+   Both of this route's locked handlers — POST (mark) and DELETE (unmark) —
+   have a structurally identical read-through-write span, so BOTH get their
+   own detector below, via the shared `runLockDetector` helper. An earlier
+   version of this describe covered POST only; an independent review found
+   that hoisting DELETE's `sourceCast` read outside its own retained
+   `withCastLocks` left the whole file green, 16/16 — the static
+   `cast-lock.guard.test.ts` regression guard can't see it either, since it
+   checks where the WRITE sits, not the read.
+
+   The racer in both detectors is a genuine `withCastLocks([bookDir], ...)`
+   writer — the SAME primitive this route calls, not a different one
+   (`withCastLock` singular has no reduceRight chain to bypass and this
+   route never calls it) — touching a field this route never reads:
+   `narrator.raceProbe`. Orthogonal by construction, so its survival (or
+   loss) is a clean signal independent of the route's own notLinkedTo
+   bookkeeping.
 
    The target's IN-LOCK read of `sourceCast` is gated via the hoisted
    `vi.mock` on state-io.js above — real bytes are read immediately (so the
@@ -497,114 +510,189 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
    is confirmed intercepted matters: gating an earlier, outer read (e.g. one
    of the pre-lock `findBookByBookId` lookups) lets the racer finish before
    the target ever asks for its lock, which passes even with the lock
-   primitive neutralised — a placebo. This construction catches both
-   mutations without needing two separate tests:
+   primitive neutralised — a placebo. This construction catches all three
+   mutations (lock neutralised, POST's read hoisted, DELETE's read hoisted)
+   without needing a dedicated test per mutation:
 
    - Correct code: the target already holds the real per-key mutex on the
      keeper book when its read is intercepted, so the racer's own
-     `withCastLocks` call queues behind it and only runs (re-reading FRESH
-     bytes) after the target's write has landed and released the lock. Both
-     changes survive.
+     `withCastLocks` call queues behind it and doesn't even ENTER its
+     critical section (see `racerEntered` below) — let alone complete its
+     read+write — until the target's write has landed and released the
+     lock. Both changes survive.
    - Lock neutralised: the target's held-open read no longer implies any
      real mutex, so the racer — going through the same neutralised
-     primitive — runs unimpeded during the gate window; the target then
-     writes its STALE pre-racer snapshot back over it, and the racer's field
-     is lost.
-   - Read hoisted outside a retained lock: the target's read fires (and gets
-     intercepted) before it ever calls `withCastLocks`, so no mutex is held
-     yet; the racer acquires the real, unmutated lock uncontested and
-     completes; the target then acquires the lock late and writes back its
-     stale (pre-racer) snapshot, clobbering the racer's field the same way. */
+     primitive — enters and runs unimpeded during the gate window; the
+     target then writes its STALE pre-racer snapshot back over it, and the
+     racer's field is lost.
+   - Read hoisted outside a retained lock (either handler): the target's
+     read fires (and gets intercepted) before it ever calls
+     `withCastLocks`, so no mutex is held yet; the racer acquires the real,
+     unmutated lock uncontested and completes; the target then acquires the
+     lock late and writes back its stale (pre-racer) snapshot, clobbering
+     the racer's field the same way.
+
+   Two hardenings on top of the original single-handler construction, both
+   found by independent review:
+
+   - `racerEntered` — set synchronously on the first line inside the
+     racer's `withCastLocks` callback, and asserted still `false` right
+     before the gate is released. The original construction asserted only
+     that `raceProbe` SURVIVED, which requires the racer's full read+write
+     to lose outright against an 80ms head start — on a contended box, an
+     unlocked racer's `readJson` + `writeJsonAtomic` (mkdir + temp write +
+     rename) can plausibly exceed 80ms, in which case `released()` fires
+     first, the target writes its stale snapshot, and the racer THEN reads
+     those fresh bytes and writes its probe on top — both assertions pass
+     and the mutation goes silently undetected. Entering the critical
+     section is a single synchronous assignment, orders of magnitude faster
+     than completing a read+write, so the same 80ms budget gives this
+     assertion enormous margin. Kept ALONGSIDE the survival assertions, not
+     instead of them — the entry flag asserts a MECHANISM (did the racer
+     queue), `raceProbe` surviving asserts the OUTCOME (did the write
+     land); a mechanism-only assertion can miss a parallel wire that
+     produces the wrong outcome anyway.
+   - `racePromise.catch(() => {})` immediately after `raceWrite()` is
+     called, mirroring `targetPromise`'s own immediate `.catch()` below (and
+     for the same reason): `racePromise` isn't awaited until ~80ms later,
+     and an fs error inside the racer (e.g. an EPERM on rename under
+     Windows AV/indexer contention) would otherwise reject unhandled during
+     that window, failing the run with an unhandled-rejection error instead
+     of the real assertions. */
+async function runLockDetector(
+  targetCall: () => ReturnType<typeof callNotLinked>,
+  assertRouteOutcome: () => void,
+): Promise<void> {
+  const stateIo = await import('../workspace/state-io.js');
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
+  );
+  const { castJsonPath } = await import('../workspace/paths.js');
+  const { withCastLocks } = await import('../workspace/cast-lock.js');
+  const keeperBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK);
+  const keeperCastPath = castJsonPath(keeperBookDir);
+
+  let released!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    released = resolve;
+  });
+  let intercepted = false;
+  const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+    if (!intercepted && path === keeperCastPath) {
+      intercepted = true;
+      const value = await actual.readJson(path); // real bytes, now — happens-before the racer's write
+      await gate; // hold the RESOLUTION open until released below
+      return value;
+    }
+    return actual.readJson(path);
+  });
+
+  // Bypasses the spy entirely (uses `actual` directly) so the racer's own
+  // read/write are never accidentally re-intercepted — it's a plain,
+  // faithful `withCastLocks` consumer, same as any other real route.
+  let racerEntered = false;
+  async function raceWrite(): Promise<void> {
+    await withCastLocks([keeperBookDir], async () => {
+      racerEntered = true; // #2123 Finding 2 — set on entry, before the read
+      const cast = await actual.readJson<{
+        characters: Array<Record<string, unknown>>;
+      }>(keeperCastPath);
+      const narrator = cast!.characters.find((c) => c.id === 'narrator')!;
+      (narrator as Record<string, unknown>).raceProbe = 'concurrent-writer-survived';
+      await actual.writeJsonAtomic(keeperCastPath, { characters: cast!.characters });
+    });
+  }
+
+  let targetPromise: ReturnType<typeof callNotLinked> | undefined;
+  let racePromise: Promise<void> | undefined;
+  try {
+    targetPromise = targetCall();
+    targetPromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+    // Poll rather than a fixed sleep — same precedent as voices.test.ts's
+    // and book-state.reparse.test.ts's own #1981 races.
+    const deadline = Date.now() + 2000;
+    while (!intercepted && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(intercepted).toBe(true);
+
+    racePromise = raceWrite();
+    racePromise.catch(() => {}); // #2123 Finding 4 — see block comment above
+
+    // Generous head start: completes fully when unlocked (the bug
+    // window), or queues behind the target's held lock when locked (the
+    // fix) — either way nothing depends on tuning a tight timing window.
+    await new Promise((r) => setTimeout(r, 80));
+
+    // #2123 Finding 2 — see block comment above: this must hold even when
+    // the survival assertions below would still pass by luck.
+    expect(racerEntered).toBe(false);
+
+    released();
+    const [targetRes] = await Promise.all([targetPromise, racePromise]);
+    expect(targetRes.status).toBe(200);
+  } finally {
+    // Idempotent: also fires here so a throw ANYWHERE above (before the
+    // happy-path call) still releases a held `readJson` rather than
+    // leaving it stuck on `await gate` forever. Resolving an
+    // already-resolved promise a second time is a no-op.
+    released();
+    // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+    // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+    // default passthrough behaviour explicitly.
+    spy.mockImplementation(actual.readJson);
+    // On the failure path (an assertion above threw) these are still
+    // in-flight — await them so the test can't return while either is
+    // still running against fixtures `afterAll` is about to delete.
+    await Promise.allSettled([targetPromise, racePromise]);
+  }
+
+  assertRouteOutcome();
+
+  const narratorKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    (c) => c.id === 'narrator',
+  );
+  expect(narratorKeeper?.raceProbe).toBe('concurrent-writer-survived');
+}
+
 describe('#2123 — cast.json lock is real, and its read stays inside it', () => {
   it('a concurrent withCastLocks writer on the same book survives a not-linked-to POST', async () => {
-    const stateIo = await import('../workspace/state-io.js');
-    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
-      '../workspace/state-io.js',
+    await runLockDetector(
+      () =>
+        callNotLinked(keeperBookId, 'wren', {
+          otherBookId: exileBookId,
+          otherCharacterId: 'wren',
+        }),
+      () => {
+        const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+          (c) => c.id === 'wren',
+        );
+        expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+      },
     );
-    const { castJsonPath } = await import('../workspace/paths.js');
-    const { withCastLocks } = await import('../workspace/cast-lock.js');
-    const keeperBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK);
-    const keeperCastPath = castJsonPath(keeperBookDir);
+  });
 
-    let released!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      released = resolve;
+  it('a concurrent withCastLocks writer on the same book survives a not-linked-to DELETE', async () => {
+    // Seed: mark the pair first (same approach as the DELETE describe
+    // above) so there is something for the DELETE to actually remove.
+    await callNotLinked(keeperBookId, 'wren', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'wren',
     });
-    let intercepted = false;
-    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      if (!intercepted && path === keeperCastPath) {
-        intercepted = true;
-        const value = await actual.readJson(path); // real bytes, now — happens-before the racer's write
-        await gate; // hold the RESOLUTION open until released below
-        return value;
-      }
-      return actual.readJson(path);
-    });
 
-    // Bypasses the spy entirely (uses `actual` directly) so the racer's own
-    // read/write are never accidentally re-intercepted — it's a plain,
-    // faithful `withCastLocks` consumer, same as any other real route.
-    async function raceWrite(): Promise<void> {
-      await withCastLocks([keeperBookDir], async () => {
-        const cast = await actual.readJson<{
-          characters: Array<Record<string, unknown>>;
-        }>(keeperCastPath);
-        const narrator = cast!.characters.find((c) => c.id === 'narrator')!;
-        (narrator as Record<string, unknown>).raceProbe = 'concurrent-writer-survived';
-        await actual.writeJsonAtomic(keeperCastPath, { characters: cast!.characters });
-      });
-    }
-
-    let targetPromise: ReturnType<typeof callNotLinked> | undefined;
-    let racePromise: Promise<void> | undefined;
-    try {
-      targetPromise = callNotLinked(keeperBookId, 'wren', {
-        otherBookId: exileBookId,
-        otherCharacterId: 'wren',
-      });
-      targetPromise.catch(() => {}); // supertest is lazy — force real dispatch now
-
-      // Poll rather than a fixed sleep — same precedent as voices.test.ts's
-      // and book-state.reparse.test.ts's own #1981 races.
-      const deadline = Date.now() + 2000;
-      while (!intercepted && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 5));
-      }
-      expect(intercepted).toBe(true);
-
-      racePromise = raceWrite();
-      // Generous head start: completes fully when unlocked (the bug
-      // window), or queues behind the target's held lock when locked (the
-      // fix) — either way nothing depends on tuning a tight timing window.
-      await new Promise((r) => setTimeout(r, 80));
-
-      released();
-      const [targetRes] = await Promise.all([targetPromise, racePromise]);
-      expect(targetRes.status).toBe(200);
-    } finally {
-      // Idempotent: also fires here so a throw ANYWHERE above (before the
-      // happy-path call) still releases a held `readJson` rather than
-      // leaving it stuck on `await gate` forever. Resolving an
-      // already-resolved promise a second time is a no-op.
-      released();
-      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
-      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
-      // default passthrough behaviour explicitly.
-      spy.mockImplementation(actual.readJson);
-      // On the failure path (an assertion above threw) these are still
-      // in-flight — await them so the test can't return while either is
-      // still running against fixtures `afterAll` is about to delete.
-      await Promise.allSettled([targetPromise, racePromise]);
-    }
-
-    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'wren',
+    await runLockDetector(
+      () =>
+        callUnmark(keeperBookId, 'wren', {
+          otherBookId: exileBookId,
+          otherCharacterId: 'wren',
+        }),
+      () => {
+        const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+          (c) => c.id === 'wren',
+        );
+        expect(wrenKeeper?.notLinkedTo).toEqual([]);
+      },
     );
-    expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
-
-    const narratorKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'narrator',
-    );
-    expect(narratorKeeper?.raceProbe).toBe('concurrent-writer-survived');
   });
 });

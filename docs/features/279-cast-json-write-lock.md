@@ -316,15 +316,26 @@ clearing CLAUDE.md's fix-now bar:
   deterministic barrier (a hoisted `vi.mock` holding both requests at a
   common point, released together) instead.
   `cast-not-linked-to.test.ts` shipped with only the AB/BA test until
-  `#2123`: its lock-existence detector races a genuine `withCastLocks`
+  `#2123`: its lock-existence detectors race a genuine `withCastLocks`
   writer (an orthogonal field on the SAME book) against the route's own
   in-lock `readJson`, gated via the same barrier idiom — proven red both
   when `withCastLocks` is neutralised (`return fn();`, bypassing its
   `reduceRight` chain — mutation-verified against that primitive, not
   `withCastLock`, which this two-book site never calls) and when
   `sourceCast`'s read is hoisted back outside the still-present lock (a
-  rule-2 regression, the same shape that hit `library-cast-override.ts`
-  above).
+  rule-2 regression — the same stale-snapshot clobber outcome as the
+  `library-cast-override.ts` defect above, though that one was a same-book
+  aliasing bug with zero concurrency involved). This route has TWO locked
+  handlers, POST (mark) and DELETE (unmark), with a structurally identical
+  read-through-write span; an independent review found the original
+  `#2123` detector covered POST only, so hoisting DELETE's read left the
+  file green 16/16 with the static guard blind to it too (it checks the
+  write site, not the read). A second detector, sharing the same
+  `runLockDetector` construction, now covers DELETE as well. Both
+  detectors also assert a `racerEntered` flag set on entry to the racer's
+  critical section (not just that its write survived) — the survival-only
+  assertion depends on the racer's full read+write losing outright against
+  an 80ms head start, which a slow-enough unlocked write can still beat.
 - `server/src/routes/analysis.fresh-cast-lock.test.ts` and
   `server/src/routes/book-state.reparse.test.ts` — race the two delete
   sites against `cast-aliases`, which re-reads inside its own lock and
