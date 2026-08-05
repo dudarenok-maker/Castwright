@@ -250,10 +250,10 @@ describe('classifyTranscript', () => {
   });
 
   it('low avg_logprob with a MODERATELY wrong transcript → inconclusive, not a re-record', () => {
-    // WER ~0.57 (below CATASTROPHIC_WER=0.85) — an untrustworthy transcript
+    // WER ~0.57 (below the catastrophic bar) — an untrustworthy transcript
     // that's wrong but not a wholesale collapse still doesn't get re-recorded
     // on a guess. (#2055 narrowed this to CATASTROPHIC mismatches only — see
-    // the two tests below for the new drift branch.)
+    // the tests below for the new drift branch.)
     const c = classifyTranscript(
       EXPECTED,
       'She climbed the stairs to a completely different rooftop under the moon.',
@@ -263,22 +263,63 @@ describe('classifyTranscript', () => {
     expect(c.wer).toBeLessThan(0.85);
   });
 
-  it('#2055 — low avg_logprob with a CATASTROPHICALLY wrong transcript → drift, not inconclusive', () => {
-    // The Coqui language-collapse shape #2055 describes: a FLUENT transcript
-    // ("mumble mumble nonsense" stands in for fluent wrong-language audio)
-    // that bears almost no resemblance to the reference (WER 1.0 here) AND
-    // trips the untrustworthy-transcript signal — forcing Whisper to decode a
-    // wrong-language/garbled clip in the book's language routinely looks
-    // low-confidence even though the render is genuinely broken. Compounding
-    // evidence (catastrophic WER + low confidence) overrides the "don't guess"
-    // backstop that protects merely-imperfect transcripts.
-    const c = classifyTranscript(EXPECTED, 'mumble mumble nonsense', {
-      ...CLEAN,
-      avgLogprob: -1.8,
-    });
+  it('#2055 review R12 — an untrustworthy inconclusive verdict carries the REAL wer/sub/del/ins, not zeros', () => {
+    // Declared side effect (see the code comment on the untrustworthy-verdict
+    // decision block): pre-#2055 the untrustworthy branch returned
+    // IMMEDIATELY, before alignment ever ran, so `wer`/`sub`/`del`/`ins`/
+    // `longestDeletionRun` all defaulted to 0 on an `inconclusive` verdict.
+    // #2055 restructured the function to compute alignment BEFORE deciding
+    // the untrustworthy verdict (so the catastrophic-WER override has a `wer`
+    // to compare against) — as a side effect, even the "stays inconclusive"
+    // path below the catastrophic bar now carries the real numbers. This
+    // matters downstream: synthesise-chapter.ts's best-of-N tie-break
+    // (`asrBetter`) compares `.wer` between two same-rank `inconclusive`
+    // takes, and a chapter's persisted ASR telemetry shows this number too —
+    // both now see real content-drift signal instead of an always-0
+    // placeholder for an untrustworthy transcript.
+    const c = classifyTranscript(
+      EXPECTED,
+      'She climbed the stairs to a completely different rooftop under the moon.',
+      { ...CLEAN, avgLogprob: -1.8 },
+    );
+    expect(c.verdict).toBe('inconclusive');
+    expect(c.wer).toBeGreaterThan(0);
+    expect(c.sub + c.del + c.ins).toBeGreaterThan(0);
+  });
+
+  it('#2055 — low avg_logprob with a CATASTROPHICALLY wrong, FULL-LENGTH transcript → drift, not inconclusive', () => {
+    // The Coqui language-collapse shape #2055 describes: a FLUENT, roughly
+    // full-length transcript that bears almost no resemblance to the
+    // reference (WER 1.0 here) AND trips the untrustworthy-transcript signal
+    // — forcing Whisper to decode a wrong-language/garbled clip in the book's
+    // language routinely looks low-confidence even though the render is
+    // genuinely broken. Compounding evidence (catastrophic WER + low
+    // confidence + a real-collapse shape) overrides the "don't guess"
+    // backstop that protects merely-imperfect transcripts. Ten heard words
+    // against the 14-word EXPECTED clears both the reference-length and the
+    // heard/expected ratio floor (review R1/R3).
+    const c = classifyTranscript(
+      EXPECTED,
+      'A completely different unrelated sentence about something else entirely today.',
+      { ...CLEAN, avgLogprob: -1.8 },
+    );
     expect(c.verdict).toBe('drift');
     expect(c.wer).toBeGreaterThanOrEqual(0.85);
     expect(c.reasons.join(' ')).toMatch(/catastrophically wrong/i);
+  });
+
+  it('#2055 — reproduces #2026\'s own reported collapse shapes as drift', () => {
+    // #2026's actual reported collapses ("Karosia olleet tämän tämän",
+    // "Job player, Moria") were fluent multi-word utterances bearing no
+    // resemblance to the expected line — reproduced here as full-length
+    // stand-ins against EXPECTED.
+    for (const heard of [
+      'Karosia olleet tama sana jotain muuta kokonaan tanaan nyt heti.',
+      'Job player Moria walked away into the fog without saying another word today.',
+    ]) {
+      const c = classifyTranscript(EXPECTED, heard, { ...CLEAN, avgLogprob: -1.8 });
+      expect(c.verdict).toBe('drift');
+    }
   });
 
   it('high no_speech_prob → inconclusive', () => {
@@ -286,21 +327,124 @@ describe('classifyTranscript', () => {
     expect(c.verdict).toBe('inconclusive');
   });
 
-  it('#2055 — high no_speech_prob stays inconclusive on a NEAR-EMPTY transcript even at WER 1.0', () => {
-    // Silence/near-silence is segment-qa.ts's dead-RMS job, not this gate's —
-    // the catastrophic-WER override requires a FLUENT (>=2 heard words)
-    // transcript so an empty/near-empty one (which trivially maximises WER
-    // against any non-empty reference) is never relabelled drift here.
-    const c = classifyTranscript(EXPECTED, 'um', { ...CLEAN, noSpeechProb: 0.9 });
+  it('#2055 review R1 — a filler-padded near-silent transcript stays inconclusive, never drift', () => {
+    // #2055 review finding: `um` / `um uh` / `mm hmm mm` against a 14-word
+    // reference all reach WER 1.0 with 2+ heard tokens — under the OLD
+    // `heardTokens.length >= 2` floor alone these misclassified as drift.
+    // This is TRUNCATION (a long deletion run), which `maxDeletionRun` /
+    // segment-qa.ts's dead-RMS check already own — not a content collapse.
+    // The fluent-collapse shape check (heard/expected length ratio) now
+    // excludes all three.
+    for (const heard of ['um', 'um uh', 'mm hmm mm']) {
+      const c = classifyTranscript(EXPECTED, heard, { ...CLEAN, noSpeechProb: 0.9 });
+      expect(c.verdict).toBe('inconclusive');
+      expect(c.wer).toBe(1);
+    }
+  });
+
+  it('#2055 review R1 — a non-English (Russian) near-silence hallucination stays inconclusive, never drift', () => {
+    // The review's sharper finding: `HALLUCINATION_PATTERNS` above is
+    // English/Latin-only, so a Russian Whisper near-silence hallucination
+    // ("Продолжение следует…", "Субтитры сделал …") is NOT caught by
+    // `looksLikeHallucination` and would previously have reached the old
+    // `heardTokens.length >= 2` floor as a "fluent" transcript. The shape
+    // check (comparably-long heard transcript, bounded deletion run) excludes
+    // it the same way it excludes English filler, with no language-specific
+    // pattern list needed.
+    const c = classifyTranscript(EXPECTED, 'Продолжение следует', {
+      ...CLEAN,
+      noSpeechProb: 0.9,
+    }, { language: 'ru' });
     expect(c.verdict).toBe('inconclusive');
     expect(c.wer).toBe(1);
   });
 
-  it('#2055 — high no_speech_prob with a FLUENT catastrophically-wrong transcript → drift', () => {
-    const c = classifyTranscript(EXPECTED, 'mumble mumble nonsense', {
-      ...CLEAN,
-      noSpeechProb: 0.9,
+  it('#2055 review R2 — a fixed catastrophic bar can never sit BELOW a raised max WER', () => {
+    // 20-word reference, 18 substitutions → wer 0.90. With `maxWer: 0.95`
+    // (an operator raising the per-language cap, #1084's whole scaffold
+    // exists for this), a TRUSTWORTHY transcript at this WER is `ok`. Before
+    // the R2 fix, the SAME transcript with an untrustworthy signal was
+    // `drift` at a fixed 0.85 bar — stricter than the trustworthy branch at
+    // an identical WER. `catastrophicBar = Math.max(catastrophicWer, maxWer)`
+    // closes that inversion: the untrustworthy branch is never pickier than
+    // the confident one.
+    const longExpected = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    const eighteenWrong = Array.from({ length: 20 }, (_, i) =>
+      i < 18 ? `wrong${i}` : `word${i}`,
+    ).join(' ');
+    const trustworthy = classifyTranscript(longExpected, eighteenWrong, CLEAN, {
+      thresholds: { maxWer: 0.95 },
     });
+    expect(trustworthy.verdict).toBe('ok');
+    expect(trustworthy.wer).toBeCloseTo(0.9, 5);
+
+    const untrustworthy = classifyTranscript(
+      longExpected,
+      eighteenWrong,
+      { ...CLEAN, avgLogprob: -1.8 },
+      { thresholds: { maxWer: 0.95 } },
+    );
+    expect(untrustworthy.verdict).toBe('inconclusive');
+    expect(untrustworthy.wer).toBeCloseTo(0.9, 5);
+  });
+
+  it('#2055 review R3 — a SHORT reference never triggers the override, however wrong the transcript', () => {
+    // #2055's own repro lines ("Хорошее олово.", "Тёплое море.") are 2-word
+    // references — on a reference this short, "both words wrong" is
+    // statistically unremarkable (an ordinary double-mishearing), not
+    // evidence of a wholesale collapse. `CATASTROPHIC_MIN_EXPECTED_WORDS`
+    // excludes any reference under that floor from the override entirely,
+    // regardless of how high the WER against it is.
+    const shortRef = 'Хорошее олово.';
+    for (const heard of ['Хорошая олова.', 'mumble nonsense.']) {
+      const c = classifyTranscript(shortRef, heard, { ...CLEAN, avgLogprob: -1.8 }, { language: 'ru' });
+      expect(c.verdict).toBe('inconclusive');
+      expect(c.wer).toBe(1);
+    }
+  });
+
+  it('#2055 review R1 — the heard/expected ratio floor does independent work beyond the deletion-run cap', () => {
+    // 8-word reference. 3 sparse wrong words (ratio 0.375, below the 0.5
+    // floor) land a deletion run of 3 — UNDER `maxDeletionRun` (4) on its
+    // own, so the deletion-run gate alone would let this through. The ratio
+    // floor is what excludes it: 3 heard words is too sparse to call a
+    // full-length collapse. One more heard word (ratio exactly 0.5) crosses
+    // the floor and the identical shape becomes drift.
+    const expected = 'alpha bravo charlie delta echo foxtrot golf hotel';
+    const sparse = classifyTranscript(expected, 'zulu delta xray', { ...CLEAN, avgLogprob: -1.8 });
+    expect(sparse.verdict).toBe('inconclusive');
+    expect(sparse.longestDeletionRun).toBeLessThanOrEqual(4);
+
+    const atFloor = classifyTranscript(expected, 'zulu yankee delta xray', {
+      ...CLEAN,
+      avgLogprob: -1.8,
+    });
+    expect(atFloor.verdict).toBe('drift');
+  });
+
+  it('#2055 review R1 — the deletion-run cap does independent work beyond the heard/expected ratio', () => {
+    // 10-word reference, 5 heard words (ratio exactly 0.5 — clears the
+    // ratio floor) but all substituting the FIRST five, leaving the last
+    // five as one contiguous deletion run of 5 — over `maxDeletionRun` (4).
+    // This is truncation-shaped (a real collapse doesn't drop the back half
+    // of the line), which is `maxDeletionRun`'s job, not this override's —
+    // confirming the review's point directly: "the shape is a long deletion
+    // run — truncation, not a content collapse."
+    const expected = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet';
+    const c = classifyTranscript(expected, 'zulu yankee xray whiskey victor', {
+      ...CLEAN,
+      avgLogprob: -1.8,
+    });
+    expect(c.verdict).toBe('inconclusive');
+    expect(c.longestDeletionRun).toBeGreaterThan(4);
+  });
+
+  it('#2055 — high no_speech_prob with a FLUENT, full-length catastrophically-wrong transcript → drift', () => {
+    const c = classifyTranscript(
+      EXPECTED,
+      'A completely different unrelated sentence about something else entirely today.',
+      { ...CLEAN, noSpeechProb: 0.9 },
+    );
     expect(c.verdict).toBe('drift');
   });
 

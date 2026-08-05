@@ -1596,15 +1596,22 @@ above `class QwenEngine`. *Cost:* short — one overlapped request pair.
 
 ### A36 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
-Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`) pin
-that a resident ASR reservation now books the separate `asr.warm` key (128 MB
-seed) instead of the cold `asr` key (400 MB) — proven with a faked
-`is_resident`/probe, no real allocator. Not yet observed: whether 128 MB is
-actually enough headroom for a real resident Whisper `base`/int8_float16
-forward's activation memory on a contended card (too low → a real, avoidable
-`noCapacity` refusal that this fix was supposed to eliminate) — this figure is
-an explicitly unmeasured conservative prior, not a measured one like the
-cold-load seeds elsewhere in `SEED_FOOTPRINTS_MB`.
+Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`,
+`test_asr_footprint_measurement.py`) pin that a resident ASR reservation now
+books the separate `asr.warm` key (128 MB seed) instead of the cold `asr` key
+(400 MB), that `admit()`/`reservation()` agree, and that the MEASUREMENT
+mechanism itself (a device-wide free-memory delta via
+`PlacementController._device_free_mb`, not the torch-allocator peak
+CTranslate2 sits outside of) is real and correctly guarded against
+contamination — all proven with a scripted `_device_free_mb` sequence, no
+real allocator. Not yet observed: whether 128 MB is actually enough headroom
+for a real resident Whisper `base`/int8_float16 forward's activation memory
+on a contended card (too low → a real, avoidable `noCapacity` refusal that
+this fix was supposed to eliminate), and whether the learned `asr.warm` p95
+converges to something sane once real device-wide-free-memory observations
+accumulate on a box that ISN'T contended by a foreign process (the one
+contamination vector `ledger.engines_holding` can't see, since it only knows
+this process's own reservations).
 
 - With `ASR_DEVICE=cuda` and content-QA enabled (`SEG_ASR_ENABLED=1`), render
   a chapter so ASR loads and goes resident, then trigger several more
@@ -1613,30 +1620,42 @@ cold-load seeds elsewhere in `SEED_FOOTPRINTS_MB`.
 - Watch `FootprintTable`'s learned `asr.warm` p95 settle after ≥5 real
   observations (`_FOOTPRINT_MIN_SAMPLES`) — record what it converges to, so
   the 128 MB seed can be revisited with evidence rather than left as a guess
-  indefinitely.
-- The device-wide `torch.cuda.max_memory_allocated` contamination question
-  #2094's own filing raised (a concurrent Qwen render possibly inflating the
-  learned COLD `asr` figure) is explicitly **not** covered by this row — it is
-  a separate, wider-blast-radius question this fix did not attempt to resolve.
+  indefinitely. A sane figure (double digits to low hundreds of MB) confirms
+  the measurement mechanism is producing real signal on a clean box; a
+  suspiciously large one (hundreds of MB to GB) points at contamination the
+  ledger-based guard couldn't see (a process outside this sidecar).
+- The device-wide contamination question #2094's own filing raised is now
+  PARTIALLY addressed (the ledger-based guard discards a reading when another
+  SIDECAR engine holds a concurrent reservation) but not fully closed — a
+  foreign, non-sidecar process on the same card remains invisible to it. This
+  row is where that residual gets its first real evidence.
 
 *Needs:* `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1`, a real book render with
-content-QA on. *Criteria:* the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB`
-(`server/tts-sidecar/main.py`) and `docs/local-llm.md`'s footprint table.
-*Cost:* short — rides along with any other GPU-ASR session (A20 already needs
-`ASR_DEVICE=cuda`-adjacent capacity behaviour; batch together).
+content-QA on, ideally on an UNCONTENDED card (no other process holding VRAM)
+for the cleanest read. *Criteria:* the `asr.warm` seed comment in
+`SEED_FOOTPRINTS_MB` and `_device_free_mb`'s docstring (`server/tts-sidecar/main.py`)
+and `docs/local-llm.md`'s footprint table. *Cost:* short — rides along with
+any other GPU-ASR session (A20 already needs `ASR_DEVICE=cuda`-adjacent
+capacity behaviour; batch together).
 
 ### A37 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in
 `server/src/tts/segment-asr-qa.test.ts` with injected transcripts/signals — a
-FLUENT, catastrophically-wrong-content transcript (WER ≥ 0.85) now overrides
-the "untrustworthy → inconclusive" backstop into `drift`, while a near-empty
-one and a merely-imperfect one are unaffected. Not yet observed: whether this
-actually fires on a REAL #2026-style Coqui language-collapse (fluent audio,
-wrong language, plausible duration) without a real `avgLogprob`/`noSpeechProb`
-false-positive rate that starts re-recording perfectly good lines — the
-`CATASTROPHIC_WER = 0.85` bound and the `heardTokens.length >= 2` floor are
-both judgement calls, not on-box-measured constants.
+FLUENT, full-length, catastrophically-wrong-content transcript (WER ≥
+`Math.max(catastrophicWer, maxWer)`) now overrides the "untrustworthy →
+inconclusive" backstop into `drift`, while a near-empty/filler-padded
+transcript, a short (<6-word) reference, and a merely-imperfect transcript are
+all unaffected — each shape independently mutation-verified, including a
+Russian near-silence-hallucination repro (`"Продолжение следует"`) invisible
+to the English-only `HALLUCINATION_PATTERNS` list. Not yet observed: whether
+this actually fires on a REAL #2026-style Coqui language-collapse (fluent
+audio, wrong language, plausible duration) without a real false-positive rate
+that starts re-recording perfectly good lines — `CATASTROPHIC_WER` (default
+0.85, now the live registry knob `qa.asr.catastrophicWer` — retunable from
+this row's own findings without a release), the 6-word reference floor, and
+the 0.5 heard/expected ratio floor are all judgement calls, not
+on-box-measured constants.
 
 - With ASR content-QA on (`SEG_ASR_ENABLED=1`) and a Russian (or French/
   Spanish) book on the Coqui engine, reproduce #2026's language-collapse per

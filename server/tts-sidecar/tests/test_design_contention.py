@@ -43,10 +43,19 @@ def test_unload_design_waits_for_in_flight_design_then_unloads() -> None:
     """A design still in flight when unload_design() is called must NOT be
     killed — unload_design() waits for it to clear, then unloads.
 
-    Mutation that must fail this — breaks the PRODUCER: drop the `while
-    self._design_in_flight.busy: ...` wait loop in `unload_design()` (i.e.
-    revert to the pre-#2070 unconditional null). `design_still_present_mid_wait`
-    then reads False (nulled immediately) instead of True.
+    Mutation that must fail this (verified) — breaks the PRODUCER: drop the
+    `while self._design_in_flight.busy: ...` wait loop in `unload_design()`
+    (i.e. revert to the pre-#2070 unconditional null). The `assert
+    engine._design is not None` below — taken from the MAIN thread, 0.2s after
+    starting `unload_design()` on a background thread, while the simulated
+    design is still held in flight — then finds `_design` already `None`: a
+    mutated `unload_design()` nulls it immediately instead of waiting, so the
+    snapshot 0.2s later reads the post-null state. That single assertion is
+    what detects the mutation; nothing else in this test needs to (review R13
+    — an earlier draft's `design_still_present_mid_wait` list duplicated this
+    check inside `run_unload()` itself but was never asserted, so it detected
+    nothing; removed rather than wired up, since the main-thread assertion
+    below already covers the same property more directly).
     """
     engine = main.QwenEngine()
     engine._design = _FakeDesignModel()
@@ -63,19 +72,15 @@ def test_unload_design_waits_for_in_flight_design_then_unloads() -> None:
     holder.start()
     assert entered.wait(2), "claim() never entered — test bug"
 
-    design_still_present_mid_wait: list[bool] = []
-
     def run_unload() -> None:
-        # Snapshot just after unload_design() starts polling but before the
-        # holder releases — proves it did NOT null `_design` immediately.
-        design_still_present_mid_wait.append(engine._design is not None)
         engine.unload_design(wait_seconds=5.0, poll_seconds=0.05)
 
     unloader = threading.Thread(target=run_unload, daemon=True)
     unloader.start()
 
     # Give unload_design() time to enter its wait loop, then confirm the
-    # design is still resident WHILE the "design" is in flight.
+    # design is still resident WHILE the "design" is in flight. This IS the
+    # mutation-detecting assertion (see the docstring above).
     time.sleep(0.2)
     assert engine._design is not None, (
         "unload_design() nulled `_design` while _design_in_flight was still "

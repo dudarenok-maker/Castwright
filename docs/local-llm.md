@@ -169,8 +169,26 @@ the separate `asr.warm` key instead — the forward-only activation cost, not
 the weight load a resident model has already paid. `asr.warm`'s 128 MB is a
 conservative, UNMEASURED cold-start prior (no on-box observation exists yet
 for this specific incremental figure) rather than a measured value like the
-design-family pair above; it learns its own p95 the same way once real
-`asr.warm` observations accumulate.
+design-family pair above.
+
+Unlike the other seeds on this page, `asr.warm` previously had no real path
+to being *learned* from: the peak-observation mechanism reads torch's own
+caching-allocator peak (`torch.cuda.max_memory_allocated`), but faster-
+whisper's CTranslate2 backend allocates entirely outside it, so a warm
+forward measured that way read ~0 MB (silently dropped by the `<= 0`
+observation guard) and never accumulated real samples. `reservation()`
+measures ASR specifically via a device-wide free-memory DELTA instead
+(`PlacementController._device_free_mb`, `torch.cuda.mem_get_info`), which
+DOES see CTranslate2's allocations. Two guards keep that delta honest rather
+than optimistic: a reading is discarded outright when any other engine holds
+a concurrent reservation on the same device (the ledger's own contamination
+signal), and a WARM reading above the `asr` cold seed is discarded as
+implausible (a resident forward should never need more than a cold load
+would). With those in place, `asr.warm` genuinely does learn its own p95 the
+same way every other key here does, once real observations accumulate — the
+residual: a foreign, non-sidecar process holding VRAM on the same card is
+still invisible to the ledger-based contamination guard, so an isolated,
+uncontended box is what makes a learned `asr.warm` figure trustworthy.
 
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
