@@ -18,7 +18,7 @@ it sees transitive and runtime dependencies — closing #2119 and #2120.
 **Architecture:** Three sequential PRs. **A1** is purely additive (nothing
 about how scope is *computed* changes) and de-circularises A2. **A2** rewrites
 `verify.yml` to derive per-step scope from `STEPS[]` via a new
-`scripts/ci-scope.mjs`, guarded by four assertions over the parsed workflow.
+`scripts/ci-scope.mjs`, guarded by five assertions over the parsed workflow.
 **B** hardens `scripts/tests/verify-cache.test.mjs`'s completeness guard with
 AST-based extraction, a TS-aware resolver, a transitive walk stopped at
 gitignored paths, and splits `check-no-budget-poll` into its own step.
@@ -64,7 +64,7 @@ verbatim from the spec.
 |---|---|---|
 | `scripts/ci-scope.mjs` | A2 | **new** — derive per-step CI scope from `STEPS[]`; emit `scopes` JSON + `ok` sentinel |
 | `scripts/tests/ci-scope.test.mjs` | A2 | **new** — unit tests for the above (fail-safe, dispatch, shared) |
-| `scripts/tests/workflow-wiring.test.mjs` | A2 | **new** — the four assertions over parsed `verify.yml` |
+| `scripts/tests/workflow-wiring.test.mjs` | A2 | **new** — the five assertions over parsed `verify.yml` (four wiring + coverage parity) |
 | `scripts/lib/module-graph.mjs` | B | **new** — AST extract, resolve, `check-ignore` classify, transitive walk |
 | `scripts/tests/module-graph.test.mjs` | B | **new** — synthetic-fixture unit tests incl. M17 |
 | `.github/workflows/verify.yml` | A1, A2 | scope detection + per-step gating |
@@ -1133,7 +1133,7 @@ git commit -m "feat(ops): gate every verify leg on the derived scope map"
 
 ---
 
-### Task 8: The four wiring assertions
+### Task 8: The five wiring assertions
 
 **Files:**
 - Create: `scripts/tests/workflow-wiring.test.mjs`
@@ -1348,7 +1348,7 @@ const PROBE_CORPUS = [
 ];
 
 test('coverage parity: no derived condition silently narrows a leg', () => {
-  const accepted = new Set(ACCEPTED_NARROWINGS.map(([s, p]) => `${s} ${p}`));
+  const accepted = new Set(ACCEPTED_NARROWINGS.map(([s, p]) => `${s}\u0000${p}`));
   const regressions = [];
 
   for (const [stepName, legacyScopes] of Object.entries(LEGACY_GATES)) {
@@ -1365,7 +1365,7 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
       const ranBefore = legacyScopes.some((s) => LEGACY_MATCHERS[s].test(path));
       const scopes = computeScopes([path], { eventName: 'pull_request' });
       const runsNow = derivedKeys.some((k) => scopes[k]);
-      if (ranBefore && !runsNow && !accepted.has(`${stepName} ${path}`)) {
+      if (ranBefore && !runsNow && !accepted.has(`${stepName}\u0000${path}`)) {
         regressions.push(`${stepName} no longer runs for ${path}`);
       }
     }
