@@ -11,9 +11,7 @@
 // One json output makes that map a single static line.
 
 import { pathToFileURL } from 'node:url';
-import { STEPS, stepTouchedByDiff, computeShared, _internals } from './verify-cache.mjs';
-
-const { toPosix } = _internals;
+import { STEPS, stepTouchedByDiff, computeShared } from './verify-cache.mjs';
 
 export function slugFor(stepName) {
   return `step_${stepName.replace(/[:-]/g, '_')}`;
@@ -36,22 +34,16 @@ export function computeScopes(files, { eventName } = {}) {
     return Object.fromEntries(keys.map((k) => [k, true]));
   }
 
-  // Normalise before any glob/equality comparison — stepTouchedByDiff and
-  // computeShared assume POSIX input (see branchDiffFiles' own toPosix
-  // mapping in verify-cache.mjs); an un-normalised backslash path would
-  // silently fail to match every glob and every `===` check.
-  const posixFiles = files.map(toPosix);
-
-  const shared = computeShared(posixFiles);
+  const shared = computeShared(files);
   const scopes = {};
   for (const step of STEPS) {
     // `shared` is a disjunct on EVERY step: stepTouchedByDiff has a lockfile
     // branch for server/package-lock.json only — a ROOT lockfile diff touches
     // zero steps, so without this a dependency bump would run nothing.
-    scopes[slugFor(step.name)] = shared || stepTouchedByDiff(step, posixFiles);
+    scopes[slugFor(step.name)] = shared || stepTouchedByDiff(step, files);
   }
   for (const [key, fn] of Object.entries(CI_ONLY)) {
-    scopes[key] = key === 'shared' ? shared : shared || fn(posixFiles);
+    scopes[key] = key === 'shared' ? shared : shared || fn(files);
   }
   return scopes;
 }
