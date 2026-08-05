@@ -1413,14 +1413,31 @@ to sweep the **whole** 20-book workspace at once.
 > trust that line.
 >
 > **Revision-sensitive:** the numbers above are against the **pre-#2102** global
-> cache gate. Once #2102 lands, `books missing analysis-cache evidence` is
-> expected to read **1** (*Unlocked* has a cache that parses and names nobody) and
-> a new `books with an auto-record withheld: 0` becomes the line that actually
-> gates `--apply`. Note for the record that *Unlocked* is not "nothing to
+> cache gate. **#2102 has since landed**: `books missing analysis-cache evidence`
+> now reads **1** (*Unlocked* has a cache that parses and names nobody) and
+> `books with an auto-record withheld: 0` is the line that actually gates
+> `--apply` (see the current dry-run figures below, which already reflect
+> post-#2102 code). Note for the record that *Unlocked* is not "nothing to
 > repair" — it carries **34 orphaned segments** across ch63/ch67 under
 > `unknown-male`; what makes withholding safe there is that a reserved
 > fold-bucket **source** is never auto-recorded regardless of evidence, which
 > fires before the ambiguity veto matters at all.
+>
+> **Further revision, #2092/#2089 Task 9 (pair-scoped reject filter):** the
+> `--apply` run recorded above predates this fix and involved zero rejected
+> pairs — no book in the real workspace has ever had a `rejectedPairs` (or
+> even legacy id-wide `rejected`) entry, since the Cast-screen "Not the same
+> character" action had not shipped to a real run of the app yet. None of the
+> auto-record/report-only/skipped figures above change as a result of this
+> fix. What changes going forward: the repair script's own skip used to be
+> id-wide (any rejection anywhere blocked that id from ever auto-recording
+> again); it is now pair-scoped, so a reject against one candidate no longer
+> withholds a DIFFERENT, later candidate for the same orphaned id. This only
+> has real bite once a real book has an actual rejected pair on disk — a
+> future `--apply` run against a workspace with a live rejection should be
+> spot-checked against this row's own "3 aliases / 93 reported / 17 re-render
+> rows" baseline to confirm a since-corrected reject doesn't reappear as
+> withheld.
 
 Every number below comes from the pass's dry-run mode, which writes
 nothing. No automated test can substitute for the real run: the pure helpers
