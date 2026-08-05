@@ -94,6 +94,30 @@ export const STEPS = [
         // install-qwen3-base17.test.mjs and install-qwen3-flash-attn.test.mjs
         // both import it (ops-18, #2115).
         'server/tts-sidecar/scripts/install-qwen3.mjs',
+        // pip-constraints.mjs is a DIRECT import of install-qwen3.mjs itself
+        // (which this PR hand-added above) — install-qwen3.test.mjs's two
+        // dependents (install-qwen3-base17.test.mjs,
+        // install-qwen3-flash-attn.test.mjs) reach it transitively via that
+        // edge. No dedicated test imports it directly, so without this entry
+        // a pip-constraints.mjs-only diff prints [cached] and both tests sit
+        // stale-green (ops-17c review, #2115).
+        'server/tts-sidecar/scripts/pip-constraints.mjs',
+        // pinokio.js sits at the repo root, outside scripts/**, so the
+        // widened glob above doesn't reach it — pinokio-entry.test.mjs loads
+        // it via createRequire + require('../../pinokio.js') (reproducing
+        // Pinokio's own CJS kernel loader), which is a genuine direct import
+        // edge the guard's `require()`-blind regex previously missed
+        // (ops-17c review, #2115).
+        'pinokio.js',
+        // eslint.config.mjs is a RUNTIME/subprocess dependency, not a module
+        // import: eslint-guardrail.test.mjs spawns `npx eslint` against this
+        // real file to prove a planted violation is rejected. No
+        // module-graph edge exists, so without this entry an
+        // eslint.config.mjs-only diff (e.g. deleting the guarded rule)
+        // prints [cached] here — only the separate `lint` step re-runs,
+        // which proves nothing about the guardrail test itself
+        // (ops-17c review, #2115).
+        'eslint.config.mjs',
       ],
       includeLockfiles: ['root'],
     },

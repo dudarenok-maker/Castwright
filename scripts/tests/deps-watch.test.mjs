@@ -335,12 +335,18 @@ test('publish: no transition -> exactly one call, and it is the sticky write (no
     gh,
     repo: 'o/r',
     issue: '790',
-    existing: null,
+    // existing is non-null so the sticky write is a PATCH to a comment-id
+    // path — structurally distinct from a transition POST to the issue's
+    // comments collection, not just distinguishable by payload (ops-17c
+    // review, #2115: with existing: null this test's own sticky POST hits
+    // the SAME path a transition POST would, so "it is the sticky write"
+    // was only provable by inspecting the body).
+    existing: { id: 42 },
     stickyBody: 'sticky-body',
     transitionComment: null,
   });
   assert.equal(gh.calls.length, 1);
-  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=sticky-body']);
+  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
 });
 
 test('publish: the sticky write throws -> the transition POST already happened (accepted duplicate-risk trade)', () => {
