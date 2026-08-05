@@ -4563,7 +4563,17 @@ function rejectedOrphanPairKey(args: RejectOrphanMatchArgs): string {
   return JSON.stringify([args.bookId, args.characterId, args.orphanedId]);
 }
 
-async function mockRejectOrphanMatch(
+/** Review round 2 "Also fix" — `mockRejectedOrphanPairs` is module-level and
+    was never resettable, so two tests in one file (or one test calling
+    reject/undo more than once with the same tuple) would see cross-test
+    leakage. Same `_resetMock*` convention as `_resetMockListenStats`/
+    `_resetMockAppInfo`/`_resetMockScriptReviewInFlight` elsewhere in this
+    file — call from a test's `beforeEach`. */
+export function _resetMockRejectedOrphanPairs(): void {
+  mockRejectedOrphanPairs.clear();
+}
+
+export async function mockRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<RejectOrphanMatchResponse> {
   await wait(80);
@@ -4620,7 +4630,7 @@ async function realUndoRejectOrphanMatch(
   return res.json();
 }
 
-async function mockUndoRejectOrphanMatch(
+export async function mockUndoRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<UndoRejectOrphanMatchResponse> {
   await wait(80);

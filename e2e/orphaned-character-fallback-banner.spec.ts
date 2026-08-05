@@ -168,12 +168,16 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     await expect(row.getByRole('button', { name: /undo/i })).toBeVisible();
   });
 
-  /* Mock mode's undoRejectOrphanMatch always echoes back the `characterId`
-     it was called with as `resolvedCharacterId` (with `resolution:
-     'history'`, collapsing to 'alias' in the frontend's own banner
-     taxonomy) — the common/lossless real-server case, and exactly what
-     restores 'mayrin' to auto-reconciled → 'narrator' here, since that's
-     the same target the reject below used. */
+  /* Mock mode's undoRejectOrphanMatch (M5, review round 2 — now honest
+     about `wasRejected` per-session, tracking real reject/undo state
+     instead of always claiming success) echoes back the `characterId` it
+     was called with as `resolvedCharacterId` (with `resolution: 'history'`,
+     collapsing to 'alias' in the frontend's own banner taxonomy) — the
+     common/lossless real-server case — ONLY when the SAME
+     (bookId, characterId, orphanedId) tuple was actually rejected first,
+     which the reject below does, and exactly what restores 'mayrin' to
+     auto-reconciled → 'narrator' here, since that's the same target the
+     reject used. */
   test('clicking Undo on a rejected row removes the chip and returns an auto-reconciled row to its section', async ({
     page,
   }) => {

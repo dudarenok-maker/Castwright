@@ -32,6 +32,9 @@ import {
   mockGetSidecarHealth,
   parseSubstagePhaseEvent,
   type LedgerEntryDTO,
+  mockRejectOrphanMatch,
+  mockUndoRejectOrphanMatch,
+  _resetMockRejectedOrphanPairs,
   api,
 } from './api';
 
@@ -841,5 +844,58 @@ describe('mockGetSidecarHealth', () => {
   it('reports whisperPackageInstalled: true', async () => {
     const health = await mockGetSidecarHealth();
     expect(health.whisperPackageInstalled).toBe(true);
+  });
+});
+
+describe('mockRejectOrphanMatch / mockUndoRejectOrphanMatch (#2092/#2089 M5, review round 2 — the honest branch had no test)', () => {
+  const args = { bookId: 'book-1', characterId: 'mairin', orphanedId: 'mayrin' };
+
+  beforeEach(() => {
+    _resetMockRejectedOrphanPairs();
+  });
+
+  it('undo without a prior reject is an honest no-op — wasRejected: false, resolution: null', async () => {
+    // This is the branch the finding named as untested: cast.test.tsx stubs
+    // the client wholesale and the e2e always rejects first, so nothing
+    // exercised the mock claiming FAILURE honestly before this test.
+    const res = await mockUndoRejectOrphanMatch(args);
+    expect(res).toEqual({
+      characterId: 'mairin',
+      orphanedId: 'mayrin',
+      wasRejected: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+    });
+  });
+
+  it('reject then undo the SAME pair is honest — wasRejected: true', async () => {
+    await mockRejectOrphanMatch(args);
+    const res = await mockUndoRejectOrphanMatch(args);
+    expect(res.wasRejected).toBe(true);
+    expect(res.resolution).toBe('history');
+    expect(res.resolvedCharacterId).toBe('mairin');
+  });
+
+  it('a SECOND undo of the same pair (already undone) reverts to the honest no-op', async () => {
+    await mockRejectOrphanMatch(args);
+    await mockUndoRejectOrphanMatch(args);
+    const second = await mockUndoRejectOrphanMatch(args);
+    expect(second.wasRejected).toBe(false);
+  });
+
+  it('undo does not cross-contaminate a DIFFERENT (bookId, characterId, orphanedId) tuple', async () => {
+    await mockRejectOrphanMatch(args);
+    const other = await mockUndoRejectOrphanMatch({ ...args, orphanedId: 'someone-else' });
+    expect(other.wasRejected).toBe(false);
+    // The original pair is still rejected — untouched by the unrelated undo.
+    const undoOriginal = await mockUndoRejectOrphanMatch(args);
+    expect(undoOriginal.wasRejected).toBe(true);
+  });
+
+  it('_resetMockRejectedOrphanPairs clears state between tests — a reject in one test does not leak into the next', async () => {
+    await mockRejectOrphanMatch(args);
+    _resetMockRejectedOrphanPairs();
+    const res = await mockUndoRejectOrphanMatch(args);
+    expect(res.wasRejected).toBe(false);
   });
 });
