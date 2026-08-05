@@ -494,6 +494,221 @@ const ACCEPTED_NARROWINGS = [
     'tailwind.config.ts',
     "file does not exist in this repository -- same as Typecheck/tailwind.config.ts above; openapi:types's own condition includes step_test for the same reason as the Frontend tests + a11y entry directly above, and openapi-typescript never reads tailwind.config.ts regardless",
   ],
+
+  // F1 (2026-08-06 whole-branch review) -- the meta-assertion below closes
+  // the recurring "matcher/gate/corpus incomplete" class by requiring every
+  // LEGACY_MATCHERS alternative to be exercised by PROBE_CORPUS. Widening the
+  // corpus to satisfy it surfaces the following, each independently verified
+  // (grep/read of the real source, not assumed) rather than reused on a
+  // frequency argument.
+
+  // Bucket 1: tsconfig.node.json and postcss.config.js are BOTH absent from
+  // this repository (confirmed via `ls`/`git ls-files` -- not merely
+  // untracked, genuinely not on disk), the same inert class as the
+  // already-accepted tailwind.config.ts rows above. Lint is missing from
+  // the postcss.config.js set because its glob (**/*.{ts,tsx,js,jsx,cjs,mjs})
+  // already matches a `.js` path, so that pair isn't a narrowing at all.
+  [
+    'Lint',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- confirmed absent from disk, not merely untracked. This literal path can never appear in a real diff',
+  ],
+  [
+    'Typecheck',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'Typecheck',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+  [
+    'Frontend tests + a11y',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'Frontend tests + a11y',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+  [
+    'E2E (chromium)',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'E2E (chromium)',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+  [
+    'E2E visual baselines (chromium)',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'E2E visual baselines (chromium)',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+  [
+    'Build',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'Build',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+  [
+    'OpenAPI types up to date',
+    'tsconfig.node.json',
+    'file does not exist in this repository -- same as Lint/tsconfig.node.json above',
+  ],
+  [
+    'OpenAPI types up to date',
+    'postcss.config.js',
+    'file does not exist in this repository -- same as Typecheck/tailwind.config.ts above',
+  ],
+
+  // Bucket 2: server/vitest.config(.slow).ts and server/scripts/sync-env-example.ts
+  // are outside both tsconfigs' `include` -- verified by reading the files
+  // directly: server/tsconfig.json's include is exactly ["src/**/*"], and the
+  // root tsconfig.json's is exactly ["src", "vite.config.ts", "vitest.config.ts"]
+  // (the ROOT vitest.config.ts, not server's). Neither `tsc` invocation
+  // (`npm run typecheck` = `tsc --noEmit && npm --prefix server run
+  // typecheck`, the latter `tsc --noEmit -p .`) compiles any of these three
+  // files, and `npm run build` (`tsc -b && vite build && ...`) doesn't either
+  // -- vite's entry graph is index.html -> src/**, server/src/** is compiled
+  // separately by tsc -p ., and none of the three live under server/src/**.
+  // Their real consumers keep running: server/vitest.config(.slow).ts is read
+  // by the `test:server`/`test:server-slow` runner invocations directly
+  // (already covered elsewhere), and sync-env-example.ts is executed
+  // (not compiled) by `config:check` via `npx tsx`, whose own extraFiles
+  // entry already covers it.
+  [
+    'Typecheck',
+    'server/vitest.config.ts',
+    "server/tsconfig.json's include is [\"src/**/*\"] and the root's is [\"src\",\"vite.config.ts\",\"vitest.config.ts\"] (the root vitest.config.ts, not server's) -- neither tsc invocation compiles this file",
+  ],
+  [
+    'Typecheck',
+    'server/vitest.config.slow.ts',
+    'same reasoning as Typecheck/server/vitest.config.ts above',
+  ],
+  [
+    'Typecheck',
+    'server/scripts/sync-env-example.ts',
+    "sits outside both tsconfigs' include (same reasoning as Typecheck/server/vitest.config.ts above); it is executed at runtime by `npx tsx` (config:check), never compiled by tsc",
+  ],
+  [
+    'Build',
+    'server/vitest.config.ts',
+    "vite build's entry graph is index.html -> src/**; server/src/** is compiled separately by `tsc -p .`. server/vitest.config.ts sits outside both, same reasoning as Typecheck/server/vitest.config.ts above",
+  ],
+  [
+    'Build',
+    'server/vitest.config.slow.ts',
+    'same reasoning as Build/server/vitest.config.ts above',
+  ],
+  [
+    'Build',
+    'server/scripts/sync-env-example.ts',
+    'same reasoning as Build/server/vitest.config.ts above; also executed at runtime by config:check via `npx tsx`, never bundled or compiled',
+  ],
+
+  // Bucket 3: server/.env.example's only real reader is `config:check`
+  // (`npx tsx server/scripts/sync-env-example.ts --check`, verified by
+  // reading the script: it reads server/.env.example directly and imports
+  // ../src/config/env-example.js) -- and Config check's own derived
+  // condition already covers this path (it is not among the narrowings
+  // below), so no coverage is actually lost by these four steps narrowing.
+  // server/src/config/env-example.test.ts (the one server test with
+  // ".env.example" in its describe block) was checked directly: it asserts
+  // against renderManagedBlock()'s output, never reads server/.env.example
+  // from disk.
+  [
+    'Lint',
+    'server/.env.example',
+    "server/.env.example's only real reader is config:check (verified: tsx server/scripts/sync-env-example.ts --check), which is unaffected by ESLint's ruleset and vice versa -- ESLint has no target for this file at all",
+  ],
+  [
+    'Typecheck',
+    'server/.env.example',
+    "same reasoning as Lint/server/.env.example above; also not part of any tsconfig's include",
+  ],
+  [
+    'Server tests (fast + slow)',
+    'server/.env.example',
+    "server/src/config/env-example.test.ts (the one server test referencing '.env.example') asserts against renderManagedBlock()'s output and never reads server/.env.example from disk (verified by reading the test) -- the real drift check is config:check, whose own derived condition already covers this path",
+  ],
+  [
+    'Build',
+    'server/.env.example',
+    'same reasoning as Lint/server/.env.example above; the built bundle never embeds this file',
+  ],
+
+  // Bucket 4: reuses reasons already accepted verbatim elsewhere in this file
+  // for the same "tool doesn't process this filetype" / "unrelated file
+  // cannot affect this narrow step's outcome" shapes.
+  [
+    'Lint',
+    'server/tsconfig.json',
+    'ESLint has no JSON target in eslint.config.mjs (verified by grep) -- same reasoning as Lint/server/package.json above',
+  ],
+  [
+    'Lint',
+    'server/package-lock.json',
+    'ESLint has no JSON target in eslint.config.mjs (verified by grep) -- same reasoning as Lint/server/package.json above',
+  ],
+  [
+    'Config check',
+    'server/tsconfig.json',
+    'config:check validates .env.example against the config registry (server/src/config/*.ts) via server/scripts/sync-env-example.ts -- an arbitrary unrelated server file cannot affect its outcome, same shape as Config check/server/src/tts/mp3.ts above',
+  ],
+  [
+    'Config check',
+    'server/vitest.config.ts',
+    'same reasoning as Config check/server/tsconfig.json above',
+  ],
+  [
+    'Config check',
+    'server/vitest.config.slow.ts',
+    'same reasoning as Config check/server/tsconfig.json above',
+  ],
+  [
+    'Config check',
+    'server/package-lock.json',
+    'config:check does not carry includeLockfiles and never reads package manifests -- same reasoning as Config check/server/tsconfig.json above, extended to the lockfile',
+  ],
+  [
+    'PowerShell-helper tests (Pester)',
+    'scripts/run-hooks-tests.mjs',
+    'Pester covers scripts/lib/*.ps1 (+ the fixtures dir) only -- same reasoning as PowerShell-helper tests (Pester)/scripts/ci-scope.mjs above: an unrelated .mjs change cannot affect it',
+  ],
+  [
+    'PowerShell-helper tests (Pester)',
+    'scripts/validate-commit-msg.mjs',
+    'same reasoning as PowerShell-helper tests (Pester)/scripts/run-hooks-tests.mjs above',
+  ],
+  [
+    'PowerShell-helper tests (Pester)',
+    'scripts/release-notes-gate.mjs',
+    'same reasoning as PowerShell-helper tests (Pester)/scripts/run-hooks-tests.mjs above',
+  ],
+  [
+    'PowerShell-helper tests (Pester)',
+    'scripts/run-pinokio-tests.mjs',
+    'same reasoning as PowerShell-helper tests (Pester)/scripts/run-hooks-tests.mjs above',
+  ],
+  [
+    'Server tests (fast + slow)',
+    'server/scripts/sync-env-example.ts',
+    "grepped server/src for 'sync-env-example' and found no reference -- no server test imports this script. It is config:check's own entry point, whose derived condition already covers this path",
+  ],
 ];
 
 const PROBE_CORPUS = [
@@ -522,7 +737,123 @@ const PROBE_CORPUS = [
   'scripts/repair-cast-id-drift.mjs',
   'RELEASE_NOTES.md',
   'docs/release-notes-next.md',
+
+  // F1 (2026-08-06 whole-branch review) -- one representative path per
+  // LEGACY_MATCHERS alternative the corpus above didn't already exercise.
+  // The meta-assertion below fails closed on the next matcher that grows an
+  // alternative this corpus doesn't probe.
+  'tsconfig.node.json',
+  'postcss.config.js',
+  'server/tsconfig.json',
+  'server/vitest.config.ts',
+  'server/vitest.config.slow.ts',
+  'server/.env.example',
+  'server/scripts/sync-env-example.ts',
+  'scripts/run-hooks-tests.mjs',
+  'scripts/validate-commit-msg.mjs',
+  'scripts/release-notes-gate.mjs',
+  'docs/testing/onbox-acceptance-register.md',
+  'docs/testing/onbox-acceptance-register-live-view.html',
+  'scripts/run-pinokio-tests.mjs',
+  'package.json',
+  'package-lock.json',
+  'server/package-lock.json',
 ];
+
+// Splits a LEGACY_MATCHERS regex into its top-level alternatives -- the
+// alternation immediately inside the anchored `^(...)` group, NOT any nested
+// group inside an individual alternative (e.g. `eslint\.config\.(js|mjs)$`'s
+// inner (js|mjs) stays one alternative; one corpus path covering either
+// branch is enough). A matcher with no top-level group (e.g. `^scripts\/`) is
+// itself a single alternative.
+//
+// Self-verifying: reassembling the split parts must reproduce the original
+// regex source byte-for-byte, or this throws rather than silently returning
+// a partial/wrong split -- a meta-assertion that quietly skipped what it
+// couldn't parse would be the very defect this test exists to prevent.
+function topLevelAlternatives(matcherName, re) {
+  const src = re.source;
+  if (!src.startsWith('^')) {
+    throw new Error(`LEGACY_MATCHERS.${matcherName} is not anchored at ^: ${src}`);
+  }
+  const body = src.slice(1);
+  if (!body.startsWith('(')) {
+    return [`^${body}`];
+  }
+  let depth = 0;
+  let closeIdx = -1;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) {
+        closeIdx = i;
+        break;
+      }
+    }
+  }
+  if (closeIdx === -1) {
+    throw new Error(`LEGACY_MATCHERS.${matcherName}: unbalanced group, cannot split: ${src}`);
+  }
+  const interior = body.slice(1, closeIdx);
+  const suffix = body.slice(closeIdx + 1);
+
+  const parts = [];
+  let groupDepth = 0;
+  let cur = '';
+  for (let i = 0; i < interior.length; i++) {
+    const c = interior[i];
+    if (c === '\\') {
+      cur += c + (interior[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (c === '(') groupDepth++;
+    if (c === ')') groupDepth--;
+    if (c === '|' && groupDepth === 0) {
+      parts.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+
+  const reassembled = `^(${parts.join('|')})${suffix}`;
+  if (reassembled !== src) {
+    throw new Error(
+      `LEGACY_MATCHERS.${matcherName}: mechanical top-level split did not reproduce the ` +
+        `source (got "${reassembled}", want "${src}") -- this matcher's shape defeats a ` +
+        `mechanical split; restructure LEGACY_MATCHERS to carry its alternatives as data`,
+    );
+  }
+  return parts.map((p) => `^${p}${suffix}`);
+}
+
+test('meta: every LEGACY_MATCHERS alternative is probed by at least one PROBE_CORPUS path', () => {
+  const unprobed = [];
+  for (const [name, re] of Object.entries(LEGACY_MATCHERS)) {
+    // Throws (failing this test) rather than skipping if a matcher's shape
+    // defeats the mechanical split -- see topLevelAlternatives' self-check.
+    for (const altSource of topLevelAlternatives(name, re)) {
+      const altRe = new RegExp(altSource);
+      if (!PROBE_CORPUS.some((p) => altRe.test(p))) {
+        unprobed.push(`${name}: ${altSource}`);
+      }
+    }
+  }
+  assert.deepEqual(
+    unprobed,
+    [],
+    `LEGACY_MATCHERS alternative(s) with no PROBE_CORPUS path exercising them ` +
+      `(the parity test below can never see a regression on these):\n${unprobed.join('\n')}`,
+  );
+});
 
 test('every ACCEPTED_NARROWINGS entry carries a non-empty reason', () => {
   const blank = ACCEPTED_NARROWINGS.filter(
