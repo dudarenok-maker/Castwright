@@ -606,6 +606,66 @@ describe('cast id history', () => {
       await retireCharacterId(dir, 'the-torment', 'lightning-dave');
       expect((await loadCastIdHistory(dir)).rejected).toEqual(['the-torment']);
     });
+
+    it('M1 (review round 1): dedupes when a repoint makes two PREVIOUSLY-distinct pairs collide', async () => {
+      // 'mayrin' rejected against BOTH 'mairin' and 'mairin-final' — two
+      // separate, valid pairs at the time each was recorded.
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin-final');
+      // Now 'mairin' itself retires into 'mairin-final' — the first pair's
+      // `to` repoints onto 'mairin-final', colliding with the second.
+      await retireCharacterId(dir, 'mairin', 'mairin-final');
+      const pairs = (await loadCastIdHistory(dir)).rejectedPairs;
+      // Exactly ONE surviving entry, not two identical ones (which would
+      // render two identical banner chips and make a second Undo click
+      // look like it did nothing, per findIndex+splice only removing one).
+      expect(pairs).toEqual([{ from: 'mayrin', to: 'mairin-final' }]);
+    });
+
+    it('M1: the first-recorded pair wins the dedupe (mirrors rejectOrphanedPair\'s own "first write wins" idempotence)', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'first-stash');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin-final');
+      await retireCharacterId(dir, 'mairin', 'mairin-final');
+      const pairs = (await loadCastIdHistory(dir)).rejectedPairs;
+      expect(pairs).toEqual([
+        { from: 'mayrin', to: 'mairin-final', forgotSupersededTo: 'first-stash' },
+      ]);
+    });
+
+    it('M2 (review round 1): retireCharacterId RETURNS a dropped self-loop pair rather than silently discarding it', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const result = await retireCharacterId(dir, 'mairin', 'mayrin');
+      expect(result.droppedSelfLoopRejections).toEqual([{ from: 'mayrin', to: 'mayrin' }]);
+    });
+
+    it('M2: droppedSelfLoopRejections is empty when nothing was dropped', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const result = await retireCharacterId(dir, 'mairin', 'mairin-final');
+      expect(result.droppedSelfLoopRejections).toEqual([]);
+    });
+
+    it('M2: droppedSelfLoopRejections is empty on every no-op early return (from === to, or a dead self-entry)', async () => {
+      const noop1 = await retireCharacterId(dir, 'mairin', 'mairin');
+      expect(noop1.droppedSelfLoopRejections).toEqual([]);
+    });
+
+    it('M3 (review round 1): forgotSupersededTo is repointed independently of `to`, when it points at the retiring id', async () => {
+      // 'mayrin' was rejected against 'timkin' — unrelated to this retirement
+      // — but its STASHED alias ('antique-id') is the id about to retire.
+      await rejectOrphanedPair(dir, 'mayrin', 'timkin', 'antique-id');
+      await retireCharacterId(dir, 'antique-id', 'antique-id-final');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'timkin', forgotSupersededTo: 'antique-id-final' },
+      ]);
+    });
+
+    it('M3: forgotSupersededTo is left alone when it does not point at the retiring id', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'timkin', 'unrelated-stash');
+      await retireCharacterId(dir, 'someone-else', 'someone-else-final');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'timkin', forgotSupersededTo: 'unrelated-stash' },
+      ]);
+    });
   });
 
   /* Wave 2 final-review finding 1(b) — the recording-boundary half of the

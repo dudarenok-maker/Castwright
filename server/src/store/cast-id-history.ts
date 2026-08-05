@@ -192,29 +192,82 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
  *  a genuine user decision for no reason tied to that decision itself,
  *  purely because of bookkeeping happening on the OTHER id it references.
  *
- *  Degenerate case: if `newTarget === pair.from` (the retiring id's live
- *  replacement is itself the pair's `from` id — a person's canonical id
- *  became the very id that was rejected as "not them"), the entry is
- *  dropped rather than written as a self-referencing `{from: X, to: X}`
- *  pair — mirroring `retireCharacterId`'s own "never write a self-entry"
- *  guard below for `supersededBy`. It would never fire at read time anyway
- *  (`buildCastResolver` checks `exact` before any rejected pair), but
- *  leaving a nonsensical pair on disk serves nothing. */
-function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: string): void {
-  if (!history.rejectedPairs?.length) return;
-  history.rejectedPairs = history.rejectedPairs
-    .map((pair) => (pair.to === from ? { ...pair, to: newTarget } : pair))
-    .filter((pair) => pair.from !== pair.to);
+ *  Degenerate case (M2, review round 1): if `newTarget === pair.from` (the
+ *  retiring id's live replacement is itself the pair's `from` id — a
+ *  person's canonical id became the very id that was rejected as "not
+ *  them"), the entry is dropped rather than written as a self-referencing
+ *  `{from: X, to: X}` pair — mirroring `retireCharacterId`'s own "never
+ *  write a self-entry" guard below for `supersededBy`. It would never fire
+ *  at read time anyway (`buildCastResolver` checks `exact` before any
+ *  rejected pair), but leaving a nonsensical pair on disk serves nothing.
+ *  Dropped entries are RETURNED, not merely discarded: this module never
+ *  touches `cast.json`, so it cannot itself remove the one-sided
+ *  `notLinkedTo` edge the original reject wrote there — a caller with
+ *  `cast.json` access is what would need to act on this, if one ever needs
+ *  to (no current caller of `retireCharacterId` does).
+ *
+ *  M1 (review round 1): repointing can make two PREVIOUSLY-distinct pairs
+ *  collide onto the same `(from, to)` — reject X against both Y and Y'
+ *  (two separate pairs), then retire Y into Y': the first pair's `to`
+ *  repoints from Y onto Y', colliding with the second, already-existing
+ *  `{from: X, to: Y'}` pair. Deduped by `(from, to)` after repointing,
+ *  keeping the first-encountered entry — the same "first write wins"
+ *  idempotence `rejectOrphanedPair` itself already applies to a literal
+ *  double-reject. Without this, the banner would render two identical
+ *  chips (a React duplicate-key warning, since the chip list keys on
+ *  `targetId`) and `unrejectOrphanedPair`'s `findIndex`+splice would only
+ *  ever remove one, making a second Undo click look like it did nothing.
+ *
+ *  M3 (review round 1): `forgotSupersededTo` is just another stored id
+ *  reference — independent of `pair.to`, but equally capable of pointing
+ *  at the id currently retiring (e.g. `from` was rejected against `to`,
+ *  but `from` ALSO used to alias via `supersededBy` to the very id that is
+ *  now retiring elsewhere). Repointed the same way `to` is, using the same
+ *  `from -> newTarget` substitution, so a later Undo restores the CURRENT
+ *  live alias rather than a dead intermediate id. */
+function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: string): RejectedPair[] {
+  if (!history.rejectedPairs?.length) return [];
+  const droppedSelfLoops: RejectedPair[] = [];
+  const seen = new Set<string>();
+  const next: RejectedPair[] = [];
+  for (const pair of history.rejectedPairs) {
+    const to = pair.to === from ? newTarget : pair.to;
+    const forgotSupersededTo = pair.forgotSupersededTo === from ? newTarget : pair.forgotSupersededTo;
+    const repointed: RejectedPair =
+      forgotSupersededTo === undefined ? { from: pair.from, to } : { from: pair.from, to, forgotSupersededTo };
+    if (repointed.from === repointed.to) {
+      droppedSelfLoops.push(repointed);
+      continue;
+    }
+    const key = JSON.stringify([repointed.from, repointed.to]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(repointed);
+  }
+  history.rejectedPairs = next;
+  return droppedSelfLoops;
+}
+
+/** #2092/#2089 M2 (review round 1) — self-loop `rejectedPairs` entries
+ *  `repointRejectedPairs` had to drop during this call, if any (see its own
+ *  doc comment). Every current caller ignores this (a purely additive
+ *  return, replacing the prior `Promise<void>`) — none of them manage
+ *  `cast.json`'s `notLinkedTo` edges, which is what a dropped pair's
+ *  original reject also wrote and this module has no access to clean up
+ *  itself. A future caller that DOES care can consume it; today this is
+ *  reported, not acted on further. */
+export interface RetireCharacterIdResult {
+  droppedSelfLoopRejections: RejectedPair[];
 }
 
 export async function retireCharacterId(
   bookDir: string,
   from: string,
   to: string,
-): Promise<void> {
+): Promise<RetireCharacterIdResult> {
   // No-op if from === to
   if (from === to) {
-    return;
+    return { droppedSelfLoopRejections: [] };
   }
 
   // Serialize writes per-book
@@ -243,9 +296,9 @@ export async function retireCharacterId(
         }
       }
       history.supersededBy[from] = to;
-      repointRejectedPairs(history, from, to);
+      const droppedSelfLoopRejections = repointRejectedPairs(history, from, to);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-      return;
+      return { droppedSelfLoopRejections };
     }
 
     // Dereference 'to' through any existing chain first, so the repoint
@@ -257,7 +310,7 @@ export async function retireCharacterId(
     // branch above already covers the only way resolvedTo can equal `from`,
     // but keep this as a defensive guard against future changes here.
     if (from === resolvedTo) {
-      return;
+      return { droppedSelfLoopRejections: [] };
     }
 
     // Find all keys that currently point to 'from' and update them to 'to'
@@ -270,10 +323,11 @@ export async function retireCharacterId(
     // Add/update the new mapping
     history.supersededBy[from] = resolvedTo;
 
-    repointRejectedPairs(history, from, resolvedTo);
+    const droppedSelfLoopRejections = repointRejectedPairs(history, from, resolvedTo);
 
     // Write back
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return { droppedSelfLoopRejections };
   });
 }
 
@@ -405,6 +459,55 @@ export async function forgetSupersededId(bookDir: string, id: string): Promise<s
     delete history.supersededBy[id];
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return removed;
+  });
+}
+
+/** Restore a single `supersededBy[id] = target` entry — the "undo forget"
+ *  primitive the reject-undo route needs (#2092/#2089, C1 fix round 1).
+ *  Unlike `retireCharacterId`, this does NOT repoint every entry whose
+ *  VALUE is `id` onto `target`, and — the defect this primitive exists to
+ *  close — it does NOT overwrite an existing `supersededBy[id]` entry that
+ *  already points somewhere else. Both of those are sound in
+ *  `retireCharacterId` only when `id` is genuinely dead, which an Undo can
+ *  no longer assume once a rejection is pair-scoped rather than id-wide.
+ *
+ *  Failure scenario this closes (C1): reject "mayrin is not Mairin" (the
+ *  pair stashes `forgotSupersededTo: 'mairin'`, the removed
+ *  `supersededBy['mayrin']`); a LATER, unrelated re-analysis records the
+ *  CORRECT alias `supersededBy['mayrin'] = 'mr-marrow'`; the user then
+ *  clicks the now-stale "Not Mairin" chip's Undo. Restoring with
+ *  `retireCharacterId(bookDir, 'mayrin', 'mairin')` would write
+ *  unconditionally, silently overwriting the correct `'mr-marrow'` alias
+ *  back to the stale `'mairin'` one, AND repoint anything that targeted
+ *  `'mayrin'` — reproducing #2040's own failure mode (a character's lines
+ *  ending up in someone else's voice) via the button labelled "Undo". This
+ *  primitive instead writes only when the key is absent — the ordinary
+ *  case, nothing has re-recorded an alias for `id` since the reject — and
+ *  otherwise leaves the newer entry alone and reports that it did, so the
+ *  caller can tell the user the alias was superseded rather than silently
+ *  restoring nothing (or the wrong thing).
+ *
+ *  Idempotent: if `supersededBy[id]` already equals `target` (a retried
+ *  DELETE after a prior successful restore), no write happens and
+ *  `restored: true` is still returned — the desired end state already
+ *  holds. */
+export async function restoreSupersededId(
+  bookDir: string,
+  id: string,
+  target: string,
+): Promise<{ restored: boolean; supersededByOther?: string }> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    const existing = history.supersededBy[id];
+    if (existing === target) {
+      return { restored: true };
+    }
+    if (existing !== undefined) {
+      return { restored: false, supersededByOther: existing };
+    }
+    history.supersededBy[id] = target;
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return { restored: true };
   });
 }
 
