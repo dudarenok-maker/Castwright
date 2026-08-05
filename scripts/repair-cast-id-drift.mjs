@@ -574,7 +574,21 @@ export function planBookRepairs(input, deps) {
   // the identical construction `collectSegmentOrphans` uses — so an omitted
   // `historyResolver` is a (redundant) optimisation for the production
   // path, never a silent correctness hole for any other caller.
-  const historyResolver = input.historyResolver ?? buildCastResolver(liveCast, history);
+  // Round 4 (independent review, 2026-08-05): this used to pass `history`
+  // straight through — but `planBookRepairs` treats a PARTIAL history as a
+  // supported shape (it defends `history.rejected ?? []` just above), while
+  // the real `buildCastResolver` does `Object.entries(history.supersededBy)`
+  // (`cast-resolve.ts`), which throws on `undefined`. The sibling
+  // construction in `collectSegmentOrphans` already defends both fields —
+  // this fallback now matches it exactly, so the two constructions of "the
+  // same resolver" can't disagree about what a valid `history` is. Latent
+  // today (production's `loadCastIdHistory` always returns the full shape,
+  // and every test that passes a partial `history` also passes the fake
+  // `deps.buildCastResolver`, which never reads `history` at all — see
+  // `makeFakeResolver`'s own doc comment) but a real resolver wired against
+  // a partial history would have crashed.
+  const historyResolver =
+    input.historyResolver ?? buildCastResolver(liveCast, { supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] });
 
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,

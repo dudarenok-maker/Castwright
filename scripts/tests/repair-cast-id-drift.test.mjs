@@ -542,6 +542,46 @@ describe('planBookRepairs', () => {
     assert.equal(plan.skipped[0].reason, 'already-recorded');
   });
 
+  test('Round 4 (independent review, 2026-08-05): a PARTIAL history (no supersededBy field), no historyResolver, and a real-shaped buildCastResolver dep does not throw', () => {
+    // planBookRepairs itself treats a partial history as a supported input
+    // shape — it defends `history.rejected ?? []` a few lines up, and
+    // roughly 110 of this file's tests pass `history: {}`. The real
+    // `buildCastResolver` (cast-resolve.ts) does
+    // `Object.entries(history.supersededBy)` with NO internal defense —
+    // TypeError on `undefined`. `planBookRepairs`'s own fallback
+    // construction (when `historyResolver` is omitted) used to pass
+    // `history` straight through, which would crash against a real
+    // resolver and a partial history — latent only because every test that
+    // passes a partial history also uses the fake `deps.buildCastResolver`
+    // (`makeFakeResolver`), which never reads `history` at all, and every
+    // test that uses a REAL-history-reading fake
+    // (`makeHistoryAwareFakeResolver`) defends `supersededBy` internally,
+    // so neither existing test double could have caught this.
+    // `buildRealShapedResolver` below is neither — it mirrors the real
+    // resolver's actual (undefended) construction line, so it genuinely
+    // throws if planBookRepairs ever hands it an `undefined`
+    // `supersededBy`.
+    const buildRealShapedResolver = (cast, hist) => {
+      const byId = new Map(cast.map((c) => [c.id, c]));
+      // The exact real-resolver line this mirrors (cast-resolve.ts): no
+      // `?? {}` defense — throws on a partial history if the caller didn't
+      // already normalise it.
+      for (const [, to] of Object.entries(hist.supersededBy)) void to;
+      return { resolve: (id) => (byId.has(id) ? { character: byId.get(id), via: 'exact' } : undefined) };
+    };
+    const localDeps = { ...deps, buildCastResolver: buildRealShapedResolver };
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    assert.doesNotThrow(() => {
+      const plan = planBookRepairs(
+        { liveCast, history: { rejected: [] }, cacheNameIndex, bakNameIndex: new Map(), orphans, cacheAvailable: true },
+        localDeps,
+      );
+      assert.equal(plan.autoRecord.length, 1);
+      assert.equal(plan.autoRecord[0].id, 'mayrin');
+    });
+  });
+
   test('an id whose NORMALISED form matches a supersededBy key — not an exact key — is ALSO skipped as already-recorded, not auto-recorded', () => {
     // #2107's widened fix (only 'exact' skips the orphan bucket) means an id
     // resolving via the resolver's 'normalised-history' tier now reaches
