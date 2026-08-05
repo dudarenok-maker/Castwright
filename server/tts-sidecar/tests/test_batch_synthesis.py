@@ -555,6 +555,34 @@ def test_route_rejects_non_qwen_engine(qwen_batch_runtime) -> None:
     assert "qwen-only" in resp.json()["detail"]
 
 
+def test_substituting_engines_cannot_batch(qwen_batch_runtime) -> None:
+    """#2033 (rescoped, 2026-08-05) — latent-gap guard, not a live bug.
+    `substituted_from` is set in exactly two places today:
+    `CoquiEngine._synthesize_claimed` and `KokoroEngine.synthesize`.
+    `QwenEngine.synthesize_batch` never sets it (deliberately — see
+    main.py:2422-2424) and `/synthesize-batch` is Qwen-only at the route
+    level (`test_route_rejects_non_qwen_engine` above pins THAT gate).
+
+    This test pins the gate one layer deeper, at the class itself: neither
+    `CoquiEngine` nor `KokoroEngine` — the only two engines that can ever
+    produce a substitution — exposes a `synthesize_batch` method at all, so
+    batching can't reach a substituting engine even if the route's
+    `engine_id != "qwen"` string check were ever loosened or bypassed. If
+    either engine grows one, this goes red before anything reaches the wire.
+
+    It also pins that the wire object itself has nowhere to put the signal:
+    `SynthBatchResult.__slots__` has no `substituted_from` (unlike
+    `SynthResult`, which does) — assigning one raises `AttributeError`
+    immediately rather than silently dropping it later at the response
+    frame."""
+    assert not hasattr(main.CoquiEngine, "synthesize_batch")
+    assert not hasattr(main.KokoroEngine, "synthesize_batch")
+    assert "substituted_from" not in main.SynthBatchResult.__slots__
+    result = main.SynthBatchResult([b""], 24000)
+    with pytest.raises(AttributeError):
+        result.substituted_from = "x"  # type: ignore[attr-defined]
+
+
 def test_route_validates_items(qwen_batch_runtime) -> None:
     client = TestClient(main.app)
     base = {"engine": "qwen", "model": "0.6b"}

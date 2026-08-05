@@ -113,6 +113,17 @@ export interface SynthesizeBatchInput {
   signal?: AbortSignal;
 }
 
+/** No `voiceSubstitutedFrom` here, unlike `SynthesizeOutput` — deliberate,
+    not an oversight (#2033, rescoped after premise check found no live
+    defect). Only `CoquiEngine._synthesize_claimed` and `KokoroEngine.synthesize`
+    (`server/tts-sidecar/main.py`) ever set `substituted_from`; batching is
+    Qwen-only (`isBatchable` in `synthesise-chapter.ts`, mirrored by the
+    sidecar's own `/synthesize-batch` engine gate), and `QwenEngine` never
+    substitutes. A per-item field here would carry a value that's structurally
+    always null. Guarded by `test_substituting_engines_cannot_batch`
+    (`server/tts-sidecar/tests/test_batch_synthesis.py`) — pins that neither
+    substituting engine can ever expose `synthesizeBatch`, so this stays true
+    rather than silently going stale. */
 export interface SynthesizeBatchOutput {
   /** One PCM blob per input item, SAME order. */
   pcms: Buffer[];
