@@ -555,32 +555,115 @@ def test_route_rejects_non_qwen_engine(qwen_batch_runtime) -> None:
     assert "qwen-only" in resp.json()["detail"]
 
 
-def test_substituting_engines_cannot_batch(qwen_batch_runtime) -> None:
+def _is_interface_stub(func: Any) -> bool:
+    """True if `func`'s body is exactly a bare `raise NotImplementedError`
+    (a docstring, if any, doesn't count) — the shape of `Engine.synthesize`'s
+    interface stub. Anything else (a real body, even one that still ends in
+    `raise NotImplementedError` after doing work) is NOT a stub."""
+    import ast
+    import inspect
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(func))
+    fn_def = ast.parse(src).body[0]
+    assert isinstance(fn_def, (ast.FunctionDef, ast.AsyncFunctionDef))
+    stmts = [
+        s
+        for s in fn_def.body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+    ]
+    return (
+        len(stmts) == 1
+        and isinstance(stmts[0], ast.Raise)
+        and isinstance(stmts[0].exc, ast.Name)
+        and stmts[0].exc.id == "NotImplementedError"
+    )
+
+
+def _has_usable_synthesize_batch(engine_cls: type) -> bool:
+    """`hasattr` alone walks the MRO, so it goes true the moment the shared
+    `Engine` base picks up a symmetric `synthesize_batch` interface stub
+    (an obvious, harmless completion of `Engine.synthesize`'s existing
+    stub) — a false positive with no substitution risk behind it. Treat a
+    method as unusable if it's absent OR it's just that stub; anything else
+    (a real inherited or overridden implementation) counts as usable."""
+    method = getattr(engine_cls, "synthesize_batch", None)
+    return method is not None and not _is_interface_stub(method)
+
+
+def test_substituting_engines_cannot_batch() -> None:
     """#2033 (rescoped, 2026-08-05) — latent-gap guard, not a live bug.
     `substituted_from` is set in exactly two places today:
     `CoquiEngine._synthesize_claimed` and `KokoroEngine.synthesize`.
-    `QwenEngine.synthesize_batch` never sets it (deliberately — see
-    main.py:2422-2424) and `/synthesize-batch` is Qwen-only at the route
-    level (`test_route_rejects_non_qwen_engine` above pins THAT gate).
+    `QwenEngine`'s five `SynthResult(...)` constructions (main.py:6206,
+    :6274, :6497, :6827, :6861) never set it, and `/synthesize-batch` is
+    Qwen-only at the route level (`test_route_rejects_non_qwen_engine` above
+    pins THAT gate). The other arm of this invariant — Qwen never setting
+    `substituted_from` in the first place — is pinned separately by
+    `test_qwen_engine_never_constructs_a_substituted_synth_result` below.
 
     This test pins the gate one layer deeper, at the class itself: neither
     `CoquiEngine` nor `KokoroEngine` — the only two engines that can ever
-    produce a substitution — exposes a `synthesize_batch` method at all, so
+    produce a substitution — exposes a USABLE `synthesize_batch` method, so
     batching can't reach a substituting engine even if the route's
     `engine_id != "qwen"` string check were ever loosened or bypassed. If
-    either engine grows one, this goes red before anything reaches the wire.
+    either engine grows a real one, this goes red before anything reaches
+    the wire. `_has_usable_synthesize_batch` deliberately does NOT use a bare
+    `hasattr` — see its docstring for the base-class-stub false positive
+    that would otherwise cause."""
+    assert not _has_usable_synthesize_batch(main.CoquiEngine)
+    assert not _has_usable_synthesize_batch(main.KokoroEngine)
 
-    It also pins that the wire object itself has nowhere to put the signal:
-    `SynthBatchResult.__slots__` has no `substituted_from` (unlike
-    `SynthResult`, which does) — assigning one raises `AttributeError`
-    immediately rather than silently dropping it later at the response
-    frame."""
-    assert not hasattr(main.CoquiEngine, "synthesize_batch")
-    assert not hasattr(main.KokoroEngine, "synthesize_batch")
-    assert "substituted_from" not in main.SynthBatchResult.__slots__
-    result = main.SynthBatchResult([b""], 24000)
-    with pytest.raises(AttributeError):
-        result.substituted_from = "x"  # type: ignore[attr-defined]
+
+def test_qwen_engine_never_constructs_a_substituted_synth_result() -> None:
+    """Arm B of the #2033 invariant. Arm A (above) covers a substituting
+    engine growing a batch entry point; this covers the other direction —
+    Qwen, the only engine that CAN batch, growing a substitution. Qwen is
+    the default generation engine, so this is the more likely arm, and it's
+    the one #2033 actually worried about: `SynthBatchResult` (unlike
+    `SynthResult`) has no `substituted_from` slot at all, so if
+    `QwenEngine.synthesize_batch` — or anything it calls into — ever set
+    one, the signal would have nowhere to go and would be dropped silently
+    rather than raising.
+
+    All five of `QwenEngine`'s `SynthResult(...)` constructions (main.py:6206,
+    :6274, :6497, :6827, :6861) leave `substituted_from` at its `None`
+    default today. Parse the class source and assert that stays true: no
+    call passes a `substituted_from` argument (positional or keyword) other
+    than the literal `None`. A future call passing anything else — a real
+    substitution, or even a variable whose value we can't prove is `None` —
+    goes red here, before it can reach `synthesize_batch`'s caller."""
+    import ast
+    import inspect
+
+    src_lines, start_line = inspect.getsourcelines(main.QwenEngine)
+    tree = ast.parse("".join(src_lines))
+    ast.increment_lineno(tree, start_line - 1)  # report REAL main.py line numbers
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "SynthResult"
+        ):
+            continue
+        # SynthResult.__init__(self, pcm, sample_rate, substituted_from=None)
+        # — 3rd positional OR the `substituted_from` keyword.
+        candidates = list(node.args[2:3]) + [
+            kw.value for kw in node.keywords if kw.arg == "substituted_from"
+        ]
+        for value in candidates:
+            if not (isinstance(value, ast.Constant) and value.value is None):
+                violations.append(f"main.py:{node.lineno}: {ast.dump(value)}")
+
+    assert not violations, (
+        "QwenEngine now constructs a SynthResult with a non-None "
+        "substituted_from:\n" + "\n".join(violations) + "\n"
+        "SynthBatchResult has no slot for this signal (unlike SynthResult) "
+        "— either add one (and a matching Node-side voiceSubstitutedFrom "
+        "field on SynthesizeBatchOutput) or this silently drops a real "
+        "substitution."
+    )
 
 
 def test_route_validates_items(qwen_batch_runtime) -> None:
