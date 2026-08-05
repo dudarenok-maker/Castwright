@@ -109,22 +109,42 @@ test('extractState parses the embedded JSON; empty/garbage -> {}', () => {
   assert.deepEqual(extractState('no marker here'), {});
 });
 
-test('computeTransitions: fires only on at-pin -> ahead', () => {
+test('computeTransitions: fires on at-pin -> ahead, and on first run for every currently-ahead plugin', () => {
   const status = [
-    { name: 'audio_session', ahead: true },
-    { name: 'mobile_scanner', ahead: true },
+    { name: 'audio_session', ahead: true, latest: '0.2.4' },
+    { name: 'mobile_scanner', ahead: true, latest: '7.3.0' },
   ];
-  // audio_session was already ahead last run; mobile_scanner just flipped.
-  const prior = { audio_session: { ahead: true }, mobile_scanner: { ahead: false } };
+  // audio_session was already ahead last run at the SAME latest; mobile_scanner just flipped.
+  const prior = { audio_session: { ahead: true, latest: '0.2.4' }, mobile_scanner: { ahead: false } };
   assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
   // empty prior (first run) -> every currently-ahead plugin transitions
   assert.deepEqual(computeTransitions(status, {}), ['audio_session', 'mobile_scanner']);
 });
 
-test('computeTransitions: ahead->ahead does NOT re-fire (transition fires once)', () => {
-  // The core A2 guarantee: a plugin already ahead last run must not re-spam #790.
-  const status = [{ name: 'audio_session', ahead: true }];
-  assert.deepEqual(computeTransitions(status, { audio_session: { ahead: true } }), []);
+test('computeTransitions: ahead->ahead with unchanged latest does NOT re-fire (no cron spam)', () => {
+  // The core no-re-spam guarantee (ops-17b, #2104): reshaped from an edge-detector
+  // on `ahead` to one on `latest` — same prior AND current latest -> [].
+  const status = [{ name: 'audio_session', ahead: true, latest: '0.3.0' }];
+  const prior = { audio_session: { ahead: true, latest: '0.3.0' } };
+  assert.deepEqual(computeTransitions(status, prior), []);
+});
+
+test('computeTransitions: fires on a genuine latest bump even though already ahead (ops-17b repro, #2104)', () => {
+  const status = [{ name: 'flutter_foreground_task', ahead: true, latest: '10.1.0' }];
+  const prior = { flutter_foreground_task: { ahead: true, latest: '10.0.0' } };
+  assert.deepEqual(computeTransitions(status, prior), ['flutter_foreground_task']);
+});
+
+test('computeTransitions: a downgrade (latest moves backwards) does not fire', () => {
+  const status = [{ name: 'mobile_scanner', ahead: true, latest: '10.0.0' }];
+  const prior = { mobile_scanner: { ahead: true, latest: '10.1.0' } };
+  assert.deepEqual(computeTransitions(status, prior), []);
+});
+
+test('computeTransitions: prior ahead:true with no usable latest fails loud (fires)', () => {
+  const status = [{ name: 'mobile_scanner', ahead: true, latest: '7.4.0' }];
+  const prior = { mobile_scanner: { ahead: true } }; // corrupt/legacy state: no `latest` recorded
+  assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
 });
 
 test('computeBehind: empty payload -> [] and exitCodeFor -> 0 (the green baseline)', () => {
@@ -237,4 +257,19 @@ test('renderTransitionComment: null when no transitions; @mention + recipe other
   assert.ok(md.includes('audio_session'));
   assert.ok(md.includes('0.3.0'));
   assert.ok(/flutter build apk --release/.test(md));
+});
+
+test('renderTransitionComment: recipe covers BOTH outcomes, and says the pin no longer arms the notification', () => {
+  // ops-17b (#2104): the old copy only told the operator what to do on success
+  // (bump pin / close #790), which trained them to leave the pin alone on a
+  // rejected release — permanently disarming the watchdog for that plugin.
+  const md = renderTransitionComment(['audio_session'], STATUS_AHEAD);
+  // success path intact: bump pin, drop escape-hatch flags + Trip-B assertion, close #790.
+  assert.ok(/bump the pin/i.test(md));
+  assert.ok(/escape-hatch flags/i.test(md));
+  assert.ok(/app\.yml.* Trip-B/i.test(md) || /Trip-B.*app\.yml/i.test(md));
+  assert.ok(/close #790/i.test(md));
+  // rejected-release path is now covered too, and states the pin isn't what re-arms it.
+  assert.ok(/still (there|applies)|warning is still|not gone/i.test(md));
+  assert.ok(/no longer (what arms|arms)|not what arms/i.test(md));
 });

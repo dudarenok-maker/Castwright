@@ -90,9 +90,29 @@ export function buildState(pluginStatus) {
   return state;
 }
 
-/** Plugins that are ahead now but were not ahead in the prior state. */
+/** Plugins whose OBSERVED LATEST changed since the prior state, not merely
+ *  whose `ahead` flag flipped (ops-17b, #2104) — an edge detector on `ahead`
+ *  alone fires once per plugin ever, then goes permanently silent for every
+ *  subsequent release once a plugin is ahead of its pin (the normal case for
+ *  an evaluated-and-rejected KGP release, where the pin is deliberately left
+ *  alone). Firing rule per prior record for the plugin:
+ *   - absent, or `ahead: false` -> fire iff `ahead` now (unchanged edge case).
+ *   - `ahead: true` with a usable recorded `latest` -> fire iff the new
+ *     `latest` is STRICTLY greater (a downgrade/yank must never fire).
+ *   - `ahead: true` with `latest` missing/null/non-string -> fire. A prior
+ *     record in that shape is corrupt or pre-ops-17b legacy state, not a
+ *     clean "nothing changed" — staying silent there is the exact defect
+ *     this issue is about, one level down. */
 export function computeTransitions(pluginStatus, priorState) {
-  return pluginStatus.filter((s) => s.ahead && !priorState[s.name]?.ahead).map((s) => s.name);
+  return pluginStatus
+    .filter((s) => {
+      if (!s.ahead) return false;
+      const prior = priorState[s.name];
+      if (!prior?.ahead) return true; // absent, or at-pin -> ahead edge
+      if (typeof prior.latest !== 'string' || !prior.latest) return true; // fail loud, don't stay silent
+      return compareSemver(s.latest, prior.latest) > 0;
+    })
+    .map((s) => s.name);
 }
 
 /** The single sticky comment (by marker), or null. Found even if a human
@@ -157,6 +177,8 @@ export function renderTransitionComment(transitions, pluginStatus, mention = '@d
     '',
     ...items,
     '',
-    'Recipe: bump locally → `flutter build apk --release` → if the KGP warning is gone, bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
+    'Recipe: bump locally → `flutter build apk --release`.',
+    '- If the KGP warning is gone: bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
+    '- If the warning is still there: leave the pin alone — it is no longer what arms this notification, so the next release still pings you regardless.',
   ].join('\n');
 }
