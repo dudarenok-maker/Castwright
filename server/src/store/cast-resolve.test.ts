@@ -19,6 +19,14 @@ function h(
   return rejected === undefined ? { supersededBy } : { supersededBy, rejected };
 }
 
+/* Same idea as `h`, for the pair-scoped successor (#2092/#2089 D1). */
+function hp(
+  supersededBy: Record<string, string>,
+  rejectedPairs: Array<{ from: string; to: string }>,
+): Pick<CastIdHistory, 'supersededBy' | 'rejectedPairs'> {
+  return { supersededBy, rejectedPairs };
+}
+
 const history = h({ mayrin: 'mairin' });
 
 describe('buildCastResolver', () => {
@@ -143,6 +151,103 @@ describe('buildCastResolver', () => {
     it('defaults to no rejections when the second argument is omitted entirely', () => {
       const r = buildCastResolver(cast).resolve('the_torment');
       expect(r?.character.id).toBe('the_torment');
+    });
+  });
+
+  describe('rejectedPairs (#2092/#2089 D1/D2 — pair-scoped "not the same character")', () => {
+    it('blocks a history-tier match onto the rejected target', () => {
+      expect(
+        buildCastResolver(cast, hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'mairin' }])).resolve(
+          'mayrin',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('blocks a normalised-id-tier match onto the rejected target', () => {
+      expect(
+        buildCastResolver(cast, hp({}, [{ from: 'the-torment', to: 'the_torment' }])).resolve(
+          'the-torment',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('blocks a normalised-history-tier match onto the rejected target', () => {
+      const c = [{ id: 'x', name: 'X' }];
+      expect(
+        buildCastResolver(c, hp({ foo_bar: 'x' }, [{ from: 'foo-bar', to: 'x' }])).resolve('foo-bar'),
+      ).toBeUndefined();
+    });
+
+    it('D1 pair scope: a DIFFERENT target for the same rejected `from` id still resolves', () => {
+      // The whole point of D1 over the legacy id-wide `rejected`: rejecting
+      // "mayrin is not Mr. Marrow" must not also block "mayrin is Mairin"
+      // once a later analysis mints the RIGHT history entry.
+      const c = [{ id: 'mr-marrow', name: 'Mr. Marrow' }, { id: 'mairin', name: 'Mairin' }];
+      const history = hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'mr-marrow' }]);
+      const r = buildCastResolver(c, history).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+      expect(r?.via).toBe('history');
+    });
+
+    it('an exact live id BEATS a pair rejection: a reclaimed id must still resolve (mirrors the legacy `rejected` fix round 1)', () => {
+      const r = buildCastResolver(cast, hp({}, [{ from: 'mairin', to: 'wren' }])).resolve('mairin');
+      expect(r?.character.id).toBe('mairin');
+      expect(r?.via).toBe('exact');
+    });
+
+    it('does not affect an id whose pair names a different `from`', () => {
+      const r = buildCastResolver(
+        cast,
+        hp({ mayrin: 'mairin' }, [{ from: 'some-other-id', to: 'mairin' }]),
+      ).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('does not affect an id whose pair names the same `from` but a different `to`', () => {
+      // Reinforces the D1-pair-scope test above from the opposite direction:
+      // the history entry's target ('mairin') isn't the rejected pair's
+      // target ('someone-else'), so the tier-2 match must go through.
+      const r = buildCastResolver(
+        cast,
+        hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'someone-else' }]),
+      ).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('defaults to no pair rejections when rejectedPairs is omitted', () => {
+      const r = buildCastResolver(cast, h({ mayrin: 'mairin' })).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('a raw `from` that only normalises to the same key as a rejected pair is still blocked at tier 3 (normalised-tier keying, not raw)', () => {
+      // 'the-mairin' is a live cast id, matched at tier 3 by anything that
+      // normalises to the same key. The pair was recorded against the raw
+      // string 'the_Mairin' (underscore + capital M); this call resolves
+      // 'the-Mairin' (hyphen + capital M) — a DIFFERENT raw string that
+      // normalises to the same key as both. Tier 3 itself matches by
+      // normalised key, so the rejection check must too, or a
+      // punctuation/case variant would silently slip the block.
+      const c = [{ id: 'the-mairin', name: 'Mairin' }];
+      const r = buildCastResolver(
+        c,
+        hp({}, [{ from: 'the_Mairin', to: 'the-mairin' }]),
+      ).resolve('the-Mairin');
+      expect(r).toBeUndefined();
+    });
+
+    describe('no-fall-through (D2, trap 2 — mutation-checked)', () => {
+      it('a rejected tier-2 candidate does not fall through to a tier-3/4 match for the same characterId', () => {
+        // 'ghost' matches tier 2 (history: ghost -> rejected-target) which is
+        // rejected. If the resolver mistakenly fell through instead of
+        // stopping, tier 3/4 could still resolve 'ghost' via SOME other
+        // route — this fixture makes sure there is genuinely nothing else
+        // for it to fall through to, so a fall-through bug would surface as
+        // a resolved character rather than coincidentally landing on
+        // undefined anyway.
+        const c = [{ id: 'rejected-target', name: 'A' }, { id: 'narrator', name: 'N' }];
+        const history = hp({ ghost: 'rejected-target' }, [{ from: 'ghost', to: 'rejected-target' }]);
+        expect(buildCastResolver(c, history).resolve('ghost')).toBeUndefined();
+      });
     });
   });
 });
