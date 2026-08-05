@@ -1444,6 +1444,28 @@ to sweep the **whole** 20-book workspace at once.
 > **91 ids / 93 segments** (161 − 68 = 93 segments, 93 − 2 = 91 ids — the whole
 > delta is `the-torment`/`lightning-dave` moving out of report-only). Full
 > console output archived with the PR.
+>
+> **Fix round 2 (independent review, 2026-08-05) found two more defects in
+> the #2107 fix itself, both now closed:** (1) the "already recorded" skip's
+> normalised-footing fix from round 1 (`supersededByNormKey`, a hand-built
+> map) was itself an instance of this wave's recurring shape — it diverged
+> from the real resolver on normalised collisions, tier precedence, and dead
+> alias targets, each a **false skip** that would drop an id off the
+> human-decision list entirely. Deleted; the guard now asks the real,
+> history-aware resolver (`historyResolver`, threaded from `main()`, not
+> reconstructed) whether an id resolves via `'history'`/`'normalised-history'`
+> directly. (2) the widening opened an undeclared write path: Tier A (name)
+> runs before Tier B (id shape), and nothing checked a Tier A candidate
+> against what the id already resolves to today — a stale cache entry naming
+> a different character could repoint real segments' attribution onto the
+> wrong live character, durably. A new guard withholds and reports that
+> conflict instead of writing it. **Both were verified latent, not live, on
+> the real workspace** — a fresh dry run (read-only, never `--apply`, same
+> command as above) reports the identical **23 rows / 188 segments**,
+> **2 / 68 segment** auto-recordable aliases, and **91 ids / 93 segments**
+> report-only; neither real auto-record (`lightning-dave -> lightning_dave`
+> Tier A, `the-torment -> the_torment` Tier B) trips the new conflict guard,
+> since both already agree with their own live id-shape resolution.
 > [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) — **FIXED**
 > (PR #2102, before this branch was cut) — a wrong `WORKSPACE_DIR` used to scan
 > **0** books and still print `books missing analysis-cache evidence: 0` and

@@ -536,6 +536,37 @@ evidence **1** (*Unlocked*, unchanged); books with an auto-record withheld
 **0** (unchanged, `--apply` not blocked). Full console output archived with
 the PR.
 
+**Fix round 2 (independent review, 2026-08-05) found two more defects in the
+#2107 fix itself:** the round-1 already-recorded fix (`supersededByNormKey`,
+a hand-built normalised map) diverged from the real resolver on normalised
+collisions, tier precedence, and dead alias targets — each a false skip that
+would drop an id off the human-decision list. Deleted; the guard now asks the
+real, history-aware resolver directly (threaded from `main()`, not
+reconstructed) whether an id resolves via `'history'`/`'normalised-history'`.
+Separately, the widening opened an undeclared write path: Tier A (name) runs
+before Tier B (id shape) with nothing checking a Tier A candidate against
+what the id already resolves to today — a stale cache entry naming a
+different character could otherwise repoint real segments' attribution onto
+the wrong live character, durably. A new guard withholds and reports that
+conflict instead of writing it.
+
+9b. Re-run the script in dry-run mode a third time, on top of the fix-round-2
+    changes, to confirm neither defect is live on the real workspace.
+
+Expected: **identical numbers to step 9a** — both defects were verified
+latent (not live) on the real workspace: the "already recorded" divergence
+never triggers because all three recorded aliases are already normalised
+fixed points; the Tier A/id-shape conflict never triggers because both real
+auto-records (`lightning-dave -> lightning_dave` Tier A, `the-torment ->
+the_torment` Tier B) already agree with their own live id-shape resolution.
+
+Result: **RUN 2026-08-05** (same branch, dry run only, same invocation as
+step 9a — `server/dist` unchanged, only the `.mjs` script and its tests
+changed this round). **Identical to step 9a**: auto-recordable aliases
+**2 (68 segments)**; skipped **3**; reported for human decision **91
+ids/93 segments**; re-render candidates **23 rows/188 segments**. Confirms
+both fix-round-2 defects are latent on this workspace today, as expected.
+
 ### 8.7 Confirm the fix reaches actual audio
 
 10. Re-render *Заказ Коалфолла* chapter 2 (the chapter carrying the
@@ -568,7 +599,8 @@ Result: **NOT RUN as of 2026-08-05.** Partial evidence from the CLI only: the po
 - [x] §§8.4-8.6 run — **2026-08-05**, all PASS
 - [ ] §§8.7-8.8 run — still owed (needs the GPU box + a listen)
 - [x] Step 9a run — **2026-08-05**, PASS against the corrected expectation: re-render 23 rows/188 segments, auto-recordable 2/68, report-only 91/93, skipped 3 (unchanged)
-- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened** by independent review + owner decision, `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at step 9a), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
+- [x] Step 9b run — **2026-08-05**, PASS: fix-round-2's two guard fixes (resolver-delegated already-recorded check; Tier A/id-shape conflict veto) confirmed latent on the real workspace — identical numbers to step 9a
+- [x] Defects filed: [#2107](https://github.com/dudarenok-maker/Castwright/issues/2107) (re-render list drops aliased rows after `--apply` — **fixed, then widened, then hardened across two independent-review rounds** — `scripts/repair-cast-id-drift.mjs`; real-workspace re-confirmation done at steps 9a and 9b), [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108) (a zero-book scan reports the same green summary as a clean one, and `--apply` exits 0 — **fixed**, PR #2102)
 
 Record what was observed, by whom, and when — here and in register row A33.
 This is the first time the repair pass has ever written to the real
