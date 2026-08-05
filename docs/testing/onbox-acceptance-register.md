@@ -1590,43 +1590,71 @@ to sweep the **whole** 20-book workspace at once.
 > [#2135](https://github.com/dudarenok-maker/Castwright/issues/2135),
 > [#2130](https://github.com/dudarenok-maker/Castwright/issues/2130),
 > [#2134](https://github.com/dudarenok-maker/Castwright/issues/2134)),
-> one of which MOVES the headline numbers again:**
+> after a round-2 review caught #2134's first fix backwards:**
 >
-> - **#2134 (guard 4/ranker inert on drifted ids) — the auto-recordable
->   figure drops from 2/68 to 0/0.** `characterSnapshots` is a file-level map
->   keyed by the id that was LIVE at render time — for `the-torment` and
->   `lightning-dave` (both drifted ids), the lookup under their OWN key finds
->   nothing, so `orphan.snapshots` was `[]` and `snapshotsConsistent([])`
->   passed guard 4 VACUOUSLY (0/1 snapshots reads as "checked, agrees").
->   `classifySnapshotEvidence` now distinguishes that from a genuine
->   "checked, agrees" and this pass withholds (report-only) rather than
->   trusting an unverifiable match. **Measured via a fresh dry run against
->   the real workspace (read-only, never `--apply`):** auto-recordable
->   aliases move from **2 / 68 segments to 0 / 0**; report-only moves from
->   **91 ids / 93 segments to 93 ids / 161 segments** (both deltas are
->   exactly `the-torment` (67 seg) + `lightning-dave` (1 seg) moving into
->   report-only); re-render candidates stay unchanged at **23 rows / 188
->   segments** (unconditional on auto-record status, as before). Neither
->   alias was ever wrong (both are id-shape-identical repoints), so this is
->   not a live-data-corruption fix — it is the guard chain no longer
->   claiming a protection it wasn't providing.
+> - **#2134 round 1 (guard 4/ranker inert on drifted ids) turned
+>   `classifySnapshotEvidence`'s new `'no-evidence'` outcome into a VETO —
+>   round 2 review found that backwards and reverted it to an annotation.**
+>   `characterSnapshots` is a file-level map written ONLY for an id that was
+>   LIVE in `cast.json` at render time. Every id this loop considers is, by
+>   definition, NOT live today (that is what makes it an orphan) — so for
+>   this population, snapshot presence/absence is not neutral: **presence**
+>   means the id WAS live at render (audio already correct, drift happened
+>   after) and **absence** means the narrator was substituted (the actual
+>   A32 damage this pass exists to fix). A veto on absence therefore blocks
+>   exactly the aliases that repair real damage and passes exactly the ones
+>   that needed no repair — replayed against the real workspace with
+>   `supersededBy` emptied, the round-1 veto would have blocked **two of the
+>   three aliases already applied and accepted on this box**
+>   (`mayrin`→`mairin`, `coalfall`→`coalfall-dragon`) while letting the
+>   already-fine `lady-alina`→`dame-alina` alias through. `'no-evidence'`
+>   now flows through to auto-record, carrying an honest "guard 4 not
+>   evaluable" annotation on the row and console line instead of either a
+>   false claim of verification (the pre-#2134 state) or a wrong block (the
+>   round-1 fix). `'conflict'` (real, disagreeing snapshot evidence for a
+>   named id) is unaffected and still downgrades to report-only. **Net
+>   effect: the fresh dry run's figures are IDENTICAL to the pre-#2134
+>   baseline** — auto-recordable **2 aliases / 68 segments**, report-only
+>   **91 ids / 93 segments**, re-render **23 rows / 188 segments** — because
+>   round 1's veto and round 2's fix cancel out for this real data; what
+>   changed is honesty (the console line now says plainly when guard 4 had
+>   nothing to verify), not the write decision.
 > - **#2097 + #2135 (evidence that can't be read must count as UNKNOWN, not
->   CLEAN) — NOT live on the real workspace today, no figure change.**
->   `collectBooks` now counts and names any dropped book (`'not-yet-analysed'`
->   vs `'unreadable'`, the latter refusing `--apply`); `collectBakNameEntries`
->   now returns `bakAvailable`, gating a per-book `withheldForMissingBak`
->   auto-record guard the same way `cacheAvailable` already gates cache. The
->   fresh dry run reports **books scanned: 20** (no drops — every book's
+>   CLEAN) — confirmed sound by round-2 review; NOT live on the real
+>   workspace today, no figure change.** `collectBooks` now counts and names
+>   any dropped book (`'not-yet-analysed'` vs `'unreadable'`, the latter
+>   refusing `--apply`); `collectBakNameEntries` now returns `bakAvailable`,
+>   gating a per-book `withheldForMissingBak` auto-record guard the same way
+>   `cacheAvailable` already gates cache. Round 2 also closed five smaller
+>   gaps found by review: `collectBooks`'s shape check now uses
+>   `Array.isArray`, not truthiness (a truthy non-array `characters` field
+>   used to be silently accepted and later crashed `planBookRepairs`); its
+>   `readdirSync` calls are now guarded the same way its bak sibling's is
+>   (an unreadable author/series directory used to throw out of `main()`
+>   uncaught); `collectBakNameEntries`'s `characters` field is now
+>   `Array.isArray`-checked too (a string silently iterated to zero entries,
+>   an object threw); and a suspected (unverified — not reproducible on this
+>   box) gap where `fs.existsSync` swallows `EACCES` the same as "doesn't
+>   exist" is closed defensively via a tri-state file read that
+>   distinguishes `ENOENT` from every other read failure. The fresh dry run
+>   reports **books scanned: 20** (no drops — every book's
 >   `cast.json`/`state.json` is readable), **books with unreadable
 >   cast.json.bak.* evidence: 0**, and **books with an auto-record withheld
 >   for missing bak evidence: 0** — matching #2135's own real-workspace scan
 >   (41 bak files, 0 unparseable).
-> - **#2130 (a resolver tier rename would go undetected) — test-only, no
->   script behaviour change, no figure change.** A new test drives
->   `buildOrphansFromSegments` against the REAL compiled
->   `buildCastResolver` (not a hand-written fake) — proven by actually
->   renaming `'exact'` to `'exact-id'` in `cast-resolve.ts`, rebuilding, and
->   confirming the new test goes red, then reverting.
+> - **#2130 (a resolver tier rename would go undetected) — relocated after
+>   round 2 review found the original fix couldn't fire in CI at all, for
+>   two independent reasons: the job that runs it never builds the server,
+>   and (separately fatal) that job's own scope condition doesn't even run
+>   on a `server/src`-only diff.** The coupling test now lives at
+>   `server/src/store/cast-resolve.repair-pass-contract.test.ts`, in the
+>   **server** test suite — vitest transpiles `cast-resolve.ts` straight
+>   from source (no `server/dist` build needed) and that suite already runs
+>   on every `server/src/` change, closing both gaps at once. Proven twice:
+>   renamed `'exact'` to `'exact-id'` in `cast-resolve.ts`, ran the new test
+>   with `server/dist` entirely absent (confirming no build is needed) and
+>   watched it go red, then reverted. Test-only, no script behaviour change,
+>   no figure change.
 >
 > Dry run command: `WORKSPACE_DIR=C:/AudiobookWorkspace
 > CACHE_DIR=<primary-checkout>/server/handoff/cache node
