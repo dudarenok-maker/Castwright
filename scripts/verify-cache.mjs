@@ -222,7 +222,12 @@ export const STEPS = [
     name: 'test:sidecar',
     inputs: {
       globs: ['server/tts-sidecar/**/*.py', 'server/tts-sidecar/requirements*.txt'],
-      extraFiles: ['server/tts-sidecar/run-tests.ps1'],
+      extraFiles: [
+        'server/tts-sidecar/run-tests.ps1',
+        // The npm script now invokes this instead; run-tests.ps1 is retained
+        // for direct local/PowerShell use, so BOTH are inputs.
+        'scripts/run-sidecar-tests.mjs',
+      ],
       includeLockfiles: [],
     },
     toolFingerprint: sidecarFingerprint,
