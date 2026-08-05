@@ -112,7 +112,11 @@ let saveAnalysisCache: (
   cache: import('../store/analysis-cache.js').AnalysisCache,
 ) => Promise<void>;
 let clearAnalysisCache: (manuscriptId: string) => Promise<void>;
-let retireCharacterId: (bookDir: string, from: string, to: string) => Promise<void>;
+let retireCharacterId: (
+  bookDir: string,
+  from: string,
+  to: string,
+) => Promise<import('../store/cast-id-history.js').RetireCharacterIdResult>;
 let rejectOrphanedId: (bookDir: string, id: string) => Promise<void>;
 let rejectOrphanedPair: (bookDir: string, from: string, to: string) => Promise<void>;
 

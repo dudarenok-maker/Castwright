@@ -4547,10 +4547,27 @@ async function realRejectOrphanMatch(
   return res.json();
 }
 
+/* #2092/#2089 M5 (review round 1) — module-level mock state tracking which
+   (bookId, characterId, orphanedId) pairs this mock session has actually
+   rejected, so `mockUndoRejectOrphanMatch` can be honest about
+   `wasRejected` instead of unconditionally claiming success for a pair
+   that was never rejected (or already undone) — mirroring the real route,
+   which returns `wasRejected: false` for an absent pair. Without this, the
+   e2e Undo assertion at e2e/orphaned-character-fallback-banner.spec.ts
+   could not fail for any server-side reason: the mock always said "yes,
+   undone" regardless of what actually preceded the click. Same
+   module-level-mutable-state pattern as `mockTourCompletedAt`/
+   `mockMergeSuggestions` elsewhere in this file. */
+const mockRejectedOrphanPairs = new Set<string>();
+function rejectedOrphanPairKey(args: RejectOrphanMatchArgs): string {
+  return JSON.stringify([args.bookId, args.characterId, args.orphanedId]);
+}
+
 async function mockRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<RejectOrphanMatchResponse> {
   await wait(80);
+  mockRejectedOrphanPairs.add(rejectedOrphanPairKey(args));
   /* D2 — a reject always leaves `orphanedId` unresolved (null) in the mock:
      the pair-scoped block the (fake) write just recorded applies, and mock
      mode has no real resolver to consult for some other, unblocked tier. */
@@ -4572,6 +4589,11 @@ export interface UndoRejectOrphanMatchResponse {
   wasRejected: boolean;
   resolution: RejectOrphanResolutionTier;
   resolvedCharacterId?: string;
+  /** C1 (fix round 1) — set when the real server skipped restoring the
+      forgotten `supersededBy` alias because a newer one already exists;
+      see the server route's own doc comment. The mock never sets this
+      (it has no `supersededBy` state to conflict with). */
+  supersededByOther?: string;
 }
 
 async function realUndoRejectOrphanMatch(
@@ -4602,6 +4624,20 @@ async function mockUndoRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<UndoRejectOrphanMatchResponse> {
   await wait(80);
+  const key = rejectedOrphanPairKey(args);
+  if (!mockRejectedOrphanPairs.has(key)) {
+    /* M5 — honest genuine-miss/never-rejected case: mirrors the real
+       route's `wasRejected: false` for a pair that was never rejected (or
+       already undone once). */
+    return {
+      characterId: args.characterId,
+      orphanedId: args.orphanedId,
+      wasRejected: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+    };
+  }
+  mockRejectedOrphanPairs.delete(key);
   /* Mock mode has no real resolver either, so it assumes the common/lossless
      case: undo restores resolution onto the same `characterId` the reject
      had blocked (a 'history' match — collapses to 'alias' in the frontend's

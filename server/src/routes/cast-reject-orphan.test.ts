@@ -389,4 +389,82 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(history?.supersededBy).toEqual({ mayrin: 'mairin' });
     expect(history?.rejectedPairs).toEqual([]);
   });
+
+  it('C1 (review round 1, Critical) — Undo does NOT overwrite a NEWER alias a later re-analysis recorded after the original reject', async () => {
+    // 'mayrin' resolves to 'mairin' via history before anything happens —
+    // the reject stashes forgotSupersededTo: 'mairin'.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
+    );
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(readHistory()?.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin' },
+    ]);
+
+    // A LATER, UNRELATED re-analysis records the CORRECT alias (and mints
+    // the live 'mr-marrow' row it points to) — simulates retireCharacterId's
+    // own production callers (analysis.ts, cast-merge.ts) running
+    // independently of this route, between the original reject and the
+    // eventual Undo click. The rejectedPairs entry (and its stash) is
+    // untouched by that write, since retireCharacterId('mayrin', 'mr-marrow')
+    // only repoints entries whose `to` is the id BEING retired ('mairin'
+    // here is the TARGET of the new write, not something retiring).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          ...initialCast,
+          { id: 'mr-marrow', name: 'Mr. Marrow', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { mayrin: 'mr-marrow' },
+        rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin' }],
+      }),
+    );
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    // The rejection IS undone (the pair is removed) —
+    expect(res.body.wasRejected).toBe(true);
+    // — but the alias restore was correctly SKIPPED, and the response says
+    // so, naming the newer alias's current target.
+    expect(res.body.supersededByOther).toBe('mr-marrow');
+
+    const history = readHistory();
+    // THE FAILURE MODE C1 EXISTS TO PREVENT: the correct, newer alias must
+    // survive untouched. Using retireCharacterId here (the pre-fix code)
+    // would have overwritten this back to 'mairin' and repointed anything
+    // else that targeted 'mayrin' — reproducing #2040 via the Undo button.
+    expect(history?.supersededBy).toEqual({ mayrin: 'mr-marrow' });
+    expect(history?.rejectedPairs).toEqual([]);
+
+    // And resolving 'mayrin' now correctly returns the NEWER alias, not the
+    // stale rejected one — proving the user-visible outcome is right, not
+    // merely the raw JSON.
+    const resolved = await resolveOrphanedId('mayrin');
+    expect(resolved?.character.id).toBe('mr-marrow');
+  });
+
+  it('C1 — a NORMAL Undo (no newer alias since the reject) still restores as before, with supersededByOther absent', async () => {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
+    );
+    await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(true);
+    expect(res.body.supersededByOther).toBeUndefined();
+
+    const history = readHistory();
+    expect(history?.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(history?.rejectedPairs).toEqual([]);
+  });
 });

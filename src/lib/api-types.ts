@@ -5484,12 +5484,28 @@ export interface components {
              *     recomputed AFTER the undo's writes land. Restoring a rejected
              *     pair's forgotten `supersededBy` alias (when present) makes this
              *     the SAME value the resolver returned before the original reject
-             *     — the lossless-undo contract.
+             *     — the lossless-undo contract, UNLESS `supersededByOther` is set
+             *     (a later, unrelated re-analysis has since recorded a different
+             *     alias for `orphanedId`; the restore is skipped rather than
+             *     overwriting it — see `supersededByOther`).
              * @enum {string|null}
              */
             resolution: "exact" | "history" | "normalised-id" | "normalised-history" | null;
             /** @description The live cast id `orphanedId` resolves onto, when `resolution` is non-null. */
             resolvedCharacterId?: string;
+            /**
+             * @description Set when the pair had a forgotten `supersededBy` alias to
+             *     restore, but the restore was SKIPPED because `orphanedId`
+             *     already resolves through a DIFFERENT, newer alias on disk (a
+             *     later, unrelated re-analysis recorded the correct one since the
+             *     original reject). The value is that alias's current target.
+             *     Restoring unconditionally here would silently overwrite the
+             *     newer, presumably-correct alias with the stale rejected one —
+             *     the exact failure mode this field exists to avoid reproducing.
+             *     Absent in the ordinary case: nothing to restore, or the restore
+             *     succeeded.
+             */
+            supersededByOther?: string;
         };
         /**
          * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
