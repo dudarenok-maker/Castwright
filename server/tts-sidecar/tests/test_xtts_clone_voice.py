@@ -893,6 +893,35 @@ def test_synthesize_cloned_voice_japanese_import_failure_names_sudachi(
         "the ja fallback must NOT tell the operator to reinstall — that would not fix anything"
 
 
+def test_get_spacy_lang_ja_resolves_and_splits_real_japanese_text() -> None:
+    """#2038 — the POSITIVE case: with `sudachipy` + `sudachidict-core`
+    installed (install-coqui.mjs's third pip step, alongside plain spacy),
+    upstream's `get_spacy_lang('ja')` — the exact call
+    `CoquiEngine._infer_from_latents` reaches via `enable_text_splitting=True`
+    — must resolve without raising, and the resulting tokenizer must
+    genuinely split Japanese text into real morphological tokens, not just
+    construct without error.
+
+    Drives the REAL upstream call (not `_ImportFailingXttsModel`'s forced
+    fake, which the two tests above use to pin the FALLBACK's behaviour
+    regardless of what's installed) — this is the dependency itself, so a
+    fake would prove nothing. Skips rather than fails on a box that hasn't
+    run the Coqui installer (sudachipy/sudachidict-core are opt-in, not in
+    the base venv) — same idiom as `test_xtts_audio_io.py`'s real-TTS checks.
+    """
+    xtts_tokenizer = pytest.importorskip("TTS.tts.layers.xtts.tokenizer")
+    pytest.importorskip("sudachipy")
+    pytest.importorskip("sudachidict_core")
+
+    nlp = xtts_tokenizer.get_spacy_lang("ja")
+    doc = nlp("これは長い日本語の文章です。")
+    tokens = [t.text for t in doc]
+    assert len(tokens) > 1, (
+        f"expected multiple morphological tokens from SudachiPy, got {tokens!r} — "
+        "a length-1 result would mean the tokenizer isn't actually splitting"
+    )
+
+
 def test_synthesize_cloned_voice_unsupported_language_raises(monkeypatch, tmp_path) -> None:
     """The fake's `config.languages` is `["en", "es", "fr", "de", "it"]` — a
     request for an unsupported language must fail loud before ever reaching

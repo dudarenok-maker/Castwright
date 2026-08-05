@@ -77,14 +77,17 @@ beforeAll(async () => {
   process.env.WORKSPACE_DIR = workspaceRoot;
   process.env.GEN_WORKERS = '1';
 
-  const [{ generationRouter }, { makeBookId, queueJsonPath }, cacheModule, migrateModule, settings] =
-    await Promise.all([
-      import('./generation.js'),
-      import('../workspace/paths.js'),
-      import('../store/analysis-cache.js'),
-      import('../workspace/queue-migrate.js'),
-      import('../workspace/user-settings.js'),
-    ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { generationRouter } = await import('./generation.js');
+  const { makeBookId, queueJsonPath } = await import('../workspace/paths.js');
+  const cacheModule = await import('../store/analysis-cache.js');
+  const migrateModule = await import('../workspace/queue-migrate.js');
+  const settings = await import('../workspace/user-settings.js');
   readQueueFile = migrateModule.readQueueFile;
   writeQueueFile = migrateModule.writeQueueFile;
   /* Qwen healthy → the gate is in play (an UNAVAILABLE Qwen takes the separate

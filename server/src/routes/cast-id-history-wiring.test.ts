@@ -124,23 +124,19 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-castid-wiring-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [
-    { generationRouter },
-    { chapterSpliceRouter },
-    { chapterQaRepairRouter },
-    paths,
-    mp3,
-    cacheModule,
-    historyModule,
-  ] = await Promise.all([
-    import('./generation.js'),
-    import('./chapter-splice.js'),
-    import('./chapter-qa-repair.js'),
-    import('../workspace/paths.js'),
-    import('../tts/mp3.js'),
-    import('../store/analysis-cache.js'),
-    import('../store/cast-id-history.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factories above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { generationRouter } = await import('./generation.js');
+  const { chapterSpliceRouter } = await import('./chapter-splice.js');
+  const { chapterQaRepairRouter } = await import('./chapter-qa-repair.js');
+  const paths = await import('../workspace/paths.js');
+  const mp3 = await import('../tts/mp3.js');
+  const cacheModule = await import('../store/analysis-cache.js');
+  const historyModule = await import('../store/cast-id-history.js');
   makeBookId = paths.makeBookId;
   audioDirFn = paths.audioDir;
   encodePcmToAudio = mp3.encodePcmToAudio;

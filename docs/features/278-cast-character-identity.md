@@ -198,10 +198,11 @@ owner: null
    `scripts/repair-cast-id-drift.mjs --apply` (A33 — run 2026-08-05, but only
    **partially** discharged: the write path is proven and recorded 3
    auto-recordable aliases across 2 books, but the workspace is not
-   orphan-free — 93 ids / 161 segments remain report-only, needing a human
-   decision, and *Unlocked* alone still carries 34 orphaned segments under
-   `unknown-male`; see the on-box register's A33 row) or a re-render to
-   recover.
+   orphan-free — 91 ids / 93 segments remain report-only, needing a human
+   decision (widened by the #2107 fix, independent review 2026-08-05; was
+   93/161 before), and *Unlocked* alone still carries 34 orphaned segments
+   under `unknown-male`; see the on-box register's A33 row) or a re-render
+   to recover.
 
 ## Deviations from the spec
 
@@ -319,9 +320,11 @@ down, each a deliberate controller ruling made during implementation:
   fold-bucket id on the source AND the target side — #2093 residual 4),
   `snapshotsConsistent`, the reserved-source guard, the cross-source ambiguity
   veto, the zero-segment guard, `rankSnapshotCandidates`'s scoring, the
-  re-render list shape, `buildOrphansFromSegments` (the auto-reconciled map's
-  producer half, including the `'normalised-history'` tier — #2093 residual
-  5/6), `isCacheAvailable`/`readAnalysisCache` against real fixtures covering
+  re-render list shape, `buildOrphansFromSegments` (#2093 residual 6; #2107,
+  widened by independent review + owner decision 2026-08-05, to list every
+  tier except `'exact'` as an orphan — the `autoReconciled` bucket this used
+  to describe, including its `'normalised-id'`/`'normalised-history'`
+  split, no longer exists), `isCacheAvailable`/`readAnalysisCache` against real fixtures covering
   every refusal state — missing, unparseable, validly-parsing-but-names-zero-
   characters (independent-review Critical C1), and (pre-merge review I1) a
   validly-parsing entry whose id or name is an EMPTY STRING — `isCacheAvailable`
@@ -475,8 +478,10 @@ and the run sheet
   banner cross-check — see the register row A33 and the run sheet's §8.6+
   for the full account, including two defects the run surfaced
   ([#2107](https://github.com/dudarenok-maker/Castwright/issues/2107), the
-  re-render list drops an aliased row's segments after `--apply` — **still
-  OPEN, tracked separately, fixed on its own branch, NOT in the #2102 PR**;
+  re-render list drops an aliased row's segments after `--apply` — **fixed,
+  then WIDENED by an independent review + owner decision** to list every
+  resolver tier except `'exact'` as an orphan, on its own branch, not in the
+  #2102 PR;
   [#2108](https://github.com/dudarenok-maker/Castwright/issues/2108), a
   wrong `WORKSPACE_DIR` scanned 0 books and still reported a clean summary
   — fixed here in the #2102 PR that also closes the residuals below).
@@ -484,11 +489,16 @@ and the run sheet
   checkout that ran this workspace's analysis) reports: **3 auto-recordable
   aliases covering 27 segments**, **93 ids reported for a human decision
   covering 161 segments** (corrected from a prior 93 — see below), **17
-  re-render rows covering 120 segments** (the pre-#2107 figure — with #2107
-  still open, the re-render list drops the 3 freshly-aliased rows' segments,
-  so a dry run against the real workspace right now reports **13** rows,
-  not 17; the true damage figure is still 17 rows / 120 segments, and the
-  13 must not be read as a regression once #2107 lands), **0 books
+  re-render rows covering 120 segments** — this whole bullet is the
+  PRE-`--apply`, pre-#2107-fix baseline, left as originally measured.
+  **Superseded, post-widened-fix (fresh dry run, 2026-08-05, read-only,
+  never `--apply`):** auto-recordable aliases **0 → 2 / 68 segments**
+  (`the-torment`/`lightning-dave`, previously invisible under the removed
+  `autoReconciled` bucket); report-only **93/161 → 91 ids / 93 segments**;
+  re-render candidates **13 rows / 93 segments (the #2107-regressed figure)
+  → 23 rows / 188 segments** — 188 matches the original full-workspace
+  orphan count, the arithmetic check that this is now the complete set.
+  Continuing with the original baseline: **0 books
   modified**, **1 book missing analysis-cache evidence, 0 books with an
   auto-record withheld because of it**. These are two DIFFERENT numbers (independent-review
   Critical C1, widened by a later pre-merge review pass (I1), found the

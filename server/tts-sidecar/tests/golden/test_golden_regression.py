@@ -80,6 +80,16 @@ ASR_LANGUAGE = "en"
 # operator's shell fails loudly with a named reason instead of silently
 # becoming content drift.
 ASR_COMPUTE_TYPE_NAME = "int8"
+# #2047 — the fourth previously-unpinned input to the tolerance-0 content-drift
+# gate: WhisperEngine loaded its weights with NO revision, so an upstream
+# checkpoint move under the same "base" model name could silently swap the
+# weights this baseline was recorded against. Pinned to the exact HuggingFace
+# commit the venv's cached snapshot already resolves to (verified on-box:
+# `models--Systran--faster-whisper-base/refs/main` == this SHA), so pinning it
+# is a no-op for any box that already has the model cached — no forced
+# re-download. Re-pin (and re-bless, with GOLDEN_REBLESS_CONTENT=1 if content
+# moves) after a deliberate Whisper weights upgrade.
+ASR_MODEL_REVISION_NAME = "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
 
 
 def _load_json(path: Path) -> dict:
@@ -131,6 +141,7 @@ def _make_whisper() -> "main.WhisperEngine":
     os.environ["ASR_MODEL"] = ASR_MODEL_NAME
     os.environ["ASR_DEVICE"] = ASR_DEVICE_NAME
     os.environ["ASR_COMPUTE_TYPE"] = ASR_COMPUTE_TYPE_NAME
+    os.environ["ASR_MODEL_REVISION"] = ASR_MODEL_REVISION_NAME
     engine = main.WhisperEngine()
     assert engine._model_name == ASR_MODEL_NAME, (
         f"ASR_MODEL resolved to {engine._model_name!r}, expected {ASR_MODEL_NAME!r} — "
@@ -147,6 +158,17 @@ def _make_whisper() -> "main.WhisperEngine":
             f"ASR_COMPUTE_TYPE resolved to {compute_type!r}, expected {ASR_COMPUTE_TYPE_NAME!r} — "
             "the recorded transcript baseline does not apply to a different compute type "
             "(int8 vs int8_float16 vs float32 changes greedy-decode output)."
+        )
+    # #2047 — same "assert outright" treatment as the three checks above: a
+    # stray ambient ASR_MODEL_REVISION must not silently apply either. Skipped
+    # (not asserted-false) for the `_StubWhisperEngine` stand-in the same way
+    # the compute-type check is — that stub predates #2047 and doesn't claim
+    # to cover the revision pin.
+    if hasattr(engine, "_model_revision"):
+        assert engine._model_revision == ASR_MODEL_REVISION_NAME, (
+            f"ASR_MODEL_REVISION resolved to {engine._model_revision!r}, expected "
+            f"{ASR_MODEL_REVISION_NAME!r} — the recorded transcript baseline does not "
+            "apply to a different upstream checkpoint revision."
         )
     return engine
 
@@ -233,6 +255,10 @@ def _bless(engine: "main.KokoroEngine", whisper: "main.WhisperEngine", fixture: 
         # needs to be just as legible as a Kokoro weights/version bump.
         "faster_whisper_version": _faster_whisper_version(),
         "ctranslate2_version": _ctranslate2_version(),
+        # #2047 — the pinned HF revision the weights were loaded at, read off
+        # the engine itself (not the bare constant) so a stub without
+        # `_model_revision` degrades to `None` rather than raising.
+        "whisper_model_revision": getattr(whisper, "_model_revision", None),
         # blessed_at intentionally left for the committer to stamp — the
         # harness has no clock and must stay reproducible.
         "blessed_at": baseline.get("metadata", {}).get("blessed_at"),

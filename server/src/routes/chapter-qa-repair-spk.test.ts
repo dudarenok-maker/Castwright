@@ -238,11 +238,9 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qa-spk-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ chapterQaRepairRouter }, { makeBookId }, mp3] = await Promise.all([
-    import('./chapter-qa-repair.js'),
-    import('../workspace/paths.js'),
-    import('../tts/mp3.js'),
-  ]);
+  const { chapterQaRepairRouter } = await import('./chapter-qa-repair.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  const mp3 = await import('../tts/mp3.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);

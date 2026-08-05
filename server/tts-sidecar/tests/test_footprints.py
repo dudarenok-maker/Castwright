@@ -116,6 +116,45 @@ def test_design_family_seeds_fit_bare_8gb_headroom():
     assert main.SEED_FOOTPRINTS_MB["qwen.1.7b.design"] < bare_headroom_8gb
 
 
+def test_asr_residency_splits_the_key():
+    # #2094: a resident ASR reservation must NOT book the cold-load peak.
+    # `_key` splits "asr" from "asr.warm" purely on the `resident` flag — no
+    # `cfg` tag needed (unlike the qwen design-family split, which reads an
+    # `op` the caller sets).
+    assert main.FootprintTable._key("asr", None, {}) == "asr"
+    assert main.FootprintTable._key("asr", None, {}, resident=False) == "asr"
+    assert main.FootprintTable._key("asr", None, {}, resident=True) == "asr.warm"
+    # Every other engine is untouched by the `resident` flag — this is
+    # deliberately ASR-only (see #2094's own scoping), not a generic
+    # residency-aware key for every engine.
+    assert main.FootprintTable._key("coqui", None, {}, resident=True) == "coqui"
+    assert main.FootprintTable._key("qwen", None, {}, resident=True) == "qwen"
+
+
+def test_asr_warm_seed_is_lower_than_cold():
+    # The whole point of the split: a resident reservation asks for LESS.
+    t = main.FootprintTable()
+    cold = t.peak_mb("asr", None, {}, resident=False)
+    warm = t.peak_mb("asr", None, {}, resident=True)
+    assert cold == main.SEED_FOOTPRINTS_MB["asr"]
+    assert warm == main.SEED_FOOTPRINTS_MB["asr.warm"]
+    assert warm < cold
+
+
+def test_asr_warm_and_cold_windows_learn_independently():
+    # A flood of (possibly contaminated, per #2094's still-open device-wide
+    # max_memory_allocated question) cold-path observations must not leak
+    # into the warm-path estimate, and vice versa — mirrors
+    # test_design_family_windows_are_independent's qwen split above.
+    t = main.FootprintTable()
+    for _ in range(main._FOOTPRINT_MIN_SAMPLES + 5):
+        t.record("asr", None, {}, 3707, resident=False)  # the #2094 contaminated-looking cold reading
+    for _ in range(main._FOOTPRINT_MIN_SAMPLES):
+        t.record("asr", None, {}, 90, resident=True)
+    assert t.peak_mb("asr", None, {}, resident=False) == 3707
+    assert t.peak_mb("asr", None, {}, resident=True) == 90  # not dragged up to 3707
+
+
 def test_seed_parity_with_local_llm_doc():
     # REAL parity: parse the numbers out of the maintained doc and compare.
     doc = REPO_ROOT.joinpath("docs/local-llm.md").read_text(encoding="utf8")

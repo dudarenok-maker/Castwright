@@ -34,12 +34,18 @@
  *            `normaliseIdKey` comparison; see `resolveTierBId`'s doc
  *            comment for why a second matcher with its own tie rule was a
  *            real bug caught in review round 1.
- * A segment orphan that Tier A/B-matches a LIVE cast id would already have
- * resolved through `buildCastResolver`'s own normalised-id tier and so
- * never reaches this script's orphan set at all — Tier B only has
- * theoretical bite here for a cache-only orphan that was never rendered,
- * and even then (review round 1, Important 2 below) a cache-only match
- * never auto-records anyway. Anything else (including every book's
+ * #2107 (widened by owner decision, 2026-08-05): a segment orphan whose raw
+ * characterId normalised-matches a LIVE cast id DOES still resolve through
+ * `buildCastResolver`'s own `'normalised-id'` tier at collection time — but
+ * that only proves no RENAME happened, not that the rendered bytes are
+ * correct (`buildOrphansFromSegments`'s doc comment has the full argument
+ * and the real counter-example, register row A32), so it lands in this
+ * script's orphan set anyway rather than being silently excluded. Tier B
+ * re-runs the same id-shape match with an EMPTY history and re-confirms the
+ * same target, so it is this script's live path for auto-recording that
+ * exact case — not merely theoretical bite for a cache-only orphan that was
+ * never rendered, which (review round 1, Important 2 below) still never
+ * auto-records regardless of tier. Anything else (including every book's
  * `cast.json.bak.*` name and the frozen `characterSnapshots`
  * tone/gender/ageRange/attributes signal) is a RANKING signal only,
  * surfaced for a human decision, never auto-applied.
@@ -74,6 +80,28 @@
  * alone: **snapshot consistency** (see `snapshotsConsistent`'s own doc
  * comment) downgrades a name match to report-only when the rendered
  * `characterSnapshots` disagree across the chapters the id appears in.
+ *
+ * A fifth guard was added on top of these four, independently, by the
+ * #2107 widening (Important 2, independent review, 2026-08-05) —
+ * **current-resolution conflict veto**: widening #2107 to list a
+ * `'normalised-id'` match as an orphan (spec: see
+ * `buildOrphansFromSegments`'s doc comment) means an id that ALREADY
+ * resolves live to one character can now also reach Tier A/B matching —
+ * and Tier A (a NAME match) is tried before Tier B (the SAME id-shape
+ * resolution), with nothing checking whether they agree. A stale cache
+ * entry naming a different character can otherwise repoint real segments'
+ * attribution onto the WRONG live character, durably (`'history'`
+ * outranks `'normalised-id'` at resolve time once written). Before
+ * trusting a Tier A/B match, this guard asks the SAME real resolver
+ * `historyResolver` what `id` resolves to today — if that is
+ * `'normalised-id'` to a DIFFERENT live character than the match found,
+ * that is two evidence sources disagreeing, not a repair: report it for a
+ * human, never write it. A genuine Tier B match can never trip this (Tier
+ * B and the resolver's own `'normalised-id'` tier are the identical
+ * computation over the same live cast); only Tier A can. Named "guard 5"
+ * in the code, not "guard 4" — added after guard 4 existed, though it
+ * happens to run before it (guard numbering here tracks when a guard was
+ * added, not execution order; guard 3 already runs after guard 4 today).
  *
  * This script reuses the server's own id-resolution logic rather than
  * re-implementing it (#2040 Wave 3 review already caught one Critical
@@ -436,12 +464,13 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
  *  only increments when an id would have reached `autoRecord.push` on
  *  cache evidence alone — i.e. it already passed guard 1 (not reserved),
- *  guard 2 (not cross-source-ambiguous), guard 4 (`snapshotsConsistent`),
- *  AND guard 3 (>=1 rendered segment) — and was refused SOLELY because
- *  `cacheAvailable` was false. The cache-availability check sits LAST in
- *  the guard chain for exactly this reason (I2): an id guard 3 or 4 would
- *  have refused ANYWAY, cache evidence or not, must not inflate this
- *  count — a single bak entry naming a retired, never-rendered id in a
+ *  guard 2 (not cross-source-ambiguous), guard 5 (current-resolution
+ *  conflict, #2107 widening), guard 4 (`snapshotsConsistent`), AND guard 3
+ *  (>=1 rendered segment) — and was refused SOLELY because `cacheAvailable`
+ *  was false. The cache-availability check sits LAST in the guard chain for
+ *  exactly this reason (I2): an id any earlier guard would have refused
+ *  ANYWAY, cache evidence or not, must not inflate this count — a single
+ *  bak entry naming a retired, never-rendered id in a
  *  cache-blind book must not read as "a real auto-record was withheld
  *  here" when nothing was ever going to be auto-recorded for it. A book
  *  can have `cacheAvailable: false` and `withheldForMissingCache === 0` at
@@ -455,17 +484,25 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
  *  reserved id (guard 1), neither source is ambiguous for this id (guard
- *  2), the id has at least one rendered segment (guard 3), and every
- *  rendered `characterSnapshots` entry for the id agrees (guard 4,
- *  `snapshotsConsistent`) — see the module doc comment for why round 1
- *  found guard 4 alone insufficient and added the other three.
+ *  2), the id has at least one rendered segment (guard 3), every rendered
+ *  `characterSnapshots` entry for the id agrees (guard 4,
+ *  `snapshotsConsistent`), and the id doesn't already resolve live to a
+ *  DIFFERENT character (guard 5, #2107 widening) — see the module doc
+ *  comment for why round 1 found guard 4 alone insufficient and added the
+ *  other three, and why the #2107 widening later added guard 5 on top.
  *
  *  `deps.normaliseForMatch` and `deps.buildCastResolver` are always the
  *  real server functions in production (dynamically imported from
  *  `server/dist` in `main()`); tests inject their own stand-ins so this
- *  function's OWN logic (ambiguity handling, tier precedence, the four
+ *  function's OWN logic (ambiguity handling, tier precedence, the five
  *  guards) is verifiable with no build step — see the module doc comment's
- *  Tests section. `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
+ *  Tests section. `input.historyResolver` (built once per book, in
+ *  `collectSegmentOrphans`, and threaded through `main()` — see the
+ *  `historyResolver` local's own doc comment just below) drives guards
+ *  `already-recorded` and 5; a test may omit it, but the default is
+ *  fail-closed (I-A, independent review, 2026-08-05) — it builds the REAL
+ *  resolver from `liveCast`/`history`, not "nothing resolves via history,
+ *  nothing conflicts". `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
  *  two fold-bucket ids (imported for real in `main()`), checked on BOTH
  *  the source id (guard 1) and the matched target (a match is never
  *  auto-recorded ONTO a reserved id either — that would misattribute a
@@ -485,7 +522,7 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  and the module doc comment's `CACHE_DIR` entry) — this default is a
  *  safety net for any future caller that forgets to. */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false, autoReconciled } = input;
+  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false } = input;
   const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
@@ -523,10 +560,80 @@ export function planBookRepairs(input, deps) {
     if (!rejectedTargetsByNormFrom.has(normFrom)) rejectedTargetsByNormFrom.set(normFrom, new Set());
     rejectedTargetsByNormFrom.get(normFrom).add(pair.to);
   }
-  const supersededBy = history.supersededBy ?? {};
   // Tier B's own resolver — id-shape only, empty history on purpose (see
   // resolveTierBId's doc comment). Built once per book, not once per id.
   const idOnlyResolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+
+  // Important 1 (independent review, 2026-08-05, on the earlier I2 fix): the
+  // "already recorded" question — and, per Important 2 below, the "does
+  // this id already resolve live" question — is a RESOLVER question, not
+  // something to re-derive with a hand-built normalised map. A prior fix
+  // (I2) closed a raw-vs-normalised gap in the already-recorded skip by
+  // building `supersededByNormKey`, a SECOND normalised map answering "does
+  // this id's normalised form appear ANYWHERE in supersededBy" — which
+  // diverges from what `cast-resolve.ts`'s real resolver actually decides in
+  // three ways: (a) a normalised COLLISION (two different `from` keys
+  // normalising the same with different targets) is a deliberate `undefined`
+  // in the real resolver (`cast-resolve.ts`'s `put()` nulls the slot) but a
+  // last-wins guess in a `Map.set`; (b) the real resolver checks
+  // `'normalised-id'` (against the LIVE cast) before `'normalised-history'`
+  // (against the alias table) — a flat map has no such precedence, so it
+  // can "already-record"-skip an id that is actually a live match today;
+  // (c) the real resolver drops a history entry whose target is no longer a
+  // live cast id at CONSTRUCTION time — a flat map built from raw
+  // `supersededBy` entries does not. Every one of those divergences is a
+  // FALSE SKIP: the id vanishes from both `autoRecord` and `reportOnly`,
+  // exactly the under-reporting the #2107 widening exists to prevent.
+  // `historyResolver` — built with the REAL `history` (unlike
+  // `idOnlyResolver` above, which must stay empty-history) — is threaded in
+  // from `main()`, which receives it from `collectSegmentOrphans` (which
+  // already built one for this exact book); NOT reconstructed in the
+  // production path, so there is only ever one real resolver instance per
+  // book, never two that could drift apart.
+  //
+  // I-A (independent review, 2026-08-05, on the Important 1 fix above):
+  // this used to default a MISSING resolver to `{ resolve: () => undefined
+  // }` — fail-OPEN, the tenth instance of this wave's shape, one level up
+  // from the one Important 1 just fixed. `undefined` from `.resolve()`
+  // means both "asked, nothing resolves" AND "never asked" — and since this
+  // function no longer reads `history.supersededBy` directly at all (that
+  // was the whole point of Important 1), a caller that omits
+  // `historyResolver` while still passing a fully populated `history` got
+  // ZERO protection from either the already-recorded skip or guard 5, with
+  // no error. Measured: omitting the resolver on the guard-5 probe fixture
+  // (live `the_torment` + `timkin`, orphan `the-torment` 67 real segments,
+  // cache names it "Timkin") auto-recorded a 67-segment durable repoint
+  // onto the wrong character; with `history.supersededBy` also populated,
+  // the already-recorded skip went silently dead too. Exactly the defect
+  // `cacheAvailable`'s doc comment above already describes for a DIFFERENT
+  // guard ("an omitted flag reads as 'unknown, refuse', not 'confirmed
+  // available'") — this one just had the opposite posture. Fixed the same
+  // way: default to building the REAL resolver from the args this function
+  // already receives (`liveCast`, `history`, `deps.buildCastResolver`) —
+  // the identical construction `collectSegmentOrphans` uses — so an omitted
+  // `historyResolver` is a (redundant) optimisation for the production
+  // path, never a silent correctness hole for any other caller.
+  // Round 4 (independent review, 2026-08-05): this used to pass `history`
+  // straight through — but `planBookRepairs` treats a PARTIAL history as a
+  // supported shape (it defends `history.rejected ?? []` just above), while
+  // the real `buildCastResolver` does `Object.entries(history.supersededBy)`
+  // (`cast-resolve.ts`), which throws on `undefined`. The sibling
+  // construction in `collectSegmentOrphans` already defends both fields —
+  // this fallback now matches it exactly, so the two constructions of "the
+  // same resolver" can't disagree about what a valid `history` is. Latent
+  // today (production's `loadCastIdHistory` always returns the full shape),
+  // and neither of the test file's existing resolver stand-ins could have
+  // caught it either: every test that passes a partial `history` and the
+  // plain fake `deps.buildCastResolver` (`makeFakeResolver`) is safe only
+  // because that fake never reads `history` at all, and every test that
+  // uses the REAL-history-reading fake (`makeHistoryAwareFakeResolver`)
+  // defends `supersededBy` internally — see the test file's own doc comment
+  // on its dedicated round-4 regression test for the resolver stand-in that
+  // actually proves this (one that mirrors the real, undefended
+  // construction line).
+  const historyResolver =
+    input.historyResolver ?? buildCastResolver(liveCast, { supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] });
+
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
   // `Unknown-Male` — precisely the drift class #2040 exists to catch, and the
@@ -544,15 +651,20 @@ export function planBookRepairs(input, deps) {
   const skipped = [];
   // Owner-decided policy (2026-08-05, review round 2): a book with NO cache
   // evidence is safe to leave entirely alone if it has nothing this pass
-  // would otherwise have auto-recorded — the missing-cache gate right below
-  // (`!cacheAvailable`) only ever fires for an id that ALREADY passed guard
-  // 1/2 and found a Tier A/B match, i.e. a real would-be auto-record this
-  // book's blind ambiguity veto can't vouch for. Counting THAT event
-  // specifically (not merely "this book's cacheAvailable is false") is what
-  // lets `main()` refuse `--apply` only for a book with something at stake,
-  // instead of one blind-but-empty book (e.g. a real *Unlocked* cache that
-  // parses but names nobody, and which currently has zero orphaned ids to
-  // begin with) vetoing every other book in the workspace.
+  // would otherwise have auto-recorded — the missing-cache gate further
+  // down (`!cacheAvailable`, last in the guard chain) only ever fires for
+  // an id that ALREADY passed guard 1 (not reserved), guard 2 (not
+  // cross-source-ambiguous), guard 5 (current-resolution conflict, #2107
+  // widening), guard 4 (`snapshotsConsistent`), AND guard 3 (>=1 rendered
+  // segment) and found a Tier A/B match — see this function's own doc
+  // comment above for why that ordering is deliberate — i.e. a real
+  // would-be auto-record this book's blind ambiguity veto can't vouch for.
+  // Counting THAT event specifically (not merely "this book's
+  // cacheAvailable is false") is what lets `main()` refuse `--apply` only
+  // for a book with something at stake, instead of one blind-but-empty
+  // book (e.g. a real *Unlocked* cache that parses but names nobody, and
+  // which currently has zero orphaned ids to begin with) vetoing every
+  // other book in the workspace.
   let withheldForMissingCache = 0;
 
   for (const id of allIds) {
@@ -562,8 +674,19 @@ export function planBookRepairs(input, deps) {
       skipped.push({ id, reason: 'rejected', detail: 'user explicitly rejected this reconciliation (Task 17 banner)' });
       continue;
     }
-    if (id in supersededBy) {
-      skipped.push({ id, reason: 'already-recorded', detail: `cast-id-history.json already maps this to "${supersededBy[id]}"` });
+    // Important 1: "does an alias already cover this id" IS the question
+    // `historyResolver`'s `'history'`/`'normalised-history'` tiers answer —
+    // ask it, rather than re-deriving the decision (see the doc comment on
+    // `historyResolver` above for why a hand-rolled second map diverges).
+    const aliasHit = historyResolver.resolve(id);
+    if (aliasHit && (aliasHit.via === 'history' || aliasHit.via === 'normalised-history')) {
+      skipped.push({
+        id,
+        reason: 'already-recorded',
+        detail:
+          `cast-id-history.json already maps this to "${aliasHit.character.id}"` +
+          (aliasHit.via === 'normalised-history' ? ' (via a normalised-spelling match, not an exact key)' : ''),
+      });
       continue;
     }
 
@@ -679,7 +802,10 @@ export function planBookRepairs(input, deps) {
       // needs) and normalised (what Tier B's `resolveTierBId` match, which
       // is defined ENTIRELY by normalisation, actually needs) — see the
       // `rejectedTargetsByRawFrom`/`rejectedTargetsByNormFrom` construction
-      // above for the full reasoning.
+      // above for the full reasoning. Runs BEFORE guard 5 below — an
+      // explicit prior rejection of this exact pairing is a settled user
+      // decision and should skip outright without also asking whether the
+      // two evidence sources agree.
       const rawBlocked = rejectedTargetsByRawFrom.get(id)?.has(matchedId);
       const normBlocked = rejectedTargetsByNormFrom.get(normaliseIdKey(id))?.has(matchedId);
       if (rawBlocked || normBlocked) {
@@ -687,6 +813,32 @@ export function planBookRepairs(input, deps) {
           id,
           reason: 'rejected-pair',
           detail: `user explicitly rejected pairing "${id}" -> "${matchedId}" (Cast screen "Not the same character")`,
+        });
+        continue;
+      }
+      // --- guard 5 (Important 2, independent review on the #2107
+      // widening, 2026-08-05): does `id` already resolve LIVE, today, to a
+      // DIFFERENT character than this match found? Widening #2107 means an
+      // id that resolves via `'normalised-id'` now reaches this matching
+      // pipeline (it used to silently reconcile with no write at all) — and
+      // Tier A (name) is tried before Tier B (the SAME id-shape check this
+      // guard re-asks), so nothing previously stopped a stale cache name
+      // from out-voting a live id-shape match. `historyResolver` is the
+      // SAME resolver the already-recorded skip above already asked — a
+      // Tier-B-sourced match can never trip this (Tier B and this tier are
+      // the identical computation over the same live cast, so they always
+      // agree); only a Tier A name match can disagree with what `id`
+      // already resolves to.
+      const currentResolution = historyResolver.resolve(id);
+      if (currentResolution?.via === 'normalised-id' && currentResolution.character.id !== matchedId) {
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id already resolves via id-shape to a ` +
+            `DIFFERENT live character, "${currentResolution.character.id}" — two evidence sources disagree; ` +
+            `needs a human decision rather than trusting the name match over the live id-shape resolution`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
         });
         continue;
       }
@@ -710,49 +862,24 @@ export function planBookRepairs(input, deps) {
       // rendered line in this book, with no wrong audio on disk to
       // justify it and no reviewer in the loop (spec §4.7 scopes this
       // pass to REPAIR, not pre-emptive cache-only aliasing).
+      //
+      // #2107, widened by owner decision (2026-08-05): this used to also
+      // need to special-case an id that HAD real rendered segments but
+      // wasn't in `orphans` because it "already auto-reconciled" through
+      // the resolver's normalised-id tier — that bucket (`autoReconciled`)
+      // no longer exists. Only `'exact'` skips `orphans` now (see
+      // `buildOrphansFromSegments`'s doc comment), so `orphan.segments ===
+      // 0` here can only mean one thing: this id genuinely has zero
+      // rendered segments anywhere in the book.
       if (orphan.segments === 0) {
-        // --- round-2 review, MINOR finding 4: `orphan.segments === 0` also
-        // covers an id that DOES have real rendered segments but was never
-        // added to `orphans` because it already auto-reconciles through the
-        // resolver's own normalised-id tier (the Cast banner already shows
-        // it under "auto-reconciled", not "needs your decision"). Reporting
-        // that case with the same "zero rendered segments / no damage to
-        // repair" wording is FALSE — it contradicts the banner and inflates
-        // the reported segment total with a phantom zero. `autoReconciled`
-        // (built alongside `orphans` in `collectSegmentOrphans`) carries the
-        // real count and target for exactly this case; only ids genuinely
-        // absent from BOTH maps (truly never rendered) get the original
-        // reason.
-        const reconciled = autoReconciled?.get(id);
-        if (reconciled) {
-          // #2093 residual 5 incidental fix: this used to hardcode "via the
-          // normalised-id tier" — accurate while `autoReconciled` only ever
-          // captured that one tier, but no longer accurate now that it also
-          // captures 'normalised-history' matches (see
-          // `buildOrphansFromSegments`'s doc comment). Worded generically
-          // rather than threading the specific `via` value through, since
-          // both tiers mean the same thing here: "already resolves live,
-          // nothing to repair."
-          reportOnly.push({
-            id,
-            segments: reconciled.segments,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id already auto-reconciles to ` +
-              `"${reconciled.resolvedTo}" via a normalised-match tier at render time (${reconciled.segments} real ` +
-              `rendered segment(s) already carry the reconciled voice, per the Cast banner's auto-reconciled ` +
-              `section) — already fixed, no separate alias needed`,
-            candidates: [],
-          });
-        } else {
-          reportOnly.push({
-            id,
-            segments: 0,
-            chapters: [],
-            reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
-              `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
-            candidates: [],
-          });
-        }
+        reportOnly.push({
+          id,
+          segments: 0,
+          chapters: [],
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
+            `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
+          candidates: [],
+        });
         continue;
       }
       // --- round-2 review, Important 1: fail-closed cache-availability
@@ -771,10 +898,11 @@ export function planBookRepairs(input, deps) {
       //
       // --- I2 (pre-merge review, 2026-08-05): this gate is deliberately
       // LAST, immediately before `autoRecord.push`, not first — moved down
-      // past guards 3 and 4 above. Before this fix it sat ahead of both, so
-      // an id that guard 3 (zero segments) or guard 4 (inconsistent
-      // snapshots) would have refused ANYWAY — cache evidence or not —
-      // still incremented `withheldForMissingCache`, the count that gates
+      // past guards 3, 4 and (added later, #2107 widening) 5 above. Before
+      // this fix it sat ahead of guards 3/4, so an id that guard 3 (zero
+      // segments) or guard 4 (inconsistent snapshots) would have refused
+      // ANYWAY — cache evidence or not — still incremented
+      // `withheldForMissingCache`, the count that gates
       // the WHOLE workspace's `--apply` run (see `shouldRefuseApplyForWithheldAutoRecord`).
       // A single bak entry naming a retired, never-rendered id in a
       // cache-blind book would have printed `withheld: 1` and refused
@@ -868,21 +996,72 @@ export function buildRerenderRows(bookLabel, orphans) {
  *  right arguments, and that `main()` actually exits 1 on `true`)
  *  testable — `main` isn't exported (it needs `server/dist` built; see the
  *  module doc comment's Tests section), so that wiring remains verified
- *  only by the live dry run. */
+ *  only by the live dry run. **#2111 narrows, but does not close, this gap
+ *  — see `planApplyRefusal`'s own doc comment immediately below.** */
 export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache) {
   return apply === true && booksWithheldForMissingCache > 0;
 }
 
+/** #2111: the smallest orchestration seam `main()`'s per-workspace `--apply`
+ *  refusal can be pulled through a test without needing `server/dist` or a
+ *  live book scan. `main()` calls this ONCE, right after its per-book loop,
+ *  with `bookWithholds` — one `{ label, withheldForMissingCache }` entry per
+ *  scanned book, built by pushing `plan.withheldForMissingCache` straight
+ *  from each iteration's `planBookRepairs` result. This is a single source
+ *  of truth, not a second computation of the same fact re-derived in a test
+ *  (`cast-resolve.ts`'s own doc comment explains why this codebase avoids
+ *  that shape) — `main()`'s loop-tail accumulation that used to inline this
+ *  logic now calls this function instead of hand-rolling it a second time.
+ *
+ *  What this closes, on top of `shouldRefuseApplyForWithheldAutoRecord`
+ *  alone: the ACCUMULATION across multiple books — only a book with
+ *  `withheldForMissingCache > 0` counts, the label text is built correctly,
+ *  and the threshold crossing is driven through the same function `main()`
+ *  calls, not a hand-reimplemented copy in the test.
+ *
+ *  What this does NOT close, named explicitly rather than overclaimed (the
+ *  #2102 pre-merge review caught exactly this shape once already — an
+ *  extraction that moves the untested boundary down a level and then reads
+ *  as "wiring covered" when it isn't):
+ *    1. That `main()`'s per-book loop actually pushes the REAL
+ *       `plan.withheldForMissingCache` it computed into `bookWithholds` — a
+ *       one-line push, visible by inspection, not exercised by any
+ *       automated test in this file.
+ *    2. That `main()` actually acts on the returned `.refuse` by setting
+ *       `process.exitCode = 1` and returning before the write phase.
+ *       Unreachable from `test:hooks`: exercising it needs `apply === true`,
+ *       which `main()` gates behind a live TCP port-probe
+ *       (`probePortRangeRefused`) and a `server/dist` import, neither of
+ *       which exist in this harness — the same wall `shouldRefuseApplyFor
+ *       EmptyScan`'s own "Ie" test-file comment already documents for the
+ *       sibling `--apply`-gated refusal.
+ *  Both remain verified only by the on-box acceptance run (register row
+ *  A33, `docs/testing/onbox-acceptance-register.md`), never by an automated
+ *  test in this file. */
+export function planApplyRefusal(apply, bookWithholds) {
+  let booksWithheldForMissingCache = 0;
+  const withheldBookLabels = [];
+  for (const b of bookWithholds) {
+    if (b.withheldForMissingCache > 0) {
+      booksWithheldForMissingCache += 1;
+      withheldBookLabels.push(`${b.label} (${b.withheldForMissingCache} id(s))`);
+    }
+  }
+  return {
+    booksWithheldForMissingCache,
+    withheldBookLabels,
+    refuse: shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache),
+  };
+}
+
 /** Formats one `reportOnly` row for the console listing (main()). Extracted
  *  as a pure function so its "(N segment(s) across M chapter(s))" suffix is
- *  directly testable — #2093 residual 5 (cosmetic): the auto-reconciled
- *  report branch (`planBookRepairs`'s `autoReconciled` case) has real
- *  rendered segments but an empty `chapters` array (no per-chapter
- *  breakdown is tracked for that tier), so the OLD unconditional suffix
- *  printed the self-contradicting "N segment(s) across 0 chapter(s))" —
- *  a real segment count can never be split across zero chapters. The
- *  chapter-count clause is omitted entirely when `chapters` is empty,
- *  rather than guessing a count. */
+ *  directly testable — #2093 residual 5 (cosmetic): a matched id with zero
+ *  rendered segments (`planBookRepairs`'s "never rendered, no damage to
+ *  repair" branch) reports `chapters: []` by construction — no chapter can
+ *  carry a segment that was never rendered. The chapter-count clause is
+ *  omitted entirely when `chapters` is empty, rather than printing the
+ *  vacuous "across 0 chapter(s))" every such row would otherwise get. */
 export function formatReportRowSummary(r) {
   return r.chapters.length > 0
     ? `${r.id} (${r.segments} segment(s) across ${r.chapters.length} chapter(s))`
@@ -1284,33 +1463,60 @@ async function loadServerModules() {
  *  loaded segments-file records (`segs`, the shape `mods.loadSegmentsFiles`
  *  returns) and a resolver (the real `buildCastResolver` result in
  *  production, a fake with the same `.resolve()` contract in tests), walks
- *  every rendered segment and buckets it into `orphans` (the resolver
- *  misses entirely — per-chapter breakdown, approximate affected duration
- *  from each segment's own startSec/endSec, every non-empty
- *  characterSnapshot) or `autoReconciled` (the resolver hits via EITHER
- *  id-shape tier — round-2 review, MINOR finding 4, widened by residual 5
- *  below).
+ *  every rendered segment and buckets it into `orphans` — the rendered
+ *  bytes on disk may be stale — per-chapter breakdown, approximate affected
+ *  duration from each segment's own startSec/endSec, every non-empty
+ *  characterSnapshot.
  *
- *  Exported so the producer half of the auto-reconciled map — previously
- *  proven only by a live dry run against the real workspace, since
- *  `planBookRepairs`'s own tests only ever injected a fake `autoReconciled`
- *  map — has a direct unit test with no fs/`server/dist` dependency (see
- *  the module doc comment's Tests section). `collectSegmentOrphans` itself
- *  stays the thin I/O wrapper that loads `segs` and calls this.
+ *  Exported so the collector's pure core — previously proven only by a live
+ *  dry run against the real workspace, since `planBookRepairs`'s own tests
+ *  only ever injected a fake `orphans` map — has a direct unit test with no
+ *  fs/`server/dist` dependency (see the module doc comment's Tests
+ *  section). `collectSegmentOrphans` itself stays the thin I/O wrapper that
+ *  loads `segs` and calls this.
  *
- *  #2093 residual 5: `resolution.via === 'normalised-id'` used to be the
- *  ONLY tier counted as "already reconciles" — but `cast-resolve.ts`'s own
- *  `'normalised-history'` tier (a normalised match through a RECORDED
- *  alias, not just id-shape) is exactly the same "already fixed, no damage
- *  here" case, and was missing. An id that only resolves that way used to
- *  fall through to `orphans.get(id) ?? { segments: 0, ... }` in
- *  `planBookRepairs` and get the misleading "zero rendered segments — no
- *  damage to repair" reason instead of "already auto-reconciles" — the
- *  same contradiction-with-the-Cast-banner shape round-2 already fixed once
- *  for the id-shape tier, reopened here for the alias tier. */
+ *  #2107, widened by an explicit owner decision after independent review
+ *  (2026-08-05): a frozen `characterId` that is not literally a live cast
+ *  id today — via `cast-resolve.ts`'s `'exact'` tier — may have been
+ *  rendered against a different resolution than the one it resolves to
+ *  now, so it is listed as an orphan. That covers a genuine miss AND every
+ *  one of the other three resolver tiers (`'normalised-id'`, `'history'`,
+ *  `'normalised-history'`) alike — ONLY `'exact'` means the rendered bytes
+ *  are fine.
+ *
+ *  This replaces a narrower first version of this fix that kept
+ *  `'normalised-id'` out of `orphans`, reasoned as: an id that still
+ *  normalised-matches a live id with no history entry for it can't depend
+ *  on the mutable `history.supersededBy` table, so it can't have started
+ *  resolving after the render. True as far as it goes, but a non-sequitur
+ *  — it proves only that no RENAME happened, not that the bytes are
+ *  correct. Register row A32 (`docs/testing/onbox-acceptance-register.md`)
+ *  records the counter-example: *Playing with Fire*'s `the-torment` (67
+ *  segments, cast id `the_torment`) and `lightning-dave` (1 segment, cast
+ *  id `lightning_dave`) both recover under the `'normalised-id'` tier
+ *  today, but their audio was rendered BEFORE Wave 1's resolver existed at
+ *  all — `resolveGroup` did a bare `castById.get()` and substituted the
+ *  narrator regardless of tier, so a normalised-id match today says
+ *  nothing about what voice rendered the frozen bytes. There is no
+ *  per-segment evidence on the real workspace to discriminate a genuinely
+ *  fine `'normalised-id'` match from a stale one either way — the
+ *  PER-SEGMENT field `renderedFallbackCharacterId` is absent from all
+ *  84,642 real segments (only `renderedFallbackEngine`, 77 segments,
+ *  exists). `characterSnapshots` is a FILE-level map, not a per-segment
+ *  field — this function reads it below, once per file, and it IS present
+ *  (497 files, 2,625 keys) — but it doesn't say which tier resolved any
+ *  ONE segment either, so it isn't per-segment discriminating evidence —
+ *  so this is still a policy call, not something detectable from the
+ *  data: over-reporting is the safe failure direction for a one-shot
+ *  repair tool, under-reporting tells an operator the workspace is clean
+ *  when it might not be.
+ *
+ *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
+ *  being empty for an id must mean "resolves via `'exact'`", never merely
+ *  "resolver.resolve() returned something" — that laxer reading is the bug
+ *  this comment exists to prevent from coming back. */
 export function buildOrphansFromSegments(segs, resolver) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
-  const autoReconciled = new Map(); // id -> { segments, resolvedTo }
   for (const seg of segs) {
     const perChapterCount = new Map(); // id -> count
     const perChapterDuration = new Map(); // id -> seconds
@@ -1318,14 +1524,10 @@ export function buildOrphansFromSegments(segs, resolver) {
       const id = s.characterId;
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
-      if (resolution) {
-        if (resolution.via === 'normalised-id' || resolution.via === 'normalised-history') {
-          const entry = autoReconciled.get(id) ?? { segments: 0, resolvedTo: resolution.character.id };
-          entry.segments += 1;
-          autoReconciled.set(id, entry);
-        }
-        continue; // resolves (exact/history/normalised) — not an orphan
-      }
+      if (resolution?.via === 'exact') continue; // fine — literally the live cast id today, not orphaned
+      // Everything else — a genuine miss, or a match via 'normalised-id' /
+      // 'history' / 'normalised-history' — is listed (see the doc comment
+      // above for why only 'exact' is exempt).
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
         perChapterDuration.set(id, (perChapterDuration.get(id) ?? 0) + Math.max(0, s.endSec - s.startSec));
@@ -1345,13 +1547,20 @@ export function buildOrphansFromSegments(segs, resolver) {
       if (snapshot) entry.snapshots.push(snapshot);
     }
   }
-  return { orphans, autoReconciled };
+  return { orphans };
 }
 
 // Exported (previously module-private) SOLELY so Task 9's fix — passing
 // `history` through unmodified instead of a hand-built subset — has a direct
 // unit test asserting what actually reaches `buildCastResolver`, rather than
 // relying on the live dry run the way most of this file's I/O wrappers do.
+//
+// Also returns the real, history-aware `resolver` it built — Important 1
+// (independent review, 2026-08-05): `planBookRepairs`'s "already recorded"
+// and current-resolution-conflict guards need to ask this SAME resolver,
+// not reconstruct a second instance from the same inputs (see
+// `planBookRepairs`'s `historyResolver` local for the full reasoning).
+// `main()` threads it straight through.
 export async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
   // #2092/#2089 Task 9 incidental fix: this used to hand-build a
   // `{ supersededBy, rejected }` subset of `history`, silently dropping
@@ -1369,7 +1578,8 @@ export async function collectSegmentOrphans(bookDir, chapters, cast, history, mo
   // (`Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>`).
   const resolver = mods.buildCastResolver(cast.characters, history);
   const segs = await mods.loadSegmentsFiles(bookDir, chapters);
-  return buildOrphansFromSegments(segs, resolver);
+  const { orphans } = buildOrphansFromSegments(segs, resolver);
+  return { orphans, resolver };
 }
 
 function backupCastIdHistory(historyPath) {
@@ -1483,14 +1693,11 @@ async function main() {
   let totalReportSegments = 0;
   let totalSkipped = 0;
   let booksMissingCache = 0;
-  // Owner-decided policy, review round 2: the count that actually gates
-  // `--apply` (see shouldRefuseApplyForWithheldAutoRecord's doc comment) —
-  // books where planBookRepairs withheld a REAL auto-record candidate for
-  // the missing-cache reason, not merely books whose cache happens to be
-  // unusable. `withheldBookLabels` makes the refusal message name the
-  // specific book(s) an operator needs to act on, rather than just a count.
-  let booksWithheldForMissingCache = 0;
-  const withheldBookLabels = [];
+  // #2111: fed to `planApplyRefusal` once, after the loop, instead of
+  // hand-accumulating `booksWithheldForMissingCache`/`withheldBookLabels`
+  // inline here — see that function's doc comment for what this does and
+  // does not close of the wiring-untested gap.
+  const bookWithholds = []; // { label, withheldForMissingCache }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -1498,7 +1705,7 @@ async function main() {
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const { orphans: segmentOrphans, autoReconciled } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans, resolver: historyResolver } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -1543,7 +1750,7 @@ async function main() {
         bakNameIndex,
         orphans: segmentOrphans,
         cacheAvailable,
-        autoReconciled,
+        historyResolver,
       },
       {
         normaliseForMatch: mods.normaliseForMatch,
@@ -1553,10 +1760,7 @@ async function main() {
       },
     );
 
-    if (plan.withheldForMissingCache > 0) {
-      booksWithheldForMissingCache += 1;
-      withheldBookLabels.push(`${book.label} (${plan.withheldForMissingCache} id(s))`);
-    }
+    bookWithholds.push({ label: book.label, withheldForMissingCache: plan.withheldForMissingCache });
 
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
     allRerenderRows.push(...rerenderRows);
@@ -1629,6 +1833,10 @@ async function main() {
     }
   }
 
+  // #2111: single call, right after the loop — see `planApplyRefusal`'s
+  // own doc comment for exactly what this does and does not prove tested.
+  const { booksWithheldForMissingCache, withheldBookLabels, refuse: refuseApply } = planApplyRefusal(apply, bookWithholds);
+
   if (allRerenderRows.length) {
     console.log('--- Re-render list (book / chapter / orphaned id / segments / ~duration) ---');
     for (const row of allRerenderRows) {
@@ -1644,7 +1852,12 @@ async function main() {
   console.log(`auto-recordable aliases: ${totalAuto} (${totalAutoSegments} segment(s))${apply ? '' : ' — dry run, nothing written'}`);
   console.log(`reported for human decision: ${totalReport} id(s) / ${totalReportSegments} segment(s)`);
   console.log(`skipped (already recorded / rejected): ${totalSkipped}`);
-  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s)`);
+  // M-3 (independent review, 2026-08-05): the row count alone forces an
+  // operator to sum every row's `segments` by hand to get the figure the
+  // register/run-sheet/live-view all quote as "the arithmetic check that
+  // the set is complete" (e.g. 188) — print it here instead.
+  const totalRerenderSegments = allRerenderRows.reduce((sum, row) => sum + row.segments, 0);
+  console.log(`re-render candidates: ${allRerenderRows.length} chapter row(s) / ${totalRerenderSegments} segment(s)`);
   // Owner-decided policy, review round 2 (2026-08-05): these are now TWO
   // distinct numbers, only one of which gates --apply — printed together,
   // explicitly labelled, so neither reads as the other.
@@ -1675,7 +1888,7 @@ async function main() {
   // This refusal now fires only when withholding actually happened
   // (booksWithheldForMissingCache > 0), so a blind-but-empty book no longer
   // blocks a run it was never going to affect.
-  if (shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache)) {
+  if (refuseApply) {
     console.error(
       `\nRefusing --apply: ${booksWithheldForMissingCache} scanned book(s) had a real auto-record candidate ` +
         `withheld because their analysis-cache evidence is unusable at CACHE_DIR (${cacheDir}): ` +

@@ -108,10 +108,14 @@ const SENTENCES = [
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-annotate-emotion-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  const [{ annotateEmotionRouter }, { makeBookId }] = await Promise.all([
-    import('./annotate-emotion.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factory above (module-under-test can
+     receive the real binding instead of the mock). Measured latent for this
+     file — 0 failures in 14 runs (#2083's own survey) — not the live
+     ~2-in-5 rate, which belongs to voices.test.ts, a different file already
+     fixed under #2046. */
+  const { annotateEmotionRouter } = await import('./annotate-emotion.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   manuscriptId = `m_${bookId}`;
   app = express();

@@ -3098,6 +3098,63 @@ export async function synthesiseChapter(
           }),
         ),
       );
+    /* #2011 — a transcribe/ASR failure (e.g. a misconfigured qa.asr.model
+       triggering an unresolvable-repo error, or a wedged sidecar) must not
+       abort a chapter that has already spent real GPU time on synthesis.
+       Mirrors the SPK embed pass just below: non-fatal, logged and skipped.
+       R2 review fix (independent review of #2011/#2088's PR) — narrowed to
+       wrap ONLY this transcribe/classify call, not the surrounding re-synth
+       (`synthGroupsSerialized`) or any other step in this pass. Every OTHER
+       failure this pass can throw (`NoCapacityError`, `UnresolvableClonedVoiceError`,
+       `MissingDesignedVoiceError`, a sidecar 500 from a re-record's synth
+       call) stays fatal, exactly like the structurally identical signal-QA
+       re-record loop above (no catch at all) — an unresolvable cloned voice
+       must not degrade to a console.warn merely because it fired inside
+       this pass instead of that one. A genuine cancellation and the C3
+       `RecycleStormError` sidecar-thrashing signal are re-thrown
+       unconditionally (whole-chapter stop signals, not "this gate didn't
+       run"); every other `verify()` failure returns `null` — "verification
+       unavailable" — instead of throwing. */
+    /* A non-transient failure (e.g. #2011's misconfigured qa.asr.model) fails
+       every call the same way, so without a cheap guard the loop below would
+       attempt a doomed round-trip for EVERY sampled group in the chapter —
+       hundreds of identical `/transcribe` calls and warn lines for an 800-
+       sentence chapter, where the pre-#2011 code bailed after the first.
+       Give up on the ASR pass for the rest of THIS chapter once
+       `safeVerify` has failed this many times in a row (a success resets the
+       count, so a transient blip that recovers never trips it); the shared
+       `recycleRecoveries` budget above still terminates the transient/hang
+       shapes on its own schedule regardless. */
+    const ASR_ABANDON_AFTER_CONSECUTIVE_FAILURES = 3;
+    let consecutiveAsrFailures = 0;
+    let asrAbandoned = false;
+    const safeVerify = async (
+      pcm: Buffer,
+      rate: number,
+      group: SentenceGroup,
+    ): Promise<AsrClassification | null> => {
+      if (asrAbandoned) return null;
+      try {
+        const result = await verify(pcm, rate, group);
+        consecutiveAsrFailures = 0;
+        return result;
+      } catch (err) {
+        const name = (err as { name?: string })?.name;
+        if (name === 'AbortError' || signal?.aborted || name === 'RecycleStormError') throw err;
+        consecutiveAsrFailures += 1;
+        console.warn(
+          `[synthesiseChapter] ASR verify failed for group ${group.index}: ${String(err)}`,
+        );
+        if (consecutiveAsrFailures >= ASR_ABANDON_AFTER_CONSECUTIVE_FAILURES) {
+          asrAbandoned = true;
+          console.warn(
+            `[synthesiseChapter] ASR verify failed ${consecutiveAsrFailures} times in a row — ` +
+              `abandoning the ASR content-QA pass for the rest of this chapter (remaining groups ship unverified).`,
+          );
+        }
+        return null;
+      }
+    };
     /* Sample the groups to verify (have a result + pass the stride). The stride
        walks groups-with-results in order, so `total` mirrors that ordering. */
     let sampleCounter = 0;
@@ -3109,26 +3166,47 @@ export async function synthesiseChapter(
       sampled.push(group);
     }
     const totalToVerify = sampled.length;
-    /* Transcribe + classify every sampled group once (the best-of-N seed). */
-    const best = new Map<number, GroupResult>();
+    /* Transcribe + classify every sampled group once (the best-of-N seed). A
+       null verdict (safeVerify failed) leaves the group with NO entry in
+       segmentAsrByIndex — the same "gate did not run" shape a chapter
+       synthesised without ASR already produces — and `results[]` untouched
+       (`r` here already IS `results[group.index]`), so the group's original
+       PCM ships exactly as it already stood. No separate `best` map is kept
+       (R1 review fix, above) — `results[]` IS the running best-of-N state. */
     let verifiedCount = 0;
     for (const group of sampled) {
       if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
       asr.onProgress?.({ verified: verifiedCount, total: totalToVerify });
       verifiedCount += 1;
       const r = results[group.index]!;
-      best.set(group.index, r);
-      const { value: verdict, ms: tMs } = await timed(() => verify(r.pcm, r.sampleRate, group));
-      segmentAsrByIndex.set(group.index, verdict);
+      const { value: verdict, ms: tMs } = await timed(() => safeVerify(r.pcm, r.sampleRate, group));
       transcribeMs += tMs;
+      if (verdict) segmentAsrByIndex.set(group.index, verdict);
     }
     /* Round-based re-records: each round re-synths ALL still-drift groups in one
        batched dispatch, re-verifies, and keeps the better take per group. Each
        drift group gets at most `maxAsrRerecords` re-synths (one per round) — same
-       budget as the old per-group loop, batched so a round costs one call, not N. */
+       budget as the old per-group loop, batched so a round costs one call, not N.
+
+       R1 review fix (independent review of #2011/#2088's PR) — `results[group.index]`
+       is now written in the SAME step as `best`/`segmentAsrByIndex`, not
+       deferred to a separate commit pass run after every round. The deferred
+       form was safe pre-#2011 (any throw aborted the whole chapter before the
+       deferred pass ever ran), but #2011's narrower catch (now safeVerify,
+       above) can let the round loop carry on past a failed verify for one
+       group while other groups in the SAME round already advanced — a
+       deferred, batch-at-the-end commit would then be able to ship a group's
+       stale PCM stamped with a DIFFERENT (already-advanced) group's-worth of
+       bookkeeping correctness assumptions violated, or, more directly, leave
+       a group's shipped `results[]` PCM and its `segmentAsrByIndex` verdict
+       referring to two different takes if a later step in the same pass
+       failed after this group had already been updated. Committing inline
+       makes that structurally impossible: at every point after this line,
+       `results[group.index]` and `segmentAsrByIndex.get(group.index)`
+       describe the SAME take. */
     for (let attempt = 1; attempt <= maxAsrRerecords; attempt++) {
       if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
-      const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)!.verdict === 'drift');
+      const pending = sampled.filter((g) => segmentAsrByIndex.get(g.index)?.verdict === 'drift');
       if (pending.length === 0) break;
       for (const group of pending) {
         asrRetryCountByIndex.set(group.index, (asrRetryCountByIndex.get(group.index) ?? 0) + 1);
@@ -3146,17 +3224,13 @@ export async function synthesiseChapter(
       for (const group of pending) {
         const f = fresh.get(group.index);
         if (!f) continue;
-        const { value: freshClass, ms: revMs } = await timed(() => verify(f.pcm, f.sampleRate, group));
+        const { value: freshClass, ms: revMs } = await timed(() => safeVerify(f.pcm, f.sampleRate, group));
         transcribeMs += revMs;
-        if (asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
-          best.set(group.index, f);
+        if (freshClass && asrBetter(freshClass, segmentAsrByIndex.get(group.index)!)) {
           segmentAsrByIndex.set(group.index, freshClass);
+          results[group.index] = f;
         }
       }
-    }
-    /* Commit the best take per sampled group. */
-    for (const group of sampled) {
-      results[group.index] = best.get(group.index)!;
     }
   }
 
