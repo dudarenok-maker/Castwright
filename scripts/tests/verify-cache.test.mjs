@@ -528,6 +528,29 @@ test('stepTouchedByDiff: an empty diff touches nothing', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], []), false);
 });
 
+// M3 (#2146 review): 'server/tts-sidecar/requirements*.txt' compiles to
+// `requirements[^/]*\.txt$` (the single-segment `*` cannot cross a `/`), so
+// it never matched a file under the requirements/ SUBDIRECTORY —
+// requirements/base.txt became load-bearing in this PR (the CI bootstrap
+// installs from it directly) but editing it prints [cached] locally. Same
+// gap for pytest.ini: it sits at server/tts-sidecar/pytest.ini, not matched
+// by '**/*.py'. Cloud is unaffected (verify.yml's `^server/tts-sidecar/`
+// match already covers both) — this is a LOCAL-cache-only hole, same shape
+// as M3's sibling findings across this PR.
+test('stepTouchedByDiff: server/tts-sidecar/requirements/base.txt is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/requirements/base.txt']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: server/tts-sidecar/pytest.ini is in scope for test:sidecar', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:sidecar'], ['server/tts-sidecar/pytest.ini']),
+    true,
+  );
+});
+
 // --- test:hooks completeness guard (ops-18, #2115) -------------------------
 // The globs + extraFiles above are a hand-maintained approximation of "every
 // file a hooks test depends on". This test checks that approximation against

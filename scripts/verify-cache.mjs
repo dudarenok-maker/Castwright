@@ -234,12 +234,27 @@ export const STEPS = [
   {
     name: 'test:sidecar',
     inputs: {
-      globs: ['server/tts-sidecar/**/*.py', 'server/tts-sidecar/requirements*.txt'],
+      /* M3 (#2146 review): 'requirements*.txt' compiles to
+         requirements[^/]*\.txt$ — a single-segment `*` that cannot cross a
+         `/`, so it never matched anything under the requirements/
+         SUBDIRECTORY. requirements/base.txt became load-bearing in this PR
+         (the CI bootstrap installs from it directly), so a base.txt-only
+         diff must bust this step's cache. Added as its own glob rather than
+         widening the existing one, to keep the miss visible in the diff. */
+      globs: [
+        'server/tts-sidecar/**/*.py',
+        'server/tts-sidecar/requirements*.txt',
+        'server/tts-sidecar/requirements/*.txt',
+      ],
       extraFiles: [
         'server/tts-sidecar/run-tests.ps1',
         // The npm script now invokes this instead; run-tests.ps1 is retained
         // for direct local/PowerShell use, so BOTH are inputs.
         'scripts/run-sidecar-tests.mjs',
+        // M3 (#2146 review): '**/*.py' misses this — it has no .py extension
+        // — so a pytest.ini-only diff (e.g. changing markers or addopts)
+        // printed [cached] locally with nothing to invalidate the step.
+        'server/tts-sidecar/pytest.ini',
       ],
       includeLockfiles: [],
     },
