@@ -3539,6 +3539,15 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     "qwen.1.7b.design": 6144,
     "coqui": 3584,
     "asr": 400,
+    # #2094 — a conservative cold-start prior for an ALREADY-RESIDENT ASR
+    # model's incremental per-forward cost (feature extraction + attention
+    # buffers for one short sentence), not weight materialisation. No on-box
+    # measurement exists yet for this specific figure (the observed 3707 MB
+    # that motivated #2094 was the CONTAMINATED cold "asr" learned estimate,
+    # not a warm one) — deliberately conservative rather than measured; the
+    # SAME learning mechanism as every other key here supersedes it once real
+    # `asr.warm` observations accumulate (`_FOOTPRINT_MIN_SAMPLES`).
+    "asr.warm": 128,
     "spk": 200,
 }
 
@@ -3569,7 +3578,7 @@ class FootprintTable:
         self._obs: dict[str, deque[int]] = {}
 
     @staticmethod
-    def _key(engine: str, model: Optional[str], cfg: Optional[dict]) -> str:
+    def _key(engine: str, model: Optional[str], cfg: Optional[dict], resident: bool = False) -> str:
         model_str = (model or "").lower()
         cfg = cfg or {}
         if engine == "qwen" and "1.7b" in model_str:
@@ -3582,6 +3591,15 @@ class FootprintTable:
             if op == "design":
                 return "qwen.1.7b.design"
             return "qwen.1.7b"
+        # #2094 — an already-resident ASR model needs only its per-call
+        # activation footprint for the forward, not the cold-load peak (weights
+        # materialisation + first CUDA-context touch) that "asr" otherwise books
+        # UNCONDITIONALLY regardless of residency. Tracked under its own key so
+        # its learned p95 warms independently of — and can't be diluted by, or
+        # (per #2094's still-open device-wide `max_memory_allocated`
+        # contamination question) leak contamination into — the cold-load pool.
+        if engine == "asr" and resident:
+            return "asr.warm"
         return engine
 
     @staticmethod
@@ -3600,17 +3618,21 @@ class FootprintTable:
         idx = min(len(s) - 1, int(math.ceil(_FOOTPRINT_PERCENTILE / 100 * len(s))) - 1)
         return s[idx]
 
-    def peak_mb(self, engine: str, model: Optional[str], cfg: Optional[dict] = None) -> int:
-        key = self._key(engine, model, cfg)
+    def peak_mb(
+        self, engine: str, model: Optional[str], cfg: Optional[dict] = None, resident: bool = False,
+    ) -> int:
+        key = self._key(engine, model, cfg, resident)
         learned = self._learned_mb(key)
         if learned > 0:
             return learned
         return self._seed_mb(key, engine, cfg)
 
-    def record(self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int) -> None:
+    def record(
+        self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int, resident: bool = False,
+    ) -> None:
         if observed_mb <= 0:
             return
-        key = self._key(engine, model, cfg)
+        key = self._key(engine, model, cfg, resident)
         self._obs.setdefault(key, deque(maxlen=_FOOTPRINT_WINDOW)).append(int(observed_mb))
 
 
@@ -4121,15 +4143,22 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
         pinned: Optional[str],
-    ) -> tuple[dict, Optional[tuple]]:
+    ) -> tuple[dict, Optional[tuple], bool]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
-        the lock. Returns `(admission, held)`; `held` is the ledger token
-        `reservation()` must release on exit, or None (cpu / noCapacity —
-        nothing was held)."""
-        peak = self.footprints.peak_mb(engine, model, cfg)
+        the lock. Returns `(admission, held, resident)`; `held` is the ledger
+        token `reservation()` must release on exit, or None (cpu / noCapacity —
+        nothing was held). `resident` (#2094) is whether `engine` was already
+        loaded BEFORE this reservation — `reservation()` threads it through to
+        `footprints.record()` so the observation lands in the same peak-mb
+        bucket (`FootprintTable._key`) the reservation itself was booked under."""
         resident = self.is_resident(engine)
+        # #2094 — consult residency BEFORE booking: an already-resident engine
+        # (currently only distinguished for "asr", see `FootprintTable._key`)
+        # needs an incremental forward-only reservation, not the cold-load peak
+        # unconditionally booked before this.
+        peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
         constraint = resident if resident is not None else pinned
         reserve_cap = self.reserve_mb()
         devices = self.probe()
@@ -4178,7 +4207,7 @@ class PlacementController:
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
-        return admission, held
+        return admission, held, resident is not None
 
     @asynccontextmanager
     async def reservation(
@@ -4216,7 +4245,7 @@ class PlacementController:
         real hazard for tests, which must therefore each drive this
         `PlacementController` under exactly one `asyncio.run()`."""
         async with self._admit_lock:
-            admission, held = await self._resolve_admission(
+            admission, held, resident = await self._resolve_admission(
                 engine, model, cfg, cpu_capable, heavy, pinned
             )
         try:
@@ -4224,7 +4253,11 @@ class PlacementController:
         finally:
             if held is not None:
                 self.ledger.release(held)
-                self.footprints.record(engine, model, cfg, self._observed_mb(held[0]))
+                # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
+                # booked the reservation under — recording under that same key
+                # (not a freshly re-checked residency) keeps the observation in
+                # the bucket its own peak_mb() estimate came from.
+                self.footprints.record(engine, model, cfg, self._observed_mb(held[0]), resident)
 
 
 # Task 4 (vram-aware-placement plan) — capacity-aware admission for every heavy
@@ -4550,6 +4583,19 @@ class VoiceLanguageUnsupportedError(VoiceNotDesignedError):
     re-cloning cannot add a language to the model's config."""
 
 
+class DesignContentionTimeoutError(RuntimeError):
+    """A synth needed to evict the transient VoiceDesign model, but a design
+    stayed in flight past `unload_design()`'s bounded wait (#2070).
+
+    The eviction-policy call (design wins): a design is short, user-initiated
+    and interactive — someone is watching it render in cast review — so
+    killing it destroys visible work with no recovery path. A synth is
+    batch/background and can absorb a wait instead. Reaching this error means
+    the design outlived even that bounded wait (sized above its own ~120s
+    cold-design server budget, see `unload_design`), i.e. it is genuinely
+    wedged, not merely slow — the caller should retry the synth shortly."""
+
+
 class Base17UnavailableError(Exception):
     """The 1.7B-Base model can't be used for an anchored mint for a
     deterministic reason the separate VoiceDesign model won't share. The
@@ -4561,6 +4607,22 @@ class Base17UnavailableError(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(f"Qwen 1.7B-Base unavailable ({reason}).")
         self.reason = reason
+
+
+# #2070 — how long `unload_design()` waits for an in-flight `design_voice()`
+# call to clear before giving up and raising `DesignContentionTimeoutError`
+# instead of silently nulling `_design` out from under it. Sized ABOVE the
+# documented ~120s cold-design server budget (design_voice's own comment:
+# "pushed cold designs past the 120s server budget") because #2064's review
+# found the race window contains a FULL 0.6B cold load — a bound tighter than
+# a design's own request budget would trip on a design that is merely slow,
+# not wedged, defeating the "design wins" policy this exists to implement. A
+# design still running past its OWN budget is wedged, not slow, so only that
+# case reaches the timeout. Not exposed as an env knob (deliberately — see
+# CLAUDE.md's "new env var MUST be a knob" rule this avoids triggering; a
+# fixed conservative bound is simpler and this is the only caller).
+_DESIGN_CONTENTION_WAIT_S_DEFAULT = 150.0
+_DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
 
 
 class QwenEngine(Engine):
@@ -5576,12 +5638,39 @@ class QwenEngine(Engine):
             else:
                 log.info("Qwen models unloaded.")
 
-    def unload_design(self) -> None:
+    def unload_design(
+        self,
+        wait_seconds: float = _DESIGN_CONTENTION_WAIT_S_DEFAULT,
+        poll_seconds: float = _DESIGN_CONTENTION_POLL_S_DEFAULT,
+    ) -> None:
         """Drop only the heavy VoiceDesign model, keeping the resident Base
         synth model loaded. Lock-guarded so it can't null the model out from
         under a concurrent design/synth forward (which holds `_synth_lock` —
         we wait for it). MUST NOT be called while already holding `_synth_lock`:
-        it is a non-reentrant threading.Lock. Idempotent."""
+        it is a non-reentrant threading.Lock. Idempotent.
+
+        #2070 — `synthesize()`/`synthesize_batch()` call this UNCONDITIONALLY
+        whenever a design is resident, with no regard for whether that design
+        is still rendering: an ordinary synth on another voice used to be able
+        to null `_design` mid-`design_voice()`, which then failed loud with
+        "VoiceDesign model was unloaded before this design could render" —
+        silently killing visible, user-initiated work for a batch job that
+        could simply have waited. The eviction-policy call is that the DESIGN
+        WINS: this waits (bounded by `wait_seconds`, polling every
+        `poll_seconds`) for `_design_in_flight` to clear before evicting,
+        rather than nulling it out from under an active forward. The wait is
+        bounded, never unbounded — a genuinely wedged design must not hang
+        every subsequent render forever — so a design still in flight past
+        `wait_seconds` raises `DesignContentionTimeoutError` instead."""
+        deadline = time.monotonic() + wait_seconds
+        while self._design_in_flight.busy:
+            if time.monotonic() >= deadline:
+                raise DesignContentionTimeoutError(
+                    f"Qwen VoiceDesign has been in flight for over "
+                    f"{wait_seconds:.0f}s — refusing to evict it out from "
+                    "under an active design. Retry the synth shortly."
+                )
+            time.sleep(poll_seconds)
         with self._synth_lock:
             if self._design is None:
                 return
@@ -5766,14 +5855,20 @@ class QwenEngine(Engine):
                         # itself hold `_synth_lock` for the whole cold load.
                         design = self._design
                         if design is None:
-                            # see #2070 — `unload_design()` is called
-                            # unconditionally from synthesize()/
-                            # synthesize_batch() (not gated on
-                            # `_design_in_flight`), so an ordinary render of
-                            # another voice can land here mid-design, and the
-                            # gap this raise closes spans a full 0.6B cold
-                            # load (seconds to tens of seconds), not a narrow
-                            # Stop-only race.
+                            # #2070 fixed the ordinary-synth race this used to
+                            # cover: `unload_design()` now waits (bounded) on
+                            # `_design_in_flight` before nulling `_design`, and
+                            # THIS call is what holds it busy, so a concurrent
+                            # /synthesize's unload_design can no longer land
+                            # here mid-design. What remains is a genuinely
+                            # explicit action — a full /unload landing in the
+                            # gap between `_ensure_design_loaded()` above and
+                            # this lock acquire — which deliberately is NOT
+                            # gated by the design-wins policy (an explicit
+                            # Stop must still be able to free the model). Raise
+                            # loud rather than silently absorbing that race
+                            # with an in-lock re-pull that would itself hold
+                            # `_synth_lock` for the whole cold load.
                             raise RuntimeError(
                                 "Qwen VoiceDesign model was unloaded before "
                                 "this design could render — reload it and "
@@ -6835,6 +6930,22 @@ class WhisperEngine:
         self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
         self._requested_device = self._device  # preserved for /health fell_back detection
         self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
+        # #2047 — optional HuggingFace revision pin for the resolved weights
+        # repo (e.g. faster-whisper's "base" -> Systran/faster-whisper-base).
+        # Unset by default: production ASR compares a fresh transcript against
+        # the MANUSCRIPT text at a real (non-zero) WER tolerance, so an
+        # upstream checkpoint move is harmless there — a pin has upgrade-path
+        # consequences (stale weights never auto-refresh) production doesn't
+        # need to pay for. The golden content-drift gate is the one consumer
+        # that DOES need this: it diffs against a RECORDED transcript at
+        # tolerance 0 (#1911/#2004), so an unpinned revision is a silent input
+        # to that gate — `tests/golden/test_golden_regression.py`'s
+        # `_make_whisper()` sets this env var outright the same way it pins
+        # ASR_MODEL/ASR_DEVICE/ASR_COMPUTE_TYPE. Deliberately NOT a config-
+        # registry knob (CLAUDE.md's "new env var MUST be a knob" applies to
+        # operator-facing settings; this mirrors the already-unregistered
+        # golden-tier-only env vars like GOLDEN_BLESS/GOLDEN_REBLESS_CONTENT).
+        self._model_revision = (os.environ.get("ASR_MODEL_REVISION", "").strip() or None)
 
     def _compute_type(self, device: Optional[str] = None) -> str:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
@@ -6875,10 +6986,16 @@ class WhisperEngine:
                 "in server/tts-sidecar."
             ) from e
         log.info(
-            "Loading Whisper ASR model=%s device=%s compute=%s ...",
-            self._model_name, dev, self._compute_type(dev),
+            "Loading Whisper ASR model=%s device=%s compute=%s revision=%s ...",
+            self._model_name, dev, self._compute_type(dev), self._model_revision or "(unpinned)",
         )
-        self._model = WhisperModel(self._model_name, **_ct2_kwargs(dev, self._compute_type(dev)))
+        # #2047 — `revision=None` (the default when ASR_MODEL_REVISION is
+        # unset) is faster-whisper's own unpinned behaviour, so this is a
+        # byte-for-byte no-op for every caller that doesn't set the env var.
+        self._model = WhisperModel(
+            self._model_name, revision=self._model_revision,
+            **_ct2_kwargs(dev, self._compute_type(dev)),
+        )
         # Reflect the resolved card for /health fell_back detection once loaded.
         self._device = dev
         log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, dev)
@@ -10221,6 +10338,18 @@ async def synthesize(req: Request) -> Response:
             {"detail": f"Voice '{voice}' has not been designed yet.", "code": "voice_not_designed"},
             status_code=409,
         )
+    except DesignContentionTimeoutError as exc:
+        # #2070 — the design-wins eviction policy timed out. Non-poisoned 503
+        # (mirrors the srv-17c drain fence above): transient, safe to retry,
+        # not a CUDA/process fault.
+        log.warning(
+            "/synthesize: design contention timeout — engine=%s voice=%s: %s",
+            engine_id, voice, exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "design_in_flight"},
+            status_code=503,
+        )
     except Exception as e:
         # Internal-only — feeds CUDA-poison detection + the server-side log,
         # never a response body (the body stays generic below).
@@ -10538,6 +10667,16 @@ async def synthesize_batch(req: Request) -> Response:
         # (potentially multi-second) batched forward runs on a worker thread.
         result = await asyncio.to_thread(
             engine.synthesize_batch, model, items, live_instruct
+        )
+    except DesignContentionTimeoutError as exc:
+        # #2070 — same design-wins eviction policy as /synthesize.
+        log.warning(
+            "/synthesize-batch: design contention timeout (model=%s items=%d): %s",
+            model, len(items), exc,
+        )
+        return JSONResponse(
+            {"detail": str(exc), "code": "design_in_flight"},
+            status_code=503,
         )
     except Exception as e:
         # Internal-only — forensic log + CUDA-poison detection, never a body.

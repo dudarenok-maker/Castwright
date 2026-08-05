@@ -162,6 +162,16 @@ Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
 so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 8 GB card before either window warms.
 
+`asr` similarly splits by residency, not model (#2094): a COLD `/transcribe`
+(no Whisper model loaded yet) books the full `asr` cold-load peak (400 MB —
+weights materialisation + first-call warmup); an ALREADY-RESIDENT one books
+the separate `asr.warm` key instead — the forward-only activation cost, not
+the weight load a resident model has already paid. `asr.warm`'s 128 MB is a
+conservative, UNMEASURED cold-start prior (no on-box observation exists yet
+for this specific incremental figure) rather than a measured value like the
+design-family pair above; it learns its own p95 the same way once real
+`asr.warm` observations accumulate.
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
@@ -169,6 +179,7 @@ so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 <!-- footprint:qwen.1.7b.design=6144 -->
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
+<!-- footprint:asr.warm=128 -->
 <!-- footprint:spk=200 -->
 
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy

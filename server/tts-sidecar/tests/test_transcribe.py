@@ -144,6 +144,31 @@ def test_load_cuda_uses_int8_float16(fake_whisper_module, monkeypatch) -> None:
     assert model.compute_type == "int8_float16"
 
 
+def test_load_omits_revision_pin_by_default(fake_whisper_module, monkeypatch) -> None:
+    """#2047 — no ASR_MODEL_REVISION set: production stays unpinned,
+    byte-for-byte the pre-#2047 call. `WhisperModel(revision=None)` is
+    faster-whisper's own unpinned default."""
+    monkeypatch.delenv("ASR_MODEL_REVISION", raising=False)
+    engine = main.WhisperEngine()
+    assert engine._model_revision is None
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.kwargs.get("revision") is None
+
+
+def test_load_passes_revision_when_pinned(fake_whisper_module, monkeypatch) -> None:
+    """#2047 — ASR_MODEL_REVISION set (the golden tier's `_make_whisper()`
+    pins it): the HF revision reaches WhisperModel's constructor, so a moved
+    upstream checkpoint under the same model name is legible rather than
+    silently swapped in underneath a tolerance-0 gate."""
+    monkeypatch.setenv("ASR_MODEL_REVISION", "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")
+    engine = main.WhisperEngine()
+    assert engine._model_revision == "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.kwargs.get("revision") == "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+
+
 def test_load_is_idempotent(fake_whisper_module) -> None:
     engine = main.WhisperEngine()
     engine._ensure_loaded()
