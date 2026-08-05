@@ -1,10 +1,16 @@
 // Runs under `npm run test:hooks` (node --test over scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { maxNvidiaSmiUtil, gpuBusyWarningFor } from '../run-golden-audio.mjs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import {
+  maxNvidiaSmiUtil,
+  gpuBusyWarningFor,
+  CONTENTION_UNKNOWN_MESSAGE,
+} from '../run-golden-audio.mjs';
 
 // Resolve relative to THIS file, not the process cwd — `node --test` can be
 // invoked from a different working directory than the repo root (e.g. a
@@ -12,6 +18,7 @@ import { maxNvidiaSmiUtil, gpuBusyWarningFor } from '../run-golden-audio.mjs';
 // would then silently read the wrong file or throw ENOENT.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_PATH = join(HERE, '..', 'run-golden-audio.mjs');
+const REPO_ROOT = join(HERE, '..', '..');
 const src = readFileSync(SRC_PATH, 'utf8');
 
 // The exact non-leaking shape both Suite calls must use: `undefined` (not
@@ -22,27 +29,34 @@ const src = readFileSync(SRC_PATH, 'utf8');
 // bless on every non-bless run and assert on every bless run.
 const BLESS_ENV_SHAPE = /GOLDEN_BLESS:\s*bless\s*\?\s*'1'\s*:\s*undefined/;
 
-test('Suite B clears GOLDEN_BLESS (not leaves it ambient) on the non-bless path', () => {
-  const suiteB = src.slice(src.indexOf("run('assembly (Suite B)'"));
-  const call = suiteB.slice(0, suiteB.indexOf('\n  }'));
-  assert.match(
-    call,
-    BLESS_ENV_SHAPE,
-    'Suite B run() must set GOLDEN_BLESS to exactly `1` when blessing and ' +
-      '`undefined` (which clears an ambient value) otherwise — an inverted ' +
-      'ternary must fail this test',
+// #2036 review round 2, finding R2: a previous version of this test sliced
+// the source text from `run('assembly (Suite B)'` to the next `\n  }`,
+// anchoring on the wrapper's exact nesting depth (two spaces). De-indenting
+// that closing brace by even one level — which the #2036 `isDirectInvocation`
+// wrapper did in passing — let the slice run past Suite B's call entirely and
+// swallow Suite A's env object too, so a mutated Suite B call (env: {} —
+// reintroducing the exact ambient-bless leak this test exists to prevent)
+// still matched somewhere inside the widened slice and stayed green. Counting
+// occurrences instead of slicing is depth-independent: it can't be widened by
+// a reindent, because there is no window to widen.
+test('GOLDEN_BLESS is cleared (not left ambient) on the non-bless path for BOTH suites', () => {
+  const occurrences = [...src.matchAll(/GOLDEN_BLESS:[^\n,}]*/g)].map((m) => m[0]);
+  assert.equal(
+    occurrences.length,
+    2,
+    `expected exactly 2 "GOLDEN_BLESS:" occurrences (Suite A's run() + Suite B's), ` +
+      `found ${occurrences.length}: ${JSON.stringify(occurrences)} — a suite's env object ` +
+      'was removed, duplicated, or no longer sets GOLDEN_BLESS at all',
   );
-});
-
-test('Suite A clears GOLDEN_BLESS (not leaves it ambient) on the non-bless path', () => {
-  const suiteA = src.slice(src.indexOf("run(\n      'sidecar (Suite A)'"));
-  assert.match(
-    suiteA,
-    BLESS_ENV_SHAPE,
-    'Suite A run() must set GOLDEN_BLESS to exactly `1` when blessing and ' +
-      '`undefined` (which clears an ambient value) otherwise — an inverted ' +
-      'ternary must fail this test',
-  );
+  for (const occurrence of occurrences) {
+    assert.match(
+      occurrence,
+      BLESS_ENV_SHAPE,
+      `"${occurrence}" must set GOLDEN_BLESS to exactly \`1\` when blessing and ` +
+        '`undefined` (which clears an ambient value) otherwise — an inverted ternary, ' +
+        'or a bare `env: {}`, must fail this test',
+    );
+  }
 });
 
 test('the header documents that --bless follows suite selection', () => {
@@ -84,7 +98,81 @@ test('gpuBusyWarningFor stays silent when every GPU is under threshold', () => {
   assert.equal(gpuBusyWarningFor('3\n12\n'), null);
 });
 
-test('gpuBusyWarningFor stays silent on empty/unparseable nvidia-smi output', () => {
-  assert.equal(gpuBusyWarningFor(''), null);
-  assert.equal(gpuBusyWarningFor('N/A\n'), null);
+// #2036 review round 2, finding R4: an absent/unparseable probe used to
+// return `null` here — indistinguishable at the console from "checked, GPU
+// idle". On a `--bless` run that permanently re-records thresholds, "I could
+// not tell" is materially different information from "it was idle", so it
+// now gets its own message instead of silently reading as the good case.
+test('gpuBusyWarningFor reports CONTENTION_UNKNOWN, not silence, on empty/unparseable nvidia-smi output', () => {
+  assert.equal(gpuBusyWarningFor(''), CONTENTION_UNKNOWN_MESSAGE);
+  assert.equal(gpuBusyWarningFor('N/A\n'), CONTENTION_UNKNOWN_MESSAGE);
+});
+
+// #2036 review round 2, finding R1: `isDirectInvocation`'s strict
+// `import.meta.url` equality check silently evaluates false — and the whole
+// script silently exits 0 having run nothing — whenever the invoked path
+// crosses a symlink or junction. Node resolves symlinks when computing the
+// entry module's own `import.meta.url`, but `pathToFileURL(argv[1])` reflects
+// the raw, unresolved invocation path, so the two sides disagree even for a
+// perfectly ordinary `node scripts/run-golden-audio.mjs`. Verified directly:
+//   import.meta.url             file:///…/real/probe.mjs
+//   pathToFileURL(argv[1]).href file:///…/link/probe.mjs
+// This repo junctions aggressively for worktrees, and POSIX's `/tmp` is
+// itself commonly a symlink (macOS: `/tmp` -> `/private/tmp`), so this is not
+// a hypothetical shape. Reproduces it for real: a link stands in for a
+// worktree root, the script is invoked THROUGH it, and the real Suite B run
+// must actually happen — an empty stdout means the guard silently no-op'd.
+test('a junction/symlink earlier in the invoked path does not silently no-op the run', () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'rga-junction-'));
+  const linkPath = join(tmpRoot, 'repo-link');
+  let linkCreated = false;
+  try {
+    // 'junction' is honoured on Windows; POSIX ignores the type argument and
+    // creates an ordinary symlink to the directory — both reproduce the same
+    // import.meta.url-vs-argv[1] mismatch, so no OS branch is needed.
+    symlinkSync(REPO_ROOT, linkPath, 'junction');
+    linkCreated = true;
+
+    const target = join(linkPath, 'scripts', 'run-golden-audio.mjs');
+    const r = spawnSync(process.execPath, [target, '--assembly-only'], {
+      encoding: 'utf8',
+      timeout: 120000,
+      env: { ...process.env, CUDA_VISIBLE_DEVICES: '' },
+    });
+    assert.equal(
+      r.status,
+      0,
+      `expected a clean exit through the junction; got status=${r.status}, ` +
+        `error=${r.error}, stderr=${r.stderr}`,
+    );
+    assert.match(
+      r.stdout,
+      /assembly \(Suite B\)/,
+      'the real Suite B run must have happened through the junction — empty stdout ' +
+        `means the guard silently no-op\'d. stdout was: ${JSON.stringify(r.stdout)}`,
+    );
+  } finally {
+    // Remove the link FIRST, and only proceed to the recursive delete once
+    // that succeeded — never a recursive delete while the link might still
+    // be present, which would follow it straight into the real repo this
+    // test points at (the exact worktree-teardown hazard CLAUDE.md warns
+    // about). rmdirSync on a junction/symlink-to-directory removes just the
+    // reparse point without traversing into the target.
+    let junctionRemoved = !linkCreated;
+    if (linkCreated) {
+      try {
+        rmdirSync(linkPath);
+        junctionRemoved = true;
+      } catch (cleanupErr) {
+        console.error(
+          'run-golden-audio test: failed to remove the junction at',
+          linkPath,
+          '— leaving the temp dir in place rather than risk a recursive delete ' +
+            'through a still-live link:',
+          cleanupErr,
+        );
+      }
+    }
+    if (junctionRemoved) rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });

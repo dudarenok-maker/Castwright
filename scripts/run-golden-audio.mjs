@@ -77,6 +77,16 @@ if (assemblyOnly && sidecarOnly) {
 // NOT block) a `--bless` attempted under load, reusing the same nvidia-smi
 // parser verify-cache.mjs's own `[contention] GPU busy` warning is built on,
 // rather than standing up a second contention probe.
+//
+// #2036 acceptance bullet 2: a single PRE-run sample is deliberately
+// sufficient, not periodic sampling during the run. A bless run's dominant
+// cost is the model synth itself, which is exactly when an operator would
+// notice and abort a badly-contended run by hand; the failure mode this
+// warning exists to catch (#1995) was contention already present when the
+// bless STARTED, not contention that begins mid-run. Sampling throughout
+// would need a background timer/interval this deliberately one-shot script
+// doesn't otherwise carry, to catch a narrower case with no reported incident
+// behind it — file a follow-up if that changes.
 const GPU_BUSY_THRESHOLD = 40; // % utilization -- mirrors verify-cache.mjs's own threshold
 
 // #2036: `parseNvidiaSmiUtil` (verify-cache.mjs) only returns the FIRST GPU's
@@ -99,12 +109,23 @@ export function maxNvidiaSmiUtil(stdout) {
   return max;
 }
 
-// Pure: given raw nvidia-smi stdout, returns the warning message to print, or
-// null if nothing should be flagged. Split out from `warnIfGpuBusyForBless`
-// so the decision logic is testable without spawning a real `nvidia-smi`.
+// #2036 review round 2: an absent/unparseable/failed probe used to return
+// `null` from `gpuBusyWarningFor` — indistinguishable at the console from "GPU
+// checked, idle". On a `--bless` run that permanently re-records thresholds,
+// "I could not tell" is materially different information from "it was idle",
+// so it gets its own message rather than silently reading as the good case.
+export const CONTENTION_UNKNOWN_MESSAGE =
+  '[contention] GPU utilization could not be read (nvidia-smi missing, errored, ' +
+  'or gave no parseable line) — contention during this bless is unknown, not ruled out.';
+
+// Pure: given raw nvidia-smi stdout, returns the message to print, or null
+// when the GPU was successfully read AND is under threshold (the one case
+// with nothing to say). Split out from `warnIfGpuBusyForBless` so the
+// decision logic is testable without spawning a real `nvidia-smi`.
 export function gpuBusyWarningFor(stdout) {
   const util = maxNvidiaSmiUtil(stdout);
-  if (util === null || util < GPU_BUSY_THRESHOLD) return null;
+  if (util === null) return CONTENTION_UNKNOWN_MESSAGE;
+  if (util < GPU_BUSY_THRESHOLD) return null;
   return (
     `[contention] GPU busy (~${util}% util) while blessing — a measurement recorded now ` +
     '(e.g. instruct-baseline.json rtf_max) may reflect contention, not steady-state ' +
@@ -119,8 +140,11 @@ function warnIfGpuBusyForBless() {
     ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
     { encoding: 'utf8', timeout: 5000 },
   );
-  if (r.error || r.status !== 0) return; // no GPU / nvidia-smi absent -- nothing to flag
-  const warning = gpuBusyWarningFor(r.stdout);
+  // A failed spawn (no GPU / nvidia-smi absent / errored) is routed through
+  // the same pure function as an empty read, rather than duplicating the
+  // "unknown" decision here — one code path, already covered by the tests on
+  // `gpuBusyWarningFor` itself.
+  const warning = gpuBusyWarningFor(r.error || r.status !== 0 ? '' : r.stdout);
   if (warning) console.log(warning);
 }
 
@@ -146,15 +170,34 @@ function run(label, cmd, cmdArgs, { env, shell } = {}) {
 // can `import` this module for its pure exports (`maxNvidiaSmiUtil`,
 // `gpuBusyWarningFor`) without triggering a full golden-audio run — same
 // pattern as verify-cache.mjs's `isDirectInvocation`.
-const isDirectInvocation = (() => {
+//
+// Two-tier, not strict-only (#2036 review round 2). The strict `import.meta.url`
+// equality check gets every ordinary invocation shape right, INCLUDING an 8.3
+// short path — Node applies the same resolution to both sides in that case.
+// What it gets wrong is a symlink or junction ANYWHERE in the invoked path:
+// Node resolves symlinks when computing the entry module's own
+// `import.meta.url`, but `pathToFileURL(argv[1])` reflects the raw, unresolved
+// invocation path, so the two sides disagree for a perfectly ordinary `node
+// scripts/run-golden-audio.mjs`. Verified with a real junction:
+//   import.meta.url             file:///…/real/probe.mjs
+//   pathToFileURL(argv[1]).href file:///…/link/probe.mjs
+// This repo junctions aggressively for worktrees, and the strict check alone
+// silently exits 0 having run nothing through one — the exact failure mode a
+// guard must not have. The fallback mirrors check-onbox-register.mjs's laxer,
+// symlink-immune detector (a basename/suffix match rather than URL equality);
+// it stays a FALLBACK, not a replacement, because it can't tell an 8.3 short
+// path (already handled correctly above) from a genuine non-invocation.
+function computeIsDirectInvocation() {
   const arg1 = process.argv[1];
   if (!arg1) return false;
   try {
-    return import.meta.url === pathToFileURL(arg1).href;
+    if (import.meta.url === pathToFileURL(arg1).href) return true;
   } catch {
-    return false;
+    // fall through to the laxer, symlink-immune check below
   }
-})();
+  return arg1.replace(/\\/g, '/').endsWith('scripts/run-golden-audio.mjs');
+}
+const isDirectInvocation = computeIsDirectInvocation();
 
 if (isDirectInvocation) {
   warnIfGpuBusyForBless();
