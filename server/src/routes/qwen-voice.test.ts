@@ -212,11 +212,16 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
 
-  const [{ qwenVoiceRouter }, { voiceSampleRouter }, { makeBookId }] = await Promise.all([
-    import('./qwen-voice.js'),
-    import('./voice-sample.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* #2083 — sequential awaits, not Promise.all: two import chains reaching
+     the same to-be-mocked module (e.g. tts/index.js, mocked above) inside one
+     Promise.all can race the async vi.mock factory, so whichever chain
+     resolves first can bind the REAL module instead of the mock. See Lane
+     4's server-wide sweep for the mutation proof (a 50ms delay injected into
+     an async vi.mock factory went 15/15 red under Promise.all, 15/15 green
+     under sequential awaits). */
+  const { qwenVoiceRouter } = await import('./qwen-voice.js');
+  const { voiceSampleRouter } = await import('./voice-sample.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
 
   app = express();
@@ -1557,6 +1562,61 @@ describe('srv-43 mint + collision regression', () => {
 
     /* Clean up the two extra books from the workspace. */
     rmSync(join(workspaceRoot, 'books', AUTHOR, 'Standalones'), { recursive: true, force: true });
+  });
+});
+
+describe('#2088 — withDesignLock actually serializes ensureCharacterVoiceUuid on the series branch', () => {
+  /* srv-85 (#2088) — withDesignLock (tts/design-lock.ts) had ZERO test
+     coverage. Neutralising it to `return fn();` left every other test in
+     this 1600-line file fully green (80/80 at the time the issue was filed).
+
+     Why the SERIES branch specifically, not a self-vs-self race on the
+     no-seriesFilter path used just above: ensureCharacterVoiceUuid's whole
+     body already sits inside withDesignLock on BOTH branches, but the
+     book-scoped branch's own body is one readJson + a tight synchronous loop
+     + one write — almost no interleaving window for two racing calls even
+     unlocked. The series branch instead hands off to
+     forEachMatchingCastCharacter (routes/voices.ts), which does a
+     workspace-wide walk with several `await`s (per-book state.json / cast.json
+     reads) BEFORE its write — a real race window where two concurrent calls
+     can both observe "no voiceUuid yet" and each mint a DIFFERENT uuid before
+     either write lands. That is the double-mint #2088 describes: the series
+     branch is where withDesignLock's serialization is load-bearing, and
+     where the suite had no coverage.
+
+     MUTATION-VERIFIED (not a placebo): with `withDesignLock`'s body
+     temporarily reverted to `return fn();` (no locking at all), this test
+     reddens — `b` comes back a DIFFERENT uuid than `a` (two mints for one
+     character) — across repeated runs; restoring the real lock body makes it
+     green again. See the #2088 PR body for the before/after run. */
+  let ensureCharacterVoiceUuidRace: typeof import('./qwen-voice.js').ensureCharacterVoiceUuid;
+
+  beforeAll(async () => {
+    ({ ensureCharacterVoiceUuid: ensureCharacterVoiceUuidRace } = await import('./qwen-voice.js'));
+  });
+
+  it('two concurrent calls for the same book mint ONE uuid, not two', async () => {
+    // 'nopersona' (from the shared `characters` fixture) carries no voiceId/
+    // voiceUuid, and the root beforeEach rewrites cast.json fresh before this
+    // test runs. AUTHOR/SERIES/BOOK is already a non-standalone series book
+    // (isStandalone: false — see writeBookOnDisk), so this seriesFilter
+    // routes ensureCharacterVoiceUuid through forEachMatchingCastCharacter's
+    // workspace walk exactly as the real cast-review "design in a series"
+    // flow does.
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+    const seriesFilter = { author: AUTHOR, series: SERIES };
+
+    const [a, b] = await Promise.all([
+      ensureCharacterVoiceUuidRace(bookDir, 'nopersona', seriesFilter),
+      ensureCharacterVoiceUuidRace(bookDir, 'nopersona', seriesFilter),
+    ]);
+
+    expect(a).toMatch(/.+/);
+    // The double-mint symptom: two concurrent callers must agree on ONE uuid.
+    expect(b).toBe(a);
+    // And exactly that uuid is what actually persisted to disk.
+    const cast = readCast();
+    expect(cast.characters.find((c) => c.id === 'nopersona')?.voiceUuid).toBe(a);
   });
 });
 
