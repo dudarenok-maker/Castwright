@@ -10,6 +10,8 @@ import {
   refuseRetirementsOfLiveIds,
   forgetSupersededId,
   rejectOrphanedId,
+  rejectOrphanedPair,
+  unrejectOrphanedPair,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -300,6 +302,17 @@ describe('cast id history', () => {
       await forgetSupersededId(dir, 'nobody');
       expect(existsSync(castIdHistoryPath(dir))).toBe(false);
     });
+
+    describe('return value (#2092/#2089 D6 — lossless undo)', () => {
+      it('returns the removed target', async () => {
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        await expect(forgetSupersededId(dir, 'mayrin')).resolves.toBe('mairin');
+      });
+
+      it('returns undefined when the key was absent', async () => {
+        await expect(forgetSupersededId(dir, 'nobody')).resolves.toBeUndefined();
+      });
+    });
   });
 
   describe('rejectOrphanedId (#2040 Task 17)', () => {
@@ -326,6 +339,159 @@ describe('cast id history', () => {
       const history = await loadCastIdHistory(dir);
       expect(history.supersededBy).toEqual({ mayrin: 'mairin' });
       expect(history.rejected).toEqual(['mayrin']);
+    });
+  });
+
+  describe('rejectedPairs backwards-compatibility and independent validation (#2092/#2089 D1)', () => {
+    it('a schema-1 file with the legacy `rejected` list still loads with `supersededBy` intact', async () => {
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'mairin' },
+          rejected: ['the-torment'],
+        }),
+      );
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.rejected).toEqual(['the-torment']);
+      expect(result.rejectedPairs).toBeUndefined();
+    });
+
+    it('loads a well-formed `rejectedPairs` array alongside `supersededBy`', async () => {
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'mairin' },
+          rejectedPairs: [{ from: 'mayrin', to: 'wren' }],
+        }),
+      );
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.rejectedPairs).toEqual([{ from: 'mayrin', to: 'wren' }]);
+    });
+
+    it('loads a pre-D1 file with no `rejectedPairs` key at all', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+      const result = await loadCastIdHistory(dir);
+      expect(result.supersededBy).toEqual({ mayrin: 'mairin' });
+      expect(result.rejectedPairs).toBeUndefined();
+    });
+
+    it('returns empty history rather than throwing when `rejectedPairs` is not an array', async () => {
+      writeTestHistoryFile(
+        JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: 'not-an-array' }),
+      );
+      const result = await loadCastIdHistory(dir);
+      expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+
+    it('a malformed `rejectedPairs` does not discard an otherwise well-formed `rejected` list — trap 4, independent validation', async () => {
+      // The two fields are validated by SEPARATE Array.isArray checks. If
+      // rejectedPairs were folded into the same check as `rejected` (or if
+      // `rejected` were retyped in place instead of adding a new field), a
+      // malformed rejectedPairs would discard supersededBy/rejected too —
+      // this pins that they stay independent.
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'mairin' },
+          rejected: ['the-torment'],
+          rejectedPairs: { not: 'an-array' },
+        }),
+      );
+      const result = await loadCastIdHistory(dir);
+      // The WHOLE file is malformed by this module's existing all-or-nothing
+      // contract (there is no per-field partial recovery anywhere else in
+      // this loader either) — pin that a malformed rejectedPairs collapses
+      // to the same empty default as every other malformed-field case above,
+      // not a silent, partially-loaded object.
+      expect(result).toEqual({ schema: 1, supersededBy: {} });
+    });
+
+    it('does NOT bump `schema` — trap 3', async () => {
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: {},
+          rejectedPairs: [{ from: 'a', to: 'b' }],
+        }),
+      );
+      const result = await loadCastIdHistory(dir);
+      expect(result.schema).toBe(1);
+    });
+  });
+
+  describe('rejectOrphanedPair / unrejectOrphanedPair (#2092/#2089 D1/D5/D6)', () => {
+    it('adds a pair to rejectedPairs', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin' },
+      ]);
+    });
+
+    it('stashes forgotSupersededTo when provided', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
+      ]);
+    });
+
+    it('omits forgotSupersededTo when not provided, rather than writing it as undefined', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const pairs = (await loadCastIdHistory(dir)).rejectedPairs;
+      expect(pairs?.[0]).toEqual({ from: 'mayrin', to: 'mairin' });
+      expect(Object.keys(pairs?.[0] ?? {})).not.toContain('forgotSupersededTo');
+    });
+
+    it('is idempotent — rejecting the same pair twice does not duplicate it', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin' },
+      ]);
+    });
+
+    it('a second, DIFFERENT target for the same `from` is a distinct pair (D1 pair scope)', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await rejectOrphanedPair(dir, 'mayrin', 'wren');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'mairin' },
+        { from: 'mayrin', to: 'wren' },
+      ]);
+    });
+
+    it('does not touch the legacy `rejected` list', async () => {
+      await rejectOrphanedId(dir, 'the-torment');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const history = await loadCastIdHistory(dir);
+      expect(history.rejected).toEqual(['the-torment']);
+      expect(history.rejectedPairs).toEqual([{ from: 'mayrin', to: 'mairin' }]);
+    });
+
+    it('unrejectOrphanedPair removes the pair and returns forgotSupersededTo', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+      await expect(unrejectOrphanedPair(dir, 'mayrin', 'mairin')).resolves.toBe('wren');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([]);
+    });
+
+    it('unrejectOrphanedPair returns undefined when the pair had no forgotSupersededTo', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await expect(unrejectOrphanedPair(dir, 'mayrin', 'mairin')).resolves.toBeUndefined();
+    });
+
+    it('unrejectOrphanedPair is a no-op (and does not write a file) when the pair is absent', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      await expect(unrejectOrphanedPair(dir, 'mayrin', 'mairin')).resolves.toBeUndefined();
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+
+    it('unrejectOrphanedPair leaves an unrelated pair for the same `from` untouched', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      await rejectOrphanedPair(dir, 'mayrin', 'wren');
+      await unrejectOrphanedPair(dir, 'mayrin', 'mairin');
+      expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+        { from: 'mayrin', to: 'wren' },
+      ]);
     });
   });
 
