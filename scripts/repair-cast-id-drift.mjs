@@ -69,17 +69,44 @@
  *      any `cast.json.bak.*` names an id more than one distinct thing,
  *      NEITHER source may auto-record it — an ambiguous source is direct
  *      evidence the id was reused, and a different, unambiguous source
- *      does not erase that evidence.
+ *      does not erase that evidence. Both halves of this veto have their
+ *      OWN availability gate protecting them (#2097/#2135): cache evidence
+ *      that is missing, unparseable, or empty makes `cacheAvailable` false;
+ *      bak evidence that exists but could not be read/parsed makes
+ *      `bakAvailable` false (zero bak files, the normal case, does NOT —
+ *      see `collectBakNameEntries`'s own doc comment). Either flag being
+ *      false withholds every matched id in the book (`planBookRepairs`'s
+ *      `cacheAvailable`/`bakAvailable` gates, both LAST in the guard chain
+ *      — see that function's own doc comment) — the guard would otherwise
+ *      read "evidence I could not read" as "evidence that says nothing",
+ *      i.e. clean, when it should read as unknown.
  *   3. **Zero-segment scoping (Important 2).** A name/id match against an
  *      id with NO rendered segments (cache-only, never rendered) is
  *      report-only — this pass repairs on-disk damage, it does not mint
  *      pre-emptive, unreviewed guesses about characters who have never
  *      spoken a rendered line.
  *
- * A fourth guard predates round 1 and is still real, just insufficient
- * alone: **snapshot consistency** (see `snapshotsConsistent`'s own doc
- * comment) downgrades a name match to report-only when the rendered
- * `characterSnapshots` disagree across the chapters the id appears in.
+ * A fourth guard predates round 1 and is still real, but **narrower than it
+ * looks** (#2134): **snapshot consistency** (see `classifySnapshotEvidence`'s
+ * and `snapshotsConsistent`'s own doc comments) downgrades a name match to
+ * report-only when the rendered `characterSnapshots` disagree across the
+ * chapters the id appears in. `characterSnapshots` is a FILE-level map keyed
+ * by the id that was LIVE at RENDER time — for a drifted id (exactly what
+ * this pass repairs), that key is not the orphaned id itself, so the lookup
+ * finds nothing, `orphan.snapshots` comes back `[]`, and this guard used to
+ * pass VACUOUSLY (`snapshotsConsistent([])` is trivially `true`) for exactly
+ * the ids it exists to protect (register row A32's `the-torment`/
+ * `lightning-dave`). `classifySnapshotEvidence` now distinguishes "checked,
+ * agrees" from "never found any evidence under this key" and this pass
+ * withholds on the latter rather than trusting an unverifiable match — so
+ * this guard, and the candidate ranker downstream of it
+ * (`rankSnapshotCandidates`, whose own doc comment has the full account),
+ * are genuinely load-bearing ONLY for a non-reserved id whose snapshots
+ * exist but conflict, never for a drifted id with no snapshot evidence at
+ * all — a considered lookup change (resolving through the id's live
+ * resolution instead) was rejected: checked against the real workspace,
+ * these ids have no snapshot entry under ANY spelling, so there is nothing
+ * a smarter lookup would find.
  *
  * A fifth guard was added on top of these four, independently, by the
  * #2107 widening (Important 2, independent review, 2026-08-05) —
@@ -182,6 +209,35 @@
  *                        `booksWithheldForMissingCache` and
  *                        `planBookRepairs`'s `cacheAvailable` gate /
  *                        `withheldForMissingCache` return field.
+ *
+ *                        #2135: bak evidence (`cast.json.bak.*`, read directly
+ *                        from each book's own `.audiobook/` dir — no separate
+ *                        env var, there is nowhere else it could live) has
+ *                        the SAME fail-closed gate, `bakAvailable`, with a
+ *                        DIFFERENT "unavailable" bar: zero bak files is the
+ *                        NORMAL case (most books never accumulate one) and
+ *                        leaves `bakAvailable` true; only a bak file that
+ *                        EXISTS but could not be read or parsed sets it
+ *                        false. See `collectBakNameEntries`'s own doc
+ *                        comment for the full reasoning and
+ *                        `planBookRepairs`'s `bakAvailable` gate /
+ *                        `withheldForMissingBak` return field for the
+ *                        per-book write-side consequence.
+ *
+ *                        #2097: a book whose `cast.json`/`state.json`
+ *                        (found via `WORKSPACE_DIR`, above) is missing
+ *                        entirely is `collectBooks`'s legitimate
+ *                        `'not-yet-analysed'` case (a book mid-import) and
+ *                        is merely logged. A book where either file EXISTS
+ *                        but fails to parse or validate is
+ *                        `'unreadable'` — evidence loss, not absence — and
+ *                        refuses `--apply` outright
+ *                        (`shouldRefuseApplyForUnreadableBooks`): unlike the
+ *                        cache/bak gates above, there is no config knob that
+ *                        fixes an unreadable book by pointing elsewhere, and
+ *                        this pass cannot scan it at all (no cast, no
+ *                        chapter list), so it cannot rule out orphaned
+ *                        segments sitting unprotected in it.
  *   PORT                 loopback port the --apply liveness probe checks (default
  *                        8080, matches server/src/index.ts's own default).
  *                        #2090: the probe also covers this port's own
@@ -355,6 +411,46 @@ export function snapshotsConsistent(snapshots) {
   return true;
 }
 
+/** #2134: `orphan.snapshots === []` is otherwise ambiguous between two
+ *  different facts — "every rendered segment's `characterSnapshots` entry
+ *  for this id agreed (or there were 0/1 to compare)" and "this id has
+ *  rendered segments, but `characterSnapshots` is a FILE-level map keyed by
+ *  the id that was LIVE at RENDER time, so a drifted id's own segments never
+ *  match under their own key at all" — `snapshotsConsistent([])` returns
+ *  `true` for both, which lets guard 4 pass VACUOUSLY for exactly the ids
+ *  this pass exists to repair (register row A32's `the-torment`/
+ *  `lightning-dave`: both have real rendered segments and zero snapshot
+ *  entries, because their `characterSnapshots` keys are the pre-drift live
+ *  ids `the_torment`/`lightning_dave`, never their own orphaned spelling).
+ *
+ *  This function is the SAME distinguishing test guard 3 (zero-segment
+ *  scoping) already makes just below guard 4's call site — `orphan.segments
+ *  > 0` — reused here for a narrower purpose: "there is real rendered
+ *  damage, but zero snapshot evidence exists under this id's own key" is a
+ *  DIFFERENT state than "there is genuinely nothing rendered at all" (that
+ *  stays guard 3's job, unchanged), and a different state again from
+ *  "checked, and it agrees" or "checked, and it conflicts" (both still
+ *  `snapshotsConsistent`'s job). Four states in, three states out on
+ *  purpose: 'no-evidence' is new; 'consistent'/'conflict' are
+ *  `snapshotsConsistent`'s existing boolean, renamed to a string so a caller
+ *  can't accidentally treat 'no-evidence' as truthy the way `true` would
+ *  read.
+ *
+ *  The considered alternative (issue #2134's option 1) was resolving the
+ *  lookup through the id's own live resolution instead of its raw spelling —
+ *  rejected: checked against the real workspace, the drifted ids this pass
+ *  targets have NO snapshot entry under ANY spelling (not the orphaned id,
+ *  not the id it resolves to today), so there is nothing a smarter lookup
+ *  would find; worse, if it ever DID resolve to a snapshot, that snapshot
+ *  would belong to a DIFFERENT character than the one guard 4 is asked
+ *  about. Honesty about the gap, not a lookup change, is the fix — see
+ *  `planBookRepairs`'s guard 4 call site for what 'no-evidence' does with
+ *  this. */
+export function classifySnapshotEvidence(orphan) {
+  if (orphan.segments > 0 && orphan.snapshots.length === 0) return 'no-evidence';
+  return snapshotsConsistent(orphan.snapshots) ? 'consistent' : 'conflict';
+}
+
 /** Advisory-only ranking (spec §4.7: "use those to rank" — never auto-
  *  applied, see the two-tier auto-record rule above). Scores each live
  *  candidate against one orphan `characterSnapshot` (tone/gender/ageRange/
@@ -390,7 +486,29 @@ export function snapshotsConsistent(snapshots) {
  *  Returns the top `topN` candidates (default 3) sorted by score
  *  descending, `{ liveId, liveName, score, why }`. Reserved ids
  *  (`reservedIds`, e.g. narrator + the two fold buckets) are never
- *  suggested — they're not a "who actually said this line" answer. */
+ *  suggested — they're not a "who actually said this line" answer.
+ *
+ *  #2134: this function returns `[]` immediately when `snapshot` is falsy
+ *  (the `if (!snapshot) return [];` below), which is exactly what every
+ *  caller passes for a `classifySnapshotEvidence(orphan) === 'no-evidence'`
+ *  row (`orphan.snapshots[0]` is `undefined` there by construction — see
+ *  that function's doc comment). That is not a gap to close: measured
+ *  against the real workspace, the report-only rows carrying genuine
+ *  actionable damage (`pool-player-2`, `silveny`, `sir-harding`) are
+ *  EXACTLY the 'no-evidence' rows, so this ranker cannot help an operator
+ *  triage them — there is no snapshot signal to score against, under any
+ *  spelling (see `classifySnapshotEvidence`'s doc comment on why a smarter
+ *  lookup wouldn't help either). The rows that DO get ranked candidates
+ *  today are the reserved fold-bucket ids (`unknown-male`/`unknown-female`)
+ *  guard 1 refuses outright — and the module doc comment's guard-1
+ *  paragraph already documents THAT snapshot as generic/non-discriminating.
+ *  So: this function is real and load-bearing for the OTHER report-only
+ *  shape — a non-reserved id whose snapshots exist but disagree
+ *  (`classifySnapshotEvidence(orphan) === 'conflict'`) — never for a
+ *  drifted id with no evidence at all. Documented here rather than
+ *  "fixed" because there is nothing to fix: giving this function evidence
+ *  it doesn't have would mean guessing, which is exactly what it exists
+ *  not to do. */
 export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3) {
   if (!snapshot) return [];
   const pool = liveCast.filter((c) => !reservedIds.has(c.id));
@@ -455,37 +573,46 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  `cast-id-history.json` alias, or report it for a human, or skip it
  *  (already recorded, or explicitly rejected by the user — #2040 Task 17's
  *  `rejected` list). Returns `{ autoRecord, reportOnly, skipped,
- *  withheldForMissingCache }` — the last is a COUNT (owner-decided policy,
- *  review round 2, 2026-08-05; ordering fixed by pre-merge review I2,
- *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
- *  only increments when an id would have reached `autoRecord.push` on
- *  cache evidence alone — i.e. it already passed guard 1 (not reserved),
- *  guard 2 (not cross-source-ambiguous), guard 5 (current-resolution
- *  conflict, #2107 widening), guard 4 (`snapshotsConsistent`), AND guard 3
- *  (>=1 rendered segment) — and was refused SOLELY because `cacheAvailable`
- *  was false. The cache-availability check sits LAST in the guard chain for
- *  exactly this reason (I2): an id any earlier guard would have refused
- *  ANYWAY, cache evidence or not, must not inflate this count — a single
- *  bak entry naming a retired, never-rendered id in a
- *  cache-blind book must not read as "a real auto-record was withheld
- *  here" when nothing was ever going to be auto-recorded for it. A book
- *  can have `cacheAvailable: false` and `withheldForMissingCache === 0` at
- *  the same time — e.g. a book whose cache parses but names nobody, and
- *  which simply has no orphaned id that would have matched (or reached)
- *  anything anyway; that book has nothing at stake and `main()` must not
- *  let it veto every other book's `--apply` run. This is the signal
- *  `main()` gates the global `--apply` refusal on, not the broader "this
- *  book's cache is unusable" fact (which stays reported, via
- *  `booksMissingCache`, but no longer gates).
+ *  withheldForMissingCache, withheldForMissingBak }` — the last two are
+ *  COUNTS (owner-decided policy, review round 2, 2026-08-05, for cache;
+ *  #2135, same policy applied to bak; ordering fixed by pre-merge review
+ *  I2, 2026-08-05), not booleans or a re-derivation of `!cacheAvailable` /
+ *  `!bakAvailable`: each only increments when an id would have reached
+ *  `autoRecord.push` on its own evidence source alone — i.e. it already
+ *  passed guard 1 (not reserved), guard 2 (not cross-source-ambiguous),
+ *  guard 5 (current-resolution conflict, #2107 widening), guard 4
+ *  (`classifySnapshotEvidence`, narrowed by #2134), AND guard 3 (>=1
+ *  rendered segment) — and was refused SOLELY because `cacheAvailable` (or
+ *  `bakAvailable`) was false. Both availability checks sit LAST in the
+ *  guard chain for exactly this reason (I2, extended to bak by #2135): an
+ *  id any earlier guard would have refused ANYWAY, cache/bak evidence or
+ *  not, must not inflate either count — a single bak entry naming a
+ *  retired, never-rendered id in a cache-blind book must not read as "a
+ *  real auto-record was withheld here" when nothing was ever going to be
+ *  auto-recorded for it. A book can have `cacheAvailable: false` and
+ *  `withheldForMissingCache === 0` at the same time (same for bak) — e.g. a
+ *  book whose cache parses but names nobody, and which simply has no
+ *  orphaned id that would have matched (or reached) anything anyway; that
+ *  book has nothing at stake and `main()` must not let it veto every other
+ *  book's `--apply` run. These are the signals `main()` gates the global
+ *  `--apply` refusal on, not the broader "this book's cache/bak is
+ *  unusable" facts (which stay reported, via `booksMissingCache` and its
+ *  bak equivalent, but no longer gate). The bak check runs BEFORE the cache
+ *  check (bak outranks cache for guard 2, spec §4.7: "stronger still"), so
+ *  an id withheld for both reasons at once is counted only under
+ *  `withheldForMissingBak` — the two counts are mutually exclusive per id,
+ *  never additive.
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
  *  reserved id (guard 1), neither source is ambiguous for this id (guard
  *  2), the id has at least one rendered segment (guard 3), every rendered
- *  `characterSnapshots` entry for the id agrees (guard 4,
- *  `snapshotsConsistent`), and the id doesn't already resolve live to a
- *  DIFFERENT character (guard 5, #2107 widening) — see the module doc
- *  comment for why round 1 found guard 4 alone insufficient and added the
- *  other three, and why the #2107 widening later added guard 5 on top.
+ *  `characterSnapshots` entry found under the id's own key agrees (guard 4,
+ *  `classifySnapshotEvidence` — narrowed by #2134 to also withhold on
+ *  'no-evidence', not merely trust a vacuous `snapshotsConsistent([])`),
+ *  and the id doesn't already resolve live to a DIFFERENT character (guard
+ *  5, #2107 widening) — see the module doc comment for why round 1 found
+ *  guard 4 alone insufficient and added the other three, and why the
+ *  #2107 widening later added guard 5 on top.
  *
  *  `deps.normaliseForMatch` and `deps.buildCastResolver` are always the
  *  real server functions in production (dynamically imported from
@@ -516,9 +643,18 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  (`main()`) always passes it explicitly, computed from whether the book's
  *  analysis-cache file exists AND parses (see `main()`'s `cacheAvailable`
  *  and the module doc comment's `CACHE_DIR` entry) — this default is a
- *  safety net for any future caller that forgets to. */
+ *  safety net for any future caller that forgets to.
+ *
+ *  `input.bakAvailable` (#2135) defaults to `false` too — same fail-closed
+ *  reasoning, DIFFERENT real-world baseline: unlike cache (expected to
+ *  exist for every analysed book), the overwhelmingly common case for bak
+ *  is genuinely zero files, which `collectBakNameEntries` reports as
+ *  `bakAvailable: true` (see its own doc comment — "no bak files" and
+ *  "confirmed available" are the SAME state for bak, unlike for cache). A
+ *  test that omits `bakAvailable` while asserting an auto-record must pass
+ *  it explicitly (`bakAvailable: true`), the same as `cacheAvailable`. */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false } = input;
+  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false, bakAvailable = false } = input;
   const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
@@ -629,6 +765,10 @@ export function planBookRepairs(input, deps) {
   // which currently has zero orphaned ids to begin with) vetoing every
   // other book in the workspace.
   let withheldForMissingCache = 0;
+  // #2135: same accounting as withheldForMissingCache, one guard below it —
+  // see the bak-availability gate's own comment at its call site for why
+  // bak sits ahead of cache in the guard order.
+  let withheldForMissingBak = 0;
 
   for (const id of allIds) {
     if (liveIds.has(id)) continue; // not an orphan at all
@@ -780,14 +920,40 @@ export function planBookRepairs(input, deps) {
         continue;
       }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
-      // own doc comment for its narrowed scope post round-1).
-      if (!snapshotsConsistent(orphan.snapshots)) {
+      // own doc comment for its narrowed scope post round-1). #2134: split
+      // into three outcomes via classifySnapshotEvidence, not two — a
+      // drifted id with real rendered segments but zero snapshot entries
+      // under its own key (characterSnapshots is a file-level map keyed by
+      // the id that was LIVE at RENDER time — see classifySnapshotEvidence's
+      // doc comment) used to read as `snapshotsConsistent([]) === true` and
+      // pass this guard VACUOUSLY, exactly for the ids this pass repairs
+      // (register row A32). That is "never checked", not "checked, all
+      // clear" — this pass withholds rather than trust an unverifiable
+      // match, the same fail-closed posture guard 2's bak/cache
+      // availability gates already take for the analogous "evidence that
+      // can't be read/found must count as unknown, not clean" shape
+      // (#2097/#2135).
+      const snapshotEvidence = classifySnapshotEvidence(orphan);
+      if (snapshotEvidence === 'conflict') {
         reportOnly.push({
           id,
           segments: orphan.segments,
           chapters: orphan.chapters,
           reason: `name-matched "${matchedId}" (${evidence}) but the rendered characterSnapshots disagree ` +
             `across chapters — this id was reused for more than one voice; needs per-chapter human review`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
+        continue;
+      }
+      if (snapshotEvidence === 'no-evidence') {
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but no rendered characterSnapshots evidence ` +
+            `exists under "${id}"'s own key — characterSnapshots is keyed by the id that was LIVE at render ` +
+            `time, so a drifted id's own segments never match under their own key (#2134); guard 4 has ` +
+            `nothing to verify, so this pass withholds rather than trusting an unverifiable match`,
           candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
         });
         continue;
@@ -849,6 +1015,33 @@ export function planBookRepairs(input, deps) {
       // that would otherwise have reached `autoRecord.push` — an exact
       // count, not an over-count — and its own reason string is only ever
       // shown for a candidate that was genuinely about to be recorded.
+      // --- #2097/#2135: bak-availability gate, sitting immediately ahead
+      // of the cacheAvailable gate above it (same I2 "deliberately LAST"
+      // reasoning — an id any earlier guard would have refused anyway must
+      // not inflate this count either). Bak evidence OUTRANKS cache
+      // evidence for guard 2 (spec §4.7: "stronger still"), so the
+      // unprotected half being the STRONGER half is exactly why #2135 rated
+      // this worse than a mirror of the cache gap: `collectBakNameEntries`
+      // sets `bakAvailable` false only when this book's bak evidence could
+      // not be fully read (readdir failure, or a `cast.json.bak.*` that
+      // exists but fails to parse) — NOT merely "zero bak files", which is
+      // the normal case and leaves `bakAvailable` true. See that function's
+      // own doc comment for the full reasoning and `main()`'s own comment
+      // for how it's computed per book.
+      if (!bakAvailable) {
+        withheldForMissingBak += 1;
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but at least one of this book's ` +
+            `cast.json.bak.* files could not be read or parsed — the cross-source ambiguity veto (guard 2) ` +
+            `cannot rule out bak ambiguity without it, so auto-record is withheld until every cast.json.bak.* ` +
+            `for this book is readable`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
+        continue;
+      }
       if (!cacheAvailable) {
         withheldForMissingCache += 1;
         reportOnly.push({
@@ -879,7 +1072,7 @@ export function planBookRepairs(input, deps) {
     });
   }
 
-  return { autoRecord, reportOnly, skipped, withheldForMissingCache };
+  return { autoRecord, reportOnly, skipped, withheldForMissingCache, withheldForMissingBak };
 }
 
 /** Flatten one book's orphan-id -> chapter map into the re-render list's
@@ -927,6 +1120,13 @@ export function buildRerenderRows(bookLabel, orphans) {
  *  `booksMissingCache` stays reported in the summary (an operator-visible
  *  fact worth knowing), it just no longer gates.
  *
+ *  #2135 widened the caller (`planApplyRefusal`) to also count books
+ *  withheld for missing BAK evidence, sharing this same decision function —
+ *  the parameter below is now a COMBINED "books with something withheld"
+ *  count (bak-withheld OR cache-withheld), not cache-only; this function's
+ *  own logic (a bare threshold check) needed no change to support that, only
+ *  its caller's accounting did.
+ *
  *  Scope correction (independent review I3, 2026-08-05, carried over):
  *  this makes the DECISION itself directly unit testable; it does NOT make
  *  `main()`'s WIRING of that decision (that it's actually called with the
@@ -935,35 +1135,40 @@ export function buildRerenderRows(bookLabel, orphans) {
  *  module doc comment's Tests section), so that wiring remains verified
  *  only by the live dry run. **#2111 narrows, but does not close, this gap
  *  — see `planApplyRefusal`'s own doc comment immediately below.** */
-export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache) {
-  return apply === true && booksWithheldForMissingCache > 0;
+export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldCount) {
+  return apply === true && booksWithheldCount > 0;
 }
 
 /** #2111: the smallest orchestration seam `main()`'s per-workspace `--apply`
  *  refusal can be pulled through a test without needing `server/dist` or a
  *  live book scan. `main()` calls this ONCE, right after its per-book loop,
- *  with `bookWithholds` — one `{ label, withheldForMissingCache }` entry per
- *  scanned book, built by pushing `plan.withheldForMissingCache` straight
- *  from each iteration's `planBookRepairs` result. This is a single source
- *  of truth, not a second computation of the same fact re-derived in a test
- *  (`cast-resolve.ts`'s own doc comment explains why this codebase avoids
- *  that shape) — `main()`'s loop-tail accumulation that used to inline this
- *  logic now calls this function instead of hand-rolling it a second time.
+ *  with `bookWithholds` — one `{ label, withheldForMissingCache,
+ *  withheldForMissingBak }` entry per scanned book (#2135 widened the shape
+ *  by one field), built by pushing both `plan.withheldForMissingCache` and
+ *  `plan.withheldForMissingBak` straight from each iteration's
+ *  `planBookRepairs` result. This is a single source of truth, not a second
+ *  computation of the same fact re-derived in a test (`cast-resolve.ts`'s
+ *  own doc comment explains why this codebase avoids that shape) —
+ *  `main()`'s loop-tail accumulation that used to inline this logic now
+ *  calls this function instead of hand-rolling it a second time.
  *
  *  What this closes, on top of `shouldRefuseApplyForWithheldAutoRecord`
- *  alone: the ACCUMULATION across multiple books — only a book with
- *  `withheldForMissingCache > 0` counts, the label text is built correctly,
- *  and the threshold crossing is driven through the same function `main()`
- *  calls, not a hand-reimplemented copy in the test.
+ *  alone: the ACCUMULATION across multiple books — a book counts toward the
+ *  refusal if EITHER `withheldForMissingCache > 0` OR
+ *  `withheldForMissingBak > 0` (the two are mutually exclusive per id per
+ *  `planBookRepairs`'s own doc comment, but a book can have both nonzero
+ *  across different ids), the label text is built correctly (naming which
+ *  reason(s) applied), and the threshold crossing is driven through the
+ *  same function `main()` calls, not a hand-reimplemented copy in the test.
  *
  *  What this does NOT close, named explicitly rather than overclaimed (the
  *  #2102 pre-merge review caught exactly this shape once already — an
  *  extraction that moves the untested boundary down a level and then reads
  *  as "wiring covered" when it isn't):
  *    1. That `main()`'s per-book loop actually pushes the REAL
- *       `plan.withheldForMissingCache` it computed into `bookWithholds` — a
- *       one-line push, visible by inspection, not exercised by any
- *       automated test in this file.
+ *       `plan.withheldForMissingCache`/`plan.withheldForMissingBak` it
+ *       computed into `bookWithholds` — a two-line push, visible by
+ *       inspection, not exercised by any automated test in this file.
  *    2. That `main()` actually acts on the returned `.refuse` by setting
  *       `process.exitCode = 1` and returning before the write phase.
  *       Unreachable from `test:hooks`: exercising it needs `apply === true`,
@@ -977,17 +1182,28 @@ export function shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMi
  *  test in this file. */
 export function planApplyRefusal(apply, bookWithholds) {
   let booksWithheldForMissingCache = 0;
+  let booksWithheldForMissingBak = 0;
+  let booksWithheldTotal = 0;
   const withheldBookLabels = [];
   for (const b of bookWithholds) {
-    if (b.withheldForMissingCache > 0) {
-      booksWithheldForMissingCache += 1;
-      withheldBookLabels.push(`${b.label} (${b.withheldForMissingCache} id(s))`);
+    const cacheCount = b.withheldForMissingCache ?? 0;
+    const bakCount = b.withheldForMissingBak ?? 0;
+    if (cacheCount > 0) booksWithheldForMissingCache += 1;
+    if (bakCount > 0) booksWithheldForMissingBak += 1;
+    if (cacheCount > 0 || bakCount > 0) {
+      booksWithheldTotal += 1;
+      const reasons = [];
+      if (bakCount > 0) reasons.push(`${bakCount} id(s) missing bak evidence`);
+      if (cacheCount > 0) reasons.push(`${cacheCount} id(s) missing cache evidence`);
+      withheldBookLabels.push(`${b.label} (${reasons.join('; ')})`);
     }
   }
   return {
     booksWithheldForMissingCache,
+    booksWithheldForMissingBak,
+    booksWithheldTotal,
     withheldBookLabels,
-    refuse: shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldForMissingCache),
+    refuse: shouldRefuseApplyForWithheldAutoRecord(apply, booksWithheldTotal),
   };
 }
 
@@ -1070,13 +1286,50 @@ const readJsonSync = (p) => {
   }
 };
 
-/* 3-level author/series/title walk — the same convention
-   `repair-linked-character-attributes.mjs` and every other workspace-wide
-   fs-direct repair script already use for `WORKSPACE_DIR/books`. */
-function collectBooks(workspaceDir) {
+/** #2097: was a silent `continue` with no counter, no log line — a book
+ *  whose `cast.json`/`state.json` was missing, corrupt, or wrong-shaped
+ *  vanished from `books` entirely, indistinguishable from a book that was
+ *  never there. Now returns `{ books, droppedBooks }`, where every dropped
+ *  book is counted and named — "a dropped book must be counted and named,
+ *  not vanish" (same under-report class #2107 was about; note
+ *  `shouldRefuseApplyForEmptyScan` only fires at exactly 0 total books, so a
+ *  partial silent drop was invisible to it).
+ *
+ *  Distinguishes two reasons, per the design question the filed issue
+ *  raised (option 3, "probably right"):
+ *
+ *    - **`'not-yet-analysed'`** — NEITHER `cast.json` nor `state.json`
+ *      exists at all. Legitimate: a book mid-import genuinely has no
+ *      analysis yet. Counted and logged (never vanishes), but does NOT
+ *      contribute to any `--apply` refusal — the same "absence is normal"
+ *      posture `collectBakNameEntries`'s `bakAvailable` takes for zero bak
+ *      files (#2135's own policy, applied here to a sibling case).
+ *    - **`'unreadable'`** — EITHER file exists but the pair still fails to
+ *      validate (missing, fails to parse, or wrong-shaped — `!cast
+ *      ?.characters || !state?.chapters`). This is evidence LOSS, not
+ *      absence: something was written for this book and this pass could not
+ *      read it. Counted, logged, AND refuses `--apply` for the whole run
+ *      (`shouldRefuseApplyForUnreadableBooks`) — this pass cannot scan the
+ *      book at all (no cast, no chapter list), so it categorically cannot
+ *      rule out orphaned segments sitting unprotected in it; unlike the
+ *      missing-cache/missing-bak gates, there is no `CACHE_DIR`-style knob
+ *      that fixes this by pointing somewhere else, so the refusal is
+ *      unconditional rather than gated on "did this book have anything at
+ *      stake" the way `booksWithheldForMissingCache` is.
+ *
+ *  3-level author/series/title walk — the same convention
+ *  `repair-linked-character-attributes.mjs` and every other workspace-wide
+ *  fs-direct repair script already use for `WORKSPACE_DIR/books`.
+ *
+ *  Exported so this is directly unit testable against real, deliberately
+ *  broken fs fixtures, with no `server/dist` build needed — the same
+ *  precedent `readAnalysisCache`/`isCacheAvailable` set (#2093 residual 1):
+ *  this function touches only `fs`, never a compiled server module. */
+export function collectBooks(workspaceDir) {
   const booksRoot = path.join(workspaceDir, 'books');
   const books = [];
-  if (!fs.existsSync(booksRoot)) return books;
+  const droppedBooks = []; // { label, reason: 'not-yet-analysed' | 'unreadable' }
+  if (!fs.existsSync(booksRoot)) return { books, droppedBooks };
   const dirs = (p) =>
     fs
       .readdirSync(p, { withFileTypes: true })
@@ -1087,9 +1340,18 @@ function collectBooks(workspaceDir) {
       for (const title of dirs(path.join(booksRoot, author, series))) {
         const bookDir = path.join(booksRoot, author, series, title);
         const audiobookDir = path.join(bookDir, '.audiobook');
+        const label = `${author} / ${series} / ${title}`;
+        const castExists = fs.existsSync(path.join(audiobookDir, 'cast.json'));
+        const stateExists = fs.existsSync(path.join(audiobookDir, 'state.json'));
         const cast = readJsonSync(path.join(audiobookDir, 'cast.json'));
         const state = readJsonSync(path.join(audiobookDir, 'state.json'));
-        if (!cast?.characters || !state?.chapters) continue;
+        if (!cast?.characters || !state?.chapters) {
+          droppedBooks.push({
+            label,
+            reason: castExists || stateExists ? 'unreadable' : 'not-yet-analysed',
+          });
+          continue;
+        }
         books.push({
           bookDir,
           audiobookDir,
@@ -1100,24 +1362,86 @@ function collectBooks(workspaceDir) {
       }
     }
   }
-  return books;
+  return { books, droppedBooks };
 }
 
-function collectBakNameEntries(audiobookDir) {
+/** #2097: pure decision for the new `--apply` refusal an `'unreadable'`
+ *  dropped book (see `collectBooks`'s doc comment) triggers — same shape as
+ *  `shouldRefuseApplyForEmptyScan`/`shouldRefuseApplyForWithheldAutoRecord`.
+ *  Unconditional on count (unlike the withheld-evidence refusals): this
+ *  pass cannot scan an unreadable book at all, so there is no "did it have
+ *  anything at stake" question to ask first. A `'not-yet-analysed'` drop
+ *  never reaches this — only `droppedBooks` entries reasoned `'unreadable'`
+ *  count. */
+export function shouldRefuseApplyForUnreadableBooks(apply, unreadableBookCount) {
+  return apply === true && unreadableBookCount > 0;
+}
+
+/** #2135: enumerates `cast.json.bak.*` name entries for one book AND
+ *  whether that evidence is FULLY available — mirroring `isCacheAvailable`'s
+ *  fail-closed reasoning (see its own doc comment) with a deliberately
+ *  DIFFERENT "no evidence" baseline. Cache evidence missing is always
+ *  suspicious (every book gets analysed); bak evidence missing is the
+ *  NORMAL case — most books never accumulate a `cast.json.bak.*` at all — so
+ *  a naive `bakAvailable` mirroring `cacheAvailable`'s "must supply >=1
+ *  usable entry" bar would fire constantly and block legitimate repairs for
+ *  no reason. The distinction this function actually makes:
+ *
+ *    - **zero bak files at all** (readdir succeeds, filter finds nothing) —
+ *      legitimate absence of evidence, `bakAvailable` stays `true`.
+ *    - **bak files exist, all parse and shape-check** — `bakAvailable`
+ *      stays `true` regardless of whether any of them happen to name THIS
+ *      id (guard 2 in `planBookRepairs` already reads "no bak entry for
+ *      this id" correctly as "bak doesn't say anything about it" when the
+ *      book's bak evidence as a whole is trustworthy).
+ *    - **the directory itself can't be enumerated, OR at least one bak file
+ *      that exists fails to parse** (`readJsonSync` swallowing a parse
+ *      failure to `null` — #2135's own repro) — `bakAvailable` is `false`:
+ *      lost evidence, not clean evidence. A book's bak evidence is judged
+ *      as a WHOLE, not per-id: an unread file could have named ANY id
+ *      ambiguous, so this function can't tell guard 2 which ids are safe —
+ *      `planBookRepairs`'s own `bakAvailable` gate withholds every matched
+ *      id for the book, the same over-cautious-but-safe shape
+ *      `cacheAvailable` already takes.
+ *
+ *  Deliberately does NOT flag a bak file that parses fine but has no
+ *  `characters` array (or an empty one) as unavailable — an empty/missing
+ *  `characters` field is a legitimate SHAPE for an early backup to have, not
+ *  evidence loss (the same way `cacheEntriesOf`'s `??[]` fallbacks aren't
+ *  treated as corruption); #2135's own scan of the real workspace found 41
+ *  bak files, 0 unparseable, 0 missing a `characters` array — the case this
+ *  function refuses on is not live today, only reachable on a corrupted
+ *  file.
+ *
+ *  Exported for the same reason `collectBooks` now is — a direct fs-fixture
+ *  unit test, no `server/dist` build needed (#2093 residual 1's precedent). */
+export function collectBakNameEntries(audiobookDir) {
   const entries = [];
   let files;
   try {
     files = fs.readdirSync(audiobookDir).filter((f) => f.startsWith('cast.json.bak'));
   } catch {
-    return entries;
+    // Can't even enumerate this book's bak files — unknown, not "zero
+    // files"; fail closed rather than reading this the same as the (much
+    // more common, entirely legitimate) zero-bak-files case.
+    return { entries, bakAvailable: false };
   }
+  let bakAvailable = true;
   for (const f of files) {
     const bak = readJsonSync(path.join(audiobookDir, f));
+    if (bak === null) {
+      // The file exists but failed to parse — lost evidence, not "this
+      // file says nothing" (#2135's exact repro: a corrupt bak swallowed to
+      // `null` used to contribute zero entries, which guard 2 then read as
+      // "bak is unambiguous" instead of "bak is unknown").
+      bakAvailable = false;
+      continue;
+    }
     for (const c of bak?.characters ?? []) {
       if (typeof c?.id === 'string' && typeof c?.name === 'string') entries.push({ id: c.id, name: c.name });
     }
   }
-  return entries;
+  return { entries, bakAvailable };
 }
 
 /** Exported (#2093 residual 1) so the fix below — `cacheAvailable` gated on
@@ -1573,7 +1897,7 @@ async function main() {
   // unchanged for every case that reaches this point with books.length > 0
   // or apply === false — only the zero-book + --apply combination now
   // short-circuits earlier.
-  const books = collectBooks(workspaceDir);
+  const { books, droppedBooks } = collectBooks(workspaceDir);
   // #2108, minor (pre-merge review, 2026-08-05): this early line now goes
   // through the same formatBooksScannedLine() the summary block already
   // used — previously this printed a bare `books scanned: 0` with none of
@@ -1581,6 +1905,46 @@ async function main() {
   // line still looked like an unremarkable count rather than the "nothing
   // was examined" callout #2108 added further down.
   console.log(`${formatBooksScannedLine(books.length)}\n`);
+
+  // #2097: a book dropped by collectBooks is counted and named, not left to
+  // vanish — see that function's own doc comment for the two reasons and
+  // why only 'unreadable' (evidence LOSS, not legitimate absence) refuses
+  // --apply. Logged before the refusal checks below so an operator sees
+  // WHICH books were dropped and why even on a dry run.
+  const unreadableBooks = droppedBooks.filter((b) => b.reason === 'unreadable');
+  const notYetAnalysedBooks = droppedBooks.filter((b) => b.reason === 'not-yet-analysed');
+  if (notYetAnalysedBooks.length) {
+    console.log(
+      `books not yet analysed (no cast.json or state.json at all — normal for a book mid-import): ` +
+        `${notYetAnalysedBooks.length}`,
+    );
+    for (const b of notYetAnalysedBooks) console.log(`  - ${b.label}`);
+  }
+  if (unreadableBooks.length) {
+    console.log(
+      `books DROPPED — cast.json/state.json present but unreadable or wrong-shaped (evidence LOST, not ` +
+        `absent): ${unreadableBooks.length}`,
+    );
+    for (const b of unreadableBooks) console.log(`  - ${b.label}`);
+  }
+  if (notYetAnalysedBooks.length || unreadableBooks.length) console.log('');
+
+  // #2097: an unreadable book cannot be scanned at all (no cast, no chapter
+  // list) — this pass categorically cannot rule out orphaned segments
+  // sitting unprotected in it, so --apply refuses unconditionally rather
+  // than merely reporting the drop (see shouldRefuseApplyForUnreadableBooks's
+  // own doc comment for why this is unconditional, unlike the withheld-
+  // evidence refusals below).
+  if (shouldRefuseApplyForUnreadableBooks(apply, unreadableBooks.length)) {
+    console.error(
+      `\nRefusing --apply: ${unreadableBooks.length} book(s) have a cast.json/state.json that exists but ` +
+        `could not be read — this pass cannot scan them for orphaned segments at all, so it cannot rule out ` +
+        `damage sitting unprotected in them: ${unreadableBooks.map((b) => b.label).join('; ')}. Fix or ` +
+        `restore each book's cast.json/state.json and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   // #2108: a wrong WORKSPACE_DIR (the script does not read server/.env, so a
   // bare invocation defaults to <home>/AudiobookWorkspace, not necessarily
@@ -1614,11 +1978,13 @@ async function main() {
   let totalReportSegments = 0;
   let totalSkipped = 0;
   let booksMissingCache = 0;
+  let booksMissingBak = 0;
   // #2111: fed to `planApplyRefusal` once, after the loop, instead of
   // hand-accumulating `booksWithheldForMissingCache`/`withheldBookLabels`
   // inline here — see that function's doc comment for what this does and
-  // does not close of the wiring-untested gap.
-  const bookWithholds = []; // { label, withheldForMissingCache }
+  // does not close of the wiring-untested gap. #2135 widened the per-book
+  // record with a second field.
+  const bookWithholds = []; // { label, withheldForMissingCache, withheldForMissingBak }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
 
@@ -1661,7 +2027,13 @@ async function main() {
     const cacheAvailable = cacheAvailableFromParsed(cache, mods.normaliseForMatch);
     if (!cacheAvailable) booksMissingCache += 1;
     const cacheNameIndex = buildNameIndex(cacheEntriesOf(cache), mods.normaliseForMatch);
-    const bakNameIndex = buildNameIndex(collectBakNameEntries(book.audiobookDir), mods.normaliseForMatch);
+    // #2135: `collectBakNameEntries` now returns both the entries AND
+    // whether this book's bak evidence is fully readable — see its own doc
+    // comment for why "zero bak files" and "confirmed available" are the
+    // SAME state here, unlike the cache side.
+    const { entries: bakEntries, bakAvailable } = collectBakNameEntries(book.audiobookDir);
+    if (!bakAvailable) booksMissingBak += 1;
+    const bakNameIndex = buildNameIndex(bakEntries, mods.normaliseForMatch);
 
     const plan = planBookRepairs(
       {
@@ -1671,6 +2043,7 @@ async function main() {
         bakNameIndex,
         orphans: segmentOrphans,
         cacheAvailable,
+        bakAvailable,
         historyResolver,
       },
       {
@@ -1681,7 +2054,11 @@ async function main() {
       },
     );
 
-    bookWithholds.push({ label: book.label, withheldForMissingCache: plan.withheldForMissingCache });
+    bookWithholds.push({
+      label: book.label,
+      withheldForMissingCache: plan.withheldForMissingCache,
+      withheldForMissingBak: plan.withheldForMissingBak,
+    });
 
     const rerenderRows = buildRerenderRows(book.label, segmentOrphans);
     allRerenderRows.push(...rerenderRows);
@@ -1689,6 +2066,16 @@ async function main() {
     if (plan.autoRecord.length === 0 && plan.reportOnly.length === 0 && plan.skipped.length === 0) continue;
 
     console.log(`--- ${book.label} ---`);
+    if (!bakAvailable) {
+      // #2135: a corrupt/unreadable cast.json.bak.* — NOT merely "zero bak
+      // files", which is the normal case and leaves bakAvailable true (see
+      // collectBakNameEntries's own doc comment).
+      console.log(
+        `  (! at least one cast.json.bak.* for this book (${book.audiobookDir}) could not be read or parsed. ` +
+          `The cross-source ambiguity veto cannot see this book's full bak evidence, so auto-record is withheld ` +
+          `for every matched id below until every cast.json.bak.* for this book is readable.)`,
+      );
+    }
     if (!cacheAvailable) {
       // #2093 residual 1, widened by independent-review Critical C1:
       // distinguish all THREE refusal states for the operator — "no file at
@@ -1756,7 +2143,14 @@ async function main() {
 
   // #2111: single call, right after the loop — see `planApplyRefusal`'s
   // own doc comment for exactly what this does and does not prove tested.
-  const { booksWithheldForMissingCache, withheldBookLabels, refuse: refuseApply } = planApplyRefusal(apply, bookWithholds);
+  // #2135 widened the returned shape with a bak-side count alongside cache.
+  const {
+    booksWithheldForMissingCache,
+    booksWithheldForMissingBak,
+    booksWithheldTotal,
+    withheldBookLabels,
+    refuse: refuseApply,
+  } = planApplyRefusal(apply, bookWithholds);
 
   if (allRerenderRows.length) {
     console.log('--- Re-render list (book / chapter / orphaned id / segments / ~duration) ---');
@@ -1789,11 +2183,24 @@ async function main() {
           'be recorded for a matched id in them; informational only, does NOT by itself block --apply (see below)'
         : ''),
   );
+  // #2135: bak's informational line, mirroring cache's — but a nonzero
+  // count here is RARE and worth flagging harder in the reason text, since
+  // (unlike cache) most books legitimately carry zero bak files at all;
+  // this count only rises when at least one that DOES exist is unreadable.
+  console.log(
+    `books with unreadable cast.json.bak.* evidence: ${booksMissingBak}` +
+      (booksMissingBak
+        ? ' — the cross-source ambiguity veto cannot see this book\'s full bak evidence, so no auto-record can ' +
+          'be recorded for a matched id in them; informational only, does NOT by itself block --apply (see below)'
+        : ''),
+  );
   console.log(
     `books with an auto-record withheld for missing cache evidence: ${booksWithheldForMissingCache}` +
-      (booksWithheldForMissingCache
-        ? ` — THIS is what blocks --apply: ${withheldBookLabels.join('; ')}`
-        : ' — --apply is not blocked by cache evidence'),
+      (booksWithheldForMissingCache ? ` — contributes to the --apply block below` : ' — --apply is not blocked by cache evidence'),
+  );
+  console.log(
+    `books with an auto-record withheld for missing bak evidence: ${booksWithheldForMissingBak}` +
+      (booksWithheldForMissingBak ? ` — contributes to the --apply block below` : ' — --apply is not blocked by bak evidence'),
   );
 
   // Round-2 review, Important 1 (original): refuse --apply outright when a
@@ -1807,20 +2214,22 @@ async function main() {
   // for a book whose ambiguity veto is blind (see its own doc comment) —
   // that safety property does not depend on this global refusal at all.
   // This refusal now fires only when withholding actually happened
-  // (booksWithheldForMissingCache > 0), so a blind-but-empty book no longer
-  // blocks a run it was never going to affect.
+  // (booksWithheldTotal > 0), so a blind-but-empty book no longer blocks a
+  // run it was never going to affect. #2135 widened the trigger to also
+  // cover bak-side withholding, sharing this one refusal path rather than a
+  // second copy of it.
   if (refuseApply) {
     console.error(
-      `\nRefusing --apply: ${booksWithheldForMissingCache} scanned book(s) had a real auto-record candidate ` +
-        `withheld because their analysis-cache evidence is unusable at CACHE_DIR (${cacheDir}): ` +
-        `${withheldBookLabels.join('; ')}. The cross-source ambiguity veto (guard 2) can only see an id as ` +
-        `ambiguous through the cache — unusable cache evidence makes every matched id in that book look ` +
-        `unambiguous whether or not it actually is, silently re-opening the exact bak-unambiguous x ` +
-        `cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. Point CACHE_DIR at the ` +
-        `checkout that actually ran these books' analysis (see the module doc comment) and re-run — the dry run ` +
-        `above must report "books with an auto-record withheld for missing cache evidence: 0" before --apply is ` +
-        `safe. (A nonzero "books missing analysis-cache evidence" count alone does NOT block --apply — only a ` +
-        `book with a real withheld candidate does.)`,
+      `\nRefusing --apply: ${booksWithheldTotal} scanned book(s) had a real auto-record candidate withheld ` +
+        `because their bak and/or analysis-cache evidence is unusable: ${withheldBookLabels.join('; ')}. The ` +
+        `cross-source ambiguity veto (guard 2) can only see an id as ambiguous through the cache (at CACHE_DIR, ` +
+        `${cacheDir}) and any cast.json.bak.* for the book — unusable evidence on either side makes every ` +
+        `matched id in that book look unambiguous whether or not it actually is, silently re-opening the exact ` +
+        `bak-unambiguous x cache-ambiguous cell the reserved-source/ambiguity-veto fix exists to close. Point ` +
+        `CACHE_DIR at the checkout that actually ran these books' analysis, and/or fix each book's unreadable ` +
+        `cast.json.bak.* (see the module doc comment), and re-run — the dry run above must report both withheld ` +
+        `counts as 0 before --apply is safe. (A nonzero "books missing ... evidence" count alone does NOT block ` +
+        `--apply — only a book with a real withheld candidate does.)`,
     );
     process.exitCode = 1;
     return;
