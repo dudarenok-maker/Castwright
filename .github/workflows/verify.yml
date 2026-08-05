@@ -84,23 +84,25 @@ concurrency:
 
 jobs:
   # Detect which scopes the PR touched by diffing the merge base against the
-  # PR head. Each output is a literal 'true'/'false' string consumed by the
-  # `if:` on every leg job/step below. Pure bash + git — no third-party
-  # action, matching this repo's all-first-party (actions/*) convention.
+  # PR head, then derive per-step scope via scripts/ci-scope.mjs (the same
+  # STEPS[] map npm run verify's local caching uses) — bash + git for the
+  # diff, no third-party action, matching this repo's all-first-party
+  # (actions/*) convention. Output is a single scopes JSON blob consumed via
+  # fromJSON() on every leg job/step below.
   detect:
     name: Detect changed scopes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      frontend: ${{ steps.changes.outputs.frontend }}
-      server: ${{ steps.changes.outputs.server }}
-      sidecar: ${{ steps.changes.outputs.sidecar }}
-      e2e: ${{ steps.changes.outputs.e2e }}
-      scripts: ${{ steps.changes.outputs.scripts }}
-      hooks: ${{ steps.changes.outputs.hooks }}
-      pinokio: ${{ steps.changes.outputs.pinokio }}
-      shared: ${{ steps.changes.outputs.shared }}
-      openapi: ${{ steps.changes.outputs.openapi }}
+      # ONE json blob rather than one output per step: GitHub has no wildcard
+      # for this map, so per-step outputs would be a third artifact that can
+      # silently drift from the emitted keys. Consumed via fromJSON below.
+      scopes: ${{ steps.changes.outputs.scopes }}
+      # Sentinel: proves ci-scope.mjs actually ran and wrote. The aggregator
+      # asserts this, catching the case where detect SUCCEEDS having written
+      # nothing — every `if:` false, every job green, required check green
+      # having run nothing.
+      ok: ${{ steps.changes.outputs.ok }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -109,85 +111,31 @@ jobs:
           # its base commit. A shallow clone wouldn't have the base reachable.
           fetch-depth: 0
 
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
       - name: Detect changed scopes
         id: changes
         run: |
-          # A manual dispatch has no PR base/head to diff against — run the
-          # FULL battery (every scope true) and skip the diff logic.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
-              echo "$k=true" >> "$GITHUB_OUTPUT"
-              echo "scope $k=true (workflow_dispatch → full run)"
-            done
-            exit 0
+          # A manual dispatch has no PR base/head to diff against. Leave FILES
+          # empty and let ci-scope.mjs branch on GITHUB_EVENT_NAME — it emits
+          # all-true for a dispatch, matching the old bash early-exit.
+          FILES=""
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            # Merge-base, not BASE itself: a PR branch created from a stale
+            # main would otherwise treat every file main moved past the fork
+            # point as "changed in this PR".
+            MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+            FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
           fi
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.event.pull_request.head.sha }}"
-          # Merge-base, not BASE itself: a PR branch created from a stale
-          # local `origin/<default-branch>` (e.g. right after a `gh pr merge`
-          # that doesn't update local refs) can be a strict ancestor of BASE
-          # rather than a descendant. A literal `git diff BASE HEAD` in that
-          # case treats every file BASE moved past HEAD's fork point as
-          # "changed in this PR", spuriously widening scope (a docs-only PR
-          # tripping the full frontend battery). Diffing from the actual
-          # merge-base is what the diff is meant to mean regardless of how
-          # stale the branch's fork point drifted. Falls back to BASE itself
-          # if the merge-base can't be resolved (shouldn't happen — Checkout
-          # above pulls full history — but conservative on any surprise).
-          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
-          FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
           echo "Changed files in this PR:"
           echo "$FILES"
           echo "---"
-          match() { echo "$FILES" | grep -qE "$1"; }
-          frontend=false; server=false; sidecar=false
-          e2e=false; scripts=false; hooks=false; pinokio=false; shared=false
-          openapi=false
-          match '^(src/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|tsconfig\.json$|tsconfig\.node\.json$|postcss\.config\.js$|eslint\.config\.(js|mjs)$)' && frontend=true
-          # scripts/tests/fixtures/: server/src/diagnostics/ffmpeg.test.ts reads
-          # ffmpeg-version-cases.json at runtime, sharing that corpus with the CJS
-          # preflight parser so the two cannot drift (ops-35). Without it here, a
-          # fixture-only diff fires the `scripts` leg (CJS side) but not `server`,
-          # so the TS parser is never re-checked against the case just added.
-          # scripts/repair-cast-id-drift.mjs: server/src/store/
-          # cast-resolve.repair-pass-contract.test.ts imports this script directly
-          # (#2130) to prove a cast-resolve.ts tier rename can't silently pass with
-          # the script's own suite green. Without it here, a scripts/-only diff to
-          # THIS file sets `scripts=true` alone, never `server=true` — the one test
-          # that guards it never runs in CI on a change to the exact file it covers.
-          match '^(server/src/|server/package(-lock)?\.json$|server/tsconfig\.json$|server/vitest\.config(\.slow)?\.ts$|openapi\.yaml$|server/\.env\.example$|server/scripts/sync-env-example\.ts$|scripts/tests/fixtures/|scripts/repair-cast-id-drift\.mjs$)' && server=true
-          match '^server/tts-sidecar/' && sidecar=true
-          match '^(e2e/|playwright\.config\.ts$)' && e2e=true
-          match '^scripts/' && scripts=true
-          # RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs:
-          # release-notes-gate.test.mjs asserts the #1956 mojibake gate against
-          # those real committed files at runtime, so a notes-only diff — the
-          # shape that would reintroduce the corruption — must still run this leg.
-          # The two on-box register files are the same shape again:
-          # check-onbox-register.test.mjs reads both at runtime and asserts the
-          # live view still agrees with the markdown, so a register-only diff —
-          # exactly the shape that drifts them apart — must run this leg too.
-          # .github/actions/: the composite setup action (I1, #2146 review) —
-          # consumed by every job (`uses: ./.github/actions/setup`) but
-          # matched by no scope, so an actions-only PR ran zero legs. Same
-          # defect D shape as .github/workflows/ above, mirrored verbatim.
-          match '^(\.husky/|\.github/workflows/|\.github/actions/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
-          match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
-          # openapi.yaml is a frontend input too (it generates
-          # src/lib/api-types.ts, and api.clone-voice.test.ts pins the
-          # clone-transcript cap against it), but its own flag rather than
-          # `frontend=true`: the frontend flag ALSO gates the 4-shard e2e job
-          # and the visual battery, and nothing under e2e/ reads the contract.
-          # Before this, an openapi-only diff matched only the server regex, so
-          # the frontend job was skipped and that pin could never run.
-          match '^openapi\.yaml$' && openapi=true
-          # `shared` = a ROOT dependency manifest changed → treat as global
-          # (a dep/lockfile bump can affect every leg), so run everything.
-          match '^(package\.json|package-lock\.json)$' && shared=true
-          for k in frontend server sidecar e2e scripts hooks pinokio shared openapi; do
-            echo "$k=${!k}" >> "$GITHUB_OUTPUT"
-            echo "scope $k=${!k}"
-          done
+          node scripts/ci-scope.mjs --files="$FILES" >> "$GITHUB_OUTPUT"
+          echo "--- derived scope ---"
+          node scripts/ci-scope.mjs --files="$FILES"
 
   lint-and-checks:
     name: Lint, typecheck & fast checks
