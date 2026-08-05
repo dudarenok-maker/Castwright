@@ -100,7 +100,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -110,7 +110,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**52 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**55 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -1562,6 +1562,99 @@ operational trap that produced the #2037 outage in the first place.
 `scheduleRespawnAttempt` in `server/src/tts/sidecar-supervisor.ts` and
 `onSpawnRefused` in `server/src/tts/spawn-sidecar.ts`. *Cost:* short — one
 kill, one log grep, one status poll.
+
+### A35 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
+
+Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
+the logic with a simulated `_design_in_flight` claim: `unload_design()` now
+waits (bounded, 150s) for an in-flight design to clear instead of nulling it,
+and raises a typed `DesignContentionTimeoutError` if the wait expires. What no
+unit test can reach is whether 150s is actually the right bound against a
+REAL cold 0.6B Base load plus a real VoiceDesign forward on this box — the
+figure was sized off the design path's own documented ~120s server budget,
+not a fresh on-box measurement of the specific race window #2064's review
+flagged.
+
+- Start a voice design (cast review → Design a new voice), and — timed to
+  land mid-design, before the design's own forward completes — trigger an
+  ordinary chapter render on a *different* voice from another tab/session.
+  Confirm the render's synth call **waits** for the design to finish (no
+  error, just a delayed start) rather than the design failing with "VoiceDesign
+  model was unloaded before this design could render."
+- Confirm the design itself completes normally and its audition plays.
+- If practical, force a genuinely wedged design (e.g. a killed/hung sidecar
+  thread while `_design_in_flight` is still claimed) and confirm the waiting
+  synth times out into the new `design_in_flight` 503 rather than hanging
+  forever — and that it does so somewhere in the 150s neighbourhood, not
+  immediately and not never.
+
+*Needs:* a live sidecar with Qwen VoiceDesign installed, and a way to trigger
+two overlapping requests (a second browser tab/session is enough). *Criteria:*
+`unload_design`'s docstring in `server/tts-sidecar/main.py`; the sizing
+rationale is in the `_DESIGN_CONTENTION_WAIT_S_DEFAULT` comment immediately
+above `class QwenEngine`. *Cost:* short — one overlapped request pair.
+
+### A36 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
+
+Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`) pin
+that a resident ASR reservation now books the separate `asr.warm` key (128 MB
+seed) instead of the cold `asr` key (400 MB) — proven with a faked
+`is_resident`/probe, no real allocator. Not yet observed: whether 128 MB is
+actually enough headroom for a real resident Whisper `base`/int8_float16
+forward's activation memory on a contended card (too low → a real, avoidable
+`noCapacity` refusal that this fix was supposed to eliminate) — this figure is
+an explicitly unmeasured conservative prior, not a measured one like the
+cold-load seeds elsewhere in `SEED_FOOTPRINTS_MB`.
+
+- With `ASR_DEVICE=cuda` and content-QA enabled (`SEG_ASR_ENABLED=1`), render
+  a chapter so ASR loads and goes resident, then trigger several more
+  `/transcribe` calls back-to-back (a re-record round is the natural trigger).
+  Confirm none of them 503 `noCapacity` on a card that has genuine room.
+- Watch `FootprintTable`'s learned `asr.warm` p95 settle after ≥5 real
+  observations (`_FOOTPRINT_MIN_SAMPLES`) — record what it converges to, so
+  the 128 MB seed can be revisited with evidence rather than left as a guess
+  indefinitely.
+- The device-wide `torch.cuda.max_memory_allocated` contamination question
+  #2094's own filing raised (a concurrent Qwen render possibly inflating the
+  learned COLD `asr` figure) is explicitly **not** covered by this row — it is
+  a separate, wider-blast-radius question this fix did not attempt to resolve.
+
+*Needs:* `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1`, a real book render with
+content-QA on. *Criteria:* the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB`
+(`server/tts-sidecar/main.py`) and `docs/local-llm.md`'s footprint table.
+*Cost:* short — rides along with any other GPU-ASR session (A20 already needs
+`ASR_DEVICE=cuda`-adjacent capacity behaviour; batch together).
+
+### A37 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
+
+`classifyTranscript`'s new logic is fully pinned in
+`server/src/tts/segment-asr-qa.test.ts` with injected transcripts/signals — a
+FLUENT, catastrophically-wrong-content transcript (WER ≥ 0.85) now overrides
+the "untrustworthy → inconclusive" backstop into `drift`, while a near-empty
+one and a merely-imperfect one are unaffected. Not yet observed: whether this
+actually fires on a REAL #2026-style Coqui language-collapse (fluent audio,
+wrong language, plausible duration) without a real `avgLogprob`/`noSpeechProb`
+false-positive rate that starts re-recording perfectly good lines — the
+`CATASTROPHIC_WER = 0.85` bound and the `heardTokens.length >= 2` floor are
+both judgement calls, not on-box-measured constants.
+
+- With ASR content-QA on (`SEG_ASR_ENABLED=1`) and a Russian (or French/
+  Spanish) book on the Coqui engine, reproduce #2026's language-collapse per
+  its own repro recipe (short Russian lines, repeated synthesis — intermittent,
+  not every run). Confirm a genuine collapse now gets caught and re-recorded
+  (segment carries `asr.verdict: drift`, reason mentioning "catastrophically
+  wrong"), where before this fix it would have read `inconclusive` and shipped
+  unflagged.
+- Across the same render (or a longer, healthy-content one), confirm the new
+  override does **not** fire on ordinary hard-to-transcribe-but-correct lines
+  — an invented character name, a foreign phrase, background noise — i.e. no
+  new false-positive re-record rate versus the pre-#2055 baseline.
+
+*Needs:* a Coqui-capable sidecar, ASR content-QA enabled, a non-English book
+(Russian ideal — matches #2026's own repro). *Criteria:* the `CATASTROPHIC_WER`
+comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
+*Cost:* short-to-medium — the collapse is intermittent, so budget a few
+repeated renders of the same short lines, not one pass.
 
 ---
 
