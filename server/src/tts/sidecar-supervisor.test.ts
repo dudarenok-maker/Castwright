@@ -127,6 +127,262 @@ describe('sidecar supervisor (srv-15)', () => {
     expect(spawn.fn).toHaveBeenCalledTimes(1);
   });
 
+  /* ── refused spawns are retried, not terminal (#2037) ──────────────────────
+   *
+   * spawnSidecar returns null for six distinct reasons. Two are BENIGN
+   * no-spawns (autoStart off, a healthy adopt) where a fresh sidecar is
+   * either unwanted or already ready. The other four are REFUSALS — a
+   * foreign listener still holds the port (often the just-exited child's
+   * socket still in TCP teardown), a stale sidecar's PID couldn't be
+   * identified/killed, or the OS-level spawn itself failed. Before this fix,
+   * spawnOnce() set `isRecycling = false` UNCONDITIONALLY after any null
+   * return, so a refusal silently ended supervision and announced the
+   * (nonexistent) sidecar as ready — the #2037 outage. */
+  describe('spawn refusal is retried, not terminal (#2037)', () => {
+    it('[HEADLINE] a refusal after a child exit is retried on backoff — recycling() stays true across the whole gap, and a supervised child eventually exists', async () => {
+      let releaseDelay1!: () => void;
+      let releaseDelay2!: () => void;
+      let delayCall = 0;
+      const delayFn = vi.fn(async () => {
+        delayCall += 1;
+        if (delayCall === 1) return new Promise<void>((r) => (releaseDelay1 = r));
+        if (delayCall === 2) return new Promise<void>((r) => (releaseDelay2 = r));
+        return Promise.resolve();
+      });
+
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      let calls = 0;
+      let capturedExit: SpawnSidecarOpts['onExit'];
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        calls += 1;
+        if (calls === 1) {
+          capturedExit = opts.onExit;
+          const h = makeHandle();
+          handles.push(h);
+          return h as SidecarHandle;
+        }
+        if (calls === 2) {
+          // The just-exited child's socket is still in teardown — spawnSidecar
+          // refuses (a foreign-looking listener) rather than spawning over it.
+          opts.onSpawnRefused?.('port still held');
+          return null;
+        }
+        const h = makeHandle();
+        handles.push(h);
+        return h as SidecarHandle;
+      });
+
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn,
+        warn: vi.fn(),
+        log: vi.fn(),
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 5,
+      });
+
+      await sup.start(); // spawn #1 succeeds
+      expect(sup.recycling()).toBe(false);
+
+      capturedExit?.(1, null); // child exits
+      expect(sup.recycling()).toBe(true);
+
+      releaseDelay1(); // backoff #1 elapses → spawn #2, which is REFUSED
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+      // The refusal must NOT have ended supervision: still recycling, and a
+      // second backoff must have been scheduled.
+      expect(sup.recycling()).toBe(true);
+      expect(delayCall).toBe(2);
+
+      releaseDelay2(); // backoff #2 elapses → spawn #3 succeeds
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(3));
+      expect(sup.recycling()).toBe(false);
+      expect(sup.current()).toBe(handles[1]); // the eventual supervised child
+    });
+
+    it('a refusal at first start() (not only after an exit) is also retried', async () => {
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      let calls = 0;
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        calls += 1;
+        if (calls === 1) {
+          opts.onSpawnRefused?.('foreign listener on :9000');
+          return null;
+        }
+        const h = makeHandle();
+        handles.push(h);
+        return h as SidecarHandle;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn: vi.fn(),
+        log: vi.fn(),
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 5,
+      });
+
+      await sup.start();
+      expect(sup.recycling()).toBe(true); // first attempt was refused
+
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+      expect(sup.recycling()).toBe(false);
+      expect(sup.current()).toBe(handles[0]);
+    });
+
+    it('a refusal every time exhausts the budget (exhaustedEvent() true), and resetAndRespawn() recovers', async () => {
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        opts.onSpawnRefused?.('foreign listener on :9000');
+        return null;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn: vi.fn(),
+        log: vi.fn(),
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 2,
+      });
+
+      await sup.start(); // attempt 1 — refused
+      expect(sup.exhaustedEvent()).toBe(false);
+      // Backoff retries run inside the (mocked, instant) delayFn chain — wait
+      // for the budget to exhaust (cap=2 → 3rd refusal trips it).
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(3));
+      expect(sup.exhaustedEvent()).toBe(true);
+      expect(sup.recycling()).toBe(true); // never reads "ready" while exhausted
+
+      const beforeRecovery = spawnFn.mock.calls.length;
+      // resetAndRespawn() clears the exhausted state and issues one more
+      // attempt via the same (still-refusing) spawnFn — proving the reset
+      // itself works; recovery all the way to a healthy process is covered
+      // by the HEADLINE test above.
+      await sup.resetAndRespawn();
+      expect(sup.exhaustedEvent()).toBe(false);
+      expect(spawnFn.mock.calls.length).toBeGreaterThan(beforeRecovery);
+    });
+
+    it('autoStart:false and a healthy adopt still settle recycling()===false and do NOT retry (the benign/non-benign split)', async () => {
+      // autoStart:false — benign, no onSpawnRefused fired.
+      {
+        const spawnFn = vi.fn(async (_opts: SpawnSidecarOpts) => null);
+        const sup = createSidecarSupervisor({
+          buildOpts: async () => ({ ...BASE_OPTS, autoStart: false }),
+          spawnFn,
+          delayFn: async () => {},
+          warn: vi.fn(),
+          log: vi.fn(),
+        });
+        await sup.start();
+        expect(sup.recycling()).toBe(false);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(spawnFn).toHaveBeenCalledTimes(1); // no retry
+      }
+      // Healthy adopt — benign, calls onAdoptExisting, not onSpawnRefused.
+      {
+        const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+          opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+          return null;
+        });
+        const sup = createSidecarSupervisor({
+          buildOpts: async () => BASE_OPTS,
+          spawnFn,
+          probeFn: vi.fn(async () => true),
+          delayFn: async () => new Promise(() => {}), // gate the adopt watchdog
+          adoptedPollMs: 100_000,
+          warn: vi.fn(),
+          log: vi.fn(),
+        });
+        await sup.start();
+        expect(sup.recycling()).toBe(false);
+        expect(spawnFn).toHaveBeenCalledTimes(1); // no retry
+      }
+    });
+
+    /* D2 (#2037) — the supervisor threads the exiting child's own pid into
+       the NEXT spawn attempt (log-only, so spawnSidecar's not-ours warning
+       can tell "our own child, still tearing down" from "a genuinely
+       foreign listener") — and only for that one chain. A later, unrelated
+       exit threads ITS OWN pid, not a stale one left over from the first. */
+    it('threads the exited child\'s own pid into the next spawn attempt as lastOwnedPid, and refreshes it on a later unrelated exit', async () => {
+      const seenPids: Array<number | null | undefined> = [];
+      let calls = 0;
+      let capturedExit1: SpawnSidecarOpts['onExit'];
+      let capturedExit2: SpawnSidecarOpts['onExit'];
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        calls += 1;
+        seenPids.push(opts.lastOwnedPid);
+        if (calls === 1) {
+          capturedExit1 = opts.onExit;
+          return { pid: 111, child: {} as SidecarHandle['child'], kill: vi.fn(async () => {}) };
+        }
+        if (calls === 2) {
+          // Recovery from pid 111's exit — must see lastOwnedPid === 111.
+          capturedExit2 = opts.onExit;
+          return { pid: 222, child: {} as SidecarHandle['child'], kill: vi.fn(async () => {}) };
+        }
+        // Recovery from pid 222's LATER exit — must see lastOwnedPid === 222, not 111.
+        return { pid: 333, child: {} as SidecarHandle['child'], kill: vi.fn(async () => {}) };
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+
+      await sup.start(); // spawn #1 — first boot, no prior exit
+      capturedExit1?.(1, null); // pid 111 exits
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+      capturedExit2?.(1, null); // pid 222 exits, LATER and unrelated to 111
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(3));
+
+      expect(seenPids).toEqual([null, 111, 222]);
+    });
+
+    /* Review finding (PR #2101): onChildExit checks `stopped` before ever
+       reaching scheduleRespawnAttempt; the refusal branch in spawnOnce did
+       not. If stop() races in while spawnFn is still in flight, a refusal
+       that resolves AFTER shutdown must not schedule a respawn or move the
+       failure counter — nothing should ever try to bring the sidecar back
+       once the supervisor has been told to stop. */
+    it('a refusal that resolves AFTER stop() does not schedule a respawn or move the failure counter', async () => {
+      let releaseSpawn!: (v: SidecarHandle | null) => void;
+      const pendingSpawn = new Promise<SidecarHandle | null>((r) => (releaseSpawn = r));
+      let capturedOnSpawnRefused: SpawnSidecarOpts['onSpawnRefused'];
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        capturedOnSpawnRefused = opts.onSpawnRefused;
+        return pendingSpawn;
+      });
+      const log = vi.fn();
+      const warn = vi.fn();
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn,
+        log,
+        backoffsMs: [10, 20, 30],
+        maxConsecutiveFailures: 5,
+      });
+
+      const startPromise = sup.start(); // spawnFn in flight, not yet resolved
+      await sup.stop(); // stop() races in WHILE the spawn attempt is still pending
+      // The in-flight spawn attempt now settles as a REFUSAL, after stop().
+      capturedOnSpawnRefused?.('port still held');
+      releaseSpawn(null);
+      await startPromise;
+
+      expect(spawnFn).toHaveBeenCalledTimes(1); // no respawn was ever scheduled
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('respawning in'));
+      expect(sup.exhaustedEvent()).toBe(false); // consecutiveFailures never moved
+    });
+  });
+
   /* Adopt-supervision: when the server honours an ALREADY-listening sidecar
      (no child spawned, so no onExit can fire), the supervisor must watch the
      port and respawn an OWNED child once that adopted sidecar disappears.
