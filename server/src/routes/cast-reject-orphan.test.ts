@@ -467,4 +467,97 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
     expect(history?.supersededBy).toEqual({ mayrin: 'mairin' });
     expect(history?.rejectedPairs).toEqual([]);
   });
+
+  it('Important 2 (review round 2) — a chip shown via a normalised-tier match IS removable by the DELETE the UI sends for that row (round-trip)', async () => {
+    // The repo's own real drift shape: 'the_torment'/'The-Torment' both
+    // normalise to 'the-torment'. Add the live target to this book's cast.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          ...initialCast,
+          { id: 'the-torment', name: 'The Torment', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+
+    // Reject ONE raw spelling ('The-Torment') against the live 'the-torment'.
+    const rejectRes = await callReject(bookId, 'the-torment', { orphanedId: 'The-Torment' });
+    expect(rejectRes.status).toBe(200);
+    expect(readHistory()?.rejectedPairs).toEqual([{ from: 'The-Torment', to: 'the-torment' }]);
+
+    // A DIFFERENT raw spelling of the same underlying id — 'the_torment' —
+    // is genuinely blocked by the resolver via the normalised-id tier
+    // (matches segments-io.ts's own Important-1 regression scenario, which
+    // is where the banner would show a chip for THIS row).
+    const blocked = await resolveOrphanedId('the_torment');
+    expect(blocked).toBeUndefined();
+
+    // The UI sends the DELETE using the ROW's own raw id — 'the_torment' —
+    // never 'The-Torment', which the row never even carries client-side.
+    const undoRes = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(undoRes.status).toBe(200);
+    // THE FAILURE MODE THIS TEST EXISTS TO PREVENT: round 1's raw-exact
+    // match would have returned wasRejected: false here, left disk
+    // unchanged, and reported success anyway (the client dispatches its
+    // "undone" state on any 200).
+    expect(undoRes.body.wasRejected).toBe(true);
+
+    const history = readHistory();
+    expect(history?.rejectedPairs).toEqual([]);
+
+    // The notLinkedTo edge (written under the PAIR's own 'The-Torment', not
+    // the row's 'the_torment') is also actually gone.
+    const cast = readCast();
+    const theTorment = cast.characters.find((c) => c.id === 'the-torment');
+    expect(theTorment?.notLinkedTo).toEqual([]);
+
+    // And 'the_torment' genuinely resolves again — not merely an empty
+    // rejectedPairs array.
+    const after = await resolveOrphanedId('the_torment');
+    expect(after?.character.id).toBe('the-torment');
+    expect(after?.via).toBe('normalised-id');
+  });
+
+  it('Important 1 (review round 2) — DELETE for a row resolving via tier 2 (raw) is a genuine no-op and does NOT collaterally remove an unrelated normalised-only pair', async () => {
+    // Same cross-spelling shape as Important 2's round-trip test, but pins
+    // the OTHER direction: 'the_torment' has its OWN tier-2 (raw
+    // supersededBy) resolution, unrelated to the pair rejected under the
+    // DIFFERENT raw spelling 'The-Torment'. A DELETE for the 'the_torment'
+    // row must not match — let alone remove — that unrelated pair, the
+    // undo-side mirror of segments-io.test.ts's read-side Important-1 test
+    // (a row that resolves via tier 2 must never be treated as governed by
+    // a normalised-only pair, on either side).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          ...initialCast,
+          { id: 'the-torment', name: 'The Torment', role: 'character', color: 'unset' },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { the_torment: 'the-torment' },
+        rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }],
+      }),
+    );
+
+    // Sanity: 'the_torment' really does resolve cleanly via tier 2 first.
+    const before = await resolveOrphanedId('the_torment');
+    expect(before?.via).toBe('history');
+
+    const res = await callUndoReject(bookId, 'the-torment', { orphanedId: 'the_torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.wasRejected).toBe(false);
+
+    // THE FAILURE MODE THIS TEST EXISTS TO PREVENT: an over-broad "which
+    // pairs apply" computation on the undo side removing 'The-Torment's
+    // pair as collateral damage from a DELETE that was never about it.
+    const history = readHistory();
+    expect(history?.rejectedPairs).toEqual([{ from: 'The-Torment', to: 'the-torment' }]);
+  });
 });

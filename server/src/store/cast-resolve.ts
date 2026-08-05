@@ -1,5 +1,5 @@
 import { normaliseIdKey } from '../util/character-id.js';
-import type { CastIdHistory } from './cast-id-history.js';
+import type { CastIdHistory, RejectedPair } from './cast-id-history.js';
 
 /** Minimal shape `buildCastResolver` needs from a cast record: an id, and
     nothing else. `T extends CastRecord` therefore accepts ANY concrete cast
@@ -195,4 +195,66 @@ export function buildCastResolver<T extends CastRecord>(
       return undefined;
     },
   };
+}
+
+/** #2092/#2089 review round 2 (Important 1/2) — the `rejectedPairs` entries
+ *  that actually GOVERN a given raw `characterId`, in the same sense
+ *  `resolve()` itself would consult them for that id — never a broader
+ *  union. Shared by BOTH the read side (`collectOrphanedCharacterFallbacks`'s
+ *  `rejectedAgainst`, driving the banner chip) and the write side (the
+ *  reject-undo route, finding which pair(s) a DELETE for this raw id
+ *  actually removes) — two independent computations that happen to agree
+ *  today is exactly the shape this wave keeps reproducing; this is ONE
+ *  function, called by both.
+ *
+ *  Round 1 unioned the raw and normalised keyspaces unconditionally, which
+ *  is broader than anything `resolve()` itself does: `resolve()` consults
+ *  raw for tier 2 (`history`) and normalised for tiers 3/4
+ *  (`normalised-id`/`normalised-history`) — never both for one id. That
+ *  broadening is fail-closed and harmless on the repair script's `--apply`
+ *  path, but wrong here: a segment resolving cleanly through tier 2 (raw)
+ *  could pick up a chip from an UNRELATED pair that only matches after
+ *  normalising a DIFFERENT raw spelling — disabling a working reject button
+ *  for a reconciliation nothing ever blocked, and offering an Undo that the
+ *  DELETE route (keyed by raw `from`) can't actually find.
+ *
+ *  Two rules, matching `resolve()`'s own per-tier precedence exactly:
+ *
+ *  1. A pair whose raw `from` EXACTLY equals `characterId` always applies —
+ *     it is this id's own literal reject history (recorded by a POST
+ *     against this exact raw spelling), valid regardless of which tier
+ *     currently resolves it. This is what stays true even in the common
+ *     case where the tier-2 `supersededBy` entry it once blocked has since
+ *     been forgotten (#2089 D6, `forgetSupersededId`) and there is no live
+ *     tier left to attribute the pair to at all — or where the id was
+ *     rejected from the needs-your-decision picker with no tier match ever
+ *     having existed. Determined by a plain string comparison; no resolver
+ *     call needed.
+ *  2. A pair whose NORMALISED `from` matches `characterId`'s normalised key
+ *     applies ONLY when this id's resolution goes through the
+ *     normalised-id/normalised-history tier — decided by resolving
+ *     `characterId` against `supersededBy` ALONE, ignoring `rejectedPairs`
+ *     entirely (`resolveIgnoringRejects`, typically
+ *     `buildCastResolver(cast, { supersededBy: history.supersededBy })
+ *     .resolve`), so a currently-BLOCKED id still gets credited to
+ *     whichever tier it would hit absent the reject. A tier-2 (raw
+ *     `supersededBy`) resolution NEVER consults the normalised keyspace —
+ *     exactly like `resolve()`'s own tier 2 never falls through to check
+ *     `rejectedTargetsByNormFrom`.
+ *
+ *  Callers build `resolveIgnoringRejects` ONCE per book (not once per id)
+ *  and pass it in, the same way `collectOrphanedCharacterFallbacks` already
+ *  builds its real (WITH-rejects) resolver once outside its segment loop. */
+export function rejectedPairsGoverning<T extends CastRecord>(
+  characterId: string,
+  rejectedPairs: readonly RejectedPair[],
+  resolveIgnoringRejects: (characterId: string) => CastResolution<T> | undefined,
+): RejectedPair[] {
+  const raw = rejectedPairs.filter((p) => p.from === characterId);
+  const ignoring = resolveIgnoringRejects(characterId);
+  const normalisedTierRelevant = ignoring?.via === 'normalised-id' || ignoring?.via === 'normalised-history';
+  if (!normalisedTierRelevant) return raw;
+  const key = normaliseIdKey(characterId);
+  const normalised = rejectedPairs.filter((p) => p.from !== characterId && normaliseIdKey(p.from) === key);
+  return [...raw, ...normalised];
 }

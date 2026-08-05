@@ -487,6 +487,33 @@ describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3
       expect(result.the_torment.resolution).toBe('normalised');
       expect(result.the_torment.rejectedAgainst).toBeUndefined();
     });
+
+    it('Important 1 (review round 2) — a tier-2 (raw supersededBy) resolution does NOT pick up a chip from an unrelated pair that only matches after normalising a DIFFERENT raw spelling', async () => {
+      // Verified-by-probe regression from round 1's plain union: 'the_torment'
+      // has its OWN supersededBy entry (raw-keyed, tier 2) pointing at the
+      // live 'the-torment' — a clean, unblocked reconciliation, since the
+      // rejected pair's raw `from` ('The-Torment') is a DIFFERENT string and
+      // tier 2 is raw-only. The old union-based fix also checked the
+      // NORMALISED keyspace regardless of which tier was actually resolving
+      // this id, so 'The-Torment' (which normalises the same as
+      // 'the_torment') incorrectly matched and put a chip on a row nothing
+      // ever blocked.
+      const cast = [{ id: 'the-torment' }];
+      writeSegmentsArray('01-one', [{ characterId: 'the_torment', sentenceIds: [1] }]);
+      const result = await collectOrphanedCharacterFallbacks(
+        bookDir,
+        chapters,
+        cast,
+        h({ the_torment: 'the-torment' }, { rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }] }),
+      );
+      // Resolves cleanly via tier 2 (history) — genuinely NOT blocked.
+      expect(result.the_torment.resolution).toBe('alias');
+      expect(result.the_torment.resolvedCharacterId).toBe('the-torment');
+      // And carries NO chip — nothing here was ever rejected under this
+      // raw spelling, and the tier that resolved it never even consults
+      // the normalised keyspace.
+      expect(result.the_torment.rejectedAgainst).toBeUndefined();
+    });
   });
 
   it('accumulates the segment count across multiple rendered chapters for the same orphaned id', async () => {

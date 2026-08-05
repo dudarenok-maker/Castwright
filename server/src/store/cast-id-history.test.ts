@@ -367,6 +367,40 @@ describe('cast id history', () => {
         await expect(forgetSupersededId(dir, 'nobody')).resolves.toBeUndefined();
       });
     });
+
+    describe('expectedTarget (#2092/#2089, review round 2 "Also fix" — closes the POST-side race I1\'s reorder opened)', () => {
+      it('deletes when the current value matches expectedTarget', async () => {
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        await expect(forgetSupersededId(dir, 'mayrin', 'mairin')).resolves.toBe('mairin');
+        expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+      });
+
+      it('is a no-op when the current value does NOT match expectedTarget — the race I1 opened', async () => {
+        // Simulates: the route reads supersededBy['mayrin'] === 'mairin',
+        // then a CONCURRENT retireCharacterId repoints it onto something
+        // else entirely before the (now non-fatal, post-reorder) forget
+        // call runs. An unconditional delete would discard the fresh
+        // 'mr-marrow' entry instead of the stale 'mairin' the caller
+        // actually read.
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        await retireCharacterId(dir, 'mayrin', 'mr-marrow');
+        await expect(forgetSupersededId(dir, 'mayrin', 'mairin')).resolves.toBeUndefined();
+        // The concurrent write survives untouched.
+        expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mr-marrow' });
+      });
+
+      it('deletes unconditionally when expectedTarget is omitted — back-compat with every other caller', async () => {
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        await expect(forgetSupersededId(dir, 'mayrin')).resolves.toBe('mairin');
+        expect((await loadCastIdHistory(dir)).supersededBy).toEqual({});
+      });
+
+      it('still returns undefined (no-op, no write) when the key is absent, whether or not expectedTarget is given', async () => {
+        expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+        await expect(forgetSupersededId(dir, 'nobody', 'anything')).resolves.toBeUndefined();
+        expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      });
+    });
   });
 
   describe('rejectOrphanedId (#2040 Task 17)', () => {

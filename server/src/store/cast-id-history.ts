@@ -450,12 +450,31 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  this module's idempotent-write discipline. Pair with `rejectOrphanedPair`
  *  when the caller also wants to stop the id resolving through the
  *  normalised tiers, which don't have a `supersededBy` entry to remove in
- *  the first place — this primitive alone is not durable against those. */
-export async function forgetSupersededId(bookDir: string, id: string): Promise<string | undefined> {
+ *  the first place — this primitive alone is not durable against those.
+ *
+ *  `expectedTarget` (#2092/#2089, review round 2 "Also fix") — when given,
+ *  the delete is a no-op unless `supersededBy[id]` still equals it. The
+ *  reject-undo route's POST handler reads `supersededBy[orphanedId]` once
+ *  (to compute the stash it bakes into `rejectOrphanedPair`), then calls
+ *  this function afterwards as a best-effort tidy-up (#2089 fix round 1,
+ *  I1's reorder). Between those two steps a CONCURRENT `retireCharacterId`
+ *  could repoint `supersededBy[orphanedId]` onto a different, unrelated
+ *  target — deleting unconditionally would then discard that fresh entry
+ *  instead of the stale one the read actually saw, reproducing C1's own
+ *  overwrite-class damage one primitive over, on the POST side instead of
+ *  DELETE's. Passing the value the caller already read as `expectedTarget`
+ *  closes that window: a mismatch means someone else already changed this
+ *  key since the read, so there is nothing of the caller's own to forget. */
+export async function forgetSupersededId(
+  bookDir: string,
+  id: string,
+  expectedTarget?: string,
+): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     const history = await loadCastIdHistory(bookDir);
     const removed = history.supersededBy[id];
     if (removed === undefined) return undefined;
+    if (expectedTarget !== undefined && removed !== expectedTarget) return undefined;
     delete history.supersededBy[id];
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return removed;
