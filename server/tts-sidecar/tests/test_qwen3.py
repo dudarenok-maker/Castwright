@@ -686,6 +686,10 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_distil(
     parked load and the 0.5s bound trips.
     """
     engine = fake_qwen_runtime["engine"]
+    # _ensure_base17_for_mint() checks real HF-cache weights presence before
+    # ever touching _ensure_base17_loaded — stub it so this test doesn't
+    # depend on ambient weights being installed on the box (CI has none).
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     engine.design_voice("v1", "A warm narrator.", "English", None, None)
     monkeypatch.setattr(
         engine, "_icl_instruct_synth",
@@ -774,6 +778,10 @@ def test_unload_is_not_blocked_by_a_cold_base_load_during_mint_variant_audition(
     parked load and the 0.5s bound trips.
     """
     engine = fake_qwen_runtime["engine"]
+    # _ensure_base17_for_mint() checks real HF-cache weights presence before
+    # ever touching _ensure_base17_loaded — stub it so this test doesn't
+    # depend on ambient weights being installed on the box (CI has none).
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     engine.design_voice("v1", "A warm narrator.", "English", None, None)
     monkeypatch.setattr(
         engine, "_icl_instruct_synth",
@@ -1099,6 +1107,10 @@ def test_mint_variant_keeps_base17_warm_across_mints(fake_qwen_runtime, monkeypa
     """Two consecutive mints reuse the SAME resident 1.7B-Base — it is not
     nulled between mints (the issue #1024 fragmentation fix)."""
     eng = fake_qwen_runtime["engine"]
+    # _ensure_base17_for_mint() checks real HF-cache weights presence before
+    # ever touching _ensure_base17_loaded — stub it so this test doesn't
+    # depend on ambient weights being installed on the box (CI has none).
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     eng.design_voice("v1", "A warm narrator.", "English", None, None)
     monkeypatch.setattr(
         eng, "_icl_instruct_synth",
@@ -1922,6 +1934,10 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     """
     eng = fake_qwen_runtime["engine"]
     vdir = fake_qwen_runtime["dir"]
+    # _ensure_base17_for_mint() checks real HF-cache weights presence before
+    # ever touching _ensure_base17_loaded — stub it so this test doesn't
+    # depend on ambient weights being installed on the box (CI has none).
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     # base voice exists on disk (design it via the fake path)
     eng.design_voice("v1", "A warm narrator.", "English", None, None)
     calls: list[str] = []
@@ -2250,6 +2266,10 @@ def test_mint_variant_remint_evicts_stale_1_7b_disk_cache(fake_qwen_runtime, mon
 
     eng = fake_qwen_runtime["engine"]
     vdir = str(fake_qwen_runtime["dir"])
+    # _ensure_base17_for_mint() checks real HF-cache weights presence before
+    # ever touching _ensure_base17_loaded — stub it so this test doesn't
+    # depend on ambient weights being installed on the box (CI has none).
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
     eng.design_voice("v1", "A warm narrator.", "English", None)
     monkeypatch.setattr(
         eng,
