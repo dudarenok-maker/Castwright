@@ -38,6 +38,20 @@ import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
+/* #1981 — hoisted `vi.mock` (NOT a runtime `vi.spyOn`) so the promote-voice-
+   vs-assign race test far below can deterministically intercept
+   qwen-voice.ts's OWN `readJson` call (bound at qwen-voice.ts's own
+   module-load time, before any runtime spy could attach to it) — same
+   rationale as book-state-preserve-voices.test.ts's own #1981 race test.
+   Defaults to a plain passthrough, so every other test in this file behaves
+   exactly as if this mock weren't here; only the one race test below
+   overrides `mockImplementation` for the duration of its own `it`, then
+   restores it. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, readJson: vi.fn(actual.readJson) };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';
@@ -221,6 +235,12 @@ beforeAll(async () => {
      under sequential awaits). */
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   const { voiceSampleRouter } = await import('./voice-sample.js');
+  /* #1981 — castAliasesRouter and voiceLibraryRouter are mounted here (not
+     in their own race describes' beforeAlls further down) so the shared
+     `app` object is fully assembled once, up front, rather than mutated
+     mid-file by a later describe. */
+  const { castAliasesRouter } = await import('./cast-aliases.js');
+  const { voiceLibraryRouter } = await import('./voice-library.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
 
@@ -228,6 +248,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/voices', voiceSampleRouter);
+  app.use('/api/books', castAliasesRouter);
+  app.use('/api/voice-library', voiceLibraryRouter);
 });
 
 beforeEach(() => {
@@ -913,6 +935,286 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
   });
 });
 
+/* #1981, Task 7 — promote-voice's stale-variants teardown write races
+   POST /voice-library/:voiceUuid/assign for a DIFFERENT character of the same
+   book. Unlocked, each side's own `readJson` can land before the other side's
+   write, so whichever side writes LAST replays a `characters` snapshot that
+   predates the other's write and silently drops it — which side loses
+   depends on interleaving (measured: promote-voice's own teardown was the
+   one lost, not assign's), so both survival assertions below matter, not
+   just one. Locked, promote-voice re-reads fresh cast.json inside
+   `withCastLock`, so both mutations survive regardless of interleaving.
+
+   #1981 race-hardening round (Aug 2026) — a bare `Promise.all` of the two
+   requests (the original shape of this test) does NOT interleave reliably:
+   measured at ~50% per-trial detection (15 red / 30 external runs,
+   `withCastLock` mutated to a pass-through, `--retry=0`) — the prior header
+   comment's "interleaves deterministically" claim did not hold up under
+   measurement. Every OTHER race test hardened in this same round measured
+   20/20 deterministic on this box (see the hardening report's table), so
+   this one is a genuine outlier: promote-voice's handler does several real
+   file renames plus a sidecar-evict `fetch` between its OWN two `readJson`
+   calls, which is enough async distance for the interleaving to go either
+   way depending on OS/fs scheduling.
+
+   A naive fix — loop the bare-`Promise.all` trial N times and require every
+   trial to pass — does NOT work here either, and was tried first: repeating
+   the trial WITHIN one vitest process is not independent sampling. Diagnostic
+   instrumentation across 25 in-process repeats showed only the FIRST trial
+   ever caught the miss; trials 2–25 consistently "passed" once the process's
+   JIT/fs-thread-pool state settled — a process-level correlation invisible to
+   a per-trial probability model. 25 external re-runs of that loop-based
+   version still went green 9/20 times, i.e. no better than the original
+   single-trial test.
+
+   The fix that actually reproduces the bug on demand: SCRIPT the
+   interleaving deterministically, the same technique
+   book-state-preserve-voices.test.ts's own #1981 race test uses for its
+   asymmetric-preamble PUT-vs-assign race. Intercept the SECOND call to
+   `readJson` for this book's cast.json — promote-voice's own "fresh read"
+   inside its (real) `withCastLock` span, the one whose snapshot the
+   teardown write is based on — read the real bytes immediately (so the read
+   genuinely happens-before assign's write, matching the bug's precondition)
+   but hold the JS-visible resolution open behind a manually-released gate.
+   /assign then gets a generous one-directional head start: it completes
+   fully when unlocked (the bug window) or queues behind promote-voice's
+   still-held lock when locked (the fix) — either way nothing depends on
+   tuning a tight timing window. This lands a single trial, deterministically,
+   in the same 200-of-200-class category the cast-lock.ts docstring cites for
+   the base primitive — no in-process repetition needed, and none of the
+   process-correlation risk that repetition carries. Confirmed empirically:
+   20/20 external re-runs of THIS version go red against the same mutation
+   (see the hardening report). */
+describe('#1981 — promote-voice races /assign for a different character', () => {
+  let vl: typeof import('../workspace/voice-library.js');
+  let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
+
+  beforeAll(async () => {
+    /* voiceLibraryRouter itself is mounted in the file's top-level beforeAll,
+       alongside the other routers this file shares — this describe still
+       needs the workspace module + castJsonPath for its own test body. */
+    const [voiceLibMod, { castJsonPath: cjp }] = await Promise.all([
+      import('../workspace/voice-library.js'),
+      import('../workspace/paths.js'),
+    ]);
+    vl = voiceLibMod;
+    castJsonPath = cjp;
+  });
+
+  it('#1981 — keeps both promote-voice’s variant teardown and a concurrent /assign on a different character', async () => {
+    const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'), 'EMBEDDING');
+    writeFileSync(
+      join(qwenDir(), 'qwen-v_maerin-preview.json'),
+      JSON.stringify({ voiceId: 'qwen-v_maerin-preview', instruct: 'a brand new take' }),
+    );
+    /* maerin needs a non-empty `variants` map or promote-voice never takes
+       the cast lock at all (Task 7 brief — the write is guarded on
+       `variants` being non-empty). */
+    const withVariants = characters.map((c) =>
+      c.id === 'maerin'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-v_maerin',
+                variants: { angry: { name: 'qwen-v_maerin__angry' } },
+              },
+            },
+          }
+        : c,
+    );
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withVariants }),
+    );
+
+    const raceVoiceUuid = 'race-assign-promote-1';
+    await vl.writeEntry({
+      voiceUuid: raceVoiceUuid,
+      name: 'Race Assign Voice',
+      provenance: 'imported',
+      tags: [],
+      pinned: false,
+      engines: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    /* Script the interleaving: hold promote-voice's SECOND `readJson` call
+       for this book's cast.json (its fresh, in-lock read) open until assign
+       has had a generous chance to write. See this describe's header
+       comment for the full rationale. */
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const raceCastPath = castJsonPath(bookDir);
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let interceptedSecondRead = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is the top-of-handler character lookup, made before any of
+         promote-voice's file-rename dance — let it through untouched. Call
+         #2 is the fresh, in-lock read the teardown write is based on. */
+      if (callsForCastPath === 2) {
+        interceptedSecondRead = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before assign's write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let resPromote: request.Response;
+    let resAssign: request.Response;
+    try {
+      const promotePromise = request(app)
+        .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+        .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      promotePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+      // Let promote-voice run its file-rename dance and reach (and get stuck
+      // behind) its second, intercepted read.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(interceptedSecondRead).toBe(true);
+
+      const assignPromise = request(app)
+        .post(`/api/voice-library/${raceVoiceUuid}/assign`)
+        .send({ bookId, characterId: 'nopersona' });
+      assignPromise.catch(() => {}); // force dispatch now (see above)
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind promote-voice's held lock when locked. Not a tight window.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [resPromote, resAssign] = await Promise.all([promotePromise, assignPromise]);
+    } finally {
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory), not a `vi.spyOn` spy — restore its default
+      // passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+    }
+
+    expect(resPromote.status).toBe(200);
+    expect(resAssign.status).toBe(200);
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
+    /* promote-voice's own mutation survived: variants dropped, base kept. */
+    expect(maerinQwen.qwen.variants).toBeUndefined();
+    expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
+    /* assign's own mutation survived too — the lost-update this test pins. */
+    const nopersonaQwen = nopersona.overrideTtsVoices as { qwen?: { libraryUuid?: string } } | undefined;
+    expect(nopersonaQwen?.qwen?.libraryUuid).toBe(raceVoiceUuid);
+  });
+});
+
+describe('#1981 — ensureCharacterVoiceUuid races a non-design cast writer', () => {
+  /* ensureCharacterVoiceUuid's whole book-scoped body sits inside
+     `withDesignLock(bookDir)`, which serialises it only against OTHER
+     design-lock holders (other designs on this book). It does nothing
+     against a writer that never takes the design lock at all — cast-aliases'
+     add-alias, which takes only the cast lock. Before this task's fix, the
+     uuid mint reads cast.json once (no cast lock), so a concurrent add-alias
+     that lands between that read and the eventual write is silently
+     clobbered when the mint's own writeJsonAtomic replays the stale
+     snapshot. Race it directly (not via HTTP) against the real add-alias
+     route on the SAME book, a DIFFERENT character, so the two writes don't
+     collide on which character index changes — only on whether the whole
+     file survives intact. castAliasesRouter is mounted in the file's
+     top-level beforeAll, alongside the other routers this file shares. */
+  it('#1981 — an add-alias write on a different character survives a concurrent voiceUuid mint on this book', async () => {
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+
+    const { ensureCharacterVoiceUuid: ensureFn } = await import('./qwen-voice.js');
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(bookDir);
+
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is the outer early-out read (lets it through — it's the
+         optimisation, not the write's basis). Call #2 is the fresh,
+         in-lock read the mint's own write is based on — hold it open so
+         add-alias gets a real chance to run underneath. Any later call
+         (add-alias's own read) passes straight through. */
+      if (callsForCastPath === 2) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before add-alias's write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let uuidPromise: Promise<string | undefined> | undefined;
+    let aliasPromise: request.Test | undefined;
+    let aliasRes: request.Response;
+    try {
+      uuidPromise = ensureFn(bookDir, 'nopersona');
+      uuidPromise.catch(() => {});
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      aliasPromise = request(app)
+        .post(`/api/books/${bookId}/cast/add-alias`)
+        .send({ characterId: 'maerin', aliasName: 'The Wanderer' });
+      aliasPromise.catch(() => {});
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      [, aliasRes] = await Promise.all([uuidPromise, aliasPromise]);
+    } finally {
+      // Idempotent — also fires here so a throw ANYWHERE above still releases
+      // a held `readJson` rather than leaving it stuck on `await gate` forever.
+      released();
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while the mint is
+      // still running against fixtures `afterAll` is about to delete.
+      await Promise.allSettled([uuidPromise, aliasPromise]);
+    }
+
+    expect(aliasRes.status).toBe(200);
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    /* add-alias's own mutation survived — the lost-update this test pins. */
+    expect(maerin.aliases).toContain('The Wanderer');
+    /* the mint's own write survived too — read back from disk, not merely
+       inferred from the race not throwing (a silent no-op write would still
+       pass every assertion above). */
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    expect(nopersona.voiceUuid).toBeTruthy();
+  });
+});
+
 describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (fs-34)', () => {
   const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 
@@ -1005,6 +1307,182 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
+
+  /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
+     characters in the SAME book race that book's cast.json. Unlocked, both
+     requests' readJson resolve before either writeJsonAtomic lands, so the
+     later write replays a `characters` snapshot taken before the earlier
+     write happened and silently drops it — one character's variant map
+     reverts to its pre-delete state. `nopersona` gets its own qwen override
+     here (it has none by default) purely so it has a second, independent
+     variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
+     `{ force: true }` / try-catch best-effort, so this doesn't need matching
+     .pt/.json fixtures on disk. */
+  it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap', async () => {
+    seedVariants();
+    const withSecond = readCast().characters.map((c) =>
+      c.id === 'nopersona'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-nopersona',
+                variants: { sad: { name: 'qwen-nopersona__sad' } },
+              },
+            },
+          }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withSecond }),
+    );
+
+    const [resMaerin, resNopersona] = await Promise.all([
+      request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`),
+      request(app).delete(`/api/books/${bookId}/cast/nopersona/emotion-variant/sad`),
+    ]);
+    expect(resMaerin.status).toBe(200);
+    expect(resNopersona.status).toBe(200);
+
+    const cast = readCast();
+    const maerin = cast.characters.find((c) => c.id === 'maerin')!;
+    const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    const nopersonaQwen = nopersona.overrideTtsVoices as {
+      qwen: { variants?: Record<string, unknown> };
+    };
+    /* maerin: angry removed, sad survives. */
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+    /* nopersona: its only variant (sad) removed → whole map cleaned up. */
+    expect(nopersonaQwen.qwen.variants).toBeUndefined();
+  });
+
+  /* C1 — the teardown's sidecar `fetch` (inside tearDownEmotionVariant) has
+     no reason to hold the cast lock across it: it's a best-effort network
+     call (#2127 bounds it with EVICT_FETCH_TIMEOUT_MS, but even that bounded
+     wait shouldn't pin the lock) — the same defect class promote-voice's own
+     "Narrow by design" comment (above, on its withCastLock call) already
+     fixes for its teardown. Proves the fix the same way voice-style.test.ts's
+     own #1981 lock-narrowing races do (`/generate-all no longer holds the
+     book lock across the whole batch`, `/generate no longer holds the book
+     lock across the LLM call`): delay the sidecar call artificially and
+     assert a concurrent cast write on the SAME book (add-alias) lands
+     quickly rather than waiting for it.
+
+     Re-review (2026-08) found the original fixed 50ms warm-up sleep could
+     lie: the evict actually starts at ~20ms, a ~2.5x margin, and with the
+     defect reintroduced plus the warm-up shrunk to 0ms, 1 of 6 runs still
+     passed — a silent false green under load (this box regularly runs
+     several concurrent worktree batteries). Replaced with a deferred that
+     the evict's own `mockImplementation` resolves the instant it's invoked,
+     so the concurrent add-alias fires exactly when the evict has genuinely
+     started — no guessed margin, no flake window. */
+  it('C1 — releases the cast lock before the sidecar evict, so a concurrent add-alias on the same book lands quickly', async () => {
+    seedVariants();
+    const EVICT_DELAY_MS = 300;
+    /* #2127 composition check — this test's whole point is a DELAYED but
+       SUCCESSFUL evict (the lock-release timing), not one that gets aborted
+       by the new EVICT_FETCH_TIMEOUT_MS bound. Assert the artificial delay
+       stays well under it; the mocked `fetch` below doesn't honor the real
+       AbortSignal anyway (it ignores `init` entirely), so this is a guard
+       against the two constants drifting into each other, not a behavioural
+       dependency. */
+    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
+    expect(EVICT_DELAY_MS).toBeLessThan(EVICT_FETCH_TIMEOUT_MS);
+    let resolveEvictStarted: () => void;
+    const evictStarted = new Promise<void>((resolve) => {
+      resolveEvictStarted = resolve;
+    });
+    fetchMock.mockImplementation(async (url: unknown) => {
+      if (String(url).endsWith('/qwen/evict-voice')) {
+        resolveEvictStarted();
+        await new Promise((r) => setTimeout(r, EVICT_DELAY_MS));
+      }
+      return { ok: true };
+    });
+
+    const deletePromise = request(app).delete(
+      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
+    );
+    deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
+
+    // Deterministic warm-up: wait for the evict fetch to actually have been
+    // invoked (whether the lock is still held at that point, pre-fix, or
+    // already released, post-fix) rather than guessing a fixed delay is
+    // enough for the DELETE handler to get there.
+    await evictStarted;
+
+    const start = Date.now();
+    const addAliasRes = await request(app)
+      .post(`/api/books/${bookId}/cast/add-alias`)
+      .send({ characterId: 'nopersona', aliasName: 'Quick' });
+    const elapsed = Date.now() - start;
+
+    expect(addAliasRes.status).toBe(200);
+    /* Under the pre-fix shape the evict ran INSIDE the lock, so add-alias's
+       own withCastLock call couldn't even start until the evict resolved —
+       >= EVICT_DELAY_MS. Generous headroom under that while staying well
+       above the few ms a genuinely-unlocked add-alias takes. */
+    expect(elapsed).toBeLessThan(EVICT_DELAY_MS - 100);
+
+    const deleteRes = await deletePromise;
+    expect(deleteRes.status).toBe(200);
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+  });
+
+  /* #2127 — the evict fetches (inside tearDownEmotionVariant, and
+     promote-voice's own direct evict) had no AbortSignal, so a sidecar that
+     accepts the TCP connection but never responds (blocked mid model
+     load/recycle — routine on this box) hung the triggering request for up
+     to undici's ~300s default, even though cast.json had already been
+     written successfully before the teardown ran. Proves the fix directly: a
+     sidecar mock that never resolves (and never rejects) on its own must
+     still let the DELETE respond, bounded by EVICT_FETCH_TIMEOUT_MS rather
+     than that ~300s hang. The mock only settles via the real `AbortSignal`
+     the route passes — exactly how undici itself behaves — so this only
+     passes if the signal is genuinely wired through, not just present. */
+  it('#2127 — a sidecar evict that never responds does not hang the DELETE past the eviction timeout', async () => {
+    seedVariants();
+    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
+    fetchMock.mockImplementation((url: unknown, init?: unknown) => {
+      if (String(url).endsWith('/qwen/evict-voice')) {
+        return new Promise((_resolve, reject) => {
+          const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
+          signal?.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted.');
+            err.name = 'AbortError';
+            reject(err);
+          });
+          // Deliberately never settles on its own — mimics a sidecar that
+          // accepted the connection but is blocked.
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const start = Date.now();
+    const res = await request(app).delete(
+      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
+    );
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, removed: 'angry' });
+    /* Bounded by the timeout, not by undici's ~300s default. Generous
+       headroom above EVICT_FETCH_TIMEOUT_MS for the abort machinery + route
+       handling itself; nowhere near the untimed-out hang this closes. */
+    expect(elapsed).toBeGreaterThanOrEqual(EVICT_FETCH_TIMEOUT_MS - 200);
+    expect(elapsed).toBeLessThan(EVICT_FETCH_TIMEOUT_MS + 2_000);
+
+    /* cast.json was still written successfully — a timed-out best-effort
+       evict must never turn a successful write into an error response. */
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
+    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+  });
 });
 
 describe('persistEmotionVariant', () => {
@@ -1091,6 +1569,86 @@ describe('persistEmotionVariant', () => {
     const cast = JSON.parse(await readFile(join(bookDirFresh, '.audiobook', 'cast.json'), 'utf8'));
     expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe(expectedBaseName);
     expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({ name: variantVoiceId });
+  });
+
+  it('#1981 — two concurrent variant writes for the same character both survive (no design lock covers this path)', async () => {
+    /* Unlike ensureCharacterVoiceUuid, persistEmotionVariant carries NO design
+       lock at all — so the ordinary self-vs-self shape is a valid race here:
+       two concurrent book-scoped calls for the SAME character (different
+       emotions) is a classic read-modify-write collision if neither takes the
+       cast lock. Script the interleaving: hold the FIRST call's read open
+       until the second call's write has landed, then release — pre-fix, the
+       first call's writeJsonAtomic replays a stale snapshot (no 'sad' slot);
+       post-fix its cast-lock body re-reads fresh and merges both. */
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const { castJsonPath } = await import('../workspace/paths.js');
+    const raceCastPath = castJsonPath(bookDir);
+
+    let released!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    let callsForCastPath = 0;
+    let intercepted = false;
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path !== raceCastPath) return actual.readJson(path);
+      callsForCastPath += 1;
+      /* Call #1 is 'angry''s outer early-out read (lets it through — it's
+         the optimisation, not the write's basis). Call #2 is 'angry''s
+         fresh, in-lock read the write is based on — hold it open so 'sad'
+         gets a real chance to run underneath. Any later call ('sad''s own
+         read) passes straight through. */
+      if (callsForCastPath === 2) {
+        intercepted = true;
+        const value = await actual.readJson(path); // real bytes, now — happens-before 'sad''s write
+        await gate; // hold the RESOLUTION open until released below
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    let angryPromise: Promise<void> | undefined;
+    let sadPromise: Promise<void> | undefined;
+    try {
+      angryPromise = persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+      angryPromise.catch(() => {});
+      const deadline = Date.now() + 2000;
+      while (!intercepted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(intercepted).toBe(true);
+
+      sadPromise = persistEmotionVariantFn(bookDir, 'wren', 'sad', 'qwen-wren__sad');
+      sadPromise.catch(() => {});
+      // Generous head start: completes fully when unlocked, queues harmlessly
+      // behind the held lock when locked. Not a tight window either way.
+      await new Promise((r) => setTimeout(r, 50));
+
+      released();
+      await Promise.all([angryPromise, sadPromise]);
+    } finally {
+      // Idempotent — also fires here so a throw ANYWHERE above still releases
+      // a held `readJson` rather than leaving it stuck on `await gate` forever.
+      released();
+      // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
+      // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
+      // default passthrough behaviour explicitly.
+      spy.mockImplementation(actual.readJson);
+      // On the failure path (an assertion above threw) these are still
+      // in-flight — await them so the test can't return while a write is
+      // still running against the fixture `afterEach` is about to delete.
+      await Promise.allSettled([angryPromise, sadPromise]);
+    }
+
+    const { readFile } = await import('node:fs/promises');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    const variants = cast.characters[0].overrideTtsVoices.qwen.variants;
+    /* Both writers' own mutations survived — the lost-update this test pins. */
+    expect(variants.angry).toEqual({ name: 'qwen-wren__angry' });
+    expect(variants.sad).toEqual({ name: 'qwen-wren__sad' });
   });
 });
 

@@ -322,3 +322,49 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
     }
   });
 });
+
+/* #1981 — a dedicated standalone book with two characters that have NO
+   series-mates, so both concurrent requests below take an identical,
+   minimal preamble (scanSeriesCharactersForBookId short-circuits to []
+   for a standalone) before reaching applyPatchToCastFile's own
+   read-through-write. A book entangled with series-mates (like KEEPER_BOOK)
+   gives the two requests asymmetric preambles — one call's extra
+   sibling-scan awaits can fully drain before the other even reaches its own
+   read, masking the race. This book is spawned fresh (own describe/beforeAll,
+   same workspaceRoot — a new mkdtemp would be invisible to the route's
+   frozen BOOKS_ROOT) precisely so the race window overlaps reliably. */
+describe('#1981 — two series-patch calls for different characters in one book overlap', () => {
+  const RACE_BOOK = 'Race Book';
+  let raceBookId: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    raceBookId = makeBookId(AUTHOR, SERIES, RACE_BOOK);
+    writeBookOnDisk(
+      workspaceRoot,
+      AUTHOR,
+      SERIES,
+      RACE_BOOK,
+      raceBookId,
+      [
+        { id: 'race-a', name: 'Race Alpha', role: 'character', color: 'unset' },
+        { id: 'race-b', name: 'Race Beta', role: 'character', color: 'unset' },
+      ],
+      { isStandalone: true },
+    );
+  });
+
+  it('keeps both patches when two series-patch calls for one book overlap', async () => {
+    const [resA, resB] = await Promise.all([
+      callPatch(raceBookId, 'race-a', { ageRange: 'child' }),
+      callPatch(raceBookId, 'race-b', { ageRange: 'elderly' }),
+    ]);
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+
+    const cast = readCast(workspaceRoot, AUTHOR, SERIES, RACE_BOOK);
+    const byId = Object.fromEntries(cast.characters.map((c) => [c.id, c]));
+    expect((byId['race-a'] as { ageRange?: string }).ageRange).toBe('child');
+    expect((byId['race-b'] as { ageRange?: string }).ageRange).toBe('elderly');
+  });
+});

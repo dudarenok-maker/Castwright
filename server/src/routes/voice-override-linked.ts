@@ -33,6 +33,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -226,6 +227,27 @@ voiceOverrideLinkedRouter.post(
    the exact consent breach this guard exists to close, just one shift-key
    away. */
 export async function applyToBook(
+  bookDir: string,
+  ids: string[],
+  canonicalVoiceId: string,
+  canonicalVoiceUuid: string | undefined,
+  override: { engine: Engine; name: string } | null,
+): Promise<string[]> {
+  /* #1981 — the read is inside the lock; every guard/throw below (cloned-slot
+     refusal, the reserved-prefix consent check) is a decision derived from
+     THIS in-lock read of the target book. I3 — `canonicalVoiceId` /
+     `canonicalVoiceUuid` are NOT derived from it: they come from the route
+     handler's own unlocked read of the SOURCE book's character, computed
+     once above and threaded through every target book's write unchanged.
+     That is deliberate — the whole point is stamping the source's canonical
+     identity onto the series, not re-deriving it per target — but it does
+     leave a staleness window against a concurrent redesign of the source
+     between that unlocked read and a given target's write. Cross-book
+     propagation staleness is tracked on #2006, not fixed here. */
+  return withCastLock(bookDir, () => applyToBookLocked(bookDir, ids, canonicalVoiceId, canonicalVoiceUuid, override));
+}
+
+async function applyToBookLocked(
   bookDir: string,
   ids: string[],
   canonicalVoiceId: string,

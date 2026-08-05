@@ -282,4 +282,24 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
     const sourceOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, SOURCE_BOOK);
     expect(sourceOnDisk.characters).toHaveLength(initialSourceCast.length + 2);
   });
+
+  /* #1981 — two concurrent add-from-roster calls into the SAME source book
+     (pulling different characters from the prior book) race that source
+     book's cast.json. Unlocked, both requests' readJson resolve before
+     either writeJsonAtomic lands, so the later write replays a `characters`
+     snapshot taken before the earlier write happened and silently drops it. */
+  it('#1981 — keeps both new characters when two add-from-roster calls for one book overlap', async () => {
+    const [resLinnet, resWren] = await Promise.all([
+      callAdd(sourceBookId, { targetBookId: priorBookId, targetCharacterId: 'councillor-linnet' }),
+      callAdd(sourceBookId, { targetBookId: priorBookId, targetCharacterId: 'wren' }),
+    ]);
+    expect(resLinnet.status).toBe(200);
+    expect(resWren.status).toBe(200);
+
+    const sourceOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, SOURCE_BOOK);
+    const ids = sourceOnDisk.characters.map((c) => c['id']);
+    expect(ids).toContain(resLinnet.body.character.id);
+    expect(ids).toContain(resWren.body.character.id);
+    expect(sourceOnDisk.characters).toHaveLength(initialSourceCast.length + 2);
+  });
 });

@@ -631,3 +631,38 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     });
   });
 });
+
+/* #1981 — `applyToBook` is the per-book read-modify-write helper (already
+   exported for direct-drive tests — see its own header comment). Two
+   concurrent calls for DIFFERENT characters in the SAME book race that
+   book's cast.json. Unlocked, both calls' readJson resolve before either
+   writeJsonAtomic lands, so the later write replays a `characters` snapshot
+   taken before the earlier write happened and silently drops it. Driving the
+   helper directly (not the route) keeps this test independent of the
+   series-discovery scan's own timing. */
+describe('#1981 — two applyToBook calls for one book overlap', () => {
+  it('keeps both overrides when two applyToBook calls for one book overlap', async () => {
+    const { applyToBook } = await import('./voice-override-linked.js');
+    const bookADir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK_A);
+
+    /* `gemini` is not a clone-capable engine (CLONE_CAPABLE_ENGINES =
+       {qwen, coqui}) — sidesteps the Task 10a reserved-prefix guard, which
+       is orthogonal to what this test is pinning. */
+    await Promise.all([
+      applyToBook(bookADir, ['wren'], 'wren', undefined, { engine: 'gemini', name: 'Wren Voice X' }),
+      applyToBook(bookADir, ['marlow'], 'v_marlow', undefined, {
+        engine: 'gemini',
+        name: 'Marlow Voice Y',
+      }),
+    ]);
+
+    const wren = findChar(BOOK_A, 'wren');
+    const marlow = findChar(BOOK_A, 'marlow');
+    expect((wren?.overrideTtsVoices as Record<string, { name: string }>)?.gemini?.name).toBe(
+      'Wren Voice X',
+    );
+    expect((marlow?.overrideTtsVoices as Record<string, { name: string }>)?.gemini?.name).toBe(
+      'Marlow Voice Y',
+    );
+  });
+});

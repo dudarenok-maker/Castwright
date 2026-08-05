@@ -74,7 +74,13 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
   const next = new Promise<void>((resolve) => {
     release = resolve;
   });
-  bookWriteLock.set(bookId, prev.then(() => next));
+  // `mine` is what actually goes in the map. The old code compared the
+  // cleanup below against `prev.then(() => next)` called a second time —
+  // `.then()` always returns a new Promise object, so that comparison was
+  // never equal to what was stored and this delete never ran: the map grew
+  // one entry per bookId for the process lifetime.
+  const mine = prev.then(() => next);
+  bookWriteLock.set(bookId, mine);
   try {
     await prev;
     return await fn();
@@ -83,7 +89,7 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
     // Best-effort cleanup: if no further requests queued behind us, drop
     // the entry so the map doesn't grow unboundedly over a long server
     // lifetime.
-    if (bookWriteLock.get(bookId) === prev.then(() => next)) {
+    if (bookWriteLock.get(bookId) === mine) {
       bookWriteLock.delete(bookId);
     }
   }

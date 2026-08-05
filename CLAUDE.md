@@ -419,6 +419,24 @@ Design rationale:
   `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
   `npx madge --circular --extensions ts server/src`, which should stay at
   its 15-cycle baseline.
+- **`cast.json` writes go through `withCastLock`/`withCastLocks`, never a
+  bare `writeJsonAtomic`/`rm`** (`server/src/workspace/cast-lock.ts`). Four
+  rules: (1) lock the innermost read-through-write, never the caller — one
+  level only, a locked function must not call another locked function on the
+  same book; (2) the read goes inside the lock, and so does every decision
+  derived from it — wrapping only the write buys nothing at all; (3) two or
+  more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
+  order is **`design` → `library-voice` → `cast`** — never acquire an earlier
+  class while holding a later one, or two requests hang forever with no
+  timeout and no diagnostic. `server/src/workspace/cast-lock.guard.test.ts`
+  fails the build on a new unlocked site. Two allowlisted exceptions, each
+  keyed on file **and** count so a further unlocked write in either still
+  fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and
+  `voice-override-linked.ts`'s one write, which **is** locked but through a
+  helper the deliberately-syntactic scan cannot follow. The guard is
+  call-graph-blind by design — a new *unlocked* caller of an already-locked
+  helper adds no occurrence text and passes; its header lists that and the
+  other blind spots.
 - **`cast.json` is the identity of record; an analyzer/cache `characterId` is
   only an alias into it** (#2040) — any path that changes a persisted character
   id calls `retireCharacterId` (`server/src/store/cast-id-history.ts`), which
