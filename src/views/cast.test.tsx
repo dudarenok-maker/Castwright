@@ -1086,6 +1086,87 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(undoToast.message).toMatch(/"Narrator" \/ "Timkin"/);
     });
 
+    it('F5 (fix round 5) — Undo clicked on ONE row clears the stale chip on a SIBLING row the server also named in removedFrom', async () => {
+      // The normalised-tier collision shape (rejectedPairsGoverning's own
+      // doc comment, server/src/store/cast-resolve.ts): 'the_torment' and
+      // 'The-Torment' are TWO SEPARATE rows in orphanedCharacterFallbacks,
+      // each carrying its own chip for the same rejected target, because
+      // two distinct rejectedPairs entries (one per spelling) both govern
+      // both rows. The server's DELETE removes both pairs in one call and
+      // names both spellings in `removedFrom` — but
+      // `handleUndoOrphanRejection` only dispatched `undoOrphanRejection`
+      // for the CLICKED row's own `orphanedId` (cast.tsx), leaving the
+      // sibling row's chip stale in redux until the next hydrate. This
+      // clicks Undo on 'the_torment' and asserts BOTH rows' chips clear.
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'the_torment',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        removedFrom: ['the_torment', 'The-Torment'],
+      });
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              the_torment: {
+                resolution: 'unresolved' as const,
+                segments: 4,
+                rejectedAgainst: ['marrow'],
+              },
+              'The-Torment': {
+                resolution: 'unresolved' as const,
+                segments: 2,
+                rejectedAgainst: ['marrow'],
+              },
+            },
+          },
+        },
+      });
+      render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+
+      const clickedRow = screen.getByTestId('orphaned-row-the_torment');
+      const undoButton = within(clickedRow).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(store.getState().cast.orphanedCharacterFallbacks?.the_torment?.rejectedAgainst).toBeUndefined();
+      });
+      // THE ASSERTION THIS TEST EXISTS FOR: the SIBLING row's chip — never
+      // clicked, only named in the server's removedFrom — also clears.
+      expect(
+        store.getState().cast.orphanedCharacterFallbacks?.['The-Torment']?.rejectedAgainst,
+      ).toBeUndefined();
+      expect(screen.queryByTestId('orphaned-rejected-chip-The-Torment-marrow')).not.toBeInTheDocument();
+    });
+
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);

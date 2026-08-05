@@ -427,6 +427,21 @@ export function CastView({
             otherCharacterId: removed,
           }),
         );
+        /* F5 (fix round 5) — `removed` can name a DIFFERENT row than the one
+           clicked (the normalised-tier collision shape: one governing pair
+           surfaces a chip on both 'the_torment' and 'The-Torment'). The
+           clicked row is already handled above by the real
+           `undoOrphanRejection` dispatch; this clears the SAME stale chip
+           off every OTHER row `removedFrom` names, using the data already on
+           the wire instead of waiting for the next hydrate. */
+        if (removed !== orphanedId) {
+          dispatch(
+            castActions.clearOrphanRejectedAgainst({
+              orphanedId: removed,
+              characterId: targetCharacterId,
+            }),
+          );
+        }
       }
       /* C1 (fix round 1) shipped the server half of supersededByOther;
          review round 2's "Also fix" is this half — the toast fired the same

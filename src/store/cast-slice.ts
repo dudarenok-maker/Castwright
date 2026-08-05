@@ -687,6 +687,36 @@ export const castSlice = createSlice({
         entry.rejectedAgainst = next.length ? next : undefined;
       }
     },
+    /* #2092/#2089 F5 (fix round 5) — a governing pair can surface a chip on
+       TWO DIFFERENT rows: the normalised-tier collision shape
+       (`rejectedPairsGoverning`'s own doc comment, server/src/store/
+       cast-resolve.ts) lets 'the_torment' and 'The-Torment' each carry a
+       chip for the same rejected target. DELETE's response names every
+       removed pair's raw spelling in `removedFrom`, but
+       `handleUndoOrphanRejection` (src/views/cast.tsx) dispatches
+       `undoOrphanRejection` above only for the CLICKED row's own
+       `orphanedId` — it has no server-computed `resolution` for a SIBLING
+       row named in `removedFrom`, so unlike `undoOrphanRejection` this
+       reducer touches ONLY `rejectedAgainst`, not `resolution`/
+       `resolvedCharacterId` (setting those from data that was never
+       computed for this row would be a guess, not a mirror). No-op for an
+       id no longer in the map or already clear — same idempotent shape as
+       `undoOrphanRejection`. This is UX polish, not a correctness fix: the
+       stale chip self-corrects on the next hydrate regardless (cast-
+       slice.ts's merge takes the server's own truth). */
+    clearOrphanRejectedAgainst: (
+      s,
+      a: PayloadAction<{
+        orphanedId: string;
+        characterId: string;
+      }>,
+    ) => {
+      const { orphanedId, characterId } = a.payload;
+      const entry = s.orphanedCharacterFallbacks?.[orphanedId];
+      if (!entry?.rejectedAgainst) return;
+      const next = entry.rejectedAgainst.filter((id) => id !== characterId);
+      entry.rejectedAgainst = next.length ? next : undefined;
+    },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a
        stable handle on the library record (POST /api/library-cast/override). */
