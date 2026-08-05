@@ -108,15 +108,24 @@ def _quantise_rtf_max(raw: float) -> float:
     noise. `math.ceil` itself is exact (ceiling-then-multiply never lands
     below `raw`'s true value -- e.g. `math.ceil(20.0) * 0.05 == 1.0`, exact,
     no residue); the FINAL `round(..., 2)` is what can occasionally pull the
-    published figure a couple of ULPs under `raw` (e.g. `math.ceil(23.0) *
-    0.05 == 1.1500000000000001`, then `round(1.1500000000000001, 2) ==
-    1.15`, on the floor side of that residue) -- so "never down" is not a
-    literally unconditional bound, only true up to ~2.2e-16. `round` stays
+    published figure a few ULPs under `raw` (e.g. `math.ceil(23.0) * 0.05 ==
+    1.1500000000000001`, then `round(1.1500000000000001, 2) == 1.15`, on the
+    floor side of that residue; at a larger magnitude the same shape gets
+    proportionally bigger -- `raw = 8.200000000000001` rounds to `8.2`, a
+    ~1.8e-15 residue, since a ULP scales with magnitude) -- so "never down"
+    is not a literally unconditional bound, only true up to a handful of
+    ULPs of whatever magnitude `raw` happens to be. That handful-of-ULPs
+    case is real but rare: it needs `raw`'s own float representation to sit
+    almost exactly on a 0.05 boundary, which a specific `rtf` measurement
+    can produce (as above) but a RANDOM `raw` essentially never does --
+    900k uniform draws across `[1,2)`, `[2,4)`, `[4,9)` (300k each,
+    #2116 R5) produced zero cases landing below their own `raw`. `round`
+    stays
     (dropping it would publish `1.1500000000000001` as `rtf_max` instead of
     `1.15`) because that residue can never cause a spurious refusal: the
     published ceiling still carries the full 1.5x calibration headroom over
     the measurement it was derived from, many orders of magnitude larger
-    than a float epsilon."""
+    than a float epsilon at any magnitude this function operates on."""
     return round(math.ceil(raw / 0.05) * 0.05, 2)
 
 

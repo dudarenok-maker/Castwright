@@ -804,11 +804,47 @@ def test_assert_against_baseline_skips_when_identity_is_missing(monkeypatch, tmp
 def test_assert_against_baseline_passes_when_fully_blessed(monkeypatch, tmp_path) -> None:
     """Sanity check that the extraction (#2061 / D2) didn't change the
     HAPPY path: a fully-blessed baseline with `measured` safely inside
-    tolerance neither skips nor raises."""
+    tolerance neither skips nor raises.
+
+    #2116 R2 (independent review): the ORIGINAL version of this test called
+    `instruct._assert_against_baseline(...)` with a bare trailing comment
+    ("must not raise or skip") and no enforcement. `pytest.skip()` raises
+    `Skipped`, a `BaseException` -- it propagates straight past the end of
+    the test function and pytest reports the TEST ITSELF as skipped, which
+    reads as GREEN in a summary line, not as a failure. So an unconditional
+    `if True: pytest.skip(...)` swapped in for the real (#2116 F3/F4)
+    `isinstance` guard survived the entire suite: `test_live_instruct_
+    golden`'s own real-hardware SKIP path makes an unconditional skip look
+    correct in isolation, and this was the ONE test meant to prove the
+    assert path still runs on a healthy baseline -- but asserted nothing
+    about which outcome (pass vs. skip) actually happened. This is the same
+    shape as the golden-audio tier's known "reports exit 0 while running
+    NOTHING" failure mode (a `pytest.skip()` reading as a green run) arriving
+    through a new door, and the F3/F4 fix widened the door: the skip
+    condition went from one field's bare `is None` to two fields'
+    `isinstance` checks with no corresponding tightening of the one test
+    meant to catch an over-broad version of it.
+    `pytest.skip.Exception` (`Skipped`) is caught explicitly and turned into
+    a hard `pytest.fail` here, so a skip on this fixture is now a RED, not
+    a quiet extra line in `-v` output.
+
+    Separately (documented here per #2116 R2, not a behaviour change): a
+    non-dict `tolerances`/`loudness_dbfs` block is now a SILENT SKIP where,
+    before #2061/#2116 F3/F4, it raised a loud `TypeError`. That is the
+    intended #2061 design extended consistently to the assert side (a
+    corrupted baseline reads as "nothing to assert against yet", the same
+    as a genuinely unblessed one) -- but it trades a crash for a green skip
+    on a corrupted baseline, which is worth stating plainly rather than
+    leaving for the next reader to discover by surprise."""
     path = _write_baseline(tmp_path, blessed=True, tolerances=dict(BASE_TOLERANCES))
     monkeypatch.setattr(instruct, "BASELINE_PATH", path)
 
-    instruct._assert_against_baseline(_measured(rtf=0.5))  # must not raise or skip
+    try:
+        instruct._assert_against_baseline(_measured(rtf=0.5))
+    except pytest.skip.Exception as skipped:
+        pytest.fail(
+            f"a fully-blessed baseline with measured safely inside tolerance must not SKIP: {skipped}"
+        )
 
 
 # ── #2116 F3/F4 (independent review): the SAME two corruption shapes on ────
@@ -979,4 +1015,10 @@ def test_bless_allows_a_forced_tolerances_move_and_echoes_it(monkeypatch, tmp_pa
         f"a flag-forced tolerances MOVE must be echoed, got: {out!r}"
     )
     assert "BEYOND epsilon" in out and "FORCED" in out and "GOLDEN_REBLESS_THRESHOLDS" in out
-    assert "(noise)" not in out
+    # #2116 R3 (independent review): the producer emits "within epsilon N
+    # (noise -- reference unchanged)" for a noise move, so the literal
+    # substring "(noise)" (with the parenthesis) never appears in EITHER
+    # branch and this assertion could not fail -- a placebo. "noise" (no
+    # parens), matching the sibling accept-path tests' spelling, is what
+    # actually distinguishes the BEYOND/FORCED branch from the noise one.
+    assert "noise" not in out

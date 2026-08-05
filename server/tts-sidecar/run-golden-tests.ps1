@@ -1,5 +1,5 @@
 #requires -Version 5.1
-# Golden-audio regression runner (ops-11) — Suite A: the REAL-model goldens.
+# Golden-audio regression runner (ops-11) -- Suite A: the REAL-model goldens.
 #
 # Triple-gated, each gate emits a SKIP banner and exits 0 (never fails the
 # caller) so a fresh clone / CI without the sidecar venv or any engine weights

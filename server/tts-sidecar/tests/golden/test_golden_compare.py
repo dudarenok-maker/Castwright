@@ -575,7 +575,7 @@ def test_bless_guard_thresholds_epsilon_ignores_a_changed_non_numeric_leaf():
 
 def test_describe_measurement_move_none_on_first_bless():
     assert (
-        describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
+        describe_measurement_move(None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS")
         is None
     )
 
@@ -584,7 +584,7 @@ def test_describe_measurement_move_none_when_nothing_changed():
     existing = {"whisper": -30.0, "neutral": -20.0}
     assert (
         describe_measurement_move(
-            existing, dict(existing), epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+            existing, dict(existing), epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS"
         )
         is None
     )
@@ -593,7 +593,7 @@ def test_describe_measurement_move_none_when_nothing_changed():
 def test_describe_measurement_move_reports_every_moved_leaf():
     existing = {"whisper": -30.0, "neutral": -20.0}
     computed = {"whisper": -30.1, "neutral": -20.0}  # only whisper moved
-    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
+    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS")
     assert desc is not None
     assert "whisper" in desc
     assert "neutral" not in desc  # unchanged leaf isn't reported as "moved"
@@ -602,7 +602,7 @@ def test_describe_measurement_move_reports_every_moved_leaf():
 def test_describe_measurement_move_labels_a_within_epsilon_move_as_noise():
     existing = {"whisper": -30.0}
     computed = {"whisper": -30.1}  # 0.1 move, epsilon 0.4 -- genuinely noise
-    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS")
+    desc = describe_measurement_move(existing, computed, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS")
     assert desc is not None
     assert desc.startswith("within epsilon")
     assert "BEYOND" not in desc and "FORCED" not in desc
@@ -617,13 +617,21 @@ def test_describe_measurement_move_labels_a_beyond_epsilon_move_as_forced_not_no
     reviewer's repro was a 0.13 identity move (8.7x the 0.015 epsilon of the
     time) echoed as "within epsilon 0.015 (noise)". The label must reflect
     the actual move, not the caller's decision to accept it: a move beyond
-    epsilon must say BEYOND/FORCED, never "noise"."""
+    epsilon must say BEYOND/FORCED, never "noise". This payload is
+    identity-shaped, so the flag it echoes is `GOLDEN_REBLESS_MEASUREMENTS`
+    (#2060 / D1 split) -- NOT `GOLDEN_REBLESS_THRESHOLDS` (#2116 R1,
+    independent review: an earlier revision passed and asserted the
+    tolerances-only flag here, pinning the exact mislabelling D1 exists to
+    prevent as expected behaviour, even though nothing was wrong at
+    runtime -- `describe_measurement_move` is field-agnostic and the
+    production `guard_specs` wiring in `_bless()` already passes the
+    correct flag per field)."""
     existing = {"cosine": {"whisper": 0.0125}}
     computed = {"cosine": {"whisper": 0.1425}}  # 0.13 move, 8.7x epsilon 0.015
-    desc = describe_measurement_move(existing, computed, epsilon=0.015, flag_name="GOLDEN_REBLESS_THRESHOLDS")
+    desc = describe_measurement_move(existing, computed, epsilon=0.015, flag_name="GOLDEN_REBLESS_MEASUREMENTS")
     assert desc is not None
     assert desc.startswith("BEYOND epsilon")
-    assert "FORCED" in desc and "GOLDEN_REBLESS_THRESHOLDS" in desc
+    assert "FORCED" in desc and "GOLDEN_REBLESS_MEASUREMENTS" in desc
     assert "noise" not in desc
     assert "cosine.whisper" in desc
 
@@ -729,7 +737,7 @@ def test_describe_measurement_move_genuine_first_bless_stays_silent():
     GENUINE first bless -- nothing to report, same as before this change."""
     assert (
         describe_measurement_move(
-            None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_THRESHOLDS"
+            None, {"whisper": -30.0}, epsilon=0.4, flag_name="GOLDEN_REBLESS_MEASUREMENTS"
         )
         is None
     )
@@ -738,7 +746,7 @@ def test_describe_measurement_move_genuine_first_bless_stays_silent():
             None,
             {"whisper": -30.0},
             epsilon=0.4,
-            flag_name="GOLDEN_REBLESS_THRESHOLDS",
+            flag_name="GOLDEN_REBLESS_MEASUREMENTS",
             previously_blessed=False,
         )
         is None
