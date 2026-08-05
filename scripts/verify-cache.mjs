@@ -53,7 +53,23 @@ export const STEPS = [
          — no module-graph edge, so without this a fixture-only diff (the
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
-      globs: ['scripts/**/*.{mjs,cjs}', 'scripts/tests/fixtures/**'],
+      globs: [
+        'scripts/**/*.{mjs,cjs}',
+        'scripts/tests/fixtures/**',
+        /* .github/workflows/** is an input because workflow-wiring.test.mjs
+           parses verify.yml at RUNTIME and asserts its `if:` conditions agree
+           with ci-scope.mjs's emitted keys. Without this, a workflow-only diff
+           — precisely the edit that breaks the wiring — prints [cached] and
+           the assertion sits stale-green. Same #1847 trap as fixtures/**
+           above (defect D, #2119 review). */
+        '.github/workflows/**',
+        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
+           matcher, which A2 deletes — and it is an input to no step, so
+           without this a .husky-only PR would run zero legs after A2.
+           release-manifest.test.mjs reads .husky/pre-commit at runtime
+           (plan review round 2). */
+        '.husky/**',
+      ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
          RELEASE_NOTES.md / docs/release-notes-next.md / release-notes-gate.mjs

@@ -161,7 +161,7 @@ jobs:
           # check-onbox-register.test.mjs reads both at runtime and asserts the
           # live view still agrees with the markdown, so a register-only diff —
           # exactly the shape that drifts them apart — must run this leg too.
-          match '^(\.husky/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
+          match '^(\.husky/|\.github/workflows/|scripts/run-hooks-tests\.mjs$|scripts/validate-commit-msg\.mjs$|RELEASE_NOTES\.md$|docs/release-notes-next\.md$|scripts/release-notes-gate\.mjs$|docs/testing/onbox-acceptance-register\.md$|docs/testing/onbox-acceptance-register-live-view\.html$)' && hooks=true
           match '^(pinokio\.js$|pinokio-scripts/|scripts/run-pinokio-tests\.mjs$)' && pinokio=true
           # openapi.yaml is a frontend input too (it generates
           # src/lib/api-types.ts, and api.clone-voice.test.ts pins the

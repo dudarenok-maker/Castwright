@@ -455,6 +455,39 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
+// PR ran zero legs — in cloud AND locally. The wiring assertions added in
+// A2 read verify.yml as evidence, so the step that runs them must be in
+// scope when verify.yml changes, or the guard cannot run on the PR that
+// breaks it.
+test('stepTouchedByDiff: a verify.yml diff matches test:hooks via extraFiles', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/verify.yml']),
+    true,
+  );
+});
+
+test('stepTouchedByDiff: any workflow diff matches test:hooks', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:hooks'], ['.github/workflows/cross-os.yml']),
+    true,
+  );
+});
+
+// .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
+// (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
+// stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
+// defect D again for .husky, on the very PR that fixes it for .github, and
+// none of the four wiring assertions can see it (they check key existence
+// and job membership, not whether a derived condition still covers what the
+// legacy one did). release-manifest.test.mjs:95 reads .husky/pre-commit at
+// runtime, so this is a real edge, not a theoretical one.
+test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
+  for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
+    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);
+  }
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['tailwind.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
