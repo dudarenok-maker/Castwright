@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { extractRelativeSpecifiers, resolveSpecifier } from '../lib/module-graph.mjs';
+import { extractRelativeSpecifiers, resolveSpecifier, classifyIgnored } from '../lib/module-graph.mjs';
+import { execFileSync } from 'node:child_process';
 
 test('extracts static, dynamic and require specifiers', () => {
   const src = `
@@ -128,4 +129,41 @@ test('every hooks test file parses', () => {
     catch (err) { failures.push(`${f}: ${err.message}`); }
   }
   assert.deepEqual(failures, [], `unparseable hooks test(s):\n${failures.join('\n')}`);
+});
+
+function gitRepo(files, ignore) {
+  const dir = tree(files);
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  writeFileSync(join(dir, '.gitignore'), ignore, 'utf8');
+  return dir;
+}
+
+test('classifyIgnored marks gitignored paths', () => {
+  const d = gitRepo({ 'src/a.js': '', 'dist/b.js': '' }, 'dist/\n');
+  const m = classifyIgnored([join(d, 'dist', 'b.js'), join(d, 'src', 'a.js')], d);
+  assert.equal(m.get(join(d, 'dist', 'b.js')), true);
+  assert.equal(m.get(join(d, 'src', 'a.js')), false);
+});
+
+// The property the rule depends on: check-ignore is pure pattern matching, so
+// it answers correctly for paths that do NOT exist. That is what makes the
+// rule clone-state independent — server/dist is present locally (1,812 files)
+// and absent on a fresh CI clone, and "untracked" would classify differently
+// in each, giving red on CI and green locally.
+test('classifyIgnored answers for a path that does not exist on disk', () => {
+  const d = gitRepo({ 'src/a.js': '' }, 'dist/\n');
+  const m = classifyIgnored([join(d, 'dist', 'never', 'existed.js')], d);
+  assert.equal(m.get(join(d, 'dist', 'never', 'existed.js')), true);
+});
+
+// M18: exit 128 (path outside the repo) and git-unavailable must FAIL CLOSED.
+// "Non-zero => not ignored" conflates 128 with 1; "non-zero => skip" would
+// classify everything as ignored wherever git is absent, making the guard
+// vacuously green — the "absent reads as clean" shape.
+test('classifyIgnored throws on a path outside the repository (exit 128)', () => {
+  const d = gitRepo({ 'src/a.js': '' }, 'dist/\n');
+  assert.throws(
+    () => classifyIgnored([resolve(d, '..', 'outside.js')], d),
+    /check-ignore/i,
+  );
 });

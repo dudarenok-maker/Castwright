@@ -10,8 +10,9 @@
 // its parser only; no plugin, no walker package.
 
 import { existsSync, statSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const acorn = require('acorn');
@@ -107,4 +108,68 @@ export function resolveSpecifier(fromFile, specifier) {
     if (isRegularFile(candidate)) return candidate;
   }
   return null;
+}
+
+const toPosix = (p) => p.split(sep).join('/');
+
+// Classify a batch of candidate paths as gitignored or not.
+//
+// NOTE: check-ignore is INDEX-AWARE, not pure .gitignore pattern matching.
+// Measured: a file matching an ignore rule but force-added to the index
+// reports exit 1 (NOT ignored); with --no-index it reports 0. This is
+// deliberate and must NOT be "fixed" by adding --no-index: a tracked file is
+// a real producer and belongs in the closure regardless of what .gitignore
+// says about its directory. The server/dist/** conclusion is unaffected —
+// those files are never tracked, so they classify as ignored in both a fresh
+// clone and a built tree, which is the clone-state independence this rule
+// needs. What is NOT true is the simpler story that this is a property of
+// .gitignore alone.
+//
+// BATCHED via --stdin, not one spawn per path: measured 81 individual spawns
+// = 3972 ms vs one batch = 60 ms (66x). test:hooks runs in pre-commit via
+// verify:fast:scoped, a path documented as sub-5s — per-query spawning would
+// roughly double it on every commit touching scripts/**.
+//
+// Paths are POSIX-normalised first: git normalises backslashes on Windows,
+// but on Linux 'server\dist\x.js' is ONE literal filename that matches
+// nothing — classified not-ignored, then fail-closed resolution turns it red
+// on CI only.
+//
+// FAILS CLOSED. git check-ignore is three-valued:
+//   0   = at least one path ignored
+//   1   = none ignored
+//   128 = error (e.g. path outside the repository)
+// 128, a spawn failure, or git being absent all THROW rather than defaulting
+// either way. Defaulting to "ignored" would silently empty the walk wherever
+// git is unavailable.
+export function classifyIgnored(absPaths, cwd) {
+  const result = new Map(absPaths.map((p) => [p, false]));
+  if (absPaths.length === 0) return result;
+
+  const posix = absPaths.map((p) => toPosix(relative(cwd, p)));
+  const proc = spawnSync('git', ['check-ignore', '--stdin'], {
+    cwd,
+    input: posix.join('\n'),
+    encoding: 'utf8',
+  });
+
+  if (proc.error) {
+    throw new Error(`check-ignore: failed to spawn git (${proc.error.message}) — refusing to guess`);
+  }
+  if (proc.status !== 0 && proc.status !== 1) {
+    // Name the paths: check-ignore batches, and on 128 it prints nothing about
+    // the good ones — so without this the error identifies neither the
+    // offending specifier nor the file that imported it. Fail-closed but
+    // undiagnosable is only half a guard.
+    throw new Error(
+      `check-ignore: git exited ${proc.status} — refusing to guess.\n` +
+      `${proc.stderr ?? ''}\nPaths in this batch:\n${posix.join('\n')}`,
+    );
+  }
+
+  const ignored = new Set(proc.stdout.split('\n').map((s) => s.trim()).filter(Boolean));
+  for (let i = 0; i < absPaths.length; i += 1) {
+    if (ignored.has(posix[i])) result.set(absPaths[i], true);
+  }
+  return result;
 }
