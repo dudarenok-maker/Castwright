@@ -50,7 +50,7 @@
  * tone/gender/ageRange/attributes signal) is a RANKING signal only,
  * surfaced for a human decision, never auto-applied.
  *
- * THREE additional guards, beyond the two tiers, gate auto-record — the
+ * FOUR additional guards, beyond the two tiers, gate auto-record — the
  * first round of independent review found the first tier-A/B pass alone
  * was not safe (two Criticals: see git history / the paired report for
  * the full account):
@@ -75,11 +75,31 @@
  *      report-only — this pass repairs on-disk damage, it does not mint
  *      pre-emptive, unreviewed guesses about characters who have never
  *      spoken a rendered line.
+ *   4. **Snapshot consistency** (see `snapshotsConsistent`'s own doc
+ *      comment) downgrades a name match to report-only when the rendered
+ *      `characterSnapshots` disagree across the chapters the id appears in.
  *
- * A fourth guard predates round 1 and is still real, just insufficient
- * alone: **snapshot consistency** (see `snapshotsConsistent`'s own doc
- * comment) downgrades a name match to report-only when the rendered
- * `characterSnapshots` disagree across the chapters the id appears in.
+ * A fifth guard was added on top of these four, independently, by the
+ * #2107 widening (Important 2, independent review, 2026-08-05) —
+ * **current-resolution conflict veto**: widening #2107 to list a
+ * `'normalised-id'` match as an orphan (spec: see
+ * `buildOrphansFromSegments`'s doc comment) means an id that ALREADY
+ * resolves live to one character can now also reach Tier A/B matching —
+ * and Tier A (a NAME match) is tried before Tier B (the SAME id-shape
+ * resolution), with nothing checking whether they agree. A stale cache
+ * entry naming a different character can otherwise repoint real segments'
+ * attribution onto the WRONG live character, durably (`'history'`
+ * outranks `'normalised-id'` at resolve time once written). Before
+ * trusting a Tier A/B match, this guard asks the SAME real resolver
+ * `historyResolver` what `id` resolves to today — if that is
+ * `'normalised-id'` to a DIFFERENT live character than the match found,
+ * that is two evidence sources disagreeing, not a repair: report it for a
+ * human, never write it. A genuine Tier B match can never trip this (Tier
+ * B and the resolver's own `'normalised-id'` tier are the identical
+ * computation over the same live cast); only Tier A can. Named "guard 5"
+ * in the code, not "guard 4" — added after guard 4 existed, though it
+ * happens to run before it (guard numbering here tracks when a guard was
+ * added, not execution order; guard 3 already runs after guard 4 today).
  *
  * This script reuses the server's own id-resolution logic rather than
  * re-implementing it (#2040 Wave 3 review already caught one Critical
@@ -438,12 +458,13 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  2026-08-05), not a boolean or a re-derivation of `!cacheAvailable`: it
  *  only increments when an id would have reached `autoRecord.push` on
  *  cache evidence alone — i.e. it already passed guard 1 (not reserved),
- *  guard 2 (not cross-source-ambiguous), guard 4 (`snapshotsConsistent`),
- *  AND guard 3 (>=1 rendered segment) — and was refused SOLELY because
- *  `cacheAvailable` was false. The cache-availability check sits LAST in
- *  the guard chain for exactly this reason (I2): an id guard 3 or 4 would
- *  have refused ANYWAY, cache evidence or not, must not inflate this
- *  count — a single bak entry naming a retired, never-rendered id in a
+ *  guard 2 (not cross-source-ambiguous), guard 5 (current-resolution
+ *  conflict, #2107 widening), guard 4 (`snapshotsConsistent`), AND guard 3
+ *  (>=1 rendered segment) — and was refused SOLELY because `cacheAvailable`
+ *  was false. The cache-availability check sits LAST in the guard chain for
+ *  exactly this reason (I2): an id any earlier guard would have refused
+ *  ANYWAY, cache evidence or not, must not inflate this count — a single
+ *  bak entry naming a retired, never-rendered id in a
  *  cache-blind book must not read as "a real auto-record was withheld
  *  here" when nothing was ever going to be auto-recorded for it. A book
  *  can have `cacheAvailable: false` and `withheldForMissingCache === 0` at
@@ -457,17 +478,24 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *
  *  Auto-record requires ALL of: Tier A or Tier B match, the id is not a
  *  reserved id (guard 1), neither source is ambiguous for this id (guard
- *  2), the id has at least one rendered segment (guard 3), and every
- *  rendered `characterSnapshots` entry for the id agrees (guard 4,
- *  `snapshotsConsistent`) — see the module doc comment for why round 1
- *  found guard 4 alone insufficient and added the other three.
+ *  2), the id has at least one rendered segment (guard 3), every rendered
+ *  `characterSnapshots` entry for the id agrees (guard 4,
+ *  `snapshotsConsistent`), and the id doesn't already resolve live to a
+ *  DIFFERENT character (guard 5, #2107 widening) — see the module doc
+ *  comment for why round 1 found guard 4 alone insufficient and added the
+ *  other three, and why the #2107 widening later added guard 5 on top.
  *
  *  `deps.normaliseForMatch` and `deps.buildCastResolver` are always the
  *  real server functions in production (dynamically imported from
  *  `server/dist` in `main()`); tests inject their own stand-ins so this
- *  function's OWN logic (ambiguity handling, tier precedence, the four
+ *  function's OWN logic (ambiguity handling, tier precedence, the five
  *  guards) is verifiable with no build step — see the module doc comment's
- *  Tests section. `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
+ *  Tests section. `input.historyResolver` (built once per book, in
+ *  `main()`, with the SAME real history the collector already threaded
+ *  into its own resolver — see the `historyResolver` local's own doc
+ *  comment just below) drives guards `already-recorded` and 5; omit it in
+ *  a test that doesn't exercise either (defaults to "nothing resolves via
+ *  history, nothing conflicts"). `deps.reservedIds` mirrors `NARRATOR_CHARACTER_IDS` + the
  *  two fold-bucket ids (imported for real in `main()`), checked on BOTH
  *  the source id (guard 1) and the matched target (a match is never
  *  auto-recorded ONTO a reserved id either — that would misattribute a
@@ -492,10 +520,40 @@ export function planBookRepairs(input, deps) {
 
   const liveIds = new Set(liveCast.map((c) => c.id));
   const rejectedSet = new Set(history.rejected ?? []);
-  const supersededBy = history.supersededBy ?? {};
   // Tier B's own resolver — id-shape only, empty history on purpose (see
   // resolveTierBId's doc comment). Built once per book, not once per id.
   const idOnlyResolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+
+  // Important 1 (independent review, 2026-08-05, on the earlier I2 fix): the
+  // "already recorded" question — and, per Important 2 below, the "does
+  // this id already resolve live" question — is a RESOLVER question, not
+  // something to re-derive with a hand-built normalised map. A prior fix
+  // (I2) closed a raw-vs-normalised gap in the already-recorded skip by
+  // building `supersededByNormKey`, a SECOND normalised map answering "does
+  // this id's normalised form appear ANYWHERE in supersededBy" — which
+  // diverges from what `cast-resolve.ts`'s real resolver actually decides in
+  // three ways: (a) a normalised COLLISION (two different `from` keys
+  // normalising the same with different targets) is a deliberate `undefined`
+  // in the real resolver (`cast-resolve.ts`'s `put()` nulls the slot) but a
+  // last-wins guess in a `Map.set`; (b) the real resolver checks
+  // `'normalised-id'` (against the LIVE cast) before `'normalised-history'`
+  // (against the alias table) — a flat map has no such precedence, so it
+  // can "already-record"-skip an id that is actually a live match today;
+  // (c) the real resolver drops a history entry whose target is no longer a
+  // live cast id at CONSTRUCTION time — a flat map built from raw
+  // `supersededBy` entries does not. Every one of those divergences is a
+  // FALSE SKIP: the id vanishes from both `autoRecord` and `reportOnly`,
+  // exactly the under-reporting the #2107 widening exists to prevent.
+  // `historyResolver` — built with the REAL `history` (unlike
+  // `idOnlyResolver` above, which must stay empty-history) — is threaded in
+  // from `main()`, which already built one in `collectSegmentOrphans` for
+  // this exact book; NOT reconstructed here, so there is only ever one real
+  // resolver instance per book, never two that could drift apart. Tests
+  // that don't exercise the already-recorded/conflict guards may omit it —
+  // the default below means "nothing resolves via history, nothing already
+  // conflicts", i.e. exactly today's behaviour for those tests.
+  const historyResolver = input.historyResolver ?? { resolve: () => undefined };
+
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
   // `Unknown-Male` — precisely the drift class #2040 exists to catch, and the
@@ -505,28 +563,6 @@ export function planBookRepairs(input, deps) {
   // comparator (that would reintroduce the exact "two independent matchers"
   // hazard `resolveTierBId`'s own doc comment already fixed once).
   const normalisedReservedIds = new Set([...reservedIds].map((r) => normaliseIdKey(r)));
-
-  // I2 (independent review, 2026-08-05, on the #2107 widened fix): the
-  // "already recorded" skip just below used to compare `id in supersededBy`
-  // — a RAW string test — while `cast-resolve.ts`'s own resolver ALSO
-  // matches `supersededBy` on a NORMALISED key (the `'normalised-history'`
-  // tier). Widening #2107 to list a `'normalised-history'` match as an
-  // orphan (rather than silently reconciling it) means such an id can now
-  // reach this loop with real rendered segments, and the raw-string skip
-  // cannot recognise it as already covered — it would fall through to the
-  // matching pipeline and could auto-record a SECOND, redundant alias for
-  // an id `supersededBy` already resolves (via a different spelling of the
-  // same `from`). Built once per book, not once per id, on the same
-  // `normaliseIdKey` the resolver itself uses — not a second, hand-rolled
-  // comparator (the exact hazard `resolveTierBId`'s own doc comment already
-  // fixed once for a different guard). This gap is LATENT, not live: all
-  // three real-workspace aliases recorded so far (`mayrin`, `coalfall`,
-  // `lady-alina`) are already normalised fixed points, so none can reach it
-  // today.
-  const supersededByNormKey = new Map(); // normaliseIdKey(from) -> to
-  for (const [from, to] of Object.entries(supersededBy)) {
-    supersededByNormKey.set(normaliseIdKey(from), to);
-  }
 
   const allIds = new Set([...cacheNameIndex.keys(), ...bakNameIndex.keys(), ...orphans.keys()]);
 
@@ -553,14 +589,18 @@ export function planBookRepairs(input, deps) {
       skipped.push({ id, reason: 'rejected', detail: 'user explicitly rejected this reconciliation (Task 17 banner)' });
       continue;
     }
-    const supersededTarget = id in supersededBy ? supersededBy[id] : supersededByNormKey.get(normaliseIdKey(id));
-    if (supersededTarget !== undefined) {
+    // Important 1: "does an alias already cover this id" IS the question
+    // `historyResolver`'s `'history'`/`'normalised-history'` tiers answer —
+    // ask it, rather than re-deriving the decision (see the doc comment on
+    // `historyResolver` above for why a hand-rolled second map diverges).
+    const aliasHit = historyResolver.resolve(id);
+    if (aliasHit && (aliasHit.via === 'history' || aliasHit.via === 'normalised-history')) {
       skipped.push({
         id,
         reason: 'already-recorded',
         detail:
-          `cast-id-history.json already maps this to "${supersededTarget}"` +
-          (id in supersededBy ? '' : ' (via a normalised-spelling match, not an exact key)'),
+          `cast-id-history.json already maps this to "${aliasHit.character.id}"` +
+          (aliasHit.via === 'normalised-history' ? ' (via a normalised-spelling match, not an exact key)' : ''),
       });
       continue;
     }
@@ -665,6 +705,32 @@ export function planBookRepairs(input, deps) {
     }
 
     if (matchedId) {
+      // --- guard 5 (Important 2, independent review on the #2107
+      // widening, 2026-08-05): does `id` already resolve LIVE, today, to a
+      // DIFFERENT character than this match found? Widening #2107 means an
+      // id that resolves via `'normalised-id'` now reaches this matching
+      // pipeline (it used to silently reconcile with no write at all) — and
+      // Tier A (name) is tried before Tier B (the SAME id-shape check this
+      // guard re-asks), so nothing previously stopped a stale cache name
+      // from out-voting a live id-shape match. `historyResolver` is the
+      // SAME resolver the already-recorded skip above already asked — a
+      // Tier-B-sourced match can never trip this (Tier B and this tier are
+      // the identical computation over the same live cast, so they always
+      // agree); only a Tier A name match can disagree with what `id`
+      // already resolves to.
+      const currentResolution = historyResolver.resolve(id);
+      if (currentResolution?.via === 'normalised-id' && currentResolution.character.id !== matchedId) {
+        reportOnly.push({
+          id,
+          segments: orphan.segments,
+          chapters: orphan.chapters,
+          reason: `name/id-matched "${matchedId}" (${evidence}) but this id already resolves via id-shape to a ` +
+            `DIFFERENT live character, "${currentResolution.character.id}" — two evidence sources disagree; ` +
+            `needs a human decision rather than trusting the name match over the live id-shape resolution`,
+          candidates: rankSnapshotCandidates(orphan.snapshots[0], liveCast, reservedIds),
+        });
+        continue;
+      }
       // --- guard 4 (pre-existing, still real — see snapshotsConsistent's
       // own doc comment for its narrowed scope post round-1).
       if (!snapshotsConsistent(orphan.snapshots)) {
@@ -721,10 +787,11 @@ export function planBookRepairs(input, deps) {
       //
       // --- I2 (pre-merge review, 2026-08-05): this gate is deliberately
       // LAST, immediately before `autoRecord.push`, not first — moved down
-      // past guards 3 and 4 above. Before this fix it sat ahead of both, so
-      // an id that guard 3 (zero segments) or guard 4 (inconsistent
-      // snapshots) would have refused ANYWAY — cache evidence or not —
-      // still incremented `withheldForMissingCache`, the count that gates
+      // past guards 3, 4 and (added later, #2107 widening) 5 above. Before
+      // this fix it sat ahead of guards 3/4, so an id that guard 3 (zero
+      // segments) or guard 4 (inconsistent snapshots) would have refused
+      // ANYWAY — cache evidence or not — still incremented
+      // `withheldForMissingCache`, the count that gates
       // the WHOLE workspace's `--apply` run (see `shouldRefuseApplyForWithheldAutoRecord`).
       // A single bak entry naming a retired, never-rendered id in a
       // cache-blind book would have printed `withheld: 1` and refused
@@ -1368,13 +1435,20 @@ export function buildOrphansFromSegments(segs, resolver) {
   return { orphans };
 }
 
+/** Also returns the real, history-aware `resolver` it built — Important 1
+ *  (independent review, 2026-08-05): `planBookRepairs`'s "already recorded"
+ *  and current-resolution-conflict guards need to ask this SAME resolver,
+ *  not reconstruct a second instance from the same inputs (see
+ *  `planBookRepairs`'s `historyResolver` local for the full reasoning).
+ *  `main()` threads it straight through. */
 async function collectSegmentOrphans(bookDir, chapters, cast, history, mods) {
   const resolver = mods.buildCastResolver(cast.characters, {
     supersededBy: history.supersededBy ?? {},
     rejected: history.rejected ?? [],
   });
   const segs = await mods.loadSegmentsFiles(bookDir, chapters);
-  return buildOrphansFromSegments(segs, resolver);
+  const { orphans } = buildOrphansFromSegments(segs, resolver);
+  return { orphans, resolver };
 }
 
 function backupCastIdHistory(historyPath) {
@@ -1500,7 +1574,7 @@ async function main() {
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const { orphans: segmentOrphans } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans, resolver: historyResolver } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -1545,6 +1619,7 @@ async function main() {
         bakNameIndex,
         orphans: segmentOrphans,
         cacheAvailable,
+        historyResolver,
       },
       {
         normaliseForMatch: mods.normaliseForMatch,
