@@ -575,8 +575,13 @@ export interface SynthesiseChapterOpts {
       path — resolve a rejected id anyway; passing one object makes that
       unrepresentable). Absent → `{ supersededBy: {} }`, which still
       recovers the normalised-id tier (case/separator drift) but not a true
-      cross-letter alias or a rejection. */
-  castIdHistory?: Pick<CastIdHistory, 'supersededBy' | 'rejected'>;
+      cross-letter alias or a rejection. Widened to `rejectedPairs`
+      (#2092/#2089 task 3) for the same reason: every caller already threads
+      the whole loaded object through, so the narrower Pick was stale
+      self-documentation rather than a live functional gap — but leaving it
+      narrow invites a future caller to "conform" to the declared type and
+      genuinely truncate what it passes. */
+  castIdHistory?: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>;
   provider: TtsProvider;
   modelKey: TtsModelKey;
   /** The run's DEFAULT engine — used for any character that doesn't carry its

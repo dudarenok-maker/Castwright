@@ -405,6 +405,48 @@ describe('book-state router — orphanedCharacterFallbacks (#2023 Piece 1)', () 
     rmSync(castJsonFile, { force: true });
     rmSync(historyFile, { force: true });
   });
+
+  it('reports a pair-rejected reconciliation as unresolved and surfaces rejectedAgainst (#2092/#2089 task 3)', async () => {
+    // Same shape as the legacy-`rejected` test above, but through the
+    // pair-scoped `rejectedPairs` field — proves book-state.ts's GET threads
+    // the WHOLE loaded CastIdHistory object (task 3), not a bare
+    // supersededBy map that would silently default rejectedPairs away.
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        segments: [{ characterId: 'mayrin', sentenceIds: [1] }],
+      }),
+    );
+    const castJsonFile = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(
+      castJsonFile,
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin' }] }),
+    );
+    const historyFile = join(bookDir, '.audiobook', 'cast-id-history.json');
+    writeFileSync(
+      historyFile,
+      JSON.stringify({
+        schema: 1,
+        supersededBy: { mayrin: 'mairin' },
+        rejectedPairs: [{ from: 'mayrin', to: 'mairin' }],
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.orphanedCharacterFallbacks).toEqual({
+      mayrin: {
+        resolution: 'unresolved',
+        segments: 1,
+        rejectedAgainst: ['mairin'],
+      },
+    });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+    rmSync(castJsonFile, { force: true });
+    rmSync(historyFile, { force: true });
+  });
 });
 
 describe('book-state router — renderedTextByChapter (#1105)', () => {
