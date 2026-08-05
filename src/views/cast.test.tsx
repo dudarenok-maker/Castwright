@@ -47,6 +47,9 @@ vi.mock('../lib/api', () => ({
       wasRejected: true,
       resolution: 'history',
       resolvedCharacterId: 'marrow',
+      /* Review round 3 (I-B) — the field the client now keys its
+         notLinkedTo redux mirror off, instead of `orphanedId` directly. */
+      removedFrom: ['mayrin'],
     }),
   },
 }));
@@ -883,7 +886,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
         wasRejected: true,
         resolution: null,
         resolvedCharacterId: undefined,
-        supersededByOther: 'narrator',
+        removedFrom: ['mayrin'],
+        // Round 3 — supersededByOther is now an array (M-7).
+        supersededByOther: ['narrator'],
       });
       const store = makeSplitStore();
       renderSplitBanner(store);
@@ -912,6 +917,97 @@ describe('CastView Qwen status pill (plan 117)', () => {
         message: expect.stringMatching(/Narrator/),
       });
       expect(undoToast.message).not.toMatch(/^Undid "not the same character" for "mayrin"\.$/);
+    });
+
+    it("review round 3 (I-B) — the notLinkedTo redux mirror is removed by the server's removedFrom, not by orphanedId, when the two differ", async () => {
+      // Simulates the resolver's normalised-tier collision shape
+      // (`the_torment`/`The-Torment`, cast-resolve.ts's
+      // `rejectedPairsGoverning`): the governing pair the server actually
+      // removed carries a DIFFERENT raw `from` ('The-Torment') than this
+      // row's own id ('mayrin'). Pre-seed marrow's notLinkedTo with edges
+      // for BOTH ids, as if written by two independent rejects, so the
+      // assertion below can tell "removed the one the server named" apart
+      // from "removed the one matching orphanedId" — before this fix, the
+      // client always mirrored off `orphanedId` and would have left
+      // 'The-Torment' stale forever (cast-slice.ts's merge prefers a
+      // truthy EXISTING notLinkedTo over the server's own value on a later
+      // hydrate).
+      const marrowWithBothEdges: Character = {
+        ...marrow,
+        notLinkedTo: [
+          { bookId: 'b_current', characterId: 'mayrin' },
+          { bookId: 'b_current', characterId: 'The-Torment' },
+        ],
+      };
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrowWithBothEdges],
+            orphanedCharacterFallbacks: {
+              mayrin: {
+                resolution: 'unresolved' as const,
+                segments: 6,
+                rejectedAgainst: ['marrow'],
+              },
+            },
+          },
+        },
+      });
+      vi.mocked(api.undoRejectOrphanMatch).mockResolvedValueOnce({
+        characterId: 'marrow',
+        orphanedId: 'mayrin',
+        wasRejected: true,
+        resolution: null,
+        resolvedCharacterId: undefined,
+        removedFrom: ['The-Torment'],
+      });
+      render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrowWithBothEdges]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+
+      const row = within(screen.getByTestId('orphaned-needs-decision'))
+        .getByText(/mayrin/)
+        .closest('li')!;
+      const undoButton = within(row).getByRole('button', { name: /undo "not mr\. marrow"/i });
+      fireEvent.click(undoButton);
+
+      await waitFor(() => {
+        expect(api.undoRejectOrphanMatch).toHaveBeenCalledWith({
+          bookId: 'b_current',
+          characterId: 'marrow',
+          orphanedId: 'mayrin',
+        });
+      });
+      await waitFor(() => {
+        const marrowState = store.getState().cast.characters.find((c) => c.id === 'marrow');
+        // Only 'The-Torment' — what the server's removedFrom actually named
+        // — is gone; 'mayrin' (matching orphanedId, but NOT named by
+        // removedFrom in this contrived cross-spelling scenario) survives.
+        expect(marrowState?.notLinkedTo).toEqual([{ bookId: 'b_current', characterId: 'mayrin' }]);
+      });
     });
 
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {

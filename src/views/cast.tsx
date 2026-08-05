@@ -382,10 +382,20 @@ export function CastView({
      shape as handleRejectOrphanMatch above: writes the undo to the server
      (removes the rejectedPairs entry + the same-book notLinkedTo edge,
      restores a forgotten supersededBy alias when present — lossless), then
-     mirrors it via TWO dispatches: undoOrphanRejection (applies the
-     server's own post-undo resolution and drops targetCharacterId out of
-     rejectedAgainst) and removeNotLinked (the notLinkedTo mirror, same
-     fs-11 reducer the sibling "unmark variant" flow uses). */
+     mirrors it via dispatches: undoOrphanRejection (applies the server's
+     own post-undo resolution and drops targetCharacterId out of
+     rejectedAgainst) and one removeNotLinked (the notLinkedTo mirror, same
+     fs-11 reducer the sibling "unmark variant" flow uses) PER entry in
+     `res.removedFrom` — review round 3 (I-B) — rather than one dispatch
+     keyed on `orphanedId`. A governing pair's `from` can differ from this
+     row's own raw `orphanedId` (the resolver's normalised-tier collision
+     shape — see `rejectedPairsGoverning`'s doc comment,
+     server/src/store/cast-resolve.ts); the server writes and removes the
+     notLinkedTo edge under the PAIR's own `from`, so mirroring off
+     `orphanedId` could silently miss it, leaving a stale edge that a later
+     hydrate could never self-correct (cast-slice.ts's merge prefers a
+     truthy EXISTING notLinkedTo over the server's own value). `removedFrom`
+     is the server's own record of exactly what it removed. */
   async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
     if (!bookId) return;
     setOrphanRejectBusyId(orphanedId);
@@ -403,24 +413,37 @@ export function CastView({
           resolvedCharacterId: res.resolvedCharacterId,
         }),
       );
-      dispatch(
-        castActions.removeNotLinked({
-          characterId: targetCharacterId,
-          otherBookId: bookId,
-          otherCharacterId: orphanedId,
-        }),
-      );
+      for (const removed of res.removedFrom) {
+        dispatch(
+          castActions.removeNotLinked({
+            characterId: targetCharacterId,
+            otherBookId: bookId,
+            otherCharacterId: removed,
+          }),
+        );
+      }
       /* C1 (fix round 1) shipped the server half of supersededByOther;
          review round 2's "Also fix" is this half — the toast fired the same
          unqualified "Undid…" message whether the forgotten alias was
          actually restored or (C1) correctly skipped because a newer,
          unrelated re-analysis has since recorded a different one. Name
          that alias's target so the user understands why the row didn't
-         visibly change, instead of Undo reading as a silent no-op. */
-      const message = res.supersededByOther
-        ? `Undid "not the same character" for "${orphanedId}" — its previous alias now points to ` +
-          `"${characters.find((c) => c.id === res.supersededByOther)?.name ?? res.supersededByOther}", so that was left as-is.`
-        : `Undid "not the same character" for "${orphanedId}".`;
+         visibly change, instead of Undo reading as a silent no-op. Round 3
+         (M-6/M-7) — `supersededByOther` is now an array (more than one
+         removed pair can each skip independently) and the message also
+         says so when more than one pair was removed by this single click,
+         rather than reading as though only `orphanedId` itself moved. */
+      const otherNames = (res.supersededByOther ?? []).map(
+        (id) => characters.find((c) => c.id === id)?.name ?? id,
+      );
+      const multiNote =
+        res.removedFrom.length > 1
+          ? ` (undid ${res.removedFrom.length} rejected spellings of this id)`
+          : '';
+      const aliasNote = otherNames.length
+        ? ` — its previous alias now points to ${otherNames.map((n) => `"${n}"`).join(' / ')}, so that was left as-is.`
+        : '.';
+      const message = `Undid "not the same character" for "${orphanedId}"${multiNote}${aliasNote}`;
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-undo-${orphanedId}-${targetCharacterId}`,

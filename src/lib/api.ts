@@ -4599,11 +4599,20 @@ export interface UndoRejectOrphanMatchResponse {
   wasRejected: boolean;
   resolution: RejectOrphanResolutionTier;
   resolvedCharacterId?: string;
-  /** C1 (fix round 1) — set when the real server skipped restoring the
-      forgotten `supersededBy` alias because a newer one already exists;
-      see the server route's own doc comment. The mock never sets this
+  /** Review round 3 (I-B/M-6) — the raw `from` id(s) of every rejectedPairs
+      entry this DELETE actually removed; always present (empty when
+      `wasRejected` is false). A governing pair's `from` need not equal
+      `orphanedId` itself, so this — not `orphanedId` — is what the caller
+      must key its `notLinkedTo` redux mirror off (see cast.tsx's
+      `handleUndoOrphanRejection`). */
+  removedFrom: string[];
+  /** C1 (fix round 1) — set (non-empty) when one or more removed pairs
+      skipped restoring their forgotten `supersededBy` alias because a newer
+      one already exists; see the server route's own doc comment. Round 3
+      (M-7) widened from a single string to an array, since more than one
+      removed pair can each skip independently. The mock never sets this
       (it has no `supersededBy` state to conflict with). */
-  supersededByOther?: string;
+  supersededByOther?: string[];
 }
 
 async function realUndoRejectOrphanMatch(
@@ -4645,19 +4654,24 @@ export async function mockUndoRejectOrphanMatch(
       wasRejected: false,
       resolution: null,
       resolvedCharacterId: undefined,
+      removedFrom: [],
     };
   }
   mockRejectedOrphanPairs.delete(key);
   /* Mock mode has no real resolver either, so it assumes the common/lossless
      case: undo restores resolution onto the same `characterId` the reject
      had blocked (a 'history' match — collapses to 'alias' in the frontend's
-     own banner taxonomy, same as the real server's typical case). */
+     own banner taxonomy, same as the real server's typical case).
+     `removedFrom` is always `[args.orphanedId]` here — mock mode never
+     simulates a governing pair recorded under a DIFFERENT raw spelling than
+     the row's own id, so the row's own id is always what was "removed". */
   return {
     characterId: args.characterId,
     orphanedId: args.orphanedId,
     wasRejected: true,
     resolution: 'history',
     resolvedCharacterId: args.characterId,
+    removedFrom: [args.orphanedId],
   };
 }
 

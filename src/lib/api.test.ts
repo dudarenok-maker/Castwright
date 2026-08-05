@@ -865,6 +865,7 @@ describe('mockRejectOrphanMatch / mockUndoRejectOrphanMatch (#2092/#2089 M5, rev
       wasRejected: false,
       resolution: null,
       resolvedCharacterId: undefined,
+      removedFrom: [],
     });
   });
 
@@ -874,6 +875,10 @@ describe('mockRejectOrphanMatch / mockUndoRejectOrphanMatch (#2092/#2089 M5, rev
     expect(res.wasRejected).toBe(true);
     expect(res.resolution).toBe('history');
     expect(res.resolvedCharacterId).toBe('mairin');
+    // Round 3 (I-B) — mock mode never simulates a governing pair recorded
+    // under a different raw spelling, so removedFrom always names the row's
+    // own orphanedId.
+    expect(res.removedFrom).toEqual(['mayrin']);
   });
 
   it('a SECOND undo of the same pair (already undone) reverts to the honest no-op', async () => {
