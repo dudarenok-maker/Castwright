@@ -101,6 +101,52 @@ test('^ every job with a derived condition is in the aggregator needs:', () => {
   );
 });
 
+// The aggregator's fail-safe (#2119): ci-scope.mjs's own fallback writes to
+// the SAME $GITHUB_OUTPUT handle it's guarding, so a handle that's
+// unwritable — or a `detect` that exits 0 having written nothing — leaves
+// every leg job's steps skipped-but-the-JOB-green, which the 'skipped' check
+// above cannot see (no job skips; only steps do). This is a step-shaped gap
+// the two structural checks above can't catch by construction, so it needs
+// its own assertion. Static scan on purpose, matching this file's style —
+// not a live GitHub Actions run — so this is a wiring guard against the YAML
+// regressing, not proof the check fires correctly in CI (that needs a hand
+// inspection of the PR's own run, per the task brief).
+test('aggregator sentinel: detect is in needs: and its result/ok are checked first', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const needs = (body.match(/needs:\s*\[([^\]]*)\]/) ?? [undefined, ''])[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.ok(
+    needs.includes('detect'),
+    `aggregator needs: is missing 'detect' — needs.detect.outputs.ok would be the ` +
+      `empty string and the sentinel below would fail on every PR:\n${needs.join(', ')}`,
+  );
+
+  const stepNames = [...body.matchAll(/^ {6}- name: (.+)$/gm)].map((m) => m[1]);
+  assert.equal(
+    stepNames[0],
+    'Scope detection ran',
+    `the sentinel must be the FIRST step of the aggregator job, found order:\n${stepNames.join('\n')}`,
+  );
+
+  const sentinelBody = body.slice(body.indexOf('- name: Scope detection ran'));
+  assert.match(
+    sentinelBody,
+    /needs\.detect\.result[^\n]*!=\s*"success"/,
+    'sentinel does not gate on needs.detect.result != "success"',
+  );
+  assert.match(
+    sentinelBody,
+    /needs\.detect\.outputs\.ok[^\n]*!=\s*"true"/,
+    'sentinel does not gate on needs.detect.outputs.ok != "true"',
+  );
+});
+
 // Setup steps (ffmpeg, Playwright cache/install) are not legs. Each declares
 // the leg it supports; its condition must be identical to that leg's, or e2e
 // runs without a browser.

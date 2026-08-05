@@ -492,10 +492,29 @@ jobs:
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
-    needs: [lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
+    needs: [detect, lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
     runs-on: ubuntu-latest
     if: always()
     steps:
+      # Consumer-side check on a DIFFERENT artifact from the one it validates.
+      # The producer-side fail-safe in ci-scope.mjs shares a failure mode with
+      # what it guards: it writes the fallback to the same GITHUB_OUTPUT
+      # handle. If that handle is unwritable, or detect exits 0 having written
+      # nothing, every `if:` is false, every job's STEPS skip, every job
+      # SUCCEEDS, and this aggregator would report green having run nothing.
+      # No job is skipped in that scenario, so the check below cannot catch it.
+      - name: Scope detection ran
+        run: |
+          if [[ "${{ needs.detect.result }}" != "success" ]]; then
+            echo "::error::detect job did not succeed: ${{ needs.detect.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.detect.outputs.ok }}" != "true" ]]; then
+            echo "::error::ci-scope.mjs did not report ok=true (got '${{ needs.detect.outputs.ok }}'). Scope detection produced no output; refusing to report green."
+            exit 1
+          fi
+          echo "Scope detection reported ok."
+
       - name: Check leg results
         # Fails on 'failure' OR 'cancelled' OR 'skipped' — not just the first
         # two — so an upstream `detect` failure (which SKIPS every leg job
