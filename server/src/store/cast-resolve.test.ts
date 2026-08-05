@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCastResolver } from './cast-resolve.js';
+import { buildCastResolver, rejectedPairsGoverning } from './cast-resolve.js';
 import type { CastIdHistory } from './cast-id-history.js';
 
 const cast = [
@@ -17,6 +17,14 @@ function h(
   rejected?: string[],
 ): Pick<CastIdHistory, 'supersededBy' | 'rejected'> {
   return rejected === undefined ? { supersededBy } : { supersededBy, rejected };
+}
+
+/* Same idea as `h`, for the pair-scoped successor (#2092/#2089 D1). */
+function hp(
+  supersededBy: Record<string, string>,
+  rejectedPairs: Array<{ from: string; to: string }>,
+): Pick<CastIdHistory, 'supersededBy' | 'rejectedPairs'> {
+  return { supersededBy, rejectedPairs };
 }
 
 const history = h({ mayrin: 'mairin' });
@@ -144,5 +152,218 @@ describe('buildCastResolver', () => {
       const r = buildCastResolver(cast).resolve('the_torment');
       expect(r?.character.id).toBe('the_torment');
     });
+  });
+
+  describe('rejectedPairs (#2092/#2089 D1/D2 — pair-scoped "not the same character")', () => {
+    it('blocks a history-tier match onto the rejected target', () => {
+      expect(
+        buildCastResolver(cast, hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'mairin' }])).resolve(
+          'mayrin',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('blocks a normalised-id-tier match onto the rejected target', () => {
+      expect(
+        buildCastResolver(cast, hp({}, [{ from: 'the-torment', to: 'the_torment' }])).resolve(
+          'the-torment',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('blocks a normalised-history-tier match onto the rejected target', () => {
+      const c = [{ id: 'x', name: 'X' }];
+      expect(
+        buildCastResolver(c, hp({ foo_bar: 'x' }, [{ from: 'foo-bar', to: 'x' }])).resolve('foo-bar'),
+      ).toBeUndefined();
+    });
+
+    it('D1 pair scope: a DIFFERENT target for the same rejected `from` id still resolves', () => {
+      // The whole point of D1 over the legacy id-wide `rejected`: rejecting
+      // "mayrin is not Mr. Marrow" must not also block "mayrin is Mairin"
+      // once a later analysis mints the RIGHT history entry.
+      const c = [{ id: 'mr-marrow', name: 'Mr. Marrow' }, { id: 'mairin', name: 'Mairin' }];
+      const history = hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'mr-marrow' }]);
+      const r = buildCastResolver(c, history).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+      expect(r?.via).toBe('history');
+    });
+
+    it('an exact live id BEATS a pair rejection: a reclaimed id must still resolve (mirrors the legacy `rejected` fix round 1)', () => {
+      const r = buildCastResolver(cast, hp({}, [{ from: 'mairin', to: 'wren' }])).resolve('mairin');
+      expect(r?.character.id).toBe('mairin');
+      expect(r?.via).toBe('exact');
+    });
+
+    it('does not affect an id whose pair names a different `from`', () => {
+      const r = buildCastResolver(
+        cast,
+        hp({ mayrin: 'mairin' }, [{ from: 'some-other-id', to: 'mairin' }]),
+      ).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('does not affect an id whose pair names the same `from` but a different `to`', () => {
+      // Reinforces the D1-pair-scope test above from the opposite direction:
+      // the history entry's target ('mairin') isn't the rejected pair's
+      // target ('someone-else'), so the tier-2 match must go through.
+      const r = buildCastResolver(
+        cast,
+        hp({ mayrin: 'mairin' }, [{ from: 'mayrin', to: 'someone-else' }]),
+      ).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('defaults to no pair rejections when rejectedPairs is omitted', () => {
+      const r = buildCastResolver(cast, h({ mayrin: 'mairin' })).resolve('mayrin');
+      expect(r?.character.id).toBe('mairin');
+    });
+
+    it('a raw `from` that only normalises to the same key as a rejected pair is still blocked at tier 3 (normalised-tier keying, not raw)', () => {
+      // 'the-mairin' is a live cast id, matched at tier 3 by anything that
+      // normalises to the same key. The pair was recorded against the raw
+      // string 'the_Mairin' (underscore + capital M); this call resolves
+      // 'the-Mairin' (hyphen + capital M) — a DIFFERENT raw string that
+      // normalises to the same key as both. Tier 3 itself matches by
+      // normalised key, so the rejection check must too, or a
+      // punctuation/case variant would silently slip the block.
+      const c = [{ id: 'the-mairin', name: 'Mairin' }];
+      const r = buildCastResolver(
+        c,
+        hp({}, [{ from: 'the_Mairin', to: 'the-mairin' }]),
+      ).resolve('the-Mairin');
+      expect(r).toBeUndefined();
+    });
+
+    describe('no-fall-through (D2, trap 2 — mutation-checked)', () => {
+      it('a rejected tier-2 candidate does not fall through to a tier-3/4 match for the same characterId', () => {
+        // 'ghost' matches tier 2 (history: ghost -> rejected-target) which is
+        // rejected. If the resolver mistakenly fell through instead of
+        // stopping, tier 3/4 could still resolve 'ghost' via SOME other
+        // route — this fixture makes sure there is genuinely nothing else
+        // for it to fall through to, so a fall-through bug would surface as
+        // a resolved character rather than coincidentally landing on
+        // undefined anyway.
+        const c = [{ id: 'rejected-target', name: 'A' }, { id: 'narrator', name: 'N' }];
+        const history = hp({ ghost: 'rejected-target' }, [{ from: 'ghost', to: 'rejected-target' }]);
+        expect(buildCastResolver(c, history).resolve('ghost')).toBeUndefined();
+      });
+    });
+  });
+});
+
+/* #2092/#2089 review round 3 (M-4) — `rejectedPairsGoverning` had NO direct
+   unit test before this round (`grep -c rejectedPairsGoverning
+   cast-resolve.test.ts` → 0): every existing regression exercised it only
+   indirectly, through `collectOrphanedCharacterFallbacks`
+   (segments-io.test.ts) or the reject-undo route (cast-reject-orphan.test.ts).
+   For the branch's own stated single-source-of-truth helper, that is the
+   wrong place to have zero direct coverage. Table-driven across its actual
+   rules (see the function's own doc comment): raw-always, tier-2-never-
+   normalised, collision (a raw pair AND its normalised sibling BOTH apply,
+   without double-counting the raw one — the M-3 dedup pin), and the M-1
+   legacy-`rejected`-list fix. Round 3 also changed the signature from
+   `(characterId, rejectedPairs, resolveIgnoringRejects)` to `(characterId,
+   cast, history)` — the helper now builds its own ignoring-resolver
+   internally instead of trusting a caller-supplied one (see the function's
+   own doc comment for why). */
+describe('rejectedPairsGoverning (#2092/#2089 review round 3, M-4)', () => {
+  it('rule 1 (raw-always): a pair whose raw `from` exactly equals characterId always applies — even when nothing else resolves this id at all', () => {
+    // 'ghost' doesn't resolve through ANY tier (no live cast id, no
+    // supersededBy entry) — proving rule 1 doesn't depend on the
+    // ignoring-resolution succeeding.
+    const c = [{ id: 'x', name: 'X' }];
+    const history = hp({}, [{ from: 'ghost', to: 'x' }]);
+    expect(rejectedPairsGoverning('ghost', c, history)).toEqual([{ from: 'ghost', to: 'x' }]);
+  });
+
+  it('rule 2 (tier-2-never-normalised): a normalised-only-matching pair does NOT apply when the id resolves via the RAW tier-2 (history) instead', () => {
+    // 'the_torment' has its OWN raw supersededBy entry (tier 2) pointing at
+    // the live 'the-torment' — a clean, unblocked resolution. The rejected
+    // pair's raw `from` ('The-Torment') is a DIFFERENT string that only
+    // normalises the same; tier 2 is raw-only and never falls through to
+    // consult the normalised keyspace, so this pair must not apply.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history = hp({ the_torment: 'the-torment' }, [{ from: 'The-Torment', to: 'the-torment' }]);
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([]);
+  });
+
+  it('rule 3 (collision) / M-3 (dedup): a raw pair AND a differently-spelled normalised-matching pair BOTH apply, without double-counting the raw one', () => {
+    // The repo's own real drift shape: 'the_torment' (this call's own raw
+    // `from`, matched by rule 1) and 'The-Torment' (a DIFFERENT raw
+    // spelling that normalises the same, matched by rule 2 since neither
+    // has its own supersededBy entry — 'the_torment' resolves via the
+    // normalised-id tier). Exactly 2 entries, not 3: the M-3 dedup clause
+    // (`p.from !== characterId`) must keep rule 1's own pair from ALSO
+    // being counted a second time by rule 2's normalised filter.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history = hp({}, [
+      { from: 'the_torment', to: 'the-torment' },
+      { from: 'The-Torment', to: 'the-torment' },
+    ]);
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([
+      { from: 'the_torment', to: 'the-torment' },
+      { from: 'The-Torment', to: 'the-torment' },
+    ]);
+  });
+
+  it('M-1: a legacy id-wide `rejected` block is not mis-attributed to an unrelated normalised-matching rejectedPairs entry', () => {
+    // 'the_torment' is blocked by the LEGACY `rejected` list (not any pair)
+    // — it has no live cast id of its own and no supersededBy entry, so
+    // absent the legacy block it would resolve via the normalised-id tier
+    // onto 'the-torment'. An unrelated pair, recorded against a DIFFERENT
+    // raw spelling that normalises the same ('The-Torment'), must NOT be
+    // credited for a block the legacy list actually caused: the
+    // ignoring-resolver this function builds internally must honour
+    // `rejected` too, or it would wrongly see 'the_torment' resolving via
+    // 'normalised-id' (since it only ignores PAIR rejects, not the id
+    // itself being on the legacy list) and credit the unrelated pair.
+    const c = [{ id: 'the-torment', name: 'T' }];
+    const history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = {
+      supersededBy: {},
+      rejected: ['the_torment'],
+      rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }],
+    };
+    expect(rejectedPairsGoverning('the_torment', c, history)).toEqual([]);
+  });
+
+  it('an id whose resolution goes through an exact live match ignores every rejectedPairs entry naming a different `from`', () => {
+    const c = [{ id: 'mairin', name: 'M' }];
+    const history = hp({}, [{ from: 'someone-else', to: 'mairin' }]);
+    expect(rejectedPairsGoverning('mairin', c, history)).toEqual([]);
+  });
+
+  it('defaults to no governing pairs when rejectedPairs is omitted entirely', () => {
+    const c = [{ id: 'x', name: 'X' }];
+    const history: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = { supersededBy: {} };
+    expect(rejectedPairsGoverning('ghost', c, history)).toEqual([]);
+  });
+
+  it('F1 (fix round 5) — the normalised-history half of rule 2 pins directly: a pair applies when the id resolves via tier 4, not just tier 3', () => {
+    // `normalisedTierRelevant` (cast-resolve.ts) is `via === 'normalised-id'
+    // || via === 'normalised-history'` — an OR the whole server suite (6580
+    // tests) plus test:server-slow stayed green with the second disjunct
+    // deleted, because every existing scenario that reaches a normalised
+    // tier at all happens to land on 'normalised-id' (a live cast row whose
+    // id normalises to match), never 'normalised-history' (a supersededBy
+    // KEY that normalises to match, with no live cast row and no raw
+    // supersededBy entry of its own). This scenario reaches tier 4
+    // specifically: 'x' is the only live cast id (so tier 1/3 can't match
+    // 'foo-bar'), and the only supersededBy entry is keyed 'foo_bar' (an
+    // UNDERSCORE spelling — raw tier 2 can't match the query's HYPHEN
+    // spelling 'foo-bar' either). Only the normalised-history tier (4)
+    // reaches across that underscore/hyphen gap.
+    const c = [{ id: 'x', name: 'X' }];
+    const history = hp({ foo_bar: 'x' }, [{ from: 'foo_bar', to: 'x' }]);
+
+    // Confirm the premise: this query resolves via tier 4, not tier 3 or
+    // tier 2 — otherwise this test would not actually exercise the deleted
+    // disjunct.
+    const ignoringResolver = buildCastResolver(c, { supersededBy: { foo_bar: 'x' } });
+    expect(ignoringResolver.resolve('foo-bar')?.via).toBe('normalised-history');
+
+    // The load-bearing assertion: the pair governs 'foo-bar' even though its
+    // own `from` is the raw-different 'foo_bar' spelling.
+    expect(rejectedPairsGoverning('foo-bar', c, history)).toEqual([{ from: 'foo_bar', to: 'x' }]);
   });
 });

@@ -144,4 +144,62 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     await row.getByRole('combobox').selectOption({ label: 'Narrator' });
     await expect(rejectButton).toBeEnabled();
   });
+
+  /* #2092/#2089 — pair-scoped reject + undo. Mock mode's rejectOrphanMatch
+     always returns `resolution: null` (D2's ordinary outcome — mirrors the
+     real server's typical case for an id that has nothing else to resolve
+     onto), so a needs-your-decision reject leaves the row exactly where it
+     is; the chip is the only visible change. */
+  test('rejecting a needs-your-decision row leaves it in place and renders its "Not …" chip', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    const row = page.getByTestId('orphaned-row-coalfall');
+    await row.getByRole('combobox').selectOption({ label: 'Narrator' });
+    await row.getByRole('button', { name: /not the same character/i }).click();
+
+    /* Still in needs-your-decision — a genuine miss stays a genuine miss. */
+    await expect(page.getByTestId('orphaned-needs-decision')).toContainText('coalfall', {
+      timeout: 5_000,
+    });
+    await expect(row.getByText('Not Narrator')).toBeVisible();
+    await expect(row.getByRole('button', { name: /undo/i })).toBeVisible();
+  });
+
+  /* Mock mode's undoRejectOrphanMatch (M5, review round 2 — now honest
+     about `wasRejected` per-session, tracking real reject/undo state
+     instead of always claiming success) echoes back the `characterId` it
+     was called with as `resolvedCharacterId` (with `resolution: 'history'`,
+     collapsing to 'alias' in the frontend's own banner taxonomy) — the
+     common/lossless real-server case — ONLY when the SAME
+     (bookId, characterId, orphanedId) tuple was actually rejected first,
+     which the reject below does, and exactly what restores 'mayrin' to
+     auto-reconciled → 'narrator' here, since that's the same target the
+     reject used. */
+  test('clicking Undo on a rejected row removes the chip and returns an auto-reconciled row to its section', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallback(page);
+
+    await page.getByRole('button', { name: /character id.*auto-reconciled/i }).click();
+    const autoRow = page.getByTestId('orphaned-row-mayrin');
+    await autoRow.getByRole('button', { name: /not the same character/i }).click();
+
+    const movedRow = page.getByTestId('orphaned-needs-decision').getByTestId('orphaned-row-mayrin');
+    await expect(movedRow).toBeVisible({ timeout: 5_000 });
+    await expect(movedRow.getByText('Not Narrator')).toBeVisible();
+
+    await movedRow.getByRole('button', { name: /undo/i }).click();
+
+    /* The chip is gone and the row is back under auto-reconciled. */
+    await expect(page.getByTestId('orphaned-needs-decision')).not.toContainText('mayrin', {
+      timeout: 5_000,
+    });
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
+    await expect(autoReconciled).toContainText('mayrin');
+    await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
+  });
 });

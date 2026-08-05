@@ -1109,8 +1109,8 @@ describe('castSlice — setOrphanedCharacterFallbacks (#2023)', () => {
   });
 });
 
-describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
-  it('flips an auto-reconciled entry to unresolved and clears resolvedCharacterId', () => {
+describe('castSlice — applyOrphanRejection (#2040 Task 17, pair-scoped + response-driven by #2092/#2089)', () => {
+  it('applies the server-returned resolution (null → unresolved) and pushes the target onto rejectedAgainst', () => {
     const start = {
       characters: [makeChar('mairin')],
       orphanedCharacterFallbacks: {
@@ -1121,10 +1121,69 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
         },
       },
     };
-    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
     expect(next.orphanedCharacterFallbacks).toEqual({
-      mayrin: { resolution: 'unresolved', resolvedCharacterId: undefined, segments: 6 },
+      mayrin: {
+        resolution: 'unresolved',
+        resolvedCharacterId: undefined,
+        segments: 6,
+        rejectedAgainst: ['mairin'],
+      },
     });
+  });
+
+  it("doesn't guess unresolved — a non-null server resolution ('history' tier → 'alias') is applied as returned", () => {
+    // Rejecting X against Y doesn't have to leave X unresolved: some OTHER,
+    // unblocked tier can still resolve it onto a different live character —
+    // this is what the response-driven design exists to reflect correctly.
+    const start = {
+      characters: [makeChar('mairin'), makeChar('other')],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 6 },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: 'history',
+        resolvedCharacterId: 'other',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin).toEqual({
+      resolution: 'alias',
+      resolvedCharacterId: 'other',
+      segments: 6,
+      rejectedAgainst: ['mairin'],
+    });
+  });
+
+  it("collapses the 'normalised-id' tier to 'normalised' (the same tier→taxonomy mapping the collector uses)", () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'unresolved' as const, segments: 6 },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'wrong-target',
+        resolution: 'normalised-id',
+        resolvedCharacterId: 'mairin',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin.resolution).toBe('normalised');
   });
 
   it('preserves the other fields on the entry (characterId, voiceName, segments)', () => {
@@ -1140,14 +1199,60 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
         },
       },
     };
-    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
     expect(next.orphanedCharacterFallbacks?.mayrin).toEqual({
       characterId: 'narrator',
       voiceName: 'qwen-oduvan',
       resolution: 'unresolved',
       resolvedCharacterId: undefined,
       segments: 3,
+      rejectedAgainst: ['mairin'],
     });
+  });
+
+  it('dedupes — rejecting the same (orphanedId, characterId) pair twice does not duplicate the chip target', () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'mairin', segments: 6 },
+      },
+    };
+    const payload = {
+      orphanedId: 'mayrin',
+      characterId: 'mairin',
+      resolution: null,
+      resolvedCharacterId: undefined,
+    };
+    const once = castSlice.reducer(start, castActions.applyOrphanRejection(payload));
+    const twice = castSlice.reducer(once, castActions.applyOrphanRejection(payload));
+    expect(twice.orphanedCharacterFallbacks?.mayrin.rejectedAgainst).toEqual(['mairin']);
+  });
+
+  it('accumulates a second distinct rejected target alongside the first', () => {
+    const start = {
+      characters: [makeChar('mairin'), makeChar('other')],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'unresolved' as const, segments: 6, rejectedAgainst: ['mairin'] },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'other',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin.rejectedAgainst).toEqual(['mairin', 'other']);
   });
 
   it('leaves an unrelated orphaned entry untouched', () => {
@@ -1158,7 +1263,15 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
         'the-torment': { resolution: 'unresolved' as const, segments: 67 },
       },
     };
-    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'mayrin' }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
     expect(next.orphanedCharacterFallbacks?.['the-torment']).toEqual({
       resolution: 'unresolved',
       segments: 67,
@@ -1167,7 +1280,106 @@ describe('castSlice — applyOrphanRejection (#2040 Task 17)', () => {
 
   it('is a no-op for an orphaned id no longer in the map', () => {
     const start = { characters: [], orphanedCharacterFallbacks: {} };
-    const next = castSlice.reducer(start, castActions.applyOrphanRejection({ orphanedId: 'ghost' }));
+    const next = castSlice.reducer(
+      start,
+      castActions.applyOrphanRejection({
+        orphanedId: 'ghost',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next).toEqual(start);
+  });
+});
+
+describe('castSlice — undoOrphanRejection (#2092/#2089 D5)', () => {
+  it('applies the server-returned resolution and drops the target out of rejectedAgainst, clearing the field when empty', () => {
+    const start = {
+      characters: [makeChar('mairin')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          resolution: 'unresolved' as const,
+          segments: 6,
+          rejectedAgainst: ['mairin'],
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.undoOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: 'history',
+        resolvedCharacterId: 'mairin',
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin).toEqual({
+      resolution: 'alias',
+      resolvedCharacterId: 'mairin',
+      segments: 6,
+      rejectedAgainst: undefined,
+    });
+  });
+
+  it('leaves other rejected targets in place when undoing only one', () => {
+    const start = {
+      characters: [makeChar('mairin'), makeChar('other')],
+      orphanedCharacterFallbacks: {
+        mayrin: {
+          resolution: 'unresolved' as const,
+          segments: 6,
+          rejectedAgainst: ['mairin', 'other'],
+        },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.undoOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin.rejectedAgainst).toEqual(['other']);
+  });
+
+  it("resolution stays 'unresolved' when the undo's own resolution is null (nothing left to resolve onto)", () => {
+    const start = {
+      characters: [],
+      orphanedCharacterFallbacks: {
+        mayrin: { resolution: 'unresolved' as const, segments: 6, rejectedAgainst: ['mairin'] },
+      },
+    };
+    const next = castSlice.reducer(
+      start,
+      castActions.undoOrphanRejection({
+        orphanedId: 'mayrin',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
+    expect(next.orphanedCharacterFallbacks?.mayrin).toEqual({
+      resolution: 'unresolved',
+      resolvedCharacterId: undefined,
+      segments: 6,
+      rejectedAgainst: undefined,
+    });
+  });
+
+  it('is a no-op for an orphaned id no longer in the map', () => {
+    const start = { characters: [], orphanedCharacterFallbacks: {} };
+    const next = castSlice.reducer(
+      start,
+      castActions.undoOrphanRejection({
+        orphanedId: 'ghost',
+        characterId: 'mairin',
+        resolution: null,
+        resolvedCharacterId: undefined,
+      }),
+    );
     expect(next).toEqual(start);
   });
 });

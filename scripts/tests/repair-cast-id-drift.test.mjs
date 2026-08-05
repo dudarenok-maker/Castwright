@@ -44,6 +44,7 @@ import {
   AUTO_REBIND_RANGE,
   shouldRefuseApplyForEmptyScan,
   formatBooksScannedLine,
+  collectSegmentOrphans,
   formatNotYetAnalysedLine,
   collectBooks,
   collectBakNameEntries,
@@ -601,6 +602,84 @@ describe('planBookRepairs', () => {
     assert.equal(plan.skipped[0].reason, 'already-recorded');
   });
 
+  test('Round 4, MUST 2 (independent review, 2026-08-05): the historyResolver fallback threads rejectedPairs through — a pair-rejected alias must NOT read as already-recorded', () => {
+    // The bug this pins: the fallback (`planBookRepairs`'s `historyResolver`
+    // default, when `input.historyResolver` is omitted) built
+    // `{ supersededBy, rejected }` without `rejectedPairs` — correct on
+    // `main`, where the field didn't exist yet, and wrong the moment
+    // #2092/#2089 merged, since the real `buildCastResolver` now also
+    // reads it. A resolver missing `rejectedPairs` resolves 'mayrin' via
+    // the 'history' tier despite the pair reject below, which trips the
+    // already-recorded skip a few lines down (`aliasHit.via === 'history'
+    // | 'normalised-history'`) and hides the id from BOTH `autoRecord` AND
+    // `reportOnly` — a false skip, the exact under-report class the #2107
+    // widening exists to prevent, reintroduced one guard over.
+    //
+    // A PARTIAL history — `rejected` omitted entirely, exercising the same
+    // "planBookRepairs supports a partial history" contract the sibling
+    // test below pins — carrying `rejectedPairs` and no `historyResolver`.
+    // `makeRejectedPairsAwareFakeResolver` (unlike the shared
+    // `makeHistoryAwareFakeResolver`, which ignores `rejectedPairs`
+    // entirely — see its own doc comment) actually consults it, so
+    // whether the fallback threads the field through is observable here.
+    const makeRejectedPairsAwareFakeResolver = (idKeyFn) =>
+      function buildRejectedPairsAwareFakeResolver(cast, history = {}) {
+        const byId = new Map(cast.map((c) => [c.id, c]));
+        const byNormId = new Map(cast.map((c) => [idKeyFn(c.id), c]));
+        const supersededBy = history.supersededBy ?? {};
+        const rejectedPairs = history.rejectedPairs ?? [];
+        return {
+          resolve(id) {
+            if (byId.has(id)) return { character: byId.get(id), via: 'exact' };
+            if (id in supersededBy) {
+              const targetId = supersededBy[id];
+              const rejected = rejectedPairs.some((p) => p.from === id && p.to === targetId);
+              if (rejected) return undefined; // D2: pair-rejected, no fall-through
+              const target = byId.get(targetId);
+              if (target) return { character: target, viaAlias: id, via: 'history' };
+            }
+            const normId = byNormId.get(idKeyFn(id));
+            if (normId) return { character: normId, viaAlias: id, via: 'normalised-id' };
+            return undefined;
+          },
+        };
+      };
+    const localDeps = { ...deps, buildCastResolver: makeRejectedPairsAwareFakeResolver(idKey) };
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc);
+    const orphans = new Map([['mayrin', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { supersededBy: { mayrin: 'mairin' }, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] },
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+        bakAvailable: true,
+      },
+      localDeps,
+    );
+    // NOT already-recorded — the pair reject correctly blocks the stale
+    // alias, so the id reaches Tier A/B matching instead of being silently
+    // hidden from both `autoRecord` and `reportOnly`.
+    assert.equal(
+      plan.skipped.some((s) => s.id === 'mayrin' && s.reason === 'already-recorded'),
+      false,
+    );
+    // It DOES reach Tier A (the cache name "Мэйрин" unambiguously matches
+    // live 'mairin'), and is THEN correctly declined by the pair-reject
+    // guard specifically — proving the false skip's damage concretely
+    // (with the fallback fix REMOVED, this whole scenario collapses to the
+    // single 'already-recorded' skip asserted absent above, and neither
+    // this specific reason nor the Tier A match is ever reached) rather
+    // than merely asserting an absence.
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.reportOnly.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].id, 'mayrin');
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+  });
+
   test('Round 4 (independent review, 2026-08-05): a PARTIAL history (no supersededBy field), no historyResolver, and a real-shaped buildCastResolver dep does not throw', () => {
     // planBookRepairs itself treats a partial history as a supported input
     // shape — it defends `history.rejected ?? []` a few lines up, and
@@ -779,6 +858,106 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord.length, 0);
     assert.equal(plan.skipped.length, 1);
     assert.equal(plan.skipped[0].reason, 'rejected');
+  });
+
+  // #2092/#2089 Task 9 — pair-scoped `rejectedPairs`, replacing the old
+  // id-wide skip for NEW rejects (the legacy `rejected` list above stays
+  // id-wide on purpose — see planBookRepairs's own doc comment). These two
+  // are the brief's stated minimum: the SAME orphaned id ("mayrin") rejected
+  // against ONE target ("mairin") must still auto-record against a DIFFERENT
+  // target ("timkin") it separately matches, and must still be blocked
+  // against the rejected target itself. A test only covering the second
+  // half would pass against the old unconditional id-wide skip too.
+  test('a pair-rejected id is skipped when it matches the REJECTED target', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Мэйрин' }], lc); // matches live 'mairin'
+    const orphans = new Map([['mayrin', renderedOrphan(8)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] },
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+        bakAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+    assert.match(plan.skipped[0].detail, /"mayrin" -> "mairin"/);
+  });
+
+  test('a pair-rejected id is STILL auto-recorded when it matches a DIFFERENT target', () => {
+    const cacheNameIndex = buildNameIndex([{ id: 'mayrin', name: 'Timkin' }], lc); // matches live 'timkin', not 'mairin'
+    const orphans = new Map([['mayrin', renderedOrphan(5)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: { rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] }, // rejection is against a DIFFERENT target
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+        bakAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.skipped.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'mayrin');
+    assert.equal(plan.autoRecord[0].to, 'timkin');
+  });
+
+  // I2 (review round 1) — the repair pass's own real drift shape:
+  // `the_torment`/`The-Torment` both normalise to the same key. Rejecting
+  // one raw spelling must still block a DIFFERENT raw spelling's Tier B
+  // (normalised-id) match onto the same target — the guard has to mirror
+  // the SAME keyspace the tier it protects actually matches on.
+  test('I2: rejecting one raw spelling blocks a DIFFERENT raw spelling that normalises the same (Tier B match)', () => {
+    const liveCastWithTorment = [...liveCast, { id: 'the-torment', name: 'The Torment' }];
+    // No name evidence anywhere — forces Tier B (id-shape) rather than Tier A.
+    const orphans = new Map([['the_torment', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast: liveCastWithTorment,
+        history: { rejectedPairs: [{ from: 'The-Torment', to: 'the-torment' }] },
+        cacheNameIndex: new Map(),
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+        bakAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.autoRecord.length, 0);
+    assert.equal(plan.skipped.length, 1);
+    assert.equal(plan.skipped[0].id, 'the_torment');
+    assert.equal(plan.skipped[0].reason, 'rejected-pair');
+  });
+
+  test('I2: an id that normalises DIFFERENTLY from the rejected pair still auto-records (the fix is not over-broad)', () => {
+    const liveCastWithTorment = [...liveCast, { id: 'the-torment', name: 'The Torment' }];
+    const orphans = new Map([['the_torment', renderedOrphan(4)]]);
+    const plan = planBookRepairs(
+      {
+        liveCast: liveCastWithTorment,
+        // Rejection names an unrelated `from` that does NOT normalise the
+        // same as 'the_torment' — must not block it.
+        history: { rejectedPairs: [{ from: 'unrelated-id', to: 'timkin' }] },
+        cacheNameIndex: new Map(),
+        bakNameIndex: new Map(),
+        orphans,
+        cacheAvailable: true,
+        bakAvailable: true,
+      },
+      deps,
+    );
+    assert.equal(plan.skipped.length, 0);
+    assert.equal(plan.autoRecord.length, 1);
+    assert.equal(plan.autoRecord[0].id, 'the_torment');
+    assert.equal(plan.autoRecord[0].to, 'the-torment');
   });
 
   test('inconsistent characterSnapshots across chapters downgrade a name match to report-only (non-reserved id)', () => {
@@ -2547,6 +2726,76 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     const segs = [seg(1, 'One', [{ characterId: 42 }, { characterId: null }, { characterId: undefined }])];
     const { orphans } = buildOrphansFromSegments(segs, resolver);
     assert.equal(orphans.size, 0);
+  });
+});
+
+describe('collectSegmentOrphans (#2092/#2089 Task 9 — threads the loaded history object, not a hand-built subset)', () => {
+  // Guards exactly the trap the task 9 brief named: a hand-built
+  // `{ supersededBy, rejected }` object silently drops `rejectedPairs`, so
+  // this resolver would disagree with the real render-time resolver (which
+  // DOES see rejected pairs) about whether a pair-rejected id counts as an
+  // orphan. Asserted by capturing what `collectSegmentOrphans` actually
+  // hands to `buildCastResolver`, since a mutation reintroducing the old
+  // `{ supersededBy: history.supersededBy ?? {}, rejected: history.rejected ?? [] }`
+  // subset would make this go red (no `rejectedPairs` key reaches the fake).
+  test('passes the whole history object — including rejectedPairs — to buildCastResolver, not a stripped subset', async () => {
+    let receivedHistory;
+    const mods = {
+      buildCastResolver(cast, history) {
+        receivedHistory = history;
+        return { resolve: () => undefined };
+      },
+      async loadSegmentsFiles() {
+        return [];
+      },
+    };
+    const history = {
+      schema: 1,
+      supersededBy: { a: 'b' },
+      rejected: ['legacy-id'],
+      rejectedPairs: [{ from: 'mayrin', to: 'mairin' }],
+    };
+    await collectSegmentOrphans('/book', [], { characters: [] }, history, mods);
+    assert.equal(receivedHistory, history); // the SAME object, not a rebuilt copy
+    assert.deepEqual(receivedHistory.rejectedPairs, [{ from: 'mayrin', to: 'mairin' }]);
+  });
+
+  test('a segment whose id is pair-rejected against its only resolvable target is reported as an orphan, not silently reconciled', async () => {
+    // Simulates the real buildCastResolver's D2 rule (cast-resolve.ts): a
+    // rejected pair returns undefined instead of resolving. Review round 3
+    // (#2092/#2089) update: `collectSegmentOrphans` no longer returns a
+    // separate `autoReconciled` bucket at all — #2107's independent-review
+    // widening (landed on origin/main, merged into this branch) folded that
+    // concept away, since only the `'exact'` tier means the rendered bytes
+    // are fine (see `buildOrphansFromSegments`'s own doc comment). The fake
+    // resolver below reports `'exact'` on the NOT-rejected branch instead of
+    // the original `'normalised-history'` so this test still discriminates
+    // under the widened rule: if `collectSegmentOrphans` dropped
+    // `rejectedPairs` (the bug this test guards), the fake would take the
+    // not-rejected branch and report `'exact'`, which the widened
+    // `buildOrphansFromSegments` treats as NOT an orphan — this assertion
+    // would then fail. The real production resolver honours `rejectedPairs`,
+    // so this pins the contract `collectSegmentOrphans` must uphold: pass
+    // history through whole, so whatever the real resolver decides is what
+    // gets counted.
+    const mods = {
+      buildCastResolver(cast, history) {
+        return {
+          resolve(id) {
+            if (id !== 'mayrin') return undefined;
+            const rejected = (history.rejectedPairs ?? []).some((p) => p.from === 'mayrin' && p.to === 'mairin');
+            if (rejected) return undefined; // D2: pair-rejected, no fall-through
+            return { character: { id: 'mairin' }, via: 'exact' };
+          },
+        };
+      },
+      async loadSegmentsFiles() {
+        return [{ chapterId: 1, chapterTitle: 'One', segments: [{ characterId: 'mayrin', startSec: 0, endSec: 1 }] }];
+      },
+    };
+    const history = { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] };
+    const { orphans } = await collectSegmentOrphans('/book', [], { characters: [] }, history, mods);
+    assert.equal(orphans.get('mayrin')?.segments, 1);
   });
 });
 
