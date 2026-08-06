@@ -1284,19 +1284,32 @@ test('--against-published exits 0 when the saved copy LAGS the register (the nor
 });
 
 test('--against-published exits 1 and names the row when the published page is AHEAD (has a row the register lacks)', () => {
-  // Rename an existing row ID on the published copy so the page carries a row
-  // (B4) the register genuinely does not have — the real "lane A already
-  // published, lane B hasn't merged that row yet" signature.
-  const ahead = REAL_LIVE_VIEW_HTML.replace(
-    '<span class="num">B3</span>',
-    '<span class="num">B4</span>',
+  // Rename the LAST existing Group B row ID on the published copy to one
+  // past it, so the page carries a row the register genuinely does not have
+  // — the real "lane A already published, lane B hasn't merged that row
+  // yet" signature. Computed from the real content rather than hardcoded:
+  // a fixed 'B3' -> 'B4' rename silently stopped modelling "a row the
+  // register lacks" the moment Group B actually grew a real B4 row (#2185
+  // fix wave, item 2) — the rename then collided with genuine content
+  // instead of representing missing content. Deriving the target from
+  // whatever Group B's highest row actually is keeps this fixture correct
+  // no matter how many more B rows land later.
+  const bIds = [...REAL_LIVE_VIEW_HTML.matchAll(/<span class="num">B(\d+)<\/span>/g)].map((m) =>
+    Number(m[1]),
   );
-  assert.notEqual(ahead, REAL_LIVE_VIEW_HTML, 'fixture setup: the B3 row ID must have matched');
+  assert.ok(bIds.length > 0, 'fixture setup: Group B must have at least one row to rename');
+  const lastB = Math.max(...bIds);
+  const aheadId = `B${lastB + 1}`;
+  const ahead = REAL_LIVE_VIEW_HTML.replace(
+    `<span class="num">B${lastB}</span>`,
+    `<span class="num">${aheadId}</span>`,
+  );
+  assert.notEqual(ahead, REAL_LIVE_VIEW_HTML, `fixture setup: the B${lastB} row ID must have matched`);
   withTempCopy(ahead, (filePath) => {
     const r = runCli(['--against-published', filePath]);
     assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
     assert.match(r.stderr, /BEHIND what is already live/);
-    assert.match(r.stderr, /Group B section has row B4/);
+    assert.match(r.stderr, new RegExp(`Group B section has row ${aheadId}`));
     assert.match(
       r.stderr,
       /Do not publish\. Merge the rows named above/,

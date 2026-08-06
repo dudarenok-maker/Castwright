@@ -13,6 +13,7 @@ import { castJsonPath } from './paths.js';
 import { writeJsonAtomic } from './state-io.js';
 import {
   ABSENT,
+  UNREADABLE,
   type CastFingerprint,
   readJsonWithFingerprint,
   fingerprintOfWrite,
@@ -63,9 +64,31 @@ export function createCastMergeBase(
     async writeChecked(payload, onConflict) {
       await withCastLock(bookDir, async () => {
         const path = castJsonPath(bookDir);
+        /* A transient read error (UNREADABLE — see cast-fingerprint.ts) says
+           nothing about who last wrote cast.json, so it must suppress the
+           COMPARISON: reporting a mismatch here would be a phantom "someone
+           else edited your cast" for an AV-scanner/OneDrive/indexer blip,
+           #2185 review). It must NOT also suppress the baseline advance
+           below — the advance is derived from `payload`, the bytes THIS
+           write just landed on disk, not from the read that failed, so it
+           stays trustworthy regardless of whether the read worked. Skipping
+           it too was tried and is strictly worse: the baseline would go
+           stale at this site and then mismatch the NEXT site's successful
+           read of this run's own write, reporting a phantom conflict there
+           instead — a cascade, and two of the five real analysis.ts sites
+           are inside a per-chapter loop, so this fires on any real
+           multi-chapter book that hits a single I/O blip. See
+           cast-merge-base.test.ts's "does NOT cause a phantom conflict at
+           the NEXT site" regression test.
+
+           The accepted trade: an UNREADABLE read may mean we MISS a real
+           conflict that happened during the blip — we clobber the other
+           writer exactly as today's (pre-#2185) code does, and say nothing.
+           That is an honest missed detection, strictly better than a
+           phantom report, and it keeps "merge behaviour is unchanged". */
         if (baseline !== null) {
           const { fingerprint: observed } = await readJsonWithFingerprint(path);
-          if (observed !== baseline) {
+          if (observed !== UNREADABLE && observed !== baseline) {
             /* Report, then carry on: merge behaviour is unchanged and the
                write proceeds with the same base it uses today (design §4).
                onConflict must not throw — the caller's handler only logs and
@@ -74,9 +97,12 @@ export function createCastMergeBase(
           }
         }
         await writeJsonAtomic(path, payload);
-        /* Advance THROUGH a conflict as well as through a clean write. Not
-           advancing here would re-report the same foreign write at every
-           remaining site — five advisories for one event. */
+        /* Advance unconditionally on every successful write — through a
+           conflict, through an UNREADABLE pre-write read, through a clean
+           comparison. Not advancing here would re-report the same event at
+           every remaining site (five advisories for one foreign write), or
+           worse, invent a phantom one out of this run's own write (see the
+           comment above). */
         if (baseline !== null) baseline = fingerprintOfWrite(payload);
       });
     },

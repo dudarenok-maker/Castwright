@@ -2,18 +2,39 @@
    detector. The coupling test at the bottom is the important one: it is the
    only thing standing between a change to writeJsonAtomic's serialisation and
    a detector that reports a conflict on every write it makes itself. */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './state-io.js';
-import { readFile } from 'node:fs/promises';
-import {
-  ABSENT,
-  hashBytes,
-  readJsonWithFingerprint,
-  fingerprintOfWrite,
-} from './cast-fingerprint.js';
+
+/* Mock fs/promises so a single test can inject a non-ENOENT read failure
+   without relying on the real filesystem (#2185 review, item 1) — every
+   other call (the default readFile path, writeFile, rename, ...) still
+   points at the real impl. Module-scoped swap, mirroring state-io.test.ts's
+   setRenameImpl pattern: each test installs its own failure via
+   setReadFileImpl(). */
+type ReadFileUtf8 = (path: string, encoding: BufferEncoding) => Promise<string>;
+let readFileImpl: ReadFileUtf8 | null = null;
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const actualReadFile = actual.readFile as unknown as ReadFileUtf8;
+  return {
+    ...actual,
+    readFile: (path: string, encoding: BufferEncoding): Promise<string> =>
+      (readFileImpl ?? actualReadFile)(path, encoding),
+  };
+});
+
+function setReadFileImpl(fn: ReadFileUtf8 | null): void {
+  readFileImpl = fn;
+}
+
+/* Import AFTER vi.mock so cast-fingerprint.ts picks up the mocked readFile. */
+const { readFile } = await import('node:fs/promises');
+const { ABSENT, UNREADABLE, hashBytes, readJsonWithFingerprint, fingerprintOfWrite } =
+  await import('./cast-fingerprint.js');
 
 function tmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'castwright-fingerprint-'));
@@ -65,6 +86,39 @@ describe('readJsonWithFingerprint', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('returns UNREADABLE — not ABSENT — for a non-ENOENT read failure (#2185 review)', async () => {
+    const dir = tmpDir();
+    const p = join(dir, 'cast.json');
+    try {
+      writeFileSync(p, '{"characters":[]}', 'utf8');
+      const err = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      setReadFileImpl(async () => {
+        throw err;
+      });
+
+      const got = await readJsonWithFingerprint(p);
+
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(UNREADABLE);
+      expect(got.fingerprint).not.toBe(ABSENT);
+    } finally {
+      setReadFileImpl(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still returns ABSENT for a real ENOENT even with the mock installed (no regression on the happy path)', async () => {
+    const dir = tmpDir();
+    try {
+      setReadFileImpl(null); // default pass-through — ENOENT comes from the real fs
+      const got = await readJsonWithFingerprint(join(dir, 'nope.json'));
+      expect(got.value).toBeNull();
+      expect(got.fingerprint).toBe(ABSENT);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('fingerprintOfWrite — coupling guard against writeJsonAtomic', () => {
@@ -107,5 +161,11 @@ describe('fingerprintOfWrite — coupling guard against writeJsonAtomic', () => 
        hex digest can only contain [0-9a-f], so a leading NUL makes collision
        impossible by construction rather than by length. */
     expect(ABSENT.startsWith(String.fromCharCode(0))).toBe(true);
+  });
+
+  it('UNREADABLE can never collide with a real sha256 hex digest or with ABSENT', () => {
+    expect(UNREADABLE).not.toMatch(/^[0-9a-f]{64}$/);
+    expect(UNREADABLE.startsWith(String.fromCharCode(0))).toBe(true);
+    expect(UNREADABLE).not.toBe(ABSENT);
   });
 });

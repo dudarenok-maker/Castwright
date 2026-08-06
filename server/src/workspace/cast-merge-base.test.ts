@@ -4,12 +4,37 @@
    other test in this file. */
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { castJsonPath } from './paths.js';
-import { readJsonWithFingerprint } from './cast-fingerprint.js';
-import { createCastMergeBase } from './cast-merge-base.js';
+
+/* Mock fs/promises so a single test can inject a non-ENOENT read failure at
+   writeChecked's pre-write read without relying on the real filesystem
+   (#2185 review, item 1) — every other call (readFile's default path,
+   writeFile, rename, ...) still points at the real impl. Same module-scoped
+   swap pattern as state-io.test.ts / cast-fingerprint.test.ts. */
+type ReadFileUtf8 = (path: string, encoding: BufferEncoding) => Promise<string>;
+let readFileImpl: ReadFileUtf8 | null = null;
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const actualReadFile = actual.readFile as unknown as ReadFileUtf8;
+  return {
+    ...actual,
+    readFile: (path: string, encoding: BufferEncoding): Promise<string> =>
+      (readFileImpl ?? actualReadFile)(path, encoding),
+  };
+});
+
+function setReadFileImpl(fn: ReadFileUtf8 | null): void {
+  readFileImpl = fn;
+}
+
+/* Import AFTER vi.mock so cast-merge-base.ts's transitive readFile use picks
+   up the mock. */
+const { rm } = await import('node:fs/promises');
+const { readJsonWithFingerprint, fingerprintOfWrite } = await import('./cast-fingerprint.js');
+const { createCastMergeBase } = await import('./cast-merge-base.js');
 
 function makeBookDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'castwright-merge-base-'));
@@ -209,6 +234,95 @@ describe('createCastMergeBase — detection disabled (fingerprint: null)', () =>
       await base.writeChecked({ characters: [{ id: 'ours' }] }, vi.fn());
       expect(existsSync(castJsonPath(dir))).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createCastMergeBase — a not-checkable (UNREADABLE) read (#2185 review)', () => {
+  it('a non-ENOENT read failure at the pre-write read does not fire onConflict, and the baseline still advances to what was actually written', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      const base = createCastMergeBase(dir, await captureOf(dir));
+      const baselineBefore = base.value;
+      expect(typeof baselineBefore).toBe('string');
+
+      /* Simulates an AV scanner / OneDrive / the Windows indexer briefly
+         locking cast.json mid-analysis — the exact shape #2185's review
+         confirmed empirically. */
+      const err = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      setReadFileImpl(async () => {
+        throw err;
+      });
+
+      const onConflict = vi.fn();
+      const payload = { characters: [{ id: 'b' }] };
+      await base.writeChecked(payload, onConflict);
+
+      expect(onConflict).not.toHaveBeenCalled();
+      /* Corrected per the coordinator's review-round-2 finding: the baseline
+         MUST still advance, to `fingerprintOfWrite(payload)` — derived from
+         the bytes this write just landed on disk, not from the read that
+         failed, so it stays trustworthy regardless. Leaving it at
+         `baselineBefore` (the FIRST version of this fix) would go stale here
+         and misfire a phantom conflict at the NEXT write site instead — see
+         the cascade regression test below. */
+      expect(base.value).not.toBe(baselineBefore);
+      expect(base.value).toBe(fingerprintOfWrite(payload));
+
+      // Merge behaviour is unchanged: the write itself still landed on disk.
+      setReadFileImpl(null);
+      const after = await readJsonWithFingerprint<{ characters: Array<{ id: string }> }>(
+        castJsonPath(dir),
+      );
+      expect(after.value?.characters.map((c) => c.id)).toEqual(['b']);
+    } finally {
+      setReadFileImpl(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /* Coordinator correction, same review round: the ORIGINAL fix also skipped
+     the baseline advance on an UNREADABLE read (see the test above's prior
+     assertion, now corrected below it). That is wrong and strictly worse
+     than the bug it replaced — trace it across two write sites, which two of
+     the five real analysis.ts sites actually are (per-chapter loop):
+
+       1. Site 1: read rejects EBUSY -> checkable=false, no conflict (fine).
+       2. writeJsonAtomic SUCCEEDS. Disk now holds serialize(payload1).
+       3. If the baseline advance is ALSO skipped, `baseline` stays stuck at
+          the PRE-write value, which no longer describes what's on disk.
+       4. Site 2: read succeeds, observed = hash(disk) = hash(payload1).
+          observed !== stale-baseline -> onConflict fires, attributing this
+          run's OWN write to a foreign writer.
+
+     `fingerprintOfWrite(payload)` is computed from the payload just WRITTEN,
+     not from the failed read — so the baseline advance is trustworthy
+     regardless of whether the read failed. This test is the regression lock
+     for that: it fails under the "also skip the advance" version, passes
+     under the correct one. */
+  it('a not-checkable read at one write site does NOT cause a phantom conflict at the NEXT site', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      const base = createCastMergeBase(dir, await captureOf(dir));
+      const onConflict = vi.fn();
+
+      // Site 1: the pre-write read fails with a transient, non-ENOENT error.
+      const err = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      setReadFileImpl(async () => {
+        throw err;
+      });
+      await base.writeChecked({ characters: [{ id: 'b' }] }, onConflict);
+      setReadFileImpl(null);
+
+      // Site 2: a normal read, no injected failure, no foreign writer.
+      await base.writeChecked({ characters: [{ id: 'c' }] }, onConflict);
+
+      expect(onConflict).not.toHaveBeenCalled();
+    } finally {
+      setReadFileImpl(null);
       rmSync(dir, { recursive: true, force: true });
     }
   });

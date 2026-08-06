@@ -14,6 +14,20 @@ import { createHash } from 'node:crypto';
     comparison sites. */
 export const ABSENT = '\0ABSENT' as const;
 
+/** "The read failed for a reason that says nothing about the file's
+    contents" — a NOT-CHECKABLE result, distinct from both `ABSENT` (the file
+    is confirmed missing) and `null` (detection disabled for this run, see
+    `CastMergeBase`). An `EBUSY`/`EPERM`/`EACCES`/`EMFILE` mid-analysis (an AV
+    scanner, OneDrive, or the Windows indexer briefly locking `cast.json`)
+    says "I cannot check right now" — collapsing it into `ABSENT` turns a
+    transient I/O blip into a false "someone else edited your cast" advisory
+    (#2185 review). A comparison site must skip the comparison entirely on
+    this value, never treat it as a mismatch against the baseline.
+
+    Same NUL-prefix collision guard as `ABSENT`, with a distinct suffix so the
+    two can never be confused with each other either. */
+export const UNREADABLE = '\0UNREADABLE' as const;
+
 /** Three states, never two — see design §1a. */
 export type CastFingerprint = string | typeof ABSENT | null;
 
@@ -45,12 +59,20 @@ export function hashBytes(raw: string): string {
     state, and a later write must be able to notice it changing. */
 export async function readJsonWithFingerprint<T>(
   path: string,
-): Promise<{ value: T | null; fingerprint: string | typeof ABSENT }> {
+): Promise<{ value: T | null; fingerprint: string | typeof ABSENT | typeof UNREADABLE }> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
-  } catch {
-    return { value: null, fingerprint: ABSENT };
+  } catch (err) {
+    /* Only a confirmed-missing file is ABSENT. Anything else (EBUSY, EPERM,
+       EACCES, EMFILE, ...) on a file that may well be perfectly intact is
+       UNREADABLE — "I cannot check", not "nothing is there". See the
+       UNREADABLE doc comment above for why conflating the two is a bug, not
+       a simplification. */
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { value: null, fingerprint: ABSENT };
+    }
+    return { value: null, fingerprint: UNREADABLE };
   }
   const fingerprint = hashBytes(raw);
   try {

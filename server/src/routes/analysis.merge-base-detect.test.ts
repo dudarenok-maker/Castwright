@@ -297,11 +297,13 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
      would pass just as trivially for a run that died before any write as for
      one where the detector correctly found nothing to report. This helper is
      what stops that: cast.json on disk afterwards must carry THIS run's own
-     detected roster. 'narrator' never appears in any of this file's seed
-     fixtures (they seed 'stale' / 'foreign' / 'carried'), and narrator always
-     speaks in CHAPTER_BODY's second sentence (survives the non-speaker-drop
-     pass unlike 'olga'), so its presence is a positive, run-specific signal
-     that a write actually landed — not proof merely that the job returned. */
+     detected roster. 'narrator' never appears in any of THIS helper's callers'
+     seed fixtures (they seed 'stale' / 'foreign' / 'carried') — control 5
+     below does seed a 'narrator' row, but it never calls this helper and has
+     its own bookDir, so the two never collide — and narrator always speaks
+     in CHAPTER_BODY's second sentence (survives the non-speaker-drop pass
+     unlike 'olga'), so its presence is a positive, run-specific signal that a
+     write actually landed — not proof merely that the job returned. */
   function assertRunWroteRoster(bookDir: string): void {
     const ids = readCast(bookDir).characters.map((c) => c.id);
     expect(ids).toContain('narrator');
