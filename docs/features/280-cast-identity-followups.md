@@ -143,7 +143,7 @@ Self-contained, no dependency on anything else in this lane. Ship it first so th
 opens with a green branch.
 
 **Files:**
-- Modify: `server/src/routes/cast-create.ts:126-129` (the taken set) and `:170-186` (the report)
+- Modify: `server/src/routes/cast-create.ts:125-128` (the taken set) and `:170-186` (the report)
 - Test: `server/src/routes/cast-create.test.ts`
 
 **Interfaces:**
@@ -204,11 +204,20 @@ passing for the wrong reason on exactly that). Use its helpers: `writeBookOnDisk
   });
 
   it('still covers a NORMALISED collision with a supersededBy target (#2110)', async () => {
-    // `the-torment` is the target; the mint for "The Torment" normalises the same.
+    /* The TARGET is the drifted spelling `the_torment`; the mint for "The
+       Torment" is `the-torment`, which normalises to the same key.
+
+       Round 1 (I9): the first draft used `{ the_torment: 'the-torment' }`,
+       where the history KEY already normalises to the mint — so `takenNorm`
+       blocked it on `main` and the test stayed green with `...historyTargets`
+       removed, i.e. it could not fail. Verified against
+       `server/src/util/character-id.ts:7-12`: `normaliseIdKey` lowercases and
+       maps `[-_\s]+` to `-`, and does NOT transliterate. Putting the drifted
+       spelling on the VALUE side is what isolates the new branch. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
     ]);
-    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { the_torment: 'the-torment' } }));
+    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { mayrin: 'the_torment' } }));
 
     const res = await callCreate(bookId, { name: 'The Torment' });
 
@@ -239,7 +248,9 @@ Expected: FAIL — the first asserts `антон-2`, the route currently returns
 
 - [ ] **Step 3: Widen the taken set**
 
-In `server/src/routes/cast-create.ts`, replace lines 126-129:
+In `server/src/routes/cast-create.ts`, replace lines **125-128** — `:129` is
+`const isTaken = …`, which `:138` and `:140` call, so replacing 126-129 both duplicates
+`const history` and deletes `isTaken` (round 1, I4):
 
 ```ts
     const history = await loadCastIdHistory(located.bookDir);
@@ -297,7 +308,7 @@ apply):
         .map(([k]) => k);
       console.log(
         `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — it is the live target of history ` +
-          `entry${viaKeys.length === 1 ? '' : 'ies'} ${viaKeys.map((k) => `"${k}"`).join(', ')}; ` +
+          `${viaKeys.length === 1 ? 'entry' : 'entries'} ${viaKeys.map((k) => `"${k}"`).join(', ')}; ` +
           `minted "${newId}" instead.`,
       );
     }
@@ -311,9 +322,11 @@ still name the key, not the target).
 
 - [ ] **Step 6: Mutate each new assertion to prove it can fail**
 
-For each of the three new tests, break the implementation on that assertion's own line
+For each of the **four** new tests, break the implementation on that assertion's own line
 (e.g. drop `...historyTargets` from `takenIds`; change the log string) and confirm the
-test goes red. Restore. This is Global Constraint 10.
+test goes red. Restore. This is Global Constraint 10 — and note that dropping
+`...historyTargets` must redden **three** of the four; if it reddens fewer, one of the
+fixtures is not isolating the new branch (round 1, I9).
 
 - [ ] **Step 7: Commit**
 
@@ -343,12 +356,22 @@ The foundation. Everything after this reads what this task writes.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `server/src/store/cast-id-history.test.ts`:
+Add to `server/src/store/cast-id-history.test.ts`. **Use that file's existing harness —
+round 1 (I11) caught the first draft inventing one:**
+
+| The file actually provides | Not |
+|---|---|
+| a module-level `let dir: string`, reassigned by its own `beforeEach` to a fresh `mkdtempSync` | a `tmpBook()` helper (does not exist) |
+| `writeTestHistoryFile(content: string)`, which `mkdirSync`s `.audiobook` first | a bare `fs.writeFile` — `castIdHistoryPath` is `<dir>/.audiobook/…`, so a direct write ENOENTs |
+| `readFileSync` / `existsSync` from `node:fs` | `node:fs/promises` — the file imports **sync only** |
+
+Its import list must gain `restoreSupersededId` and `stampRecordedAtSeqIfAbsent`; the
+other primitives used below are already imported.
 
 ```ts
 describe('#2128 — seq and recordedAt markers', () => {
   it('stamps a marker for every supersededBy key it writes, and bumps seq', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');
     const h = await loadCastIdHistory(dir);
     expect(h.seq).toBe(1);
@@ -357,7 +380,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('restamps a repointed entry — the merge-repoint regression', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');      // seq 1, mayrin@1
     await retireCharacterId(dir, 'mairin', 'dame-alina');  // repoints mayrin -> dame-alina
     const h = await loadCastIdHistory(dir);
@@ -368,7 +391,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('restamps on the direct-reversal branch too', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'антон', 'anton');
     await retireCharacterId(dir, 'anton', 'антон'); // reversal
     const h = await loadCastIdHistory(dir);
@@ -377,7 +400,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('deletes both markers when forgetSupersededId removes a key', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');
     await forgetSupersededId(dir, 'mayrin');
     const h = await loadCastIdHistory(dir);
@@ -387,7 +410,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('deletes both markers when dropSupersededIdsReclaimedByLiveCast drops a key', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');
     await dropSupersededIdsReclaimedByLiveCast(dir, ['mayrin', 'mairin']);
     const h = await loadCastIdHistory(dir);
@@ -395,7 +418,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('restoreSupersededId stamps the CURRENT seq, never a replayed one', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');  // seq 1
     await forgetSupersededId(dir, 'mayrin');           // seq 2
     await rejectOrphanedPair(dir, 'mayrin', 'mairin'); // seq 3
@@ -406,7 +429,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it("restoreSupersededId's early returns leave markers untouched", async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');
     const before = await loadCastIdHistory(dir);
     await restoreSupersededId(dir, 'mayrin', 'mairin'); // already equal — idempotent, no write
@@ -418,7 +441,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('bumps seq on the four writes that touch no supersededBy key', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await rejectOrphanedId(dir, 'a');                     // 1
     await rejectOrphanedPair(dir, 'b', 'c');              // 2
     await unrejectOrphanedPair(dir, 'b', 'c');            // 3
@@ -427,7 +450,7 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('holds keys(recordedAtSeq) === keys(supersededBy) bidirectionally', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     const script: Array<() => Promise<unknown>> = [
       () => retireCharacterId(dir, 'a', 'b'),
       () => retireCharacterId(dir, 'b', 'c'),
@@ -450,25 +473,23 @@ describe('#2128 — seq and recordedAt markers', () => {
   });
 
   it('repairs a seq lost while recordedAtSeq survived', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'a', 'b');
     await retireCharacterId(dir, 'c', 'b'); // seq 2
-    const p = castIdHistoryPath(dir);
-    const raw = JSON.parse(await fs.readFile(p, 'utf8'));
+    const raw = JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8'));
     delete raw.seq;
-    await fs.writeFile(p, JSON.stringify(raw));
+    writeTestHistoryFile(JSON.stringify(raw));
     // Without the repair this loads as 0, every later write starts at 1, and
     // every existing marker stays above it — the book can never clear again.
     expect((await loadCastIdHistory(dir)).seq).toBe(2);
   });
 
   it('collapses the whole file when a new field is malformed (fail-closed)', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'a', 'b');
-    const p = castIdHistoryPath(dir);
-    const raw = JSON.parse(await fs.readFile(p, 'utf8'));
+    const raw = JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8'));
     raw.recordedAtSeq = ['not', 'a', 'map'];
-    await fs.writeFile(p, JSON.stringify(raw));
+    writeTestHistoryFile(JSON.stringify(raw));
     const h = await loadCastIdHistory(dir);
     expect(h.supersededBy).toEqual({}); // no aliases -> every affected id is a genuine miss and IS listed
   });
@@ -476,9 +497,8 @@ describe('#2128 — seq and recordedAt markers', () => {
 
 describe('#2128 — the one-shot stamp', () => {
   it('creates the field on a pre-lane file, stamping every existing key', async () => {
-    const dir = await tmpBook();
-    await fs.writeFile(
-      castIdHistoryPath(dir),
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile(
       JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin', anton: 'антон' } }),
     );
     expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(true);
@@ -488,7 +508,7 @@ describe('#2128 — the one-shot stamp', () => {
   });
 
   it('is a no-op once the field exists', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'a', 'b');
     const before = await loadCastIdHistory(dir);
     expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
@@ -496,18 +516,18 @@ describe('#2128 — the one-shot stamp', () => {
   });
 
   it('never writes when there is no file', async () => {
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
-    await expect(fs.access(castIdHistoryPath(dir))).rejects.toThrow();
+    expect(existsSync(castIdHistoryPath(dir))).toBe(false);
   });
 
   it('refuses to overwrite a malformed file', async () => {
-    const dir = await tmpBook();
-    await fs.writeFile(castIdHistoryPath(dir), '{ "schema": 2, "supersededBy": {} }');
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile('{ "schema": 2, "supersededBy": {} }');
     expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
     // The operator's broken file is still there to fix, not silently replaced
     // with an empty history that discards whatever supersededBy it held.
-    expect(JSON.parse(await fs.readFile(castIdHistoryPath(dir), 'utf8')).schema).toBe(2);
+    expect(JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8')).schema).toBe(2);
   });
 });
 ```
@@ -716,6 +736,63 @@ and the normal path the same way, using `resolvedTo` in place of `to`:
 nothing, so they must stamp nothing. A mutant that stamps on the idempotent path is what
 the "early returns leave markers untouched" test exists to catch.
 
+**Add an idempotence guard to `retireCharacterId`.** Review round 1 (I12) found that the
+function's only early returns are `from === to` (`:269`) and `from === resolvedTo`
+(`:312`) — there is **no** "already equals the recorded target" guard, so recording the
+same retirement twice writes twice. Harmless before this lane; under the uniform stamp
+rule the second, semantically-no-op call bumps `seq` and restamps `from`, invalidating
+every render made in between. `analysis.ts` reaches `recordRetirements` from **eight**
+sites per run (`:2896, 4914, 4915, 4925, 5438, 6176, 6177, 6187`), so a re-analysis that
+re-derives an already-recorded retirement would re-list the whole book — a far larger
+operator-visible consequence than known limits 1 and 2, arriving silently.
+
+Add immediately after the `resolvedTo` dereference (`:307`) and the existing self-entry
+guard (`:312`):
+
+```ts
+    /* #2128 — a retirement that changes nothing must not write. This mirrors
+       the idempotent-write discipline every other primitive in this module
+       already applies (`rejectOrphanedId`, `rejectOrphanedPair`,
+       `unrejectOrphanedPair`, `restoreSupersededId`); `retireCharacterId` was
+       the one that didn't, which was invisible until `seq` made a redundant
+       write observable. Without it, an analysis re-deriving an
+       already-recorded retirement restamps `from` and invalidates every render
+       made since the original — re-listing a book the operator just cleared.
+
+       The repoint loop below is included in "changes nothing": if no other
+       entry's value is `from`, and `supersededBy[from]` already equals
+       `resolvedTo`, the write is a byte-for-byte no-op. */
+    const alreadyRecorded =
+      history.supersededBy[from] === resolvedTo &&
+      !Object.values(history.supersededBy).includes(from);
+    if (alreadyRecorded && !history.rejectedPairs?.some((p) => p.to === from)) {
+      return { droppedSelfLoopRejections: [] };
+    }
+```
+
+with its own test:
+
+```ts
+  it('a repeat retirement writes nothing and restamps nothing (#2128)', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const before = await loadCastIdHistory(dir);
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const after = await loadCastIdHistory(dir);
+    expect(after.seq).toBe(before.seq);
+    expect(after.recordedAtSeq).toEqual(before.recordedAtSeq);
+  });
+
+  it('still repoints when a repeat call DOES have work to do', async () => {
+    // Guard the guard: `alreadyRecorded` must not swallow a real repoint.
+    await retireCharacterId(dir, 'a', 'b');
+    await retireCharacterId(dir, 'c', 'b');
+    await retireCharacterId(dir, 'b', 'd'); // repoints a and c onto d
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ a: 'd', c: 'd', b: 'd' });
+  });
+```
+
 - [ ] **Step 6: Export the one-shot stamp**
 
 Append to the module:
@@ -735,20 +812,24 @@ Append to the module:
  *  over whatever `supersededBy` the operator still has on disk to repair. */
 export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boolean> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const path = castIdHistoryPath(bookDir);
-    const raw = await readJson<CastIdHistory>(path).catch(() => undefined);
+    const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir)).catch(() => undefined);
     if (raw === null || raw === undefined) return false;
     if (!isWellFormedHistory(raw)) {
       console.warn(
-        `[cast-id-history] ${path} has an unexpected shape — skipping the #2128 one-shot stamp rather than ` +
-          `overwriting it with an empty history.`,
+        `[cast-id-history] ${castIdHistoryPath(bookDir)} has an unexpected shape — skipping the #2128 ` +
+          `one-shot stamp rather than overwriting it with an empty history.`,
       );
       return false;
     }
     if (raw.recordedAtSeq !== undefined) return false;
     const history: CastIdHistory = { ...raw, seq: repairSeq(raw) };
     bumpSeqAndStamp(history, []);
-    await writeJsonAtomic(path, history);
+    /* Written as `writeJsonAtomic(castIdHistoryPath(bookDir), …)`, NOT via a
+       `const path` local. Review round 1 (C2): guard 5 counts write sites by
+       matching that literal text, so hoisting the path into a variable makes
+       the one new write site this lane adds invisible to the guard that exists
+       to see write sites. */
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return true;
   });
 }
@@ -780,7 +861,7 @@ git commit -m "feat(server): stamp a monotonic seq and per-key markers on cast-i
 ### Task 3: `matchedHistoryKeys` on the resolver
 
 **Files:**
-- Modify: `server/src/store/cast-resolve.ts:13-58` (the `CastResolution` interface),
+- Modify: `server/src/store/cast-resolve.ts:13-29` (the `CastResolution` interface),
   `:99-106` (the history maps), `:166-193` (the three non-exact branches)
 - Test: `server/src/store/cast-resolve.test.ts`
 
@@ -850,7 +931,9 @@ Expected: FAIL — `matchedHistoryKeys` is `undefined` on every tier.
 
 - [ ] **Step 3: Add the field to `CastResolution`**
 
-After the `via` field (`cast-resolve.ts:57`):
+After the `via` field, which is `cast-resolve.ts:28` — the interface closes at `:29`.
+(Round 1, I6: `:57` is prose inside `buildCastResolver`'s JSDoc, so inserting there puts
+the new field in a comment.)
 
 ```ts
   /** #2128 — every RAW `supersededBy` key that matched, for the two history
@@ -1003,7 +1086,15 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
       expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 2 }, history())).toBe(false);
     });
     it('takes the MAX over every matched key (fail-closed)', () => {
-      const h = history({ recordedAtSeq: { a: 2, b: 7 }, supersededBy: { a: 'mairin', b: 'mairin' } });
+      /* `seq: 9` is NOT decoration — the helper defaults to 5, and a
+         `castHistorySeq` of 7 against a file seq of 5 trips the counter-reset
+         guard and returns 'unknown' before the max is ever computed. Review
+         round 1 (I7) caught the second assertion passing for that reason. */
+      const h = history({
+        seq: 9,
+        recordedAtSeq: { a: 2, b: 7 },
+        supersededBy: { a: 'mairin', b: 'mairin' },
+      });
       expect(isAudioCurrent(res('normalised-history', ['a', 'b']), { castHistorySeq: 4 }, h)).toBe(false);
       expect(isAudioCurrent(res('normalised-history', ['a', 'b']), { castHistorySeq: 7 }, h)).toBe(true);
     });
@@ -1020,17 +1111,25 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
     });
     it('no recordedAtSeq FIELD — never been through the lane', () => {
       expect(
-        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, history({ recordedAtSeq: undefined })),
+        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 4 }, history({ recordedAtSeq: undefined })),
       ).toBe('unknown');
     });
     it('counter reset — the file counter is below a render stamp', () => {
-      expect(
-        isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, history({ seq: 5 })),
-      ).toBe('unknown');
+      // helper default seq is 5; the render claims 9, which it cannot have read.
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, history())).toBe('unknown');
+    });
+    it('NO seq at all — the conjunctive form of the guard fails open (round 1, C1)', () => {
+      /* `recordedAtSeq` present, `seq` dropped in transit. Under
+         `finite(history.seq) && …` this returned `true` and cleared the row. */
+      const h = history({ seq: undefined, recordedAtSeq: { mayrin: 3 } });
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, h)).toBe('unknown');
     });
     it('a non-finite marker', () => {
+      /* `castHistorySeq: 4` (not 9) so this reaches the marker loop instead of
+         being short-circuited by the counter-reset guard — round 1 (I8) caught
+         it passing for the wrong reason, which made its Step 5 mutant inert. */
       const h = history({ recordedAtSeq: { mayrin: Number.NaN } });
-      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 9 }, h)).toBe('unknown');
+      expect(isAudioCurrent(res('history', ['mayrin']), { castHistorySeq: 4 }, h)).toBe('unknown');
     });
     it('a non-finite castHistorySeq', () => {
       expect(
@@ -1061,7 +1160,7 @@ describe('#2128 — the two hazard scenarios', () => {
        Revision 3 had `restoreSupersededId` REPLAY the stashed marker (3),
        making 4 >= 3 true and clearing a row whose audio is the narrator's. It
        stamps the CURRENT seq instead, so the row correctly stays listed. */
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');   // seq 1, mayrin@1
     await forgetSupersededId(dir, 'mayrin');            // seq 2
     const renderedWithNoAlias = { castHistorySeq: 2 };  // narrator bytes
@@ -1080,7 +1179,7 @@ describe('#2128 — the two hazard scenarios', () => {
        whichever row won. A render made while the alias pointed at `sourceId`
        used `sourceId`'s voice, so its bytes are stale even though the KEY never
        changed. This is what "recordedAtSeq tracks the CURRENT target" buys. */
-    const dir = await tmpBook();
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');       // seq 1, mayrin@1
     const renderedAgainstMairin = { castHistorySeq: 1 };
     await retireCharacterId(dir, 'mairin', 'dame-alina');   // seq 2, mayrin repointed@2
@@ -1196,8 +1295,18 @@ export function isAudioCurrent(
      so a file counter below a render's stamp means the file was rebuilt from
      nothing. With `repairSeq` on load this fires only on that path, and only
      transiently — once writes accumulate past the old stamps it stops firing,
-     which is correct, because by then the rebuilt file's own markers govern. */
-  if (finite(history.seq) && history.seq < stamp) return 'unknown';
+     which is correct, because by then the rebuilt file's own markers govern.
+
+     `!finite`, NOT `finite(...) && ...`. Review round 1 (Critical): the
+     conjunctive form fails OPEN — `seq?: number` is optional, so an object
+     that has `recordedAtSeq` but no `seq` (a hand-narrowed subset, a
+     merge conflict, a hand-edit) skips the guard entirely and falls through to
+     `stamp >= highest`, which can return `true`. That is spine rule 2's exact
+     shape on the one axis this codebase actually fails, and guard 3 is
+     call-graph-blind so it cannot see a subset built into a variable.
+     `loadCastIdHistory` always supplies a numeric `seq`, so this costs a
+     correctly-threaded object nothing. */
+  if (!finite(history.seq) || history.seq < stamp) return 'unknown';
 
   let highest = 0;
   for (const key of resolution.matchedHistoryKeys ?? []) {
@@ -1301,7 +1410,12 @@ Create `server/src/store/cast-history-threading.guard.test.ts`:
    - Scans `server/src/**/*.ts` (excluding `*.test.ts`) and
      `scripts/repair-cast-id-drift.mjs`. Any other `.mjs` caller is invisible.
    - Comment/string text is stripped before matching, so a call quoted inside a
-     doc comment neither fires nor masks a real one. */
+     doc comment neither fires nor masks a real one. `blankOutOpaque` does NOT
+     understand regex literals, so a `/'/` in scanned source would blank forward
+     to the next quote. Mitigated, not closed, by the allowlist's `count` check
+     firing in BOTH directions on the two files that do contain literals — those
+     act as a live-fire canary: if the scanner started blanking real code, their
+     counts would drop and the suite would redden. */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -1402,8 +1516,9 @@ const ALLOWLIST: Array<{ file: string; count: number; reason: string }> = [
     file: 'scripts/repair-cast-id-drift.mjs',
     count: 1,
     reason:
-      "resolveTierBId's idOnlyResolver is id-shape-only by design (empty history on purpose, see its doc " +
-      'comment). planBookRepairs\'s historyResolver was the OTHER literal here and now takes the whole object.',
+      "planBookRepairs's `idOnlyResolver` (:742, passed to resolveTierBId) is id-shape-only BY DESIGN — " +
+      'empty history on purpose, built once per book, see resolveTierBId\'s doc comment. It never calls ' +
+      'isAudioCurrent. planBookRepairs\'s historyResolver was the OTHER literal here and now takes the whole object.',
   },
 ];
 
@@ -1458,9 +1573,10 @@ describe('guard 3 — the loaded CastIdHistory is threaded whole (#2128)', () =>
 });
 ```
 
-If `globSync` is not available from `node:fs` on the pinned Node version, use the
-project's existing directory-walk helper — `cast-lock.guard.test.ts` already walks
-`server/src`; reuse its walker rather than adding a dependency.
+**`globSync` is not available on Node 20** (`fs.globSync` landed in 22) — round 1 (M17).
+Do not write it. `server/src/workspace/cast-lock.guard.test.ts` already walks `server/src`
+recursively; **copy that walker** rather than adding a dependency or a second import from
+`node:fs` (a duplicate `import … from 'node:fs'` also trips `no-duplicate-imports`).
 
 - [ ] **Step 2: Run guard 3 and watch it fail on the real tree**
 
@@ -1471,7 +1587,9 @@ Expected: FAIL on `scripts/repair-cast-id-drift.mjs` — **2** literals found, 1
 
 `main()` already loads the whole object (`repair-cast-id-drift.mjs:2335`) and
 `collectSegmentOrphans` already threads it whole (`:2170`), so the correct object is in
-scope. Replace `:830-834`:
+scope. Replace **`:829-835`** — `:829` is `const historyResolver =` and `:835` is the
+closing `});`, so the spec's `:830-834` leaves a dangling assignment and an orphan `});`
+(round 1, I5; the spec §1 carries the same error):
 
 ```js
   const historyResolver =
@@ -1522,14 +1640,56 @@ const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'cast-id-
 
 /** Indexed assignment, never comparison. */
 export const ASSIGN_RE = /supersededBy\[[^\]]+\]\s*=(?!=)/g;
+const WRITE_RE = /await writeJsonAtomic\(castIdHistoryPath/g;
+const STAMP_RE = /bumpSeqAndStamp\(/g;
+
+/** Split the module at top-level `function`/`export ... function` boundaries,
+ *  so "this write is paired with a stamp" is asked PER FUNCTION rather than
+ *  over the whole file — a file-wide count is satisfied by nine stamps in one
+ *  writer and none in the other eight. */
+export function topLevelFunctions(src: string): Array<{ name: string; body: string }> {
+  const starts: Array<{ name: string; at: number }> = [];
+  const re = /^(?:export )?(?:async )?function (\w+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) starts.push({ name: m[1], at: m.index });
+  return starts.map((s, i) => ({
+    name: s.name,
+    body: src.slice(s.at, i + 1 < starts.length ? starts[i + 1].at : src.length),
+  }));
+}
 
 describe('guard 5 — the stamp pairing (#2128)', () => {
-  it('pairs every writeJsonAtomic with a bumpSeqAndStamp', () => {
-    const writes = SRC.match(/await writeJsonAtomic\(castIdHistoryPath/g)?.length ?? 0;
-    const stamps = SRC.match(/bumpSeqAndStamp\(/g)?.length ?? 0;
-    // 8 writers + 1 stamp helper definition + 1 call inside stampRecordedAtSeqIfAbsent.
-    expect(writes).toBe(9);
-    expect(stamps).toBe(writes + 1); // +1 for the function's own declaration
+  const fns = topLevelFunctions(SRC);
+
+  /* Round 1 (C2): the first version of this guard applied ASSIGN_RE only to
+     synthetic strings and asserted two file-wide integers, so it checked
+     nothing it claimed and was red as written. These three assertions run
+     against the real module. */
+
+  it('finds the write sites at all — a scan matching nothing must not pass green', () => {
+    expect(SRC.match(WRITE_RE)?.length ?? 0).toBeGreaterThanOrEqual(9);
+    expect(SRC.match(ASSIGN_RE)?.length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  it('pairs every writing function with a bumpSeqAndStamp before its write', () => {
+    const unpaired = fns
+      .filter((f) => new RegExp(WRITE_RE.source).test(f.body))
+      .filter((f) => {
+        const writeAt = f.body.search(new RegExp(WRITE_RE.source));
+        const stampAt = f.body.search(new RegExp(STAMP_RE.source));
+        return stampAt < 0 || stampAt > writeAt;
+      })
+      .map((f) => f.name);
+    expect(unpaired).toEqual([]);
+  });
+
+  it('leaves no supersededBy ASSIGNMENT in a function that never stamps', () => {
+    const unstamped = fns
+      .filter((f) => new RegExp(ASSIGN_RE.source).test(f.body))
+      .filter((f) => !new RegExp(STAMP_RE.source).test(f.body))
+      .map((f) => f.name);
+    // `bumpSeqAndStamp` itself assigns into its own maps, not `supersededBy`.
+    expect(unstamped).toEqual([]);
   });
 
   it('matches an indexed ASSIGNMENT', () => {
@@ -1544,9 +1704,16 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
 });
 ```
 
-Adjust the two expected counts to whatever Task 2 actually produced — then **verify the
-count check fires in both directions** by adding a stray `writeJsonAtomic(castIdHistoryPath(...))`
-and confirming the test reddens.
+**Neutralisation proof, run by hand and recorded in the commit body:** delete the
+`bumpSeqAndStamp(...)` call from `forgetSupersededId` and confirm the pairing test names
+`forgetSupersededId`; move a `bumpSeqAndStamp` call to *after* its `writeJsonAtomic` and
+confirm the same test still catches it. If either mutation stays green, the guard is
+inert and must be fixed before the task closes.
+
+**Note the blind spot this shape keeps:** `restoreSupersededId` has an assignment AND a
+stamp, but its two early returns write nothing — the function-level pairing cannot tell a
+stamped early return from an unstamped one. That case is covered by Task 2's
+"restoreSupersededId's early returns leave markers untouched" behavioural test, not here.
 
 - [ ] **Step 6: Run both guards and the full store suite**
 
@@ -1578,7 +1745,8 @@ git commit -m "test(server): guard whole-history threading and the stamp pairing
 **Files:**
 - Modify: `server/src/audio/finalize-chapter-write.ts:49-61` (`ChapterSegmentsFile`),
   `:63+` (`FinalizeChapterAudioInput`), `:324-335` (the built object)
-- Modify: `server/src/audio/segments-io.ts:51-53` (`SegmentsFile`)
+- Modify: `server/src/audio/segments-io.ts` — `SegmentsFile` is `:51-96`; insert after
+  `synthesizedAt` at `:54`
 - Modify: `server/src/routes/generation.ts:1873`
 - Modify: `server/src/routes/chapter-qa-repair.ts:689`, `server/src/routes/chapter-splice.ts:483`
 - Test: `server/src/audio/finalize-chapter-write.test.ts`,
@@ -1610,19 +1778,19 @@ In `server/src/audio/finalize-chapter-write.test.ts`:
 ```ts
 it('writes the castHistorySeq the caller resolved against (#2128)', async () => {
   await finalizeChapterAudioWrite({ ...baseInput, castHistorySeq: 7 });
-  const written = JSON.parse(await fs.readFile(segPath, 'utf8'));
+  const written = JSON.parse(readFileSync(segPath, 'utf8'));
   expect(written.castHistorySeq).toBe(7);
 });
 
 it('writes castHistorySeq 0 as a real value, not an omission (#2128)', async () => {
   await finalizeChapterAudioWrite({ ...baseInput, castHistorySeq: 0 });
-  const written = JSON.parse(await fs.readFile(segPath, 'utf8'));
+  const written = JSON.parse(readFileSync(segPath, 'utf8'));
   expect(written).toHaveProperty('castHistorySeq', 0);
 });
 
 it('omits castHistorySeq entirely when the caller supplies none', async () => {
   await finalizeChapterAudioWrite(baseInput);
-  const written = JSON.parse(await fs.readFile(segPath, 'utf8'));
+  const written = JSON.parse(readFileSync(segPath, 'utf8'));
   expect(written).not.toHaveProperty('castHistorySeq');
 });
 ```
@@ -1635,7 +1803,7 @@ negative the whole redesign exists to prevent**:
 it('carries the prior castHistorySeq forward and never refreshes it (#2128)', async () => {
   await writeSegmentsFile({ ...priorSegments, castHistorySeq: 3 });
   await runTheSplice();               // (or runTheRepair())
-  const after = JSON.parse(await fs.readFile(segPath, 'utf8'));
+  const after = JSON.parse(readFileSync(segPath, 'utf8'));
   // A partial rewrite must NOT launder a stale row into looking current.
   expect(after.castHistorySeq).toBe(3);
   // `synthesizedAt` still refreshes — that is its existing, unchanged meaning.
@@ -1645,7 +1813,7 @@ it('carries the prior castHistorySeq forward and never refreshes it (#2128)', as
 it('omits castHistorySeq when the prior file had none (#2128)', async () => {
   await writeSegmentsFile({ ...priorSegments, castHistorySeq: undefined });
   await runTheSplice();
-  expect(JSON.parse(await fs.readFile(segPath, 'utf8'))).not.toHaveProperty('castHistorySeq');
+  expect(JSON.parse(readFileSync(segPath, 'utf8'))).not.toHaveProperty('castHistorySeq');
 });
 ```
 
@@ -1955,17 +2123,35 @@ after `segments` (and add `audioCurrent` to the `required` list alongside
 **Decision, pinned:** the wire type is a **string enum**, not `boolean | string`. OpenAPI
 cannot express `true | false | 'unknown'` as one scalar without a `oneOf`, which
 `openapi-typescript` renders as an awkward union and which every consumer would have to
-narrow. The server serialises `String(currency)`; the frontend parses it back at the slice
-boundary. Note this in the collector's doc comment so the two shapes are not confused.
+narrow.
 
-Add the conversion at the route boundary in `book-state.ts`, not in the collector — the
-collector's own type stays `AudioCurrency` for the repair-pass consumer:
+**The frontend does NOT parse it back.** It stays `'true' | 'false' | 'unknown'` all the
+way through `src/lib/types.ts`, `src/store/cast-slice.ts` and `src/views/cast.tsx`, whose
+filters compare against the string `'true'`. Round 1 (I14): the first draft said the
+frontend "parses it back at the slice boundary" while declaring the mirrors as strings —
+an implementer who followed the prose would have inverted both of Task 8's buckets, since
+`false === 'true'` is always false. **Server side is `AudioCurrency`; wire and frontend are
+strings; the boundary is `book-state.ts` and nowhere else.**
+
+Convert at the route boundary, not in the collector — the collector's own type stays
+`AudioCurrency` for the repair-pass consumer, which imports it directly:
 
 ```ts
+    /* The `.catch(() => ({}))` must be INSIDE the awaited call and typed, or
+       the result widens to `Record<…> | {}` and `v` will not narrow (round 1,
+       M19). Annotating the local is the smallest fix. */
+    const rawFallbacks: Record<string, OrphanedCharacterFallback> =
+      await collectOrphanedCharacterFallbacks(
+        bookDir,
+        state.chapters,
+        (cast?.characters ?? []) as Array<{ id: string }>,
+        orphanedCharacterFallbackHistoryFile,
+      ).catch(() => ({}));
     const orphanedCharacterFallbacks = Object.fromEntries(
-      Object.entries(await collectOrphanedCharacterFallbacks(...).catch(() => ({}))).map(
-        ([id, v]) => [id, { ...v, audioCurrent: String(v.audioCurrent) }],
-      ),
+      Object.entries(rawFallbacks).map(([id, v]) => [
+        id,
+        { ...v, audioCurrent: String(v.audioCurrent) },
+      ]),
     );
 ```
 
@@ -1985,6 +2171,34 @@ Then update `src/lib/types.ts:457-468` and `src/store/cast-slice.ts:61-73`, addi
 **Do not hand-edit `src/lib/api-types.ts`** — it is generated. If the regeneration
 produces no diff, the `openapi.yaml` edit did not land in a schema position; fix the YAML
 rather than the output.
+
+- [ ] **Step 6b: Update the two optimistic reject/undo reducers**
+
+Round 1 (I13). `src/store/cast-slice.ts`'s `applyOrphanRejection` (`:642-660`) and
+`undoOrphanRejection` (`:671-689`) rewrite `entry.resolution` and
+`entry.resolvedCharacterId` from the server's response but never touch `audioCurrent`.
+That reproduces **the exact divergence #2129 is**, one layer up: per known limit 2,
+`restoreSupersededId` stamps the current `seq`, so after an Undo the server's next
+`audioCurrent` is `'false'` — yet the row re-enters the auto-reconciled bucket carrying its
+stale pre-reject value and is filed under "audio is current" until the next hydrate.
+
+The reducers cannot compute currency (they have no history and no segments files), and
+guessing would be a second answer. **Set it to `'unknown'`** in both, which the bucketing
+already treats as needs-a-re-render — fail-closed, and correct on the next hydrate:
+
+```ts
+      /* #2129 — a reject/undo changes what this id RESOLVES to, which can also
+         change whether its rendered audio is current; this reducer cannot know
+         which (no history, no segments files here). `'unknown'` is the honest
+         value and buckets as needs-a-re-render, so the optimistic update can
+         never claim "audio is current" on the strength of a stale field. The
+         next book-state hydrate replaces it with the server's real verdict. */
+      entry.audioCurrent = 'unknown';
+```
+
+with a slice test per reducer asserting the field moves to `'unknown'` and a
+`cast.test.tsx` case asserting the row lands in the needs-a-re-render section after an
+Undo.
 
 - [ ] **Step 7: Run the server and frontend suites**
 
@@ -2248,6 +2462,13 @@ git commit -m "feat(frontend): split the auto-reconciled orphan disclosure by au
   `collectSegmentOrphans` (`:2155`), `planBookRepairs`'s zero-segment branch
   (`:1118-1142`), `main()`'s `--apply` tail (`:2611-2622`), the `mods` bundle (`:2032-2050`)
 - Modify: `server/src/store/cast-resolve.repair-pass-contract.test.ts:78, 87, 95`
+- Modify: `scripts/tests/repair-cast-id-drift.test.mjs` — **eight existing
+  `buildOrphansFromSegments(segs, resolver)` call sites** at `:2589, 2606, 2622, 2629,
+  2649, 2698, 2712, 2727` (`:2698`/`:2712` bind the whole result as `run1`/`run2`). Every
+  one takes the new signature, or the branch lands red: Step 3's body calls
+  `isAudioCurrent(...)` unconditionally on the first segment, so an `undefined` fourth
+  argument throws `TypeError: isAudioCurrent is not a function`. Round 1 (C3) — the first
+  draft of this plan named only the server-side contract test.
 - Test: `scripts/tests/repair-cast-id-drift.test.mjs` (exists — extend it, do not create a
   second file)
 
@@ -2284,84 +2505,131 @@ precisely register row A32's `the-torment` / `lightning-dave` shape.
 
 - [ ] **Step 1: Write the failing tests**
 
+**Framework, verified — this file is NOT Vitest.** `scripts/tests/*.test.mjs` run under
+`node --test` via `npm run test:hooks` (`scripts/run-hooks-tests.mjs` globs them and spawns
+`node --test`); the root `vitest.config.ts` `include` is `src/**` + `skills/**` and never
+touches `scripts/`. So: `import { test, describe } from 'node:test'` and
+`import assert from 'node:assert/strict'` — **`test`, not `it`; `assert.equal`, not
+`expect`.** Both are already imported at the top of the target file.
+
 ```js
 describe('#2128 — a re-rendered chapter drops off the repair list', () => {
-  it('drops an alias id whose every chapter was re-rendered above its marker', () => {
+  test('drops an alias id whose every chapter was re-rendered above its marker', () => {
     const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 5, recordedAtSeq: { mayrin: 3 } };
     const segs = [{ chapterId: 1, castHistorySeq: 5, segments: [{ characterId: 'mayrin' }] }];
     const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, isAudioCurrent);
-    expect(orphans.has('mayrin')).toBe(false);
+    assert.equal(orphans.has('mayrin'), false);
   });
 
-  it('KEEPS an id whose chapter was not re-rendered', () => {
+  test('KEEPS an id whose chapter was not re-rendered', () => {
     const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 5, recordedAtSeq: { mayrin: 3 } };
     const segs = [{ chapterId: 1, castHistorySeq: 1, segments: [{ characterId: 'mayrin' }] }];
     const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, isAudioCurrent);
-    expect(orphans.get('mayrin').segments).toBe(1);
+    assert.equal(orphans.get('mayrin').segments, 1);
   });
 
-  it('KEEPS every id in a book whose history has no recordedAtSeq field', () => {
-    const history = { schema: 1, supersededBy: { mayrin: 'mairin' } };
+  test('KEEPS every id in a book whose history has no recordedAtSeq field', () => {
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 99 };
     const segs = [{ chapterId: 1, castHistorySeq: 99, segments: [{ characterId: 'mayrin' }] }];
     const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, isAudioCurrent);
-    expect(orphans.has('mayrin')).toBe(true); // 'unknown' LISTS
+    assert.equal(orphans.has('mayrin'), true); // 'unknown' LISTS
   });
 
-  it("KEEPS an id when the file counter is below a render's stamp", () => {
+  test("KEEPS an id when the file counter is below a render's stamp", () => {
     const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 2, recordedAtSeq: { mayrin: 1 } };
     const segs = [{ chapterId: 1, castHistorySeq: 99, segments: [{ characterId: 'mayrin' }] }];
     const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, isAudioCurrent);
-    expect(orphans.has('mayrin')).toBe(true);
+    assert.equal(orphans.has('mayrin'), true);
   });
 
-  it('reports a current non-exact id as such, not as never-rendered', () => {
+  test('KEEPS an id when the history object has recordedAtSeq but no seq', () => {
+    // Round 1 (C1) — the fail-open shape, pinned on the consumer side too.
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, recordedAtSeq: { mayrin: 1 } };
+    const segs = [{ chapterId: 1, castHistorySeq: 9, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, isAudioCurrent);
+    assert.equal(orphans.has('mayrin'), true);
+  });
+
+  test('reports a current non-exact id as such, not as never-rendered', () => {
     // A 'normalised-id'-tier id, re-rendered: skips `orphans`, but it DID render.
     const history = { schema: 1, supersededBy: {}, seq: 1, recordedAtSeq: {} };
     const segs = [{ chapterId: 1, castHistorySeq: 1, segments: [{ characterId: 'The_Torment' }] }];
     const { orphans, currentNonExact } = buildOrphansFromSegments(
       segs, resolverFor(history, [{ id: 'the-torment' }]), history, isAudioCurrent,
     );
-    expect(orphans.has('The_Torment')).toBe(false);
-    expect(currentNonExact.has('The_Torment')).toBe(true);
+    assert.equal(orphans.has('The_Torment'), false);
+    assert.equal(currentNonExact.has('The_Torment'), true);
   });
 
-  it('planBookRepairs distinguishes current from never-rendered, and auto-records neither', () => {
-    const { reportOnly, autoRecord } = planBookRepairs({
-      ...baseInput,
-      orphans: new Map(),
-      currentNonExact: new Set(['The_Torment']),
-      candidateIds: ['The_Torment', 'never-spoke'],
-    });
-    expect(autoRecord).toEqual([]);
-    expect(reportOnly.find((r) => r.id === 'The_Torment').reason).toMatch(/every rendered segment is current/);
-    expect(reportOnly.find((r) => r.id === 'never-spoke').reason).toMatch(/zero rendered segments/);
+  test('orphans membership WINS over currentNonExact across chapters', () => {
+    // Current in ch1, stale in ch2. Without the subtraction at the end of
+    // buildOrphansFromSegments the id lands in BOTH, and planBookRepairs then
+    // reads the wrong one — the "any-current => clean" direction that re-opens #2107.
+    const history = { schema: 1, supersededBy: {}, seq: 4, recordedAtSeq: {} };
+    const segs = [
+      { chapterId: 1, castHistorySeq: 4, segments: [{ characterId: 'The_Torment' }] },
+      { chapterId: 2, segments: [{ characterId: 'The_Torment' }] }, // no stamp -> 'unknown'
+    ];
+    const { orphans, currentNonExact } = buildOrphansFromSegments(
+      segs, resolverFor(history, [{ id: 'the-torment' }]), history, isAudioCurrent,
+    );
+    assert.equal(orphans.has('The_Torment'), true);
+    assert.equal(currentNonExact.has('The_Torment'), false);
+  });
+
+  test('planBookRepairs distinguishes current from never-rendered, and auto-records neither', () => {
+    /* `planBookRepairs(input, deps)` — verified signature at
+       repair-cast-id-drift.mjs:716-718. `input` destructures
+       `{ liveCast, history, cacheNameIndex, bakNameIndex, orphans,
+       cacheAvailable = false, bakAvailable = false }` plus this lane's new
+       `currentNonExact`. There is NO `candidateIds` field: the ids come from
+       the name indexes, so the fixture must seed `bakNameIndex`/`cacheNameIndex`
+       the way this file's existing planBookRepairs cases do. Round 1 (I10)
+       caught the first draft inventing a parameter and driving no branch. */
+    const { reportOnly, autoRecord } = planBookRepairs(
+      {
+        ...baseInput, // liveCast, history, both name indexes, cacheAvailable/bakAvailable: true
+        orphans: new Map(),
+        currentNonExact: new Set(['The_Torment']),
+      },
+      deps,
+    );
+    assert.deepEqual(autoRecord, []);
+    // Matches Step 5's string exactly — "every rendered segment carrying this id
+    // is already current". Round 1 (I10): the first draft asserted a phrase the
+    // implementation never produces.
+    assert.match(reportOnly.find((r) => r.id === 'The_Torment').reason, /is already current/);
+    assert.match(reportOnly.find((r) => r.id === 'never-spoke').reason, /zero rendered segments/);
   });
 });
 ```
 
-Plus an `--apply` test:
+Plus an `--apply` test, in the same framework (the file already imports `node:fs` as `fs`
+and `node:net` — it has an existing live-server-refusal case to model on):
 
 ```js
-it('--apply performs the one-shot stamp on a scanned book with no auto-records', async () => {
+test('--apply performs the one-shot stamp on a scanned book with no auto-records', async () => {
   // The books carrying pre-lane aliases are exactly the ones A33 already visits.
-  const dir = await bookWithHistory({ schema: 1, supersededBy: { mayrin: 'mairin' } });
+  const dir = bookWithHistory({ schema: 1, supersededBy: { mayrin: 'mairin' } });
   await runMain(['--apply']);
-  const after = JSON.parse(await fs.readFile(historyPath(dir), 'utf8'));
-  expect(after.recordedAtSeq).toEqual({ mayrin: 1 });
+  const after = JSON.parse(fs.readFileSync(historyPath(dir), 'utf8'));
+  assert.deepEqual(after.recordedAtSeq, { mayrin: 1 });
 });
 
-it('still refuses --apply while a server is live', async () => {
+test('still refuses --apply while a server is live', async () => {
   // Pin the existing gate — #2128's counter depends on a single writer.
+  // Model this on the file's existing port-probe refusal case rather than
+  // inventing a second server fixture.
   const server = await listenOn(port);
   await runMain(['--apply']);
-  expect(process.exitCode).toBe(1);
+  assert.equal(process.exitCode, 1);
   await server.close();
 });
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `npx vitest run scripts/tests/repair-cast-id-drift.test.mjs -t "#2128"`
+Run: `node --test scripts/tests/repair-cast-id-drift.test.mjs`
 Expected: FAIL — `buildOrphansFromSegments` takes two arguments.
 
 - [ ] **Step 3: Change `buildOrphansFromSegments`**
@@ -2435,7 +2703,9 @@ and in `collectSegmentOrphans`:
 
 - [ ] **Step 5: Rewrite the zero-segment branch and its stale invariant comment**
 
-Replace `:1118-1142`'s comment and branch:
+Replace **`:1116-1142`** — the comment block starts at `:1116`
+(`// --- review round 1, Important 2, guard 3: …`), so replacing from `:1118` leaves two
+orphaned lines ending mid-sentence above the new comment (round 1, M16):
 
 ```js
       // #2107, widened by owner decision (2026-08-05), then narrowed again by
@@ -2522,7 +2792,9 @@ function against **both** real server implementations.
 
 - [ ] **Step 8: Run everything**
 
-Run: `npx vitest run scripts/ && cd server && npx vitest run src/store/cast-resolve.repair-pass-contract.test.ts`
+Run: `npm run test:hooks` (this is what runs `scripts/tests/*.test.mjs` — `npx vitest run
+scripts/` matches nothing and would report a vacuous green), then
+`cd server && npx vitest run src/store/cast-resolve.repair-pass-contract.test.ts`.
 Then a real dry run against the workspace: `node scripts/repair-cast-id-drift.mjs`
 Expected: the dry run still reports **23 rows / 188 segments** — no history file has been
 through the one-shot stamp yet, and no chapter has been re-rendered, so day-one output is
@@ -2758,6 +3030,55 @@ than discovered:
 - Pruning dangling `supersededBy` entries (Task 1's rationale).
 - Per-segment currency stamping — the file-level stamp is confined to the full-render path.
 - A second candidate ranker on any surface — plan 278 invariant 7.
+
+## Review history
+
+**Rev 1 → 2** (Premium `assumption-checker` pass, 2026-08-06). Declared **not converged**.
+Three Criticals and eleven lesser findings, all verified against source before acting:
+
+- **The predicate itself fail-open.** `if (finite(history.seq) && history.seq < stamp)`
+  meant an object with `recordedAtSeq` but no `seq` — `seq?` is optional, so a hand-narrowed
+  subset type-checks — skipped the counter-reset guard and could return `true`. Spine rule
+  2's exact shape, inside the one function the whole lane exists to make trustworthy. Now
+  `!finite(history.seq) || …`, with its own test.
+- **Guard 5 asserted nothing it claimed, and was red as written.** `ASSIGN_RE` was
+  exercised only against synthetic strings and never applied to the module; the two
+  file-wide counts were wrong against the implementation Task 2 specifies, and the
+  "adjust the counts" escape hatch would have made the lane's one new write site
+  permanently invisible. Rewritten to scan per top-level function, with a hand-run
+  neutralisation proof and its residual blind spot stated.
+- **Eight unlisted callers.** `scripts/tests/repair-cast-id-drift.test.mjs:2589, 2606,
+  2622, 2629, 2649, 2698, 2712, 2727` all call `buildOrphansFromSegments(segs, resolver)`
+  and would have thrown on the new signature.
+- **Wrong test framework** (found while verifying the above, not by the review):
+  `scripts/tests/*.test.mjs` run under `node --test` via `npm run test:hooks`, with
+  `node:test` + `node:assert/strict`. Task 9's block was written in Vitest, and its run
+  command (`npx vitest run scripts/`) matches nothing — a vacuous green.
+- **Three line ranges that produce broken edits**: `cast-create.ts` 126-129 would have
+  deleted `isTaken` (correct: 125-128); `repair-cast-id-drift.mjs` 830-834 leaves a
+  dangling assignment (correct: 829-835 — **the spec §1 carries the same error**);
+  `planBookRepairs`'s comment starts at 1116, not 1118.
+- **Four tests that could not fail or failed against the plan's own code** — two tripped
+  the counter-reset guard before reaching what they meant to assert (making their
+  prescribed mutants inert), one asserted a reason string the implementation never
+  produces and passed a `planBookRepairs` field that does not exist, and #2110's
+  normalised case was already blocked on `main` by the existing key check.
+- **Task 2's tests invented a harness.** No `tmpBook()` exists;
+  `cast-id-history.test.ts` is sync-fs-only with a module-level `dir` and a
+  `writeTestHistoryFile` helper, and a direct write to `castIdHistoryPath` ENOENTs.
+- **Two defects the plan created rather than inherited**, both added as work: a repeat
+  `retireCharacterId` would restamp and re-list a whole book (no idempotence guard existed
+  — invisible until `seq` made a redundant write observable), and the frontend's optimistic
+  reject/undo reducers never touch `audioCurrent`, reproducing #2129's own divergence one
+  layer up.
+- Plus `cast-resolve.ts`'s `CastResolution` cited as `:13-58`/`:57` when it is `:13-29`
+  with `via` at `:28` (inserting at `:57` puts the field in a comment), a `node:fs`
+  `globSync` that does not exist on Node 20, an `"entryies"` plural, a `.catch(() => ({}))`
+  that breaks narrowing, and the guard-3 allowlist misattributing `idOnlyResolver`.
+
+**Carry back to the spec:** §1's `repair-cast-id-drift.mjs:830-834` should read `829-835`.
+Not corrected in the spec itself — the plan is the artifact an implementer follows, and the
+spec's own "Review history" convention is to record rather than silently rewrite.
 
 ## Shipping
 
