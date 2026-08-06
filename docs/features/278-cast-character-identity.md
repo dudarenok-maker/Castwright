@@ -187,15 +187,22 @@ owner: null
    resolution for both (review round 1) — the same normalised taken-set
    (built from `existingIds` **and** `historyKeys`) covers it.
 9. **An interim `cast.json` write never removes an id from the persisted
-   roster** (srv-87, #2086). The three interim ("Cast so far") writes
-   (`analysis.ts:3633`, `:3845`, `:5613`) go through
+   roster** (srv-87, #2086). The three interim ("Cast so far") writes — two
+   inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+   (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+   those two functions — cited by symbol, not line: a line citation here was
+   already stale twice over, F2, #2163) — go through
    `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
    which has no id-drift name-fallback and produces no `retirements` — there is
    nothing in its return type for a caller to discard. Only the two
-   authoritative end-of-run writes (`:4885`, `:6148`) apply identity merges and
+   authoritative end-of-run writes (the `mergeAnalysisResultWithExistingCast`
+   call in `runMainAnalyzerJob` and the one in
+   `runSubsetAnalyzerJob`) apply identity merges and
    call `retireCharacterId`. Before this fix, a mid-run death — **or a
    completed run whose `phase1DriftExceeded` gate skipped the authoritative
-   write** (`analysis.ts:4868`; `attributionDriftExceeded` is a normal, logged,
+   write** (`runMainAnalyzerJob`'s `attributionDriftExceeded` call, checked
+   at its two `phase1DriftExceeded` use sites later in the same function;
+   `attributionDriftExceeded` is a normal, logged,
    non-crash outcome, not only a process kill) — could leave a character's id
    durably swapped in `cast.json` with no history record, orphaning that
    character's frozen `<slug>.segments.json` entries to the narrator. Residual
@@ -213,6 +220,56 @@ owner: null
    93/161 before), and *Unlocked* alone still carries 34 orphaned segments
    under `unknown-male`; see the on-box register's A33 row) or a re-render
    to recover.
+10. **A reject's two writes are created together and must be destroyed
+    together** (#2133). `POST /reject-orphan-match` writes BOTH a
+    `rejectedPairs` entry on `cast-id-history.json` and a one-sided
+    `notLinkedTo` edge on `cast.json` — see this same doc's invariant 2 and
+    `rejectedPairs`'s own doc comment on `CastIdHistory`
+    (`server/src/store/cast-id-history.ts`) for why both are needed. Anything
+    that removes one must remove the other, or the survivor becomes a
+    decision about a pairing that no longer exists, applied forever,
+    invisibly:
+    - **`retireCharacterId` dropping a self-loop `rejectedPairs` entry**
+      (`RetireCharacterIdResult.droppedSelfLoopRejections`,
+      `cast-id-history.ts`) — when the id a pair was rejected `to` retires
+      into a replacement that IS that same pair's `from`, the pair becomes
+      nonsensical (`X !-> X`) and is dropped. `retireCharacterId` never
+      touches `cast.json` itself, so it can only report the drop; BOTH
+      production callers (`analysis.ts`'s `recordRetirements` and
+      `cast-merge.ts`'s `performCastMerge`) now act on it, clearing the
+      matching `notLinkedTo` edge in the same write (or the same lock span,
+      for `cast-merge.ts`, which already holds it — rule 1 forbids a second
+      nested `withCastLock` for the same book).
+    - **`DELETE /reject-orphan-match`'s abandoned-half-write path** — the
+      route writes `notLinkedTo` first (unconditional, per its own module
+      doc) and `rejectedPairs` second; if the process dies or 500s between
+      the two and the user never retries, the `notLinkedTo` edge survives
+      with no pair, and the only removal path (`rejectedPairsGoverning`
+      returning a matching pair) can never find one. DELETE now also clears
+      the edge unconditionally, keyed on `orphanedId` directly, alongside the
+      pair-scoped removal (which stays keyed on each governing pair's own
+      `from`, for the `the_torment`/`The-Torment` normalised-collision
+      shape).
+      **Residual, recorded rather than fixed (I3, fix round, #2163):** the
+      endpoint change above is real and tested — it clears the edge for any
+      caller that reaches it — but nothing in the UI reaches it in this
+      exact state. `handleUndoOrphanRejection` (`src/views/cast.tsx`) only
+      fires from `OrphanRejectedChips`, which renders only off
+      `info.rejectedAgainst`, itself derived from `rejectedPairsGoverning`
+      — empty here by construction, since no `rejectedPairs` entry ever
+      landed. So the abandoned-half-write state stays invisible and
+      unreachable from the UI even after this fix; deciding how (or
+      whether) to surface it is a UI design call, deliberately left open
+      rather than folded into this endpoint change.
+    - **A dead `notLinkedTo` target on the read side** is a separate,
+      narrower case (finding B, same #2133 comment): `rejectedPairsGoverning`
+      rule 1 has no liveness check on `to`, so a chip can still name a
+      character no longer in the live cast (folded away by an unrelated
+      merge). The pair is already inert for resolution regardless — the chip
+      is cosmetic and its Undo button would 404 forever, so `src/views/
+      cast.tsx`'s `OrphanRejectedChips` hides it client-side rather than
+      changing `rejectedPairsGoverning`'s deliberately-raw rule-1 semantics
+      or loosening the DELETE route to accept a non-live `characterId`.
 
 ## Deviations from the spec
 

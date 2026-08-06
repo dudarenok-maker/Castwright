@@ -1,0 +1,17 @@
+[
+  ["analyzer/index.ts", "analyzer/gemini.ts"],
+  ["analyzer/gemini.ts", "analyzer/ollama.ts"],
+  ["analyzer/index.ts", "analyzer/gemini.ts", "analyzer/ollama.ts"],
+  ["tts/index.ts", "tts/gemini.ts"],
+  ["tts/voice-mapping.ts", "tts/index.ts", "tts/gemini.ts"],
+  ["tts/index.ts", "tts/sidecar.ts"],
+  ["tts/language.ts", "tts/voice-mapping.ts", "tts/index.ts", "tts/sidecar.ts"],
+  ["tts/voice-mapping.ts", "tts/index.ts", "tts/sidecar.ts"],
+  ["store/manuscripts.ts", "parsers/index.ts", "parsers/epub.ts", "parsers/text.ts"],
+  ["store/manuscripts.ts", "parsers/index.ts", "parsers/epub.ts"],
+  ["store/manuscripts.ts", "parsers/index.ts", "parsers/mobi.ts"],
+  ["workspace/scan.ts", "workspace/chapter-uuid.ts"],
+  ["workspace/scan.ts", "workspace/state-migrate.ts"],
+  ["routes/models-status.ts", "routes/setup-diagnosis.ts", "routes/setup-readiness.ts"],
+  ["routes/setup-diagnosis.ts", "routes/setup-readiness.ts"]
+]

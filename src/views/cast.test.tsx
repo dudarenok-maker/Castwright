@@ -799,6 +799,96 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(section.id).toBe('orphaned-auto-reconciled-list');
     });
 
+    it("#2129, widened by I2 (fix round, #2163) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              // 'alias' — resolved through the id-history side-table
+              // (`'history'`/`'normalised-history'` server-side).
+              mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'marrow', segments: 6 },
+              // 'normalised' — a live id-shape match with no history entry
+              // (`'normalised-id'` server-side). The repair pass can list
+              // THIS exact shape as damage needing a re-render — register
+              // row A32's own fixture (`docs/testing/onbox-acceptance-
+              // register.md`) is a normalised-id match, not a history one
+              // (67-segment `the-torment`, RC2's underscore-vs-hyphen
+              // split) — so per #2107's ruling ("only 'exact' means the
+              // rendered bytes are fine") this must ALSO carry the note,
+              // not be excluded from it.
+              Mayrin_: { resolution: 'normalised' as const, resolvedCharacterId: 'marrow', segments: 2 },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /2 character ids auto-reconciled/i }));
+      const section = screen.getByTestId('orphaned-auto-reconciled');
+      expect(within(section).getByTestId('orphaned-alias-audio-note-mayrin')).toHaveTextContent(
+        /resolves now.*audio may still need a re-render/i,
+      );
+      expect(within(section).getByTestId('orphaned-alias-audio-note-Mayrin_')).toHaveTextContent(
+        /resolves now.*audio may still need a re-render/i,
+      );
+    });
+
+    it('F5 (#2163) — a resolution outside the stale-audio allowlist gets no note, even though it still counts as auto-reconciled', () => {
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              // Not a value the map's real union carries today ('alias' |
+              // 'normalised' | 'unresolved') — stands in for a FUTURE tier
+              // this map might grow that means "the bytes are fine"
+              // (mirroring 'exact' on the richer four-tier union
+              // segments-io.ts/cast-reject-orphan.ts use). Still not
+              // 'unresolved', so it still lands in the auto-reconciled
+              // section (row still shown, still counted) — only the note
+              // must not render for it. This is the exact mutation ("widen
+              // the gate back to a catch-all, `{true && (`") the fix
+              // guards: with the old denylist (`resolution !== 'unresolved'`)
+              // this row got the note too; with the STALE_AUDIO_RESOLUTIONS
+              // allowlist it must not.
+              mayrin: {
+                resolution: 'exact' as unknown as 'alias' | 'normalised' | 'unresolved',
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+              },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const section = screen.getByTestId('orphaned-auto-reconciled');
+      expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(section).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
+    });
+
     it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
@@ -1165,6 +1255,67 @@ describe('CastView Qwen status pill (plan 117)', () => {
         store.getState().cast.orphanedCharacterFallbacks?.['The-Torment']?.rejectedAgainst,
       ).toBeUndefined();
       expect(screen.queryByTestId('orphaned-rejected-chip-The-Torment-marrow')).not.toBeInTheDocument();
+    });
+
+    it('finding B (#2133) — a rejectedAgainst target absent from the live cast renders no chip', () => {
+      // rejectedPairsGoverning's rule 1 has no liveness check on `to`
+      // (cast-resolve.ts:282), so a pair can name an id no longer in the
+      // live cast (e.g. folded away by an unrelated merge since the
+      // reject). The pair is already inert for resolution either way, and
+      // Undo for a dead target would 404 forever — the chip must not
+      // render at all, rather than falling back to the raw id as a label.
+      // 'marrow' (live) sits alongside 'ghost-target' (not in `characters`)
+      // to prove the hide is scoped to the dead entry, not the whole row.
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              coalfall: {
+                resolution: 'unresolved' as const,
+                segments: 67,
+                rejectedAgainst: ['marrow', 'ghost-target'],
+              },
+            },
+          },
+        },
+      });
+      render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+
+      // The row itself still renders (segment count intact).
+      const section = screen.getByTestId('orphaned-needs-decision');
+      expect(within(section).getByText(/67 segments/)).toBeInTheDocument();
+      // The live target's chip renders as usual.
+      expect(screen.getByTestId('orphaned-rejected-chip-coalfall-marrow')).toBeInTheDocument();
+      // The dead target's chip does not — neither under its own id nor any
+      // fallback label.
+      expect(screen.queryByTestId('orphaned-rejected-chip-coalfall-ghost-target')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Not ghost-target/i)).not.toBeInTheDocument();
     });
 
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {

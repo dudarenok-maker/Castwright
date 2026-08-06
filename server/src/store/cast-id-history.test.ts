@@ -7,6 +7,7 @@ import {
   retireCharacterId,
   castIdHistoryPath,
   dropSupersededIdsReclaimedByLiveCast,
+  dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   forgetSupersededId,
   rejectOrphanedId,
@@ -282,6 +283,53 @@ describe('cast id history', () => {
       expect(existsSync(castIdHistoryPath(dir))).toBe(true);
       const history = await loadCastIdHistory(dir);
       expect(history).toEqual({ schema: 1, supersededBy: {} });
+    });
+  });
+
+  describe('dropSupersededTargetsNoLongerLive (#2110)', () => {
+    it('drops a history entry whose TARGET is no longer live, and reports it', async () => {
+      await retireCharacterId(dir, 'anton', 'антон');
+      const dropped = await dropSupersededTargetsNoLongerLive(dir, ['narrator']);
+      expect(dropped).toEqual([{ id: 'anton', supersededBy: 'антон' }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      expect(history.displaced).toEqual({ anton: 'антон' });
+    });
+
+    it('leaves an entry whose target IS live untouched', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededTargetsNoLongerLive(dir, ['eliza', 'narrator']);
+      expect(dropped).toEqual([]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      expect(history.displaced).toBeUndefined();
+    });
+
+    it('drops the dead-target entry while an unrelated live-target entry survives, in the same call', async () => {
+      await retireCharacterId(dir, 'anton', 'антон');
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededTargetsNoLongerLive(dir, ['eliza']);
+      expect(dropped).toEqual([{ id: 'anton', supersededBy: 'антон' }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ 'old-eliza': 'eliza' });
+      expect(history.displaced).toEqual({ anton: 'антон' });
+    });
+
+    it('accumulates displaced entries across multiple drop calls rather than overwriting', async () => {
+      await retireCharacterId(dir, 'anton', 'антон');
+      await dropSupersededTargetsNoLongerLive(dir, []);
+      await retireCharacterId(dir, 'mayrin', 'мэйрин');
+      const dropped = await dropSupersededTargetsNoLongerLive(dir, []);
+      expect(dropped).toEqual([{ id: 'mayrin', supersededBy: 'мэйрин' }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.displaced).toEqual({ anton: 'антон', mayrin: 'мэйрин' });
+    });
+
+    it('returns [] and still writes when nothing needs dropping', async () => {
+      await retireCharacterId(dir, 'old-eliza', 'eliza');
+      const dropped = await dropSupersededTargetsNoLongerLive(dir, ['eliza']);
+      expect(dropped).toEqual([]);
+      expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ 'old-eliza': 'eliza' });
     });
   });
 

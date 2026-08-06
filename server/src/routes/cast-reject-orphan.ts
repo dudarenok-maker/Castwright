@@ -502,6 +502,39 @@ castRejectOrphanRouter.delete(
       for (const pair of matchingPairs) {
         if (removeNotLinked(character, bookId, pair.from)) changed = true;
       }
+      /* #2133 fold finding A — the abandoned-half-write path: POST's
+         `appendNotLinked` can land (writing `{bookId, characterId:
+         orphanedId}` onto this character) and then `rejectOrphanedPair`
+         500s before the pair itself ever reaches `rejectedPairs`. If the
+         user never retries, `governingPairs`/`matchingPairs` above are
+         permanently empty for this `(orphanedId, characterId)` — there is
+         no pair to loop over, so the edge above never gets cleared. Per the
+         same "a reject's two writes are created together and must be
+         destroyed together" invariant (`docs/features/
+         278-cast-character-identity.md`), clear this edge unconditionally,
+         by `orphanedId` directly rather than any pair's `from` — safe even
+         when `matchingPairs` already covered it (removeNotLinked is
+         idempotent, and a same-book `notLinkedTo` entry can only ever be
+         one this route itself wrote; cast-not-linked-to.ts's DELETE 400s on
+         a same-book pair, so it never writes this shape).
+
+         What this closes, precisely (I3, fix round, #2163): this endpoint
+         now clears the edge for ANY caller that reaches it with the right
+         `(bookId, characterId, orphanedId)` triple — that part is real and
+         tested. What it does NOT do is give the UI a way to reach it in
+         the abandoned-half-write state itself: no chip renders for this
+         row (`OrphanRejectedChips` only renders off `info.rejectedAgainst`,
+         itself derived from `rejectedPairsGoverning`, which is empty here
+         by construction — there is no `rejectedPairs` entry to find), so
+         nothing on `src/views/cast.tsx` ever issues this DELETE for it.
+         The stranded edge stays invisible until some other pair-scoped
+         reject/undo on the same row happens to clear it as a side effect,
+         or until it's found by hand. Deciding how to surface an invisible
+         stranded edge (a new banner affordance? a raw-id admin action?) is
+         a UI design call this fix round deliberately does not make — see
+         `docs/features/278-cast-character-identity.md`'s invariant 10 for
+         the recorded residual. */
+      if (removeNotLinked(character, bookId, orphanedId)) changed = true;
       if (changed) {
         await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
       }
