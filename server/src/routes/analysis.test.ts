@@ -1027,7 +1027,7 @@ describe('failedChapterErrors records (spec A4)', () => {
 describe('chapter-failed replay map (spec A4 — reconnect carries code/remediation)', () => {
   function makeJob() {
     return {
-      replay: { failedByChapterId: new Map(), logs: [] },
+      replay: { failedByChapterId: new Map(), logs: [], warnings: new Map() },
     } as unknown as Parameters<typeof trackForReplay>[0];
   }
   it('stores code + remediation off a chapter-failed event', () => {
@@ -1120,6 +1120,7 @@ describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
     const job = makeJob();
     trackForReplay(job, { kind: 'warning' });
     trackForReplay(job, { kind: 'warning', code: 'x' });
+    trackForReplay(job, { kind: 'warning', message: 'no code' });
     const sent: unknown[] = [];
     replayCatchUp(job, (ev) => sent.push(ev));
     expect(sent).toHaveLength(0);
@@ -2579,6 +2580,7 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -2975,6 +2977,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3084,6 +3087,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3177,6 +3181,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3486,6 +3491,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3596,6 +3602,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3710,6 +3717,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3955,6 +3963,7 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4193,6 +4202,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4401,6 +4411,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4639,6 +4650,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4833,6 +4845,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -5441,6 +5454,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -5698,6 +5712,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -5786,6 +5801,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -6182,6 +6198,7 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;

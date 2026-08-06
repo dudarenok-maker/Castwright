@@ -248,6 +248,7 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;

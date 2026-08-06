@@ -250,6 +250,7 @@ describe('runMainAnalyzerJob — the recording boundary refuses a retirement nam
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
