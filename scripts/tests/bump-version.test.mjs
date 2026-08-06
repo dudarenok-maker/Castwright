@@ -18,7 +18,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit } from '../bump-version.mjs';
+import { scrubGitEnv } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -100,6 +101,17 @@ function setupRepo(startVersion) {
     resolve(dir, 'scripts', 'release-notes-gate.mjs'),
     readFileSync(resolve(here, '..', 'release-notes-gate.mjs'), 'utf8'),
   );
+  // #2169/#2170 — bump-version.mjs also imports ./git-env.mjs (the shared
+  // GIT_* env scrub) and ./release-body.mjs (the shared normaliser); mirror
+  // both, or the throwaway script crashes on module resolution.
+  writeFileSync(
+    resolve(dir, 'scripts', 'git-env.mjs'),
+    readFileSync(resolve(here, '..', 'git-env.mjs'), 'utf8'),
+  );
+  writeFileSync(
+    resolve(dir, 'scripts', 'release-body.mjs'),
+    readFileSync(resolve(here, '..', 'release-body.mjs'), 'utf8'),
+  );
 
   // Init throwaway git repo with a local identity so commits work in CI.
   // env: cleanGitEnv() so a parent git-hook context doesn't redirect these
@@ -123,6 +135,37 @@ function runBump(dir, args) {
     encoding: 'utf8',
     env: cleanGitEnv(),
   });
+}
+
+// #2169 — unlike runBump above (which always scrubs GIT_* from the child's
+// env, so it can never exercise the production script's OWN internal
+// scrub), this starts from the same clean baseline and then deliberately
+// re-adds exactly the env vars under test — so a passing assertion proves
+// bump-version.mjs's own git()/execGit scrub protected the run, not the test
+// harness.
+function runBumpWithEnv(dir, args, envOverrides) {
+  return spawnSync('node', [resolve(dir, 'scripts', 'bump-version.mjs'), ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...cleanGitEnv(), ...envOverrides },
+  });
+}
+
+// A second, independent throwaway git repo standing in for "whatever
+// repository an inherited GIT_DIR/GIT_WORK_TREE happens to point at" —
+// deliberately on a NON-'main' branch by default so a misdirected
+// `git rev-parse --abbrev-ref HEAD` (bump-version's own pre-flight 2) fails
+// loudly and unambiguously rather than coincidentally reading 'main' too.
+function setupDecoyRepo(branchName = 'decoy-branch') {
+  const dir = mkdtempSync(resolve(tmpdir(), 'bump-version-decoy-'));
+  const env = cleanGitEnv();
+  gitExec(['init', '-q', '-b', branchName], { cwd: dir, env });
+  gitExec(['config', 'user.email', 'test@example.com'], { cwd: dir, env });
+  gitExec(['config', 'user.name', 'Test'], { cwd: dir, env });
+  writeFileSync(resolve(dir, 'seed.txt'), 'seed\n');
+  gitExec(['add', '.'], { cwd: dir, env });
+  gitExec(['commit', '-q', '-m', 'chore: seed decoy'], { cwd: dir, env });
+  return dir;
 }
 
 test('bump-version --dry-run prints the plan and does not mutate', () => {
@@ -262,15 +305,14 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
   }
 });
 
-// #2168 review, Important 2 — release.yml's release-body.mjs publishes the
-// GitHub release body from DEFAULT_NOTES_FILE only, never from whatever
-// --notes-file supplied the tag annotation. Before #2168 a non-default
-// --notes-file published fine; now it guarantees resolveReleaseBody's Rule 4
+// #2170 (decided 2026-08-06, superseding the #2168-review WARNING-only shape) —
+// release.yml's release-body.mjs publishes the GitHub release body from
+// DEFAULT_NOTES_FILE only, never from whatever --notes-file supplied the tag
+// annotation. A genuine divergence guarantees resolveReleaseBody's Rule 4
 // fails the tag at PUBLISH time (after verify/cross-os-verify/mobile-e2e/
-// companion-apk-build have all run, tag already pushed) unless the two
-// files' contents happen to normalise-equal. A WARNING only, deliberately
-// not a refusal — refusing is a behaviour decision left open.
-test('bump-version warns at cut time when --notes-file differs from the default the release body publishes from', () => {
+// companion-apk-build have all run, tag already pushed) — refuse at cut time
+// instead, comparing under release-body.mjs's own `normalise`.
+test('bump-version refuses at cut time when --notes-file genuinely diverges from the default', () => {
   const dir = setupRepo('1.0.0');
   try {
     mkdirSync(resolve(dir, 'docs'));
@@ -285,11 +327,170 @@ test('bump-version warns at cut time when --notes-file differs from the default 
     writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
     const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
     rmSync(notes, { force: true });
-    assert.equal(out.status, 0, out.stderr);
-    assert.match(
-      out.stdout,
-      /\[WARN\] --notes-file .* was given, but release\.yml publishes the release body from docs\/release-notes-next\.md/,
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /--notes-file .* and docs\/release-notes-next\.md disagree after normalising/);
+    assert.match(out.stderr, /--allow-notes-divergence/);
+    // Refuses BEFORE any of the expensive pre-flights (e.g. the clean-tree
+    // check) even run — no working-tree mutation, no [PLAN] output at all.
+    assert.doesNotMatch(out.stdout, /\[PLAN\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The identical-content-modulo-normalisation case: this is also the trap
+// test for "same normaliser as release-body.mjs" (#2170 acceptance) — the
+// two files differ RAW (CRLF vs LF line endings) but agree once normalised.
+// If the implementation were ever swapped for a raw `===` comparison instead
+// of the imported `normalise()`, this run would incorrectly refuse and this
+// test would go red.
+test('bump-version does not refuse when --notes-file normalise-equals the default (CRLF-only difference)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the same content.\n',
     );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-crlf-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\r\n\r\nFixes:\r\n- the same content.\r\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.doesNotMatch(out.stderr, /disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version --allow-notes-divergence permits a genuine divergence, with a warning', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-override-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--skip-cross-os',
+      '--allow-notes-divergence',
+    ]);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[WARN\] --allow-notes-divergence:.*disagree after normalising/);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 3 — the divergence check above must resolve
+// DEFAULT_NOTES_FILE against repoRoot, not the invocation's process.cwd().
+// Run from server/ (a subdirectory of the repo root), mirroring `cd server
+// && node ../scripts/bump-version.mjs … --notes-file <path>`: a bare-relative
+// `existsSync(DEFAULT_NOTES_FILE)` resolves to `<repo>/server/docs/…`, which
+// doesn't exist, so the unfixed check silently skips — the run succeeds with
+// a genuinely divergent --notes-file, exactly the outcome #2170 exists to
+// prevent. This test's --notes-file is an absolute tmpdir path (unaffected by
+// cwd) so the only variable under test is DEFAULT_NOTES_FILE's resolution.
+test('bump-version resolves DEFAULT_NOTES_FILE against repoRoot, not the invocation cwd, when checking notes divergence', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-subdir-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = spawnSync(
+      'node',
+      [resolve(dir, 'scripts', 'bump-version.mjs'), '--level', 'patch', '--notes-file', notes, '--skip-cross-os'],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv() },
+    );
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stderr, /--notes-file .* and docs\/release-notes-next\.md disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 4 — every other CONDITIONAL pre-flight in main()
+// reports rather than dies under --dry-run; a dry run mutates nothing, so
+// refusing protects nothing while destroying the preview, and a dry run is
+// exactly when an operator wants to be TOLD the real run would refuse.
+// Asserts BOTH the downgrade (exit 0, [DRY-RUN][WARN] naming the escape
+// hatch) AND that the run actually continued past the refusal ([PLAN] output
+// follows) — a fix that merely swallowed the die() without continuing would
+// pass the first assertion and fail the second.
+test('bump-version --dry-run reports a notes-file divergence instead of refusing', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-dryrun-divergence-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--dry-run']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[DRY-RUN\]\[WARN\].*disagree after normalising/);
+    assert.match(out.stdout, /--allow-notes-divergence/);
+    assert.match(out.stdout, /\[PLAN\]/, 'the run must continue past the refusal under --dry-run');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 5 — the divergence check must compare
+// buildTagMessage(explicitText) (BOM-stripped, matching what actually becomes
+// the tag annotation), not raw explicitText, against the default file's raw
+// text (matching what release-body.mjs reads at publish time). A BOM-prefixed
+// --notes-file that is otherwise identical to the default must NOT report a
+// (misleading) divergence — pre-flight 6c still refuses it, but with the
+// accurate BOM diagnostic rather than the divergence one.
+test('bump-version divergence check compares the BOM-stripped explicit text, not raw, so a BOM-only difference reports the accurate BOM message', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the same content.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-bom-divergence-${process.pid}-${Date.now()}.md`);
+    // Real EF BB BF bytes on disk (writeBOMFile, defined below) — not a JS
+    // string escape — so this proves detection of the actual defect. See
+    // writeBOMFile's own doc comment.
+    writeBOMFile(notes, '# v1.0.1\n\nFixes:\n- the same content.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0, out.stdout);
+    assert.doesNotMatch(out.stderr, /disagree after normalising/);
+    assert.match(out.stderr, /BOM/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -376,6 +577,246 @@ test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () =>
       else process.env[k] = v;
     }
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2169 — pure unit test of the scrub itself: every repository-discovery
+// override git checks BEFORE falling back to `cwd` gets stripped, and
+// nothing else does. Mutation-sensitive per key: dropping any one entry from
+// GIT_ENV_SCRUB_KEYS fails exactly that assertion.
+test('scrubGitEnv strips every git repo-discovery override and preserves everything else', () => {
+  const fakeEnv = {
+    PATH: '/usr/bin',
+    GIT_DIR: '/decoy/.git',
+    GIT_WORK_TREE: '/decoy',
+    GIT_INDEX_FILE: '/decoy/.git/index',
+    GIT_OBJECT_DIRECTORY: '/decoy/.git/objects',
+    GIT_COMMON_DIR: '/decoy/.git',
+    GIT_AUTHOR_NAME: 'Someone', // NOT a discovery override — must survive
+  };
+  const scrubbed = scrubGitEnv(fakeEnv);
+  assert.equal(scrubbed.GIT_DIR, undefined);
+  assert.equal(scrubbed.GIT_WORK_TREE, undefined);
+  assert.equal(scrubbed.GIT_INDEX_FILE, undefined);
+  assert.equal(scrubbed.GIT_OBJECT_DIRECTORY, undefined);
+  assert.equal(scrubbed.GIT_COMMON_DIR, undefined);
+  assert.equal(scrubbed.PATH, '/usr/bin');
+  assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+});
+
+// #2175 review, Finding 1 — Windows env lookup is case-insensitive, but
+// `{ ...process.env }` snapshots whatever casing the OS happened to store a
+// variable under. A `delete out[key]` keyed on the canonical uppercase name
+// alone leaves a `git_dir`-cased survivor in the scrubbed object, and git
+// (case-insensitively, on Windows) still honours it — a no-op fix for
+// exactly this case. This fixture is deliberately mixed-case-only (unlike
+// the uppercase-only fixture above) so it cannot pass against the
+// pre-fix implementation.
+test('scrubGitEnv strips a git repo-discovery override regardless of stored casing', () => {
+  const fakeEnv = {
+    PATH: '/usr/bin',
+    git_dir: '/decoy/.git',
+    Git_Work_Tree: '/decoy',
+    GIT_AUTHOR_NAME: 'Someone', // NOT a discovery override — must survive
+  };
+  const scrubbed = scrubGitEnv(fakeEnv);
+  assert.equal(scrubbed.git_dir, undefined);
+  assert.equal(scrubbed.Git_Work_Tree, undefined);
+  assert.ok(!Object.keys(scrubbed).some((k) => k.toUpperCase() === 'GIT_DIR'));
+  assert.ok(!Object.keys(scrubbed).some((k) => k.toUpperCase() === 'GIT_WORK_TREE'));
+  assert.equal(scrubbed.PATH, '/usr/bin');
+  assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+});
+
+// #2175 review, Finding 6 — execGit spread `...options` THEN set
+// `env: scrubGitEnv()`, so a caller-supplied `options.env` was silently
+// discarded rather than merged into the scrub. No live bug today (no call
+// site passes one), but it breaks the file's own stated contract ("a git
+// call added later inherits the fix" — see execGit's doc comment): a future
+// call site passing its own env would have that env thrown away instead of
+// scrubbed-and-honoured. Proven by an observable side effect of the child
+// process (GIT_AUTHOR_DATE / GIT_COMMITTER_DATE change what `git log`
+// reports) rather than by inspecting execFileSync's call arguments, so this
+// can't be satisfied by a mock that merely records what it was passed.
+test('execGit merges a caller-supplied env with the scrub rather than discarding it', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'extra.txt'), 'x\n');
+    execGit(['add', 'extra.txt'], { cwd: dir, env: cleanGitEnv() });
+    const customDate = 'Wed, 15 Jan 2020 00:00:00 +0000';
+    execGit(['commit', '-m', 'chore: custom-date commit'], {
+      cwd: dir,
+      env: { ...cleanGitEnv(), GIT_AUTHOR_DATE: customDate, GIT_COMMITTER_DATE: customDate },
+      stdio: 'ignore',
+    });
+    const authorDate = execGit(['log', '-1', '--format=%aD'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(authorDate, customDate);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 2 — `gh` resolves its target repository the same
+// GIT_DIR-first way git does (empirically: with GIT_DIR pointed at a decoy,
+// `gh repo view` reports "no git remotes found" instead of the real repo's
+// remotes), so every `gh` call site needs the same scrub the git() helper
+// already gets. Spawning a real (or faked) `gh` binary from this cross-
+// platform node:test suite isn't practical — a `.cmd`/`.bat` stand-in hits
+// Node's CVE-2024-27980 EINVAL guard on Windows without `shell: true` (which
+// gh() deliberately doesn't set), and a genuine `.exe` stand-in needs a
+// native compiler this suite can't assume is present, especially in Ubuntu
+// CI. So this is a structural check on the source itself — the same
+// approach `workflow-wiring.test.mjs` already uses for GitHub Actions wiring
+// that's equally impractical to exercise behaviourally — extracting each of
+// the three call sites `runCrossOsGate` reaches (`ghAvailable`, the dispatch
+// + discovery calls inside `gh()`, and the `gh run watch` spawnSync) and
+// asserting each passes `env: scrubGitEnv()`. Mutation-sensitive per site:
+// dropping the env option from any one of the three fails only that
+// assertion, naming the site.
+test('every gh() / ghAvailable() / "gh run watch" call site scrubs its env', () => {
+  const source = readFileSync(bumpScript, 'utf8');
+
+  const ghAvailableBody = source.slice(
+    source.indexOf('function ghAvailable()'),
+    source.indexOf('function sleep('),
+  );
+  assert.match(
+    ghAvailableBody,
+    /spawnSync\('gh', \['--version'\], \{ stdio: 'ignore', env: scrubGitEnv\(\) \}\)/,
+    'ghAvailable() must scrub its env',
+  );
+
+  const ghFnBody = source.slice(
+    source.indexOf("function gh(args, opts = {}) {"),
+    source.indexOf('function ghAvailable()'),
+  );
+  assert.match(ghFnBody, /env: scrubGitEnv\(\),?\s*\n\s*\}\);/, 'gh() must scrub its env');
+
+  const watchCallStart = source.indexOf("spawnSync('gh', ['run', 'watch'");
+  assert.notEqual(watchCallStart, -1, 'the gh run watch call site must exist');
+  const watchCallBody = source.slice(watchCallStart, source.indexOf(');', watchCallStart));
+  assert.match(watchCallBody, /env: scrubGitEnv\(\)/, 'the gh run watch spawnSync call must scrub its env');
+});
+
+// #2169's own regression test, as specified on the ticket: set GIT_DIR to a
+// decoy repo, call createAnnotatedTag({ repoRoot: realRepo, … }) DIRECTLY
+// (bypassing main()'s spawn, the same shape as the BOM direct-call test
+// above), and assert the tag exists in the real repo and is ABSENT from the
+// decoy — not merely present in the real one, which a no-op fix could also
+// satisfy if git happened to write to both. Empirically confirmed before
+// writing this test (`git tag -a` with only GIT_DIR set, cwd elsewhere,
+// writes into whatever GIT_DIR names — the tag never reaches the real repo
+// at all when unfixed, it doesn't just ALSO land in the decoy).
+test('createAnnotatedTag resolves repoRoot even with an inherited GIT_DIR pointing at a decoy repo (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = setupDecoyRepo();
+  const notes = resolve(tmpdir(), `bump-notes-gitdir-decoy-${process.pid}-${Date.now()}.md`);
+  writeFileSync(notes, '# v9.9.8\n\nFixes:\n- the GIT_DIR leak\n');
+  const savedGitEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('GIT_')) {
+      savedGitEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  process.env.GIT_DIR = resolve(decoy, '.git');
+  try {
+    createAnnotatedTag({
+      repoRoot: dir,
+      newTag: 'bump-version-test-gitdir-decoy',
+      notesFile: notes,
+    });
+
+    const realTags = gitExec(['tag', '--list', 'bump-version-test-gitdir-decoy'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(realTags, 'bump-version-test-gitdir-decoy');
+
+    const decoyTags = gitExec(['tag', '--list', 'bump-version-test-gitdir-decoy'], {
+      cwd: decoy,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(decoyTags, '', 'the tag must NOT land in the decoy repo GIT_DIR pointed at');
+  } finally {
+    delete process.env.GIT_DIR;
+    for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
+    rmSync(notes, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+// #2169's GIT_WORK_TREE half, deliberately NOT shaped like the GIT_DIR test
+// above. Empirically verified (see this PR's own investigation, not
+// asserted from memory): `git tag -a` reads/writes only the ref + object
+// database, which GIT_DIR controls — GIT_WORK_TREE alone does not affect it
+// at all, with or without a fix, so a createAnnotatedTag-shaped test for
+// GIT_WORK_TREE would be exactly the "test that cannot fail" shape this
+// repo's history warns about (it would pass identically whether or not the
+// scrub strips GIT_WORK_TREE). What GIT_WORK_TREE alone DOES misdirect is
+// any git call that reads/writes working-tree files — `git status
+// --porcelain`, the shared git() helper's pre-flight 1 clean-tree check —
+// confirmed empirically: from a clean real repo, `GIT_WORK_TREE=<empty
+// decoy dir> git status --porcelain` reports every tracked file as deleted.
+// This test drives that through the real script end-to-end (runBumpWithEnv,
+// not runBump — see its own comment) so a passing run proves the git()
+// helper's scrub, not the createAnnotatedTag one.
+test('bump-version resolves the working tree from repoRoot even with an inherited GIT_WORK_TREE (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = mkdtempSync(resolve(tmpdir(), 'bump-version-decoy-worktree-'));
+  try {
+    const out = runBumpWithEnv(
+      dir,
+      ['--level', 'patch', '--skip-cross-os', '--allow-placeholder'],
+      { GIT_WORK_TREE: decoy },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+    const tags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(tags, 'v1.0.1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+// The GIT_DIR counterpart to the GIT_WORK_TREE test above, driven through
+// the same runBumpWithEnv path so it exercises the shared git() helper (used
+// by EVERY other git call in main() — status, rev-parse, tag --list) rather
+// than only createAnnotatedTag's own call site. The decoy is on a
+// non-'main' branch so an unfixed run can't accidentally read a coincidental
+// 'main' back off it. Mutation-confirmed failure mode (GIT_ENV_SCRUB_KEYS
+// with GIT_DIR removed): with GIT_WORK_TREE unset, git treats `cwd` (the
+// real repo) as the work tree but the DECOY's `.git` as the index/ref
+// database — so `git status --porcelain` (pre-flight 1) compares the real
+// repo's files against the decoy's index and reports every real file as
+// untracked/deleted, dying "Working tree is not clean" before pre-flight 2's
+// branch check is even reached. Either die is proof of misdirection; this
+// test only asserts the fixed run succeeds end-to-end.
+test('bump-version resolves the repository from repoRoot even with an inherited GIT_DIR pointing at a decoy repo on another branch (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = setupDecoyRepo('decoy-branch');
+  try {
+    const out = runBumpWithEnv(
+      dir,
+      ['--level', 'patch', '--skip-cross-os', '--allow-placeholder'],
+      { GIT_DIR: resolve(decoy, '.git') },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+
+    const realTags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(realTags, 'v1.0.1');
+
+    const decoyTags = gitExec(['tag', '--list'], { cwd: decoy, encoding: 'utf8' }).trim();
+    assert.equal(decoyTags, '', 'the tag must NOT land in the decoy repo GIT_DIR pointed at');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
   }
 });
 
@@ -709,18 +1150,19 @@ test('buildTagMessage produces BOM-free output from BOM-prefixed input', () => {
 // EF BB BF bytes on disk (writeBOMFile above), not a JS string, for the same
 // reason the pre-flight tests use them.
 //
-// Unlike every other git call in this file, createAnnotatedTag's own
-// execFileSync has no `env` override (it doesn't accept one — matching the
-// production call site, which is only ever reached via a freshly spawned
-// `node bump-version.mjs` process whose env a test harness already
-// sanitises). Called DIRECTLY, in-process, it inherits process.env
-// verbatim — so when this suite itself runs from inside a `git commit`
+// Historical note (pre-#2169): createAnnotatedTag's own execFileSync used to
+// have no `env` override at all — called DIRECTLY, in-process, it inherited
+// process.env verbatim, so when this suite ran from inside a `git commit`
 // (husky's pre-commit hook), the parent commit's GIT_DIR / GIT_WORK_TREE /
-// GIT_INDEX_FILE leak straight through and redirect the tag write at the
+// GIT_INDEX_FILE leaked straight through and redirected the tag write at the
 // REAL calling repo instead of the throwaway fixture (caught during this
-// test's own development: it left a stray tag in this repo). Sanitise
-// process.env around the call, the same GIT_* stripping cleanGitEnv() does
-// for every other git invocation, restoring it afterwards.
+// test's own development: it left a stray tag in this repo). #2169 fixed
+// createAnnotatedTag to scrub those vars itself (via the shared
+// scrubGitEnv(), see git-env.mjs and the dedicated GIT_DIR-decoy test
+// above), so this manual sanitise-around-the-call is now redundant
+// belt-and-suspenders rather than load-bearing — kept anyway so this test
+// still passes unmodified even if a future change ever narrowed the
+// production scrub back down.
 test('createAnnotatedTag strips a BOM even when called directly, bypassing pre-flight 6c', () => {
   const dir = setupRepo('1.0.0');
   try {

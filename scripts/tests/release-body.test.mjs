@@ -17,11 +17,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { normalise } from '../release-body.mjs';
+import { normalise, readTagAnnotation } from '../release-body.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bodyScript = resolve(here, '..', 'release-body.mjs');
 const gateScript = resolve(here, '..', 'release-notes-gate.mjs');
+const gitEnvScript = resolve(here, '..', 'git-env.mjs');
 
 // Built via fromCharCode, not an embedded literal, so this file — which
 // specifically tests BOM handling — never carries a raw BOM in its own
@@ -75,6 +76,9 @@ function setupRepo() {
   mkdirSync(resolve(dir, 'docs'));
   writeFileSync(resolve(dir, 'scripts', 'release-body.mjs'), readFileSync(bodyScript, 'utf8'));
   writeFileSync(resolve(dir, 'scripts', 'release-notes-gate.mjs'), readFileSync(gateScript, 'utf8'));
+  // #2169 — release-body.mjs also imports ./git-env.mjs; mirror it too, or
+  // the spawned CLI crashes on module resolution.
+  writeFileSync(resolve(dir, 'scripts', 'git-env.mjs'), readFileSync(gitEnvScript, 'utf8'));
 
   const env = cleanGitEnv();
   gitExec(['init', '-q', '-b', 'main'], { cwd: dir, env });
@@ -97,6 +101,27 @@ function makeAnnotatedTag(dir, tagName, message) {
     encoding: 'utf8',
     env: cleanGitEnv(),
   });
+}
+
+// #2169 — a second, independent throwaway repo carrying a tag of the SAME
+// name as the real one but distinguishable content, standing in for
+// "whatever repository an inherited GIT_DIR happens to point at".
+function setupDecoyRepoWithTag(tagName, message) {
+  const dir = mkdtempSync(resolve(tmpdir(), 'release-body-decoy-'));
+  const env = cleanGitEnv();
+  gitExec(['init', '-q', '-b', 'main'], { cwd: dir, env });
+  gitExec(['config', 'user.email', 'test@example.com'], { cwd: dir, env });
+  gitExec(['config', 'user.name', 'Test'], { cwd: dir, env });
+  writeFileSync(resolve(dir, 'seed.txt'), 'seed\n');
+  gitExec(['add', '.'], { cwd: dir, env });
+  gitExec(['commit', '-q', '-m', 'chore: seed decoy'], { cwd: dir, env });
+  execFileSync('git', ['tag', '--cleanup=verbatim', '-a', tagName, '-F', '-'], {
+    cwd: dir,
+    input: message,
+    encoding: 'utf8',
+    env,
+  });
+  return dir;
 }
 
 function writeNotesFile(dir, text) {
@@ -320,5 +345,41 @@ test('round-trip control: a tag created from a file normalises equal when read b
     assert.equal(normalise(annotation), normalise(fileText));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2169 — readTagAnnotation (release-body.mjs:70, the line release.yml's
+// publish step actually calls) had the same GIT_DIR/GIT_WORK_TREE-inherits-
+// silently shape as bump-version.mjs. The decoy carries a tag of the SAME
+// NAME as the real repo's but distinguishable content, so a misdirected read
+// returns the wrong text rather than merely an empty/absent one — a stronger
+// signal than "present vs absent", and not satisfiable by a no-op fix that
+// happens to also succeed against the real repo.
+test('readTagAnnotation resolves repoRoot even with an inherited GIT_DIR pointing at a decoy repo carrying the same tag name (#2169)', () => {
+  const dir = setupRepo();
+  const tagName = 'release-body-test-gitdir-decoy';
+  const realMessage = 'Castwright real notes\n\n- from the real repo\n';
+  makeAnnotatedTag(dir, tagName, realMessage);
+
+  const decoyMessage = 'DECOY notes -- if you read this, GIT_DIR leaked\n';
+  const decoy = setupDecoyRepoWithTag(tagName, decoyMessage);
+
+  const savedGitEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('GIT_')) {
+      savedGitEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  process.env.GIT_DIR = resolve(decoy, '.git');
+  try {
+    const annotation = readTagAnnotation(dir, tagName);
+    assert.match(annotation, /from the real repo/);
+    assert.doesNotMatch(annotation, /DECOY notes/);
+  } finally {
+    delete process.env.GIT_DIR;
+    for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
   }
 });

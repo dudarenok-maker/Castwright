@@ -649,7 +649,11 @@ $EDITOR docs/release-notes-next.md
 #    The bump REFUSES if the notes are missing or their version marker is stale
 #    (a release can't ship a placeholder body); --allow-placeholder overrides.
 node scripts/bump-version.mjs --level minor
-#    (Or point at a different file: --notes-file path/to/notes.md)
+#    (Or point at a different file: --notes-file path/to/notes.md — the bump
+#    REFUSES if that file disagrees with docs/release-notes-next.md, since
+#    release.yml publishes from the latter only and a genuine divergence
+#    would otherwise fail the tag at publish time; --allow-notes-divergence
+#    cuts anyway, --dry-run only reports it.)
 
 # 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
 git push origin main
@@ -683,9 +687,20 @@ platform-independent zip + SHA-256 using the tag annotation as the body. Full sp
   (the bumper refuses to run if they've drifted).
 - Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
 to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
-- Release notes live in the tag annotation, not the GitHub Release UI. The
-  workflow reads `git tag -l --format='%(contents)' vX.Y.Z` and uses that
-  verbatim as the body.
+- Release notes live in `docs/release-notes-next.md`, not the GitHub Release
+  UI. The bumper builds the tag annotation from that file, and since #2168
+  `release.yml` publishes the release body from the **file** — not from the
+  annotation. It still reads the annotation back
+  (`git tag -l --format='%(contents)' vX.Y.Z`) to compare the two, and fails
+  the publish job if they diverge.
+- A non-default `--notes-file` MUST agree with `docs/release-notes-next.md`
+  (compared normalised: CRLF -> LF, trailing whitespace stripped) — a genuine
+  divergence refuses the cut, since `release.yml` publishes the GitHub release
+  body from `docs/release-notes-next.md` only and a divergent tag would
+  otherwise fail at publish time, after the full pre-release battery has run
+  and the tag is already pushed. `--allow-notes-divergence` cuts anyway;
+  `--dry-run` downgrades the refusal to a report instead of blocking the
+  preview.
 
 If the artefact is broken after publish, delete the release + tag and bump
 again — never amend or force-push a published tag:

@@ -7,6 +7,7 @@
 // Usage:
 //   node scripts/bump-version.mjs --level patch|minor|major
 //                                  [--notes-file <path>]
+//                                  [--allow-notes-divergence]
 //                                  [--dry-run]
 //                                  [--force]
 //                                  [--skip-cross-os]
@@ -32,6 +33,10 @@ import {
   stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
+import { scrubGitEnv } from './git-env.mjs';
+// #2170 — same normaliser release.yml's publish step applies, imported
+// rather than copied so the two can't drift apart (see the refusal below).
+import { normalise } from './release-body.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -53,6 +58,7 @@ function parseArgs(argv) {
     force: false,
     skipCrossOs: false,
     allowPlaceholder: false,
+    allowNotesDivergence: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -62,6 +68,7 @@ function parseArgs(argv) {
     else if (a === '--force') out.force = true;
     else if (a === '--skip-cross-os') out.skipCrossOs = true;
     else if (a === '--allow-placeholder') out.allowPlaceholder = true;
+    else if (a === '--allow-notes-divergence') out.allowNotesDivergence = true;
     else if (a === '--help' || a === '-h') {
       printHelpAndExit(0);
     } else {
@@ -74,7 +81,12 @@ function parseArgs(argv) {
 function printHelpAndExit(code) {
   process.stdout.write(
     'Usage: node scripts/bump-version.mjs --level patch|minor|major ' +
-      '[--notes-file <path>] [--allow-placeholder] [--dry-run] [--force] [--skip-cross-os]\n',
+      '[--notes-file <path>] [--allow-placeholder] [--allow-notes-divergence] ' +
+      '[--dry-run] [--force] [--skip-cross-os]\n' +
+      '\n' +
+      `  --allow-notes-divergence  Cut anyway when --notes-file disagrees with ` +
+      `${DEFAULT_NOTES_FILE} — the publish job WILL FAIL unless you reconcile ` +
+      'the two before pushing the tag.\n',
   );
   process.exit(code);
 }
@@ -193,8 +205,24 @@ export function pickWorkflowRun(runs, { headSha, sinceMs, skewMs = 10000 }) {
   return matches.length > 0 ? matches[0].databaseId : null;
 }
 
+// #2169 — every git invocation in this script routes through here so the
+// env scrub (dropping an inherited GIT_DIR / GIT_WORK_TREE / etc. that would
+// otherwise silently override `cwd`) can't be forgotten by a call site that
+// builds its own execFileSync options. createAnnotatedTag below is the one
+// call site that needs different stdio/input, so it calls this directly
+// rather than growing a second copy of the scrub. `options?.env` is merged
+// INTO the scrub rather than replaced by it (PR #2175 review) — a caller
+// that needs to pass its own env (none does today) still gets the scrub
+// applied to what it passed, not silently overridden by an unrelated
+// `scrubGitEnv()` of `process.env`; that's what "a git call added later
+// inherits the fix" actually requires. Exported (like buildTagMessage /
+// createAnnotatedTag below) as a thin, directly-testable seam.
+export function execGit(args, options) {
+  return execFileSync('git', args, { ...options, env: scrubGitEnv(options?.env) });
+}
+
 function git(args, opts = {}) {
-  return execFileSync('git', args, {
+  return execGit(args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
@@ -228,16 +256,24 @@ function npm(args, opts = {}) {
 
 // `gh` wrapper. capture=true returns stdout; otherwise inherits stdio so
 // `gh run watch`'s live progress streams to the user.
+//
+// #2175 review, Finding 2 — `gh` resolves its target repository the same
+// GIT_DIR/GIT_WORK_TREE-first way git itself does (empirically: with GIT_DIR
+// pointed at a decoy, `gh repo view` reports "no git remotes found" instead
+// of the real repo's remotes). The scrub above was applied to every git()
+// call but not to gh — a workflow_dispatch could fire against a foreign
+// repository. Same fix, same shared scrub.
 function gh(args, opts = {}) {
   return execFileSync('gh', args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
 }
 
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = spawnSync('gh', ['--version'], { stdio: 'ignore', env: scrubGitEnv() });
   return !r.error && r.status === 0;
 }
 
@@ -302,6 +338,7 @@ async function runCrossOsGate({ ref, headSha }) {
   const watch = spawnSync('gh', ['run', 'watch', String(runId), '--exit-status'], {
     cwd: repoRoot,
     stdio: 'inherit',
+    env: scrubGitEnv(),
   });
   if (watch.status !== 0) {
     die(
@@ -389,7 +426,7 @@ export function buildTagMessage(fileText) {
  *  place; preserve them by default from here on. */
 export function createAnnotatedTag({ repoRoot, newTag, notesFile }) {
   const tagMessage = buildTagMessage(readFileSync(resolve(notesFile), 'utf8'));
-  execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
+  execGit(['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
     cwd: repoRoot,
     input: tagMessage,
     stdio: ['pipe', 'inherit', 'inherit'],
@@ -409,26 +446,66 @@ async function main() {
   // placeholder body (the refusal is enforced after the cheap pre-flights).
   args.notesFile = resolveNotesFile(args.notesFile, existsSync);
 
-  // #2168 review, Important 2 — a heads-up, not a refusal (that's a
-  // behaviour decision left open on purpose). release.yml's release-body.mjs
-  // sources the PUBLISHED GitHub release body from DEFAULT_NOTES_FILE only —
-  // never from whatever --notes-file supplied the tag annotation. Before
-  // #2168 a non-default --notes-file published fine; now it guarantees
-  // resolveReleaseBody's Rule 4 fails the tag at PUBLISH time — after
-  // verify, cross-os-verify, mobile-e2e and companion-apk-build have all
-  // run, and with the tag already pushed — unless the two files' contents
-  // happen to normalise-equal. Fires only when there's an actual divergence
-  // hazard: an explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that
-  // exists to disagree with it (resolveNotesFile only returns something
-  // other than DEFAULT_NOTES_FILE when an explicit path was given, or when
-  // the default is absent — the latter can't trip this, since the "exists"
-  // check below is then false).
-  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(DEFAULT_NOTES_FILE)) {
-    info(
-      `[WARN] --notes-file ${args.notesFile} was given, but release.yml publishes the release ` +
-        `body from ${DEFAULT_NOTES_FILE} — this tag will fail the publish job unless ` +
-        `${args.notesFile}'s content matches ${DEFAULT_NOTES_FILE} exactly.`,
-    );
+  // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
+  // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
+  // from DEFAULT_NOTES_FILE only — never from whatever --notes-file supplied
+  // the tag annotation. Before #2168 a non-default --notes-file published
+  // fine; now a genuine divergence guarantees resolveReleaseBody's Rule 4
+  // fails the tag at PUBLISH time — after verify, cross-os-verify, mobile-e2e
+  // and companion-apk-build have all run, and with the tag already pushed.
+  // Refuse here, before any of the expensive pre-flights below, comparing
+  // under the SAME normaliser release-body.mjs applies at publish time
+  // (imported, not copied — two normalisers that drift apart reintroduce
+  // exactly the failure this closes) so the refusal fires if and only if the
+  // publish job actually would fail. --allow-notes-divergence opts into the
+  // deliberate case. Fires only when there's an actual divergence hazard: an
+  // explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that exists to
+  // disagree with it (resolveNotesFile only returns something other than
+  // DEFAULT_NOTES_FILE when an explicit path was given, or when the default
+  // is absent — the latter can't trip this, since the "exists" check below
+  // is then false).
+  // #2175 review, Finding 3 — DEFAULT_NOTES_FILE is a path WITHIN THE REPO
+  // (same as release-body.mjs's own `resolve(repoRoot, DEFAULT_NOTES_FILE)`
+  // at publish time), so both the existence check and the read below must
+  // resolve it against `repoRoot`, not the invocation `process.cwd()`. Run
+  // from a subdirectory (e.g. `cd server && node ../scripts/bump-version.mjs
+  // … --notes-file <path>`) and the bare-relative `existsSync(DEFAULT_NOTES_FILE)`
+  // would find nothing, silently skipping this whole guard rather than
+  // refusing — the exact outcome #2170 exists to prevent. `args.notesFile`
+  // itself is intentionally left resolved against the invocation cwd (see
+  // the `--notes-file does not exist` pre-flight above, which does the same)
+  // — an operator's notes file legitimately lives wherever they're standing.
+  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))) {
+    const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
+    const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
+    // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
+    // which strips a defensive BOM (see buildTagMessage's own doc comment);
+    // release-body.mjs's fileText is read raw. Comparing raw explicitText here
+    // would report a "divergence" for a BOM-only difference that publish would
+    // never have seen (pre-flight 6c below refuses a BOM'd --notes-file anyway,
+    // so this isn't exploitable — but this check runs FIRST, so an unfixed
+    // comparison hands the operator the misleading divergence message instead
+    // of the accurate BOM one). Comparing buildTagMessage(explicitText) makes
+    // this check agree with what publish actually compares.
+    if (normalise(buildTagMessage(explicitText)) !== normalise(defaultText)) {
+      const msg =
+        `--notes-file ${args.notesFile} and ${DEFAULT_NOTES_FILE} disagree after normalising ` +
+        `(CRLF -> LF, trailing whitespace stripped) — release.yml publishes the release body ` +
+        `from ${DEFAULT_NOTES_FILE} only, so this tag would fail the publish job after verify, ` +
+        `cross-os-verify, mobile-e2e, and companion-apk-build have all run, with the tag already ` +
+        `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
+        `publish job WILL FAIL unless you fix it before pushing the tag).`;
+      // Finding 4 — every other CONDITIONAL pre-flight in main() reports
+      // rather than dies under --dry-run (the four that die unconditionally
+      // each carry their own comment explaining why — no legitimate reason
+      // for a conflict marker or a BOM to ship, ever). A dry run creates no
+      // tag, so refusing here protects nothing while destroying the preview;
+      // it's also exactly when an operator wants to be TOLD the real run
+      // would refuse.
+      if (args.allowNotesDivergence) info(`[WARN] --allow-notes-divergence: ${msg}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] ${msg}`);
+      else die(msg);
+    }
   }
 
   // Pre-flight 1: clean working tree (unless dry-run).
