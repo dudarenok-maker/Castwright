@@ -188,19 +188,21 @@ owner: null
    (built from `existingIds` **and** `historyKeys`) covers it.
 9. **An interim `cast.json` write never removes an id from the persisted
    roster** (srv-87, #2086). The three interim ("Cast so far") writes — two
-   inside `runMainAnalyzerJob` (`analysis.ts`, the `overlayInterimCastForLiveView`
-   calls around line 3710 and line 3922) and one inside `runSubsetAnalyzerJob`
-   (same call, around line 5715) — go through
+   inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+   (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+   those two functions — cited by symbol, not line: a line citation here was
+   already stale twice over, F2, #2163) — go through
    `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
    which has no id-drift name-fallback and produces no `retirements` — there is
    nothing in its return type for a caller to discard. Only the two
    authoritative end-of-run writes (the `mergeAnalysisResultWithExistingCast`
-   calls at `analysis.ts:4962` in `runMainAnalyzerJob` and `:6250` in
+   call in `runMainAnalyzerJob` and the one in
    `runSubsetAnalyzerJob`) apply identity merges and
    call `retireCharacterId`. Before this fix, a mid-run death — **or a
    completed run whose `phase1DriftExceeded` gate skipped the authoritative
-   write** (`analysis.ts:4873`'s `attributionDriftExceeded` call, checked at
-   `:4945`/`:5096`; `attributionDriftExceeded` is a normal, logged,
+   write** (`runMainAnalyzerJob`'s `attributionDriftExceeded` call, checked
+   at its two `phase1DriftExceeded` use sites later in the same function;
+   `attributionDriftExceeded` is a normal, logged,
    non-crash outcome, not only a process kill) — could leave a character's id
    durably swapped in `cast.json` with no history record, orphaning that
    character's frozen `<slug>.segments.json` entries to the narrator. Residual
@@ -248,7 +250,7 @@ owner: null
       pair-scoped removal (which stays keyed on each governing pair's own
       `from`, for the `the_torment`/`The-Torment` normalised-collision
       shape).
-      **Residual, recorded rather than fixed (I3, fix round, #2158):** the
+      **Residual, recorded rather than fixed (I3, fix round, #2163):** the
       endpoint change above is real and tested — it clears the edge for any
       caller that reaches it — but nothing in the UI reaches it in this
       exact state. `handleUndoOrphanRejection` (`src/views/cast.tsx`) only

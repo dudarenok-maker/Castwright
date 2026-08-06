@@ -409,7 +409,7 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
     60_000,
   );
 
-  /* C1 (fix round, #2158) — the hazard the review found one tier up from
+  /* C1 (fix round, #2163) — the hazard the review found one tier up from
      #2110's own fix: pruning `anton -> антон` out of `supersededBy` frees
      the raw KEY 'anton' unless something else keeps it reserved.
      `dropSupersededTargetsNoLongerLive` moves it into `displaced`

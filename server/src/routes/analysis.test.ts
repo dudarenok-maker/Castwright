@@ -2231,7 +2231,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
   });
 });
 
-describe('bookIdForRetirementCleanup — M6 (fix round, #2158)', () => {
+describe('bookIdForRetirementCleanup — M6 (fix round, #2163)', () => {
   /* recordRetirements' `bookId` param exists ONLY to key
      clearNotLinkedEdgesForDroppedRejections' lookup against `notLinkedTo`
      edges keyed with the workspace `makeBookId` shape. The old call sites

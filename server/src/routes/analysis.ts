@@ -908,7 +908,7 @@ function bookIdFromTitle(title: string): string {
   return safeBookId(title);
 }
 
-/* M6 (fix round, #2158) — `recordRetirements`'s `bookId` parameter exists
+/* M6 (fix round, #2163) — `recordRetirements`'s `bookId` parameter exists
    for exactly one purpose: keying `clearNotLinkedEdgesForDroppedRejections`'s
    lookup against `notLinkedTo` edges on `cast.json`, which are written with
    the workspace `makeBookId` shape (`author__series__title`,

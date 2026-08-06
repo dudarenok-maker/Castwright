@@ -799,7 +799,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(section.id).toBe('orphaned-auto-reconciled-list');
     });
 
-    it("#2129, widened by I2 (fix round, #2158) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
+    it("#2129, widened by I2 (fix round, #2163) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
       const store = configureStore({
         reducer: {
           ui: uiSlice.reducer,

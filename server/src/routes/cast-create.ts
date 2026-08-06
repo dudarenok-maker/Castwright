@@ -124,7 +124,7 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        only `historyKeys`. */
     const history = await loadCastIdHistory(located.bookDir);
     const historyKeys = new Set(Object.keys(history.supersededBy));
-    /* C1 (fix round, #2158) — `displaced` keys are just as taken as
+    /* C1 (fix round, #2163) — `displaced` keys are just as taken as
        `supersededBy` keys. `dropSupersededTargetsNoLongerLive` deletes an
        entry from `supersededBy` and files it under `displaced` the moment
        its target stops being live — but a key that leaves `supersededBy`

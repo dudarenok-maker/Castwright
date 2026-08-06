@@ -518,7 +518,7 @@ castRejectOrphanRouter.delete(
          one this route itself wrote; cast-not-linked-to.ts's DELETE 400s on
          a same-book pair, so it never writes this shape).
 
-         What this closes, precisely (I3, fix round, #2158): this endpoint
+         What this closes, precisely (I3, fix round, #2163): this endpoint
          now clears the edge for ANY caller that reaches it with the right
          `(bookId, characterId, orphanedId)` triple — that part is real and
          tested. What it does NOT do is give the UI a way to reach it in

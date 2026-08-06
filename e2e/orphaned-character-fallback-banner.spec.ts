@@ -84,7 +84,7 @@ async function seedOrphanedFallback(page: Page): Promise<void> {
   });
 }
 
-/* #2129, widened by I2 (fix round, #2158) — a second seed with both
+/* #2129, widened by I2 (fix round, #2163) — a second seed with both
    non-exact resolution tiers represented, so the "resolves now — may still
    need a re-render" note can be pinned against a real 'normalised' row too
    (see src/views/cast.tsx's own comment on the `info.resolution !==
@@ -231,7 +231,7 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
   });
 
-  /* #2129, widened by I2 (fix round, #2158) — the banner must distinguish
+  /* #2129, widened by I2 (fix round, #2163) — the banner must distinguish
      "resolves today" (auto-reconciled) from "the already-rendered audio is
      definitely fine". EVERY non-exact resolution shown in this section
      (`'alias'` — server tiers 'history'/'normalised-history' — AND

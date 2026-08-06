@@ -467,7 +467,7 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  hazard — it relocates it one write later. The moment 'anton' leaves
  *  `supersededBy`, it is free to re-mint again unless something else keeps
  *  it reserved. That something is `displaced` (below): `POST /cast/create`
- *  (`cast-create.ts`, C1 fix round, #2158) treats a `displaced` key as
+ *  (`cast-create.ts`, C1 fix round, #2163) treats a `displaced` key as
  *  taken exactly the same way it already treats a `supersededBy` key, so
  *  the id stays reserved across the drop rather than reopening the hijack
  *  window this function exists to close. This is why the drop is written
@@ -477,9 +477,10 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *
  *  MUST be called only against the full, final roster of an AUTHORITATIVE
  *  write — never an interim one. The three mid-run "Cast so far" writes —
- *  two inside `runMainAnalyzerJob` (`analysis.ts`, the
- *  `overlayInterimCastForLiveView` calls around line 3710 and line 3922)
- *  and one inside `runSubsetAnalyzerJob` (same call, around line 5715) —
+ *  two inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+ *  (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+ *  those two functions — cited by symbol, not line: F2, #2163, a line
+ *  citation here was stale the moment it was written twice already) —
  *  go through `overlayInterimCastForLiveView`, never this function,
  *  precisely because `buildInterimCast` has
  *  folded only the chapters analysed so far there: a character who simply

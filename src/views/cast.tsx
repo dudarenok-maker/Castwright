@@ -1340,7 +1340,7 @@ export function CastView({
                           <span className="text-xs text-ink/60">
                             {info.segments} segment{info.segments === 1 ? '' : 's'}
                           </span>
-                          {/* #2129, widened by I2 (fix round, #2158) — any
+                          {/* #2129, widened by I2 (fix round, #2163) — any
                               non-exact resolution answers "does this id
                               resolve today?", not "was the rendered audio
                               ever produced under the resolved voice?" —
