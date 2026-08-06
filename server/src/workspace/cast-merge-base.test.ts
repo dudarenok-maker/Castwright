@@ -68,6 +68,33 @@ describe('createCastMergeBase — the negative control (design §3a)', () => {
     }
   });
 
+  it('a fresh run still DETECTS a foreign write — markDeleted sets ABSENT, never null', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'prior' }] }, null, 2));
+      const base = createCastMergeBase(dir, await captureOf(dir));
+      await rm(castJsonPath(dir), { force: true });
+      base.markDeleted();
+
+      /* The whole point of the three-state model. `ABSENT` means "no file is
+         expected right now" and detection stays LIVE; `null` means "cannot
+         check" and detection is dead for the rest of the run. Both produce
+         zero conflicts on an uncontended fresh run, so every other test in
+         this file passes either way — this is the only one that separates
+         them. */
+      expect(base.enabled).toBe(true);
+
+      // A foreign writer lands before this run's first write.
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'foreign' }] }, null, 2));
+      const onConflict = vi.fn();
+      await base.writeChecked({ characters: [{ id: 'fresh1' }] }, onConflict);
+
+      expect(onConflict).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('WITHOUT markDeleted a fresh run would false-positive — proving the reset is load-bearing', async () => {
     const dir = makeBookDir();
     try {
