@@ -908,6 +908,39 @@ function bookIdFromTitle(title: string): string {
   return safeBookId(title);
 }
 
+/* M6 (fix round, #2158) — `recordRetirements`'s `bookId` parameter exists
+   for exactly one purpose: keying `clearNotLinkedEdgesForDroppedRejections`'s
+   lookup against `notLinkedTo` edges on `cast.json`, which are written with
+   the workspace `makeBookId` shape (`author__series__title`,
+   `workspace/paths.js`). `bookIdFromTitle` above — a 32-char kebab slug of
+   the title alone — produces a completely different shape, so using it as
+   a fallback here can never match a real edge; it only manufactures a value
+   that LOOKS like a book id without being the one anything else uses. Every
+   `recordRetirements` call site in this file used to fall back to it via
+   `record.bookId ?? bookIdFromTitle(record.title)`, which fails OPEN: the
+   call proceeds with a bookId that silently can never match, so any
+   self-loop-rejection cleanup that run needed simply never happens, with
+   nothing logged. Not reachable today — `loadManuscriptForBook` always sets
+   `record.bookId` — but a param that exists for one narrow purpose should
+   not accept a value that defeats that purpose without saying so.
+   `recordRetirements` already has the right fail-closed behaviour built in
+   (`if (result.droppedSelfLoopRejections.length && bookId)` skips the
+   cleanup when `bookId` is falsy) — this helper's job is only to stop
+   handing it a value that looks truthy but is wrong, and to say so when it
+   would have. Deliberately does NOT derive a new id shape of its own. */
+export function bookIdForRetirementCleanup(record: {
+  bookId?: string | null;
+  title: string;
+}): string | undefined {
+  if (record.bookId) return record.bookId;
+  console.warn(
+    `[analysis] record.bookId is absent for "${record.title}" — skipping notLinkedTo cleanup for any ` +
+      `character-id retirement this run records (a title-derived id would never match a real notLinkedTo ` +
+      `edge's book id, so silently using one would fail without saying so).`,
+  );
+  return undefined;
+}
+
 function durationPlaceholder(): string {
   return '00:00';
 }
@@ -2954,7 +2987,7 @@ export async function runMainAnalyzerJob(
       try {
         await recordRetirements(
           recordRef.bookDir,
-          recordRef.bookId ?? bookIdFromTitle(recordRef.title),
+          bookIdForRetirementCleanup(recordRef),
           reconciled.retirements,
           null,
           log,
@@ -4976,8 +5009,9 @@ export async function runMainAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, bookId, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, bookId, mergedFinal.retirements, liveIds, log);
+            const retirementBookId = bookIdForRetirementCleanup(record);
+            await recordRetirements(record.bookDir, retirementBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -4987,7 +5021,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, bookId, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5521,7 +5555,7 @@ export async function runSubsetAnalyzerJob(
     try {
       await recordRetirements(
         record.bookDir,
-        record.bookId ?? bookIdFromTitle(record.title),
+        bookIdForRetirementCleanup(record),
         dedupRetirements,
         null,
         log,
@@ -6263,7 +6297,7 @@ export async function runSubsetAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            const subsetBookId = record.bookId ?? bookIdFromTitle(record.title);
+            const subsetBookId = bookIdForRetirementCleanup(record);
             await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
             await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an

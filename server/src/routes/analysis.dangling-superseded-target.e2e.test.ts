@@ -198,16 +198,18 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-dangling-target-e2e-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [analysisMod, manuscriptsMod, cacheMod, historyMod, resolveMod, pathsMod, createMod] =
-    await Promise.all([
-      import('./analysis.js'),
-      import('../store/manuscripts.js'),
-      import('../store/analysis-cache.js'),
-      import('../store/cast-id-history.js'),
-      import('../store/cast-resolve.js'),
-      import('../workspace/paths.js'),
-      import('./cast-create.js'),
-    ]);
+  /* #2083 — sequential awaits, not Promise.all: a Promise.all of dynamic
+     imports here races the async vi.mock factory above (module-under-test
+     can receive the real binding instead of the mock). See the sibling
+     files carrying this same comment (e.g. cast-id-history-wiring.test.ts)
+     for the measured background. */
+  const analysisMod = await import('./analysis.js');
+  const manuscriptsMod = await import('../store/manuscripts.js');
+  const cacheMod = await import('../store/analysis-cache.js');
+  const historyMod = await import('../store/cast-id-history.js');
+  const resolveMod = await import('../store/cast-resolve.js');
+  const pathsMod = await import('../workspace/paths.js');
+  const createMod = await import('./cast-create.js');
 
   runMainAnalyzerJob = analysisMod.runMainAnalyzerJob;
   putManuscript = manuscriptsMod.putManuscript;

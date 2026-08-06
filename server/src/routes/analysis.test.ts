@@ -24,6 +24,7 @@ import {
   buildStage1ChapterInbox,
   readPriorCastForMerge,
   recordRetirements,
+  bookIdForRetirementCleanup,
   trackForReplay,
   replayCatchUp,
   castInFlightEntryToLiveChapter,
@@ -2226,6 +2227,46 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('bookIdForRetirementCleanup — M6 (fix round, #2158)', () => {
+  /* recordRetirements' `bookId` param exists ONLY to key
+     clearNotLinkedEdgesForDroppedRejections' lookup against `notLinkedTo`
+     edges keyed with the workspace `makeBookId` shape. The old call sites
+     fell back to `record.bookId ?? bookIdFromTitle(record.title)` —
+     `bookIdFromTitle` produces a completely different (title-only kebab
+     slug) shape, so that fallback can never match a real edge; it fails
+     OPEN by proceeding with a value that looks like a book id without
+     being the one anything else uses. */
+  it('returns record.bookId unchanged when present', () => {
+    expect(bookIdForRetirementCleanup({ bookId: 'author__series__title', title: 'Some Title' })).toBe(
+      'author__series__title',
+    );
+  });
+
+  it('returns undefined (never a title-derived id) and warns when bookId is absent', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = bookIdForRetirementCleanup({ title: 'Some Title' });
+      expect(result).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain('Some Title');
+      expect(warnSpy.mock.calls[0][0]).toContain('skipping notLinkedTo cleanup');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('treats an empty-string bookId the same as absent (falls through to the warn+undefined path)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = bookIdForRetirementCleanup({ bookId: '', title: 'Some Title' });
+      expect(result).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });
