@@ -171,10 +171,10 @@ carry the rule: `…Seq` is authoritative, `…Iso` is display.
 stamps `recordedAtSeq[k]` and `recordedAtIso[k]`. Every delete of
 `supersededBy[k]` deletes both.**
 
-The increment is on *every* write, not only key-changing ones — four paths write
-without touching a key (`rejectOrphanedPair:607`, `unrejectOrphanedPair:635`,
-`rejectOrphanedId:569`, and `dropSupersededIdsReclaimedByLiveCast`'s
-unconditional write at `:427`, documented as "Always writes, even when nothing was
+The increment is on *every* write, not only key-changing ones — five paths write
+without touching a key (`rejectOrphanedPair`, `unrejectOrphanedPair`,
+`rejectOrphanedId`, and BOTH drop primitives'
+unconditional writes, each documented as "Always writes, even when nothing was
 dropped"). Picking the broader rule makes "seq strictly increases across every
 write" a testable invariant rather than an ambiguous one.
 
@@ -188,12 +188,32 @@ merge-repoint hole:
 > while the alias pointed at `sourceId` used `sourceId`'s voice, so its bytes are
 > stale. Under the uniform rule the repoint restamps and the row lists.
 
-The six mutation sites, all uniform: `retireCharacterId`; its direct-reversal
-branch (`:291-298`); its repoint loop (`:317-321`); `forgetSupersededId`
-(`:475-491`); `dropSupersededIdsReclaimedByLiveCast` (`:417`); and
-`restoreSupersededId` (`:526`), which **stamps the current seq like every other
+The **seven** mutation sites, all uniform: `retireCharacterId`; its direct-reversal
+branch; its repoint loop; `forgetSupersededId`;
+`dropSupersededIdsReclaimedByLiveCast`; `dropSupersededTargetsNoLongerLive`; and
+`restoreSupersededId`, which **stamps the current seq like every other
 writer**. Nothing is preserved into `displaced` — it has zero readers outside this
 module.
+
+> **Rev 5 → 6 (2026-08-06, post-merge correction).**
+> `dropSupersededTargetsNoLongerLive` was missing from both enumerations above —
+> it did not exist when revisions 1-5 were written. #2110 added it in PR #2163,
+> which merged after this spec, and plan 280's after-the-fact reconciliation of
+> that PR did not revisit these lists. It deletes `supersededBy[k]` and writes
+> unconditionally, so it is a mutation site under the uniform rule like any other.
+>
+> The consequence of leaving it unwired is **not** stale-marker inheritance — the
+> `stampAndBump` helper self-heals that by pruning keys absent from
+> `supersededBy`. It is that a write which changes history state *without*
+> incrementing `seq` lets two distinct states share one counter value, which
+> defeats the thing `castHistorySeq` exists to record: the state a render actually
+> resolved against. A render before the drop and a render after it stamp the same
+> seq while resolving differently.
+>
+> Line citations in this section were removed at the same time. Every one was
+> stale by ~50-100 lines after #2110/#2133 reshaped `cast-id-history.ts` in
+> PR #2163 — the same drift this document already called out for `analysis.ts`
+> (F2) and resolved by citing symbols instead.
 
 `restoreSupersededId`'s two early returns (`:534-539`) write nothing and therefore
 stamp nothing; the guard test must assert those paths leave markers **untouched**,
@@ -699,6 +719,20 @@ each. Closed as a shape rather than by enumeration:
 - citation fixes: `cast.tsx:304-307`, `finalize-chapter-write.ts:106`,
   `aggregate.ts:485` was a comment, and the guard regex must not fire on
   `cast-reject-orphan.ts:357`'s `===`.
+
+**Rev 5 → 6** (post-merge correction, 2026-08-06 — after PR #2163 shipped
+#2110/#2129/#2133 and left #2128 open). The uniform-stamp rule enumerated **six**
+mutation sites and **four** keyless writes; both counts predate
+`dropSupersededTargetsNoLongerLive`, which #2110 introduced in PR #2163 — i.e.
+after this spec was written, and not caught by plan 280's after-the-fact
+reconciliation of that PR. Now seven and five. The failure it would have caused is
+subtler than a missing marker (the `stampAndBump` helper self-heals those): an
+unwired write changes history state without moving `seq`, so two distinct states
+share one counter and `castHistorySeq` stops identifying the state a render
+resolved against. Line citations in the affected sections were dropped rather than
+re-derived — #2110/#2133 shifted `cast-id-history.ts` by ~50-100 lines, so every
+one of them pointed at the wrong write, the same drift this document already
+resolved for `analysis.ts` by citing symbols (F2).
 
 ## Handover
 

@@ -369,6 +369,34 @@ export function buildTagMessage(fileText) {
   return stripBOM(fileText);
 }
 
+/** Creates the annotated release tag from `notesFile`'s content (#2114). A
+ *  thin, directly-callable seam separated out from main() specifically so a
+ *  test can call it without going through the CLI's pre-flights: pre-flight
+ *  6c already refuses to reach this point with a BOM-prefixed --notes-file,
+ *  so an end-to-end run can never legitimately drive a BOM through this call
+ *  — calling it directly is what lets a test pin the belt-and-suspenders
+ *  guarantee below independent of that pre-flight.
+ *
+ *  Reads `notesFile` in Node and pipes the result of `buildTagMessage`
+ *  (which strips a defensive BOM) to `git tag -F -` (stdin) rather than
+ *  `-F <path>`, which would hand git the raw, unstripped bytes — so a future
+ *  change to (or bypass of) the pre-flight still can't let a BOM through
+ *  here. `--cleanup=verbatim` is separately load-bearing: git's default
+ *  cleanup mode for both `-m` and `-F` strips lines starting with `#` as
+ *  commentary, which would silently eat the `## Features` / `## Fixes` /
+ *  `## Engineering` section headers CONTRIBUTING.md "Release notes"
+ *  mandates — v1.4.0 shipped with stripped headers and had to be patched in
+ *  place; preserve them by default from here on. */
+export function createAnnotatedTag({ repoRoot, newTag, notesFile }) {
+  const tagMessage = buildTagMessage(readFileSync(resolve(notesFile), 'utf8'));
+  execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
+    cwd: repoRoot,
+    input: tagMessage,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    encoding: 'utf8',
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.level) {
@@ -380,6 +408,28 @@ async function main() {
   // Default to the canonical in-repo notes so a release can't ship a silent
   // placeholder body (the refusal is enforced after the cheap pre-flights).
   args.notesFile = resolveNotesFile(args.notesFile, existsSync);
+
+  // #2168 review, Important 2 — a heads-up, not a refusal (that's a
+  // behaviour decision left open on purpose). release.yml's release-body.mjs
+  // sources the PUBLISHED GitHub release body from DEFAULT_NOTES_FILE only —
+  // never from whatever --notes-file supplied the tag annotation. Before
+  // #2168 a non-default --notes-file published fine; now it guarantees
+  // resolveReleaseBody's Rule 4 fails the tag at PUBLISH time — after
+  // verify, cross-os-verify, mobile-e2e and companion-apk-build have all
+  // run, and with the tag already pushed — unless the two files' contents
+  // happen to normalise-equal. Fires only when there's an actual divergence
+  // hazard: an explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that
+  // exists to disagree with it (resolveNotesFile only returns something
+  // other than DEFAULT_NOTES_FILE when an explicit path was given, or when
+  // the default is absent — the latter can't trip this, since the "exists"
+  // check below is then false).
+  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(DEFAULT_NOTES_FILE)) {
+    info(
+      `[WARN] --notes-file ${args.notesFile} was given, but release.yml publishes the release ` +
+        `body from ${DEFAULT_NOTES_FILE} — this tag will fail the publish job unless ` +
+        `${args.notesFile}'s content matches ${DEFAULT_NOTES_FILE} exactly.`,
+    );
+  }
 
   // Pre-flight 1: clean working tree (unless dry-run).
   const status = git(['status', '--porcelain'], { capture: true });
@@ -646,29 +696,11 @@ async function main() {
   git(['add', ...addPaths]);
   git(['commit', '-m', `chore: bump version to ${newVersion}`]);
 
-  // Annotated tag. `--cleanup=verbatim` is load-bearing: git's default
-  // cleanup mode for both `-m` and `-F` strips lines starting with `#`
-  // as commentary, which silently eats the `## Features` / `## Fixes` /
-  // `## Engineering` section headers CONTRIBUTING.md "Release notes"
-  // mandates. v1.4.0 shipped with stripped headers and had to be patched
-  // in place; preserve them by default from here on.
+  // Annotated tag — see createAnnotatedTag()'s doc comment for why
+  // `--cleanup=verbatim` and the BOM strip are both load-bearing.
   info('[STEP] git tag ...');
   if (args.notesFile) {
-    // #2114 — strip a leading BOM defensively before it becomes the tag
-    // message, even though pre-flight 6c above already refuses to reach here
-    // with one. This is belt-and-suspenders at the point of use: this
-    // content is what release.yml publishes verbatim as the GitHub release
-    // body, so a future change to (or bypass of) the pre-flight check still
-    // can't let a BOM through here. Reads the file in Node and pipes it to
-    // `git tag -F -` (stdin) rather than `-F <path>`, which would hand git
-    // the raw, unstripped bytes.
-    const tagMessage = buildTagMessage(readFileSync(resolve(args.notesFile), 'utf8'));
-    execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
-      cwd: repoRoot,
-      input: tagMessage,
-      stdio: ['pipe', 'inherit', 'inherit'],
-      encoding: 'utf8',
-    });
+    createAnnotatedTag({ repoRoot, newTag, notesFile: args.notesFile });
   } else {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }
@@ -682,7 +714,13 @@ async function main() {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);
     info(`       git tag -d ${newTag}`);
-    info(`       git tag -a ${newTag} -F <path-to-notes.md>`);
+    // --cleanup=verbatim mirrors the real call inside createAnnotatedTag()
+    // (load-bearing — see that function's doc comment). -F <path> hands git
+    // the file's raw bytes — no strip like the script's own buildTagMessage
+    // (#2114) runs — so the note below is the guard against re-introducing a
+    // BOM here.
+    info(`       git tag -a ${newTag} --cleanup=verbatim -F <path-to-notes.md>`);
+    info(`       (that file must not carry a UTF-8 BOM — git passes it through verbatim)`);
   }
   process.exit(0);
 }

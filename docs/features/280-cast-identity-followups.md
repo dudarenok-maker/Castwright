@@ -516,6 +516,22 @@ describe('#2128 — seq and recordedAt markers', () => {
     expect(h.recordedAtSeq).toEqual({});
   });
 
+  // Amended 2026-08-06 — the mirror of the test above, for the ninth write site.
+  // The two drop primitives are mirror images (one prunes an entry whose KEY was
+  // reclaimed, the other one whose TARGET died), so a marker-cleanup test for
+  // only one of them leaves the other's deletion path unproven.
+  it('deletes both markers when dropSupersededTargetsNoLongerLive drops a key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');   // seq 1, supersededBy {mayrin: mairin}
+    const before = (await loadCastIdHistory(dir)).seq!;
+    await dropSupersededTargetsNoLongerLive(dir, []);   // 'mairin' not live — entry drops
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({});
+    expect(h.recordedAtSeq).toEqual({});
+    expect(h.recordedAtIso).toEqual({});
+    expect(h.seq!).toBeGreaterThan(before);             // the write bumps seq like any other
+  });
+
   it('restoreSupersededId stamps the CURRENT seq, never a replayed one', async () => {
     // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await retireCharacterId(dir, 'mayrin', 'mairin');  // seq 1
@@ -539,13 +555,14 @@ describe('#2128 — seq and recordedAt markers', () => {
     expect(after.recordedAtIso).toEqual(before.recordedAtIso);
   });
 
-  it('bumps seq on the four writes that touch no supersededBy key', async () => {
+  it('bumps seq on the five writes that touch no supersededBy key', async () => {
     // `dir` is the file's own module-level temp dir, fresh per beforeEach.
     await rejectOrphanedId(dir, 'a');                     // 1
     await rejectOrphanedPair(dir, 'b', 'c');              // 2
     await unrejectOrphanedPair(dir, 'b', 'c');            // 3
     await dropSupersededIdsReclaimedByLiveCast(dir, []);  // 4 — writes unconditionally
-    expect((await loadCastIdHistory(dir)).seq).toBe(4);
+    await dropSupersededTargetsNoLongerLive(dir, []);     // 5 — likewise (amended 2026-08-06)
+    expect((await loadCastIdHistory(dir)).seq).toBe(5);
   });
 
   it('holds keys(recordedAtSeq) === keys(supersededBy) bidirectionally', async () => {
@@ -558,6 +575,13 @@ describe('#2128 — seq and recordedAt markers', () => {
       () => restoreSupersededId(dir, 'a', 'c'),
       () => dropSupersededIdsReclaimedByLiveCast(dir, ['b']),
       () => retireCharacterId(dir, 'd', 'c'),
+      // Amended 2026-08-06 — the ninth write site. Both arms, because they fail
+      // differently: the first writes while dropping NOTHING (proving seq bumps
+      // on an empty drop, the shape that makes "strictly increasing" testable),
+      // the second drops every surviving entry (proving the markers go with the
+      // keys rather than being left for the next write to self-heal).
+      () => dropSupersededTargetsNoLongerLive(dir, ['c']), // 'c' live — drops nothing, still writes
+      () => dropSupersededTargetsNoLongerLive(dir, []),    // 'c' dead — drops a and d
     ];
     let seq = 0;
     for (const step of script) {
@@ -781,18 +805,54 @@ function bumpSeqAndStamp(history: CastIdHistory, stampedKeys: readonly string[])
 }
 ```
 
-Then wire all eight write sites. The keys each one establishes:
+Then wire all **nine** write sites. The keys each one establishes:
 
 | Site | `stampedKeys` |
 |---|---|
-| `retireCharacterId` direct-reversal (before `:300`) | `[from, ...repointed]` |
-| `retireCharacterId` normal (before `:329`) | `[from, ...repointed]` |
-| `dropSupersededIdsReclaimedByLiveCast` (before `:427`) | `[]` — deletions only |
-| `forgetSupersededId` (before `:492`) | `[]` — deletion only |
-| `restoreSupersededId` (before `:541`) | `[id]` |
-| `rejectOrphanedId` (before `:569`) | `[]` |
-| `rejectOrphanedPair` (before `:607`) | `[]` |
-| `unrejectOrphanedPair` (before `:635`) | `[]` |
+| `retireCharacterId` direct-reversal | `[from, ...repointed]` |
+| `retireCharacterId` normal | `[from, ...repointed]` |
+| `dropSupersededIdsReclaimedByLiveCast` | `[]` — deletions only |
+| `dropSupersededTargetsNoLongerLive` | `[]` — deletions only |
+| `forgetSupersededId` | `[]` — deletion only |
+| `restoreSupersededId` | `[id]` |
+| `rejectOrphanedId` | `[]` |
+| `rejectOrphanedPair` | `[]` |
+| `unrejectOrphanedPair` | `[]` |
+
+> **Amended 2026-08-06 — the ninth site, and why the line citations are gone.**
+>
+> This table said "all eight write sites" and omitted
+> **`dropSupersededTargetsNoLongerLive`**. That primitive did not exist when this
+> plan was written: #2110 introduced it in PR #2163, the same PR the "What actually
+> shipped" section above reconciles after the fact — and that reconciliation did not
+> revisit this table. It deletes `supersededBy[k]` and writes the file, so under
+> Global Constraint 6 it is a write site like any other.
+>
+> **What goes wrong if it stays unwired.** Not stale-marker inheritance — the
+> `stampAndBump` helper above already self-heals that, pruning keys absent from
+> `supersededBy` (and back-filling missing ones at the *current* seq, which is the
+> conservative direction). The actual hole is upstream of the markers: an unwired
+> write changes the history state **without incrementing `seq`**, so two different
+> history states share one counter value. `castHistorySeq` exists to record *the
+> state a render resolved against*; once two states share a value it cannot.
+>
+> > `supersededBy['anton'] = 'антон'` at `seq=3`. Chapter X renders and stamps
+> > `castHistorySeq=3`, resolving through the alias to Антон — correct.
+> > `'антон'` then stops being live, so `dropSupersededTargetsNoLongerLive` removes
+> > the entry — leaving `seq=3`. Chapter Y renders and also stamps
+> > `castHistorySeq=3`, but `'anton'` no longer resolves through history at all.
+> > Two renders, two different resolutions, one indistinguishable stamp.
+>
+> It also breaks the plan's own two testable invariants directly: "seq strictly
+> increases across every write", and `keys(recordedAtSeq) === keys(supersededBy)`
+> at rest between the drop and the next write.
+>
+> **Line citations removed from this table deliberately.** Every `(before :NNN)`
+> here was stale — #2110/#2133 shifted `cast-id-history.ts` by ~50-100 lines in
+> PR #2163, so `:427`, `:492`, `:541` and the rest no longer point at the writes
+> they name. Cite by symbol, as the linked spec already resolved to do for the same
+> reason (its F2 note: "a line citation here was stale the moment it was written
+> twice already").
 
 Both repoint loops must now collect what they touched. The direct-reversal branch becomes:
 

@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag } from '../bump-version.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -173,6 +173,27 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
   }
 });
 
+/* Regression for #2140: the manual fallback recipe printed when there's no
+   notes file (placeholder-tag branch) omitted --cleanup=verbatim, silently
+   re-issuing the v1.4.0 header-stripping regression as advice. This pins
+   the printed hint, not just the real tag call the test above already
+   covers. Also pins the adjacent BOM caveat (round 1 review: keep the
+   recipe a plain, typeable `git tag` line — a long inline BOM-strip
+   pipeline is realistically mistyped under release pressure, which is the
+   exact failure this hint exists to prevent). */
+test('bump-version placeholder-tag fallback hint includes --cleanup=verbatim and the BOM note', () => {
+  const dir = setupRepo('1.2.3');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[NOTE\] Tag annotation is a placeholder/);
+    assert.match(out.stdout, /git tag -a v1\.2\.4 --cleanup=verbatim -F <path-to-notes\.md>/);
+    assert.match(out.stdout, /must not carry a UTF-8 BOM/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('bump-version --level minor zeros the patch field', () => {
   const dir = setupRepo('2.4.7');
   try {
@@ -236,6 +257,58 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
     });
     assert.match(annotation, /Fixes:/);
     assert.match(annotation, /the bug/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2168 review, Important 2 — release.yml's release-body.mjs publishes the
+// GitHub release body from DEFAULT_NOTES_FILE only, never from whatever
+// --notes-file supplied the tag annotation. Before #2168 a non-default
+// --notes-file published fine; now it guarantees resolveReleaseBody's Rule 4
+// fails the tag at PUBLISH time (after verify/cross-os-verify/mobile-e2e/
+// companion-apk-build have all run, tag already pushed) unless the two
+// files' contents happen to normalise-equal. A WARNING only, deliberately
+// not a refusal — refusing is a behaviour decision left open.
+test('bump-version warns at cut time when --notes-file differs from the default the release body publishes from', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-nondefault-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(
+      out.stdout,
+      /\[WARN\] --notes-file .* was given, but release\.yml publishes the release body from docs\/release-notes-next\.md/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version does not warn on the default path (no --notes-file given)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /\[WARN\] --notes-file/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -622,6 +695,60 @@ const BOM_CHAR = String.fromCharCode(0xfeff);
 test('buildTagMessage produces BOM-free output from BOM-prefixed input', () => {
   assert.equal(buildTagMessage(`${BOM_CHAR}# v1.0.1\n\n- the bug\n`), '# v1.0.1\n\n- the bug\n');
   assert.equal(buildTagMessage('# v1.0.1\n\n- the bug\n'), '# v1.0.1\n\n- the bug\n'); // no-op
+});
+
+// Direct unit test of createAnnotatedTag itself (#2139). Pre-flight 6c
+// already refuses to reach the tag step with a BOM-prefixed --notes-file, so
+// a run through main() can never legitimately drive a BOM through to the tag
+// call — the test above only pins buildTagMessage in isolation, not the
+// actual `git tag` call site. This test calls createAnnotatedTag directly,
+// bypassing main() (and so bypassing pre-flight 6c) on purpose: that bypass
+// is exactly what lets a test exercise the tag-creation unit's own stated
+// guarantee — "even if the pre-flight is reordered or bypassed, a BOM cannot
+// get through here" — independent of whether the pre-flight ran. Real
+// EF BB BF bytes on disk (writeBOMFile above), not a JS string, for the same
+// reason the pre-flight tests use them.
+//
+// Unlike every other git call in this file, createAnnotatedTag's own
+// execFileSync has no `env` override (it doesn't accept one — matching the
+// production call site, which is only ever reached via a freshly spawned
+// `node bump-version.mjs` process whose env a test harness already
+// sanitises). Called DIRECTLY, in-process, it inherits process.env
+// verbatim — so when this suite itself runs from inside a `git commit`
+// (husky's pre-commit hook), the parent commit's GIT_DIR / GIT_WORK_TREE /
+// GIT_INDEX_FILE leak straight through and redirect the tag write at the
+// REAL calling repo instead of the throwaway fixture (caught during this
+// test's own development: it left a stray tag in this repo). Sanitise
+// process.env around the call, the same GIT_* stripping cleanGitEnv() does
+// for every other git invocation, restoring it afterwards.
+test('createAnnotatedTag strips a BOM even when called directly, bypassing pre-flight 6c', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-direct-bom-${process.pid}-${Date.now()}.md`);
+    writeBOMFile(notes, '# v9.9.9\n\nFixes:\n- the bug\n');
+    const savedGitEnv = {};
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) {
+        savedGitEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
+    try {
+      createAnnotatedTag({ repoRoot: dir, newTag: 'bump-version-test-direct-bom', notesFile: notes });
+      const annotation = gitExec(
+        ['tag', '-l', '--format=%(contents)', 'bump-version-test-direct-bom'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.ok(!annotation.startsWith(BOM_CHAR), 'tag annotation must not start with a BOM');
+      assert.match(annotation, /# v9\.9\.9/);
+      assert.match(annotation, /Fixes:/);
+    } finally {
+      for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
+      rmSync(notes, { force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /* Plan 127 — cross-OS gate. The throwaway repo has no `gh` and no remote, so
