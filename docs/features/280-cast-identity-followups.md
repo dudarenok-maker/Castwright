@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
@@ -10,7 +10,10 @@ owner: null
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft
+> Status: active — #2110, #2129, #2133 shipped 2026-08-06 (PR #2163), each **except
+> #2133** via a mechanism this plan's own tasks do not specify; #2128 (Tasks 2-9,
+> most of this document) was never started and remains open. See "What actually
+> shipped" immediately below for the full reconciliation.
 > Design of record: [`docs/superpowers/specs/2026-08-06-cast-identity-followups-design.md`](../superpowers/specs/2026-08-06-cast-identity-followups-design.md)
 > Parent plan: [`278-cast-character-identity.md`](278-cast-character-identity.md)
 > Key files: `server/src/store/cast-id-history.ts`, `server/src/store/cast-resolve.ts`,
@@ -31,6 +34,89 @@ established*. Every full chapter render stamps the counter it resolved against
 `isAudioCurrent(resolution, segmentsFile, history)`, compares the two and returns
 `true | false | 'unknown'`; the Cast banner and `repair-cast-id-drift.mjs` both call it
 rather than each deciding for themselves. Anything other than `true` is damage.
+
+## What actually shipped (2026-08-06)
+
+Reconciled after the fact. This document was the design thread for #2110, #2129,
+#2133, #2128, but implementation ran on a separate branch
+(`fix/server-cast-identity-followups`, **PR #2163**, merge commit
+`7add81c0ce4fde75657ca2e64f5bd0131eb87d16`) whose commits **do not follow the task
+breakdown below** for three of the four issues. Recorded here rather than by
+silently rewriting the tasks to match — CLAUDE.md's "Surgical changes" section is
+explicit that a plan quietly edited to agree with the code loses the record of
+what was decided and why. Tasks 1-9 below are left exactly as originally written,
+as the historical design record — do not treat their checkboxes as a to-do list
+without reading this section first.
+
+**#2110 shipped, but not via Task 1.** Task 1 specifies reserving `supersededBy`
+*values* directly in `cast-create.ts`'s taken set. The linked spec (§7) explicitly
+considered and **rejected** pruning dangling entries ("a dangling entry is inert
+only while its target is dead, and resumes protecting its segments if a later
+re-analysis re-mints that target"). **The shipped fix does exactly the pruning the
+spec rejected**: a new primitive, `dropSupersededTargetsNoLongerLive`
+(`server/src/store/cast-id-history.ts`), prunes a `supersededBy` entry whose target
+has stopped being live — but only at the two authoritative end-of-run writes, never
+an interim one (pinned by
+`server/src/routes/analysis.interim-prune-prohibition.e2e.test.ts`, closing the
+exact #2086 hazard Task 1's own background section warns pruning would reopen).
+The pruned entry moves into `displaced` (a pre-existing field), and
+`cast-create.ts`'s taken set was widened during PR #2163's own fix rounds to
+`existingIds ∪ historyKeys ∪ displacedKeys ∪ rejectedPairs[].from` — the last two
+buckets (`displacedKeys`, then `rejectedPairFromKeys`) were found missing by
+review findings C1 and F1 *during* that PR, not planned here. Task 1's literal diff
+(reserving `Object.values(history.supersededBy)`) was never written.
+
+**#2129 shipped, but not via `isAudioCurrent`/`castHistorySeq`.** Tasks 2-9 build a
+per-book monotonic `seq` counter, `recordedAtSeq` markers, `matchedHistoryKeys` on
+the resolver, and a pure `isAudioCurrent` predicate meant to be consumed by both
+the banner and the repair script. **None of this exists in the shipped code** — no
+`server/src/store/cast-audio-currency.ts`, no `seq`/`recordedAtSeq`/`recordedAtIso`
+on `CastIdHistory`, no `castHistorySeq` on any segments file, no
+`matchedHistoryKeys` on `CastResolution`. `src/views/cast.tsx` instead gates the
+"audio needs a re-render" note on a static allowlist,
+`STALE_AUDIO_RESOLUTIONS: ReadonlySet<OrphanedCharacterFallback['resolution']> =
+new Set(['alias', 'normalised'])` (per #2107's ruling that only `'exact'` means the
+rendered bytes are fine) — a resolution-*type*-only gate with no notion of "has
+this alias's target changed since this segment rendered." `repair-cast-id-drift.mjs`
+was not touched to consult any predicate, so it still lists every non-`'exact'` id
+as damage regardless of whether a re-render has since made it current — the exact
+divergence #2129 was filed to close between the two surfaces stays partially open:
+the banner's language softened, but neither surface can yet say "this one's audio
+is current."
+
+**#2133 shipped as Task 10 specifies.** Reconciled from the sibling branch
+(commits `8c0925a2`, `03dd0fc6`, both present in the merged history) exactly as
+planned: both `analysis.ts`'s `recordRetirements` and `cast-merge.ts`'s
+`performCastMerge` now act on `droppedSelfLoopRejections`, the DELETE route clears
+the `notLinkedTo` edge unconditionally, and `docs/features/278-cast-character-identity.md`
+gained invariant 10. One thing Task 10 did not anticipate: PR #2163's review filed
+a residual, **#2166** ("an abandoned half-written reject leaves an invisible
+`notLinkedTo` edge with no UI path to remove it"), recorded in plan 278's
+invariant 10 rather than here.
+
+**#2128 (Tasks 2-9 in full) did not ship and remains open.** The open issue's text
+(filed 2026-08-05, unedited since) still describes the *timestamp*-based approach
+("per-entry `recordedAt` on `cast-id-history.json` compared against
+`SegmentsFile.synthesizedAt`") that the linked spec explicitly considered and moved
+away from, in favour of a `seq` counter, one day later (see the spec's "Why a
+counter and not a timestamp" section) — a design decision the issue itself has
+never been updated to reflect. A future implementer picking up #2128 needs to know
+this spec exists and represents a considered, reviewed (three adversarial passes)
+alternative to the issue's own framing, not simply re-derive a timestamp scheme
+from the stale issue text.
+
+**Also shipped in PR #2163, outside this plan's scope entirely** (declared in the
+PR body as incidental fixes, not silently folded in): a per-run `cast.json`
+merge-base compare-and-set primitive serialising `analysis.ts`'s five merge-base
+writes (a pre-existing race, unrelated to any of #2110/#2129/#2133/#2128); a
+`Promise.all`-of-dynamic-imports race fix in both new e2e test files (the same
+pattern #2083 had already swept from ten siblings); and a
+`record.bookId ?? bookIdFromTitle(...)` fail-open fallback fix, four sites rather
+than the two originally reported.
+
+**Net position:** 3 of 4 issues closed, only #2133 via the mechanism this plan
+specifies for it. #2128 — the reason the `seq`/predicate architecture (the bulk of
+this document, Tasks 2-9) exists at all — is untouched.
 
 **Tech Stack:** TypeScript (Node 20 + Express server, Vite/React 18/RTK frontend),
 Vitest (server + frontend), Playwright (e2e), plain-JS `.mjs` for the repair script.
@@ -138,6 +224,11 @@ Recorded here rather than silently fixed — this plan is what a later reader tr
 ---
 
 ### Task 1: #2110 — reserve `supersededBy` values, not just its keys
+
+> **Not how #2110 shipped.** The real fix (PR #2163, 2026-08-06) prunes dangling
+> entries instead — the opposite of what this task and the linked spec's §7
+> recommend. See "What actually shipped" above before implementing anything below;
+> #2110 is already closed.
 
 Self-contained, no dependency on anything else in this lane. Ship it first so the lane
 opens with a green branch.
@@ -338,6 +429,14 @@ git commit -m "fix(server): reserve supersededBy targets against a cast-create r
 ---
 
 ### Task 2: The persisted schema, `seq`, and the uniform stamp rule
+
+> **Tasks 2-9 (through "#2128 — the repair pass clears") are unimplemented.** None
+> of the `seq`/`recordedAtSeq`/`isAudioCurrent`/`matchedHistoryKeys` architecture
+> below exists in the shipped code. #2129 shipped a narrower fix that does not need
+> it (see "What actually shipped" above); #2128, which this architecture exists
+> for, is still open. This remains the live design for #2128 unless a future
+> implementer decides otherwise — but check the open issue's own text first, which
+> still describes a different (rejected) timestamp-based approach.
 
 The foundation. Everything after this reads what this task writes.
 
@@ -2818,6 +2917,10 @@ git commit -m "feat(scripts): clear a repaired id from the drift report once its
 
 ### Task 10: Reconcile #2133 from the sibling branch
 
+> **Shipped as specified.** Merged via PR #2163 (2026-08-06, merge commit
+> `7add81c0`), carrying commits `8c0925a2` and `03dd0fc6` from this sibling branch.
+> This is the one task in this document whose outcome matches what was planned.
+
 **Files:** none written in this lane. Verification and a merge.
 
 **Interfaces:**
@@ -3101,4 +3204,12 @@ Per CLAUDE.md's Before-shipping checklist:
 
 ## Ship notes
 
-_(fill on merge: shipped date, merge SHA, PR number)_
+**Partial.** #2110, #2129, #2133 shipped **2026-08-06** via **PR #2163**
+(`fix/server-cast-identity-followups` → `main`, merge commit
+`7add81c0ce4fde75657ca2e64f5bd0131eb87d16`) — see "What actually shipped" above for
+how each diverged from the tasks below (all but Task 10/#2133). **#2128 (Tasks
+2-9) did not ship** and is not archived here: this plan stays `status: active` and
+out of `docs/features/archive/` until #2128 either lands or is formally deferred.
+There is no single merge SHA for "this plan shipping" — only the three-issue
+subset above landed, and not via this plan's own task breakdown for two of the
+three.

@@ -6,6 +6,35 @@
 > per-issue handover brief are separate artifacts (see "Handover").
 > Parent plan: [`docs/features/278-cast-character-identity.md`](../../features/278-cast-character-identity.md).
 
+## Post-hoc note (2026-08-06, after PR #2163)
+
+Implementation ran on `fix/server-cast-identity-followups` (PR #2163, merged
+`7add81c0ce4fde75657ca2e64f5bd0131eb87d16`) rather than through the "Handover"
+chain below, and did not follow this design for three of the four issues. Full
+reconciliation lives in the plan's "What actually shipped" section
+(`docs/features/280-cast-identity-followups.md`); two points are recorded here
+because they directly contradict specific claims this document makes, not merely
+"this wasn't built yet":
+
+- **§7 explicitly rejects pruning**: "Pruning dangling entries (the issue's option
+  2) was rejected: a dangling entry is inert only while its target is dead, and
+  resumes protecting its segments if a later re-analysis re-mints that target."
+  **The shipped #2110 fix prunes anyway** — a new `dropSupersededTargetsNoLongerLive`
+  primitive — but closes the exact gap this rejection warns about by moving the
+  pruned entry into `displaced` and reserving `displaced` keys in `cast-create.ts`'s
+  taken set, so the id stays protected across the drop. Recorded as a reversed
+  decision, not a factual error in either document — the repo owner chose
+  differently at implementation time, after this spec's reasoning was already
+  written down.
+- **§6 ("Both surfaces derive their verdict from `isAudioCurrent`") did not
+  ship.** #2129 shipped via a static `STALE_AUDIO_RESOLUTIONS` allowlist on
+  `resolution` type alone (`src/views/cast.tsx`) — no `seq`, no `castHistorySeq`,
+  no predicate call. §1-§5 (the `seq`/predicate architecture §6 depends on) were
+  never built; #2128, which that architecture exists for, remains open — and the
+  open issue's own text still describes the timestamp-based approach §1's "Why a
+  counter and not a timestamp" subsection argues against, unedited since before
+  this spec existed.
+
 ## Why one lane
 
 The four issues are independent defects but share one surface: the cast-identity
