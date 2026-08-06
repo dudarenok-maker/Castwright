@@ -106,6 +106,8 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { readJsonWithFingerprint } from '../workspace/cast-fingerprint.js';
+import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
   mergeAnalysisResultWithExistingCast,
   overlayInterimCastForLiveView,
@@ -171,22 +173,49 @@ import { GeminiAnalyzer } from '../analyzer/gemini.js';
    it) fall back to the reuse-carryover snapshot the reparse handler wrote, so
    continuity survives the reparse → re-analysis window. Once this run writes a
    fresh cast.json it takes precedence and the carryover goes inert until the
-   next reparse refreshes it. */
-export async function readPriorCastForMerge(
-  bookDir: string,
-): Promise<Array<{ id: string } & Record<string, unknown>>> {
-  const fromCast = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
-      castJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  if (fromCast?.length) return fromCast;
-  const fromCarryover = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+   next reparse refreshes it.
+
+   #2015 / #2155 — the whole two-file fallback runs INSIDE the cast lock, which
+   is what makes "which file did these rows come from" a decidable question
+   answered atomically with the read itself. That is the capture problem the
+   four earlier designs died on: fingerprinting cast.json from outside this
+   fallback describes bytes the snapshot may not have come from.
+
+   Rule 1 (one level only) holds: both production callers sit at the top of
+   their run outside any lock, and applyReparse never calls this. */
+export interface PriorCastSnapshot {
+  rows: Array<{ id: string } & Record<string, unknown>>;
+  /** sha256 of cast.json's raw bytes when the rows came from it. `null` means
+      "no compare-and-set is available for this run" — carryover-sourced or
+      empty. A null fingerprint DISABLES conflict detection rather than
+      producing a wrong verdict (design §1a). */
+  fingerprint: string | null;
+  source: 'cast' | 'carryover' | 'none';
+}
+
+export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastSnapshot> {
+  type Rows = Array<{ id: string } & Record<string, unknown>>;
+  return withCastLock(bookDir, async () => {
+    const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
+    const fromCast = cast.value?.characters;
+    if (fromCast?.length) {
+      /* fingerprint is a hash, never ABSENT, on this branch — the file
+         demonstrably parsed. The guard is for the type, not the case. */
+      return {
+        rows: fromCast,
+        fingerprint: typeof cast.fingerprint === 'string' ? cast.fingerprint : null,
+        source: 'cast' as const,
+      };
+    }
+    const carry = await readJsonWithFingerprint<{ characters?: Rows }>(
       castReuseCarryoverJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  return fromCarryover ?? [];
+    );
+    const fromCarryover = carry.value?.characters;
+    if (fromCarryover) {
+      return { rows: fromCarryover, fingerprint: null, source: 'carryover' as const };
+    }
+    return { rows: [], fingerprint: null, source: 'none' as const };
+  });
 }
 
 /* §4.4 — the choke point every id-retiring call site records through.
@@ -2845,11 +2874,17 @@ export async function runMainAnalyzerJob(
        snapshot the prior on a fresh run — with reuse continuity stripped, since
        fresh legitimately re-derives that. Read happens before the fresh block
        below rm's cast.json, so the value survives that deletion. */
-    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
-      ? requestedFresh
-        ? dropReuseContinuityKeepDesignedVoice(await readPriorCastForMerge(recordRef.bookDir))
-        : await readPriorCastForMerge(recordRef.bookDir)
-      : [];
+    const priorSnapshot = recordRef.bookDir
+      ? await readPriorCastForMerge(recordRef.bookDir)
+      : { rows: [], fingerprint: null, source: 'none' as const };
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
+      ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
+      : priorSnapshot.rows;
+    /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+       every merge-base write and reset by the Start-fresh delete below. */
+    const castBase: CastMergeBase | null = recordRef.bookDir
+      ? createCastMergeBase(recordRef.bookDir, priorSnapshot.fingerprint)
+      : null;
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
        feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
@@ -5384,9 +5419,15 @@ export async function runSubsetAnalyzerJob(
 
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
-  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
+  const priorSnapshot = record.bookDir
     ? await readPriorCastForMerge(record.bookDir)
-    : [];
+    : { rows: [], fingerprint: null, source: 'none' as const };
+  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+  /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+     every merge-base write. */
+  const castBase: CastMergeBase | null = record.bookDir
+    ? createCastMergeBase(record.bookDir, priorSnapshot.fingerprint)
+    : null;
 
   /* Heal cross-series/author reuse links in the prior cast before it feeds the
      seed + cast.json merges (see the streaming path for the full rationale —
