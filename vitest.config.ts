@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { availableParallelism } from 'node:os';
+import { retryHazardReporter } from './src/test/retry-hazard-reporter';
+import { isAgent } from 'std-env';
 
 /* Contention throttle (plan 156). When LOW_CONCURRENCY is set — manually, or
    automatically by scripts/verify-cache.mjs when it detects a busy GPU — cap
@@ -26,6 +28,18 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}', 'skills/**/*.test.ts'],
+    /* #2063 (ported from server/vitest.config.ts's identical exclude entry,
+       PR #2049 review Finding 6) — vitest-retry-hazard-reporter.test.ts's
+       runVitestOnFixture() writes throwaway wire-test fixtures under this
+       directory and deletes them in a `finally` block; a kill between write
+       and cleanup could leave one behind. Excluding it here means a
+       surviving `__wire-fixtures__/*.test.ts` is structurally invisible to
+       THIS suite regardless — vitest.config.wire-fixtures.ts is the only
+       config that ever includes it, and only that config is what
+       runVitestOnFixture() spawns against. Setting `exclude` replaces
+       vitest's defaults rather than extending them, so the first two
+       entries re-list them. */
+    exclude: ['node_modules/**', 'dist/**', 'src/__wire-fixtures__/**'],
     /* `vitest run --changed <base>` (CI cost round 2 — verify.yml frontend leg)
        narrows the run to tests whose module graph touches the diff. The setup
        file is injected by the runner, NOT imported by any test, so a change to
@@ -80,6 +94,25 @@ export default defineConfig({
          type`, erased at transform time, so regenerating the types doesn't
          create an edge either. */
       '{**/openapi.yaml,**/.*/**/openapi.yaml}',
+      /* #2051 (PR #2160 review, finding 2) — api.design-sse-event-types.test.ts
+         readFile()s BOTH of these at RUNTIME to cross-check
+         readCastDesignStream's `case` labels against the generated event
+         union. It imports neither, so there is no module-graph edge, and
+         `vitest --changed` — which verify.yml uses for the frontend leg —
+         would never select it for a diff that touches only api.ts. That diff
+         is precisely the one the guard exists to catch: delete a `case` and
+         nothing else, and the required check goes green.
+
+         The openapi.yaml trigger above does NOT cover this: it fires only when
+         the contract itself moves, not on an api.ts edit or an api-types.ts
+         regeneration commit.
+
+         Cost measured, not assumed: with these absent, a diff touching api.ts
+         already selects 330 of 332 files, because api.ts is a near-universal
+         transitive import. The marginal cost of forcing the full run is ~2
+         files. */
+      '{**/src/lib/api.ts,**/.*/**/src/lib/api.ts}',
+      '{**/src/lib/api-types.ts,**/.*/**/src/lib/api-types.ts}',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See
@@ -87,6 +120,34 @@ export default defineConfig({
        Vitest's defaults — jsdom suites are CPU-bound, not subprocess-
        bound; the server suite is where the worker-crash pattern lives. */
     retry: 1,
+    // #2063 (ported from server/vitest.config.ts) — see retryHazardReporter's
+    // own module (src/test/retry-hazard-reporter.ts) for why retry:1 stays
+    // and what this adds on top of it. Vitest
+    // only auto-selects its OWN built-in reporters when the resolved
+    // `reporters` array is EMPTY — setting one explicitly, unconditionally,
+    // would silently override TWO separate auto-selections (PR #2049
+    // review, Findings 1 and 4, reproduced here rather than repeated):
+    //   1. The base reporter: vitest's own resolver pushes
+    //      `[isAgent ? 'agent' : 'default', {}]` — 'agent' under an AI
+    //      coding agent (std-env's isAgent, true here under CLAUDECODE —
+    //      also Cursor, Replit, Codex, etc.), 'default' otherwise.
+    //      Hardcoding 'default' unconditionally would silently downgrade
+    //      every agent-driven local run.
+    //   2. 'github-actions' (inline PR annotations + the "Flaky Tests"
+    //      $GITHUB_STEP_SUMMARY panel), appended only when GITHUB_ACTIONS
+    //      is 'true'; verify.yml runs `vitest run`/`vitest run --changed`
+    //      directly against this config, so suppressing it would silence
+    //      that panel on every CI run of this suite.
+    // Mirroring both selections below keeps this config's behaviour
+    // identical to what an EMPTY `reporters` array would already do, plus
+    // retryHazardReporter layered on top — never a downgrade from it. No
+    // sibling config has this bug: vitest.config.wire-fixtures.ts pulls
+    // `reporters` straight off this file's resolved default export rather
+    // than re-declaring it.
+    reporters:
+      process.env.GITHUB_ACTIONS === 'true'
+        ? [isAgent ? 'agent' : 'default', 'github-actions', retryHazardReporter]
+        : [isAgent ? 'agent' : 'default', retryHazardReporter],
     /* Vitest 4 removed `poolOptions`; `maxThreads`/`maxForks` collapsed into a
        single top-level `maxWorkers` (and `minWorkers` was dropped — only the
        cap affects scheduling). The contention throttle now just sets that cap. */

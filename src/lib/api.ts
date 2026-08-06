@@ -5993,6 +5993,22 @@ export interface CastDesignStatus {
   failures?: Array<{ characterId: string; name: string; error: string }>;
 }
 
+/* #2051 — the `handle()` switch below (and CastDesignCallbacks/
+   CastDesignStatus above it) is a HAND-WRITTEN mirror of the generated
+   `CastDesignEvent`/`SingleDesignEvent` unions in api-types.ts, not derived
+   from them. Deliberate, not an oversight: this is a permissive wire parser
+   feeding narrow per-event callbacks (one optional handler per event, most
+   fields renamed/reshaped on the way through — e.g. `character_designed`'s
+   `voiceId` fans out to `onCharacterDesigned`'s differently-shaped payload),
+   so the generated discriminated union isn't a drop-in the way a 1:1 REST
+   mirror would be (see #1883/plan 270) — forcing that swap would mean
+   deciding how a permissive parser narrows into a generated union, which is
+   design work a much smaller guard already makes unnecessary.
+   `src/lib/api.design-sse-event-types.test.ts` is that guard: it cross-checks
+   the switch's `case` labels against `CastDesignEvent['type'] |
+   SingleDesignEvent['type']` in api-types.ts, so a tenth event type reaching
+   the generated types without a matching `case` here fails a test — see that
+   file's header for what the guard does and does NOT catch. */
 export async function readCastDesignStream(res: Response, cb: CastDesignCallbacks): Promise<void> {
   if (!res.ok || !res.body) {
     let detail = '';
