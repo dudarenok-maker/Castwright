@@ -288,6 +288,25 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
     return job;
   }
 
+  /* Fix round 1 (independent review, Important finding 1) — a zero-warnings
+     assertion is VACUOUS unless the run actually reached a merge-base write.
+     runMainAnalyzerJob swallows every top-level failure into
+     endJob(job, {kind:'error'}) (analysis.ts ~5123-5161), and both interim
+     write sites additionally swallow their own throws (:3739, :5743) — none
+     of that surfaces as a 'warning' event, so warningCodes(events).toEqual([])
+     would pass just as trivially for a run that died before any write as for
+     one where the detector correctly found nothing to report. This helper is
+     what stops that: cast.json on disk afterwards must carry THIS run's own
+     detected roster. 'narrator' never appears in any of this file's seed
+     fixtures (they seed 'stale' / 'foreign' / 'carried'), and narrator always
+     speaks in CHAPTER_BODY's second sentence (survives the non-speaker-drop
+     pass unlike 'olga'), so its presence is a positive, run-specific signal
+     that a write actually landed — not proof merely that the job returned. */
+  function assertRunWroteRoster(bookDir: string): void {
+    const ids = readCast(bookDir).characters.map((c) => c.id);
+    expect(ids).toContain('narrator');
+  }
+
   function warningCodes(events: unknown[]): Array<string | undefined> {
     return events
       .filter((ev) => (ev as { kind?: string }).kind === 'warning')
@@ -324,19 +343,24 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       const manuscriptId = `test-merge-base-fresh-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-      registerManuscript(manuscriptId, bookDir);
-
-      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
-      setPhase1Selection(phase1Selection);
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
-
+      // Fix round 1 (Minor) — setup that can throw (registerManuscript,
+      // saveAnalysisCache, etc.) now lives INSIDE the try, alongside the env
+      // var mutation. Previously both ran before the try: a throw there would
+      // skip `finally` entirely, leaking the env var override and the tmpdir
+      // into whichever sibling test runs next in the same fork.
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+        registerManuscript(manuscriptId, bookDir);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -347,6 +371,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(warningCodes(events)).toEqual([]);
+        assertRunWroteRoster(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -363,19 +388,19 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       const manuscriptId = `test-merge-base-nonfresh-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-      registerManuscript(manuscriptId, bookDir);
-
-      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
-      setPhase1Selection(phase1Selection);
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+        registerManuscript(manuscriptId, bookDir);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -386,6 +411,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(warningCodes(events)).toEqual([]);
+        assertRunWroteRoster(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -398,43 +424,46 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
        run's OWN writes. Asserts EXACTLY one warning, not "at least one" —
        "at least one" cannot fail for a detector that fires on every
        remaining write site, which is precisely the regression the
-       baseline-advance rule (cast-merge-base.ts) exists to prevent.
-
-       The foreign write is injected inside the Phase-1 (attribution)
-       analyzer's FIRST call. The sequential-stub watermark
-       (pipelinedPerPhase is forced false by the select-analyzer mock above)
-       gates every Phase-1 chapter dispatch behind watermark.markPhase0AllDone(),
-       which analysis.ts only calls AFTER the 'stage1' write
-       (analysis.ts ~3948) has already landed — so this always lands
-       strictly between the run's own 'stage1' write and its 'final' write,
-       regardless of Phase-1's own internal dispatch order. */
+       baseline-advance rule (cast-merge-base.ts) exists to prevent. A run
+       that reports a conflict has, by definition, reached a write — no
+       separate disk assertion is needed here the way it is for the
+       zero-warnings controls above. */
     "control 3 — a foreign write between two of this run's own writes reports EXACTLY one stale warning (route-level, main)",
     async () => {
       const manuscriptId = `test-merge-base-positive-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-      registerManuscript(manuscriptId, bookDir);
-
-      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
-      let injected = false;
-      const phase1Selection = buildSelection(
-        buildPhase1Analyzer(() => {
-          if (!injected) {
-            injected = true;
-            seedCastJson(bookDir, [{ id: 'foreign' }]);
-          }
-        }),
-        'phase1-model',
-      );
-      setPhase1Selection(phase1Selection);
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+        registerManuscript(manuscriptId, bookDir);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        /* The foreign write is injected inside the Phase-1 (attribution)
+           analyzer's FIRST call. The sequential-stub watermark
+           (pipelinedPerPhase is forced false by the select-analyzer mock
+           above) gates every Phase-1 chapter dispatch behind
+           watermark.markPhase0AllDone(), which analysis.ts only calls AFTER
+           the 'stage1' write (analysis.ts ~3948) has already landed — so
+           this always lands strictly between the run's own 'stage1' write
+           and its 'final' write, regardless of Phase-1's own internal
+           dispatch order. */
+        let injected = false;
+        const phase1Selection = buildSelection(
+          buildPhase1Analyzer(() => {
+            if (!injected) {
+              injected = true;
+              seedCastJson(bookDir, [{ id: 'foreign' }]);
+            }
+          }),
+          'phase1-model',
+        );
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -464,36 +493,36 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       const manuscriptId = `test-merge-base-carryover-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      // No cast.json — only the reuse-carryover snapshot.
-      writeFileSync(
-        castReuseCarryoverJsonPath(bookDir),
-        JSON.stringify(
-          { characters: [{ id: 'carried', name: 'Carried', role: 'minor', color: '#abcabc' }] },
-          null,
-          2,
-        ),
-      );
-      registerManuscript(manuscriptId, bookDir);
-
-      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
-      let injected = false;
-      const phase1Selection = buildSelection(
-        buildPhase1Analyzer(() => {
-          if (!injected) {
-            injected = true;
-            seedCastJson(bookDir, [{ id: 'foreign' }]);
-          }
-        }),
-        'phase1-model',
-      );
-      setPhase1Selection(phase1Selection);
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        // No cast.json — only the reuse-carryover snapshot.
+        writeFileSync(
+          castReuseCarryoverJsonPath(bookDir),
+          JSON.stringify(
+            { characters: [{ id: 'carried', name: 'Carried', role: 'minor', color: '#abcabc' }] },
+            null,
+            2,
+          ),
+        );
+        registerManuscript(manuscriptId, bookDir);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        let injected = false;
+        const phase1Selection = buildSelection(
+          buildPhase1Analyzer(() => {
+            if (!injected) {
+              injected = true;
+              seedCastJson(bookDir, [{ id: 'foreign' }]);
+            }
+          }),
+          'phase1-model',
+        );
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -504,6 +533,17 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(warningCodes(events)).toEqual([]);
+        /* Fix round 1 (Important finding 2) — this control previously had
+           ZERO execution evidence of its own: it stays green under both
+           mutations by design, asserts only an empty array, and never
+           touched disk. As written it could not distinguish "detection
+           correctly disabled" from "the run errored", "the foreign write
+           never landed", or "no write site was reached". This is the
+           route-level's only pin on the fingerprint:null third state, so it
+           needs its own proof the run actually reached a write — not just
+           that the (vacuous) zero-warnings assertion above happened to
+           hold. */
+        assertRunWroteRoster(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -521,35 +561,35 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       const manuscriptId = `test-merge-base-voice-preserve-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId, { castConfirmed: true });
-      seedCastJson(bookDir, [
-        {
-          id: 'narrator',
-          name: 'Narrator',
-          voiceUuid: 'U-narr',
-          ttsEngine: 'qwen',
-          overrideTtsVoices: {
-            qwen: {
-              name: 'qwen-U-narr',
-              variants: { excited: { name: 'qwen-U-narr__excited' } },
-            },
-          },
-          voiceId: 'some-library-voice',
-          voiceState: 'reused',
-          matchedFrom: { bookId: 'prior', characterId: 'narrator', confidence: 0.9 },
-        },
-      ]);
-      registerManuscript(manuscriptId, bookDir);
-
-      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
-      setPhase1Selection(phase1Selection);
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId, { castConfirmed: true });
+        seedCastJson(bookDir, [
+          {
+            id: 'narrator',
+            name: 'Narrator',
+            voiceUuid: 'U-narr',
+            ttsEngine: 'qwen',
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-U-narr',
+                variants: { excited: { name: 'qwen-U-narr__excited' } },
+              },
+            },
+            voiceId: 'some-library-voice',
+            voiceState: 'reused',
+            matchedFrom: { bookId: 'prior', characterId: 'narrator', confidence: 0.9 },
+          },
+        ]);
+        registerManuscript(manuscriptId, bookDir);
+
+        const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+        setPhase1Selection(phase1Selection);
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), { manuscriptId, bookDir });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -590,32 +630,32 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
       const manuscriptId = `test-merge-base-subset-negative-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-      const chapterHints = registerManuscript(manuscriptId, bookDir);
-
-      // Pre-seed cache.stage1 so the subset route takes the "book already
-      // fully analysed" branch (stage1Existed === true) — the only branch
-      // that reaches the subset-final write site at all.
-      const stage1: Stage1Output = {
-        characters: stage1Roster(),
-        chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
-      };
-      await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
-
-      const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), {
-        manuscriptId,
-        bookDir,
-        kind: 'subset',
-        subsetChapterIds: chapterHints.map((c) => c.id),
-      });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+        const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+        // Pre-seed cache.stage1 so the subset route takes the "book already
+        // fully analysed" branch (stage1Existed === true) — the only branch
+        // that reaches the subset-final write site at all.
+        const stage1: Stage1Output = {
+          characters: stage1Roster(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        };
+        await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+
+        const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), {
+          manuscriptId,
+          bookDir,
+          kind: 'subset',
+          subsetChapterIds: chapterHints.map((c) => c.id),
+        });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
@@ -629,6 +669,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         );
 
         expect(warningCodes(events)).toEqual([]);
+        assertRunWroteRoster(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -647,44 +688,46 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
        the first chapter's subset-interim write always lands strictly before
        the second chapter's own analyzer call — injecting on the SECOND call
        deterministically lands the foreign write between two of this run's
-       own writes. */
+       own writes. A run that reports a conflict has, by definition, reached
+       a write — no separate disk assertion is needed here the way it is for
+       the zero-warnings controls above. */
     "control 7 — a foreign write mid-run reports EXACTLY one warning on the subset job's own send (route-level, subset)",
     async () => {
       const manuscriptId = `test-merge-base-subset-positive-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      process.env.STAGE2_COVERAGE_RETRIES = '0';
-      seedStateJson(bookDir, manuscriptId);
-      seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-      const chapterHints = registerManuscript(manuscriptId, bookDir);
-
-      const stage1: Stage1Output = {
-        characters: stage1Roster(),
-        chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
-      };
-      await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
-
-      let calls = 0;
-      const selection = buildSelection(
-        buildPhase0Analyzer(() => {
-          calls += 1;
-          if (calls === 2) {
-            seedCastJson(bookDir, [{ id: 'foreign' }]);
-          }
-        }),
-        'phase0-model-subset',
-      );
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
-
-      const events: unknown[] = [];
-      const job = makeJob((ev) => events.push(ev), {
-        manuscriptId,
-        bookDir,
-        kind: 'subset',
-        subsetChapterIds: chapterHints.map((c) => c.id),
-      });
-
       try {
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+        const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+        const stage1: Stage1Output = {
+          characters: stage1Roster(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        };
+        await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+
+        let calls = 0;
+        const selection = buildSelection(
+          buildPhase0Analyzer(() => {
+            calls += 1;
+            if (calls === 2) {
+              seedCastJson(bookDir, [{ id: 'foreign' }]);
+            }
+          }),
+          'phase0-model-subset',
+        );
+        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+
+        const events: unknown[] = [];
+        const job = makeJob((ev) => events.push(ev), {
+          manuscriptId,
+          bookDir,
+          kind: 'subset',
+          subsetChapterIds: chapterHints.map((c) => c.id),
+        });
+
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
