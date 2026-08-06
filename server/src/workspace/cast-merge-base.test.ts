@@ -8,7 +8,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { castJsonPath } from './paths.js';
-import { readJsonWithFingerprint, fingerprintOfWrite } from './cast-fingerprint.js';
+import { readJsonWithFingerprint } from './cast-fingerprint.js';
 import { createCastMergeBase } from './cast-merge-base.js';
 
 function makeBookDir(): string {
