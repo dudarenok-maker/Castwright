@@ -203,7 +203,10 @@ pattern.
    `orphanSpoken`, and is separately visible.
 3. The script runs against the live workspace and prints a row for every book,
    skipping and reporting books with no cache.
-4. No threshold constant, no UI, no persisted state exists yet.
+4. The script **flags a book with `castCount > 0 && spokenTotal === 0`
+   distinctly** from one with no cache at all — _Ночной дозор_ must be visibly a
+   damaged book, not a blank row (D11).
+5. No threshold constant, no UI, no persisted state exists yet.
 
 ---
 
@@ -304,7 +307,7 @@ gave it no consumer.
   ```ts
   type AttributionHealthResponse = AttributionMeasurement & {
     share: number | null;                             // null under the floor
-    state: 'ok' | 'collapsed' | 'unmeasurable';
+    state: 'ok' | 'collapsed' | 'missing' | 'unmeasurable';
     triggeredBy: 'book' | 'chapter' | null;
     worstChapterId: number | null;
     analysedAt: string;
@@ -317,7 +320,7 @@ gave it no consumer.
   client-supplied timestamp (revision 1) could go stale between the client's GET
   and its POST, making the dismiss button do nothing, silently (R-M7).
 - `GET /api/library` — each book gains
-  `attributionState: 'ok' | 'collapsed' | 'unmeasurable'`. **Not a boolean:** a
+  `attributionState: 'ok' | 'collapsed' | 'missing' | 'unmeasurable'`. **Not a boolean:** a
   boolean cannot distinguish `unmeasurable` from `ok`, which is how revision 1
   reproduced the silence it was written to fix (R-M5).
 
@@ -492,7 +495,8 @@ instead of reading as a clean bill of health.
 
 | Case | Behaviour |
 |---|---|
-| Zero spoken sentences (non-fiction, pure narration) | `share: null`, not collapsed. |
+| Zero spoken sentences, **no non-narrator cast** (non-fiction, pure narration) | `share: null`, state `ok`. Nothing is missing — there were never any characters. |
+| Zero spoken sentences, **cast present** | State `missing` (D11). The contradiction is the signal. |
 | Under 20 spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. |
 | Chapter with 6 spoken lines, all narrator | Shows `100%` in the breakdown; does **not** trigger (under the 20-line trigger floor). |
 | User excludes back-matter after analysis | Live compute picks it up; the library badge is patched in the same session. |
@@ -528,6 +532,20 @@ count a dash-prefixed sentence that also contains one.
 firing while the book-level share is far below it; a chapter at 100% with 19
 spoken lines **not** triggering and the same chapter with 20 triggering;
 `triggeredBy` and `worstChapterId` correct in both directions.
+
+**Wave 2 — the `missing` state (D11).** Three fixtures that must resolve to
+three different states, because the whole point of D11 is that revision 2
+collapsed them into one:
+
+| Fixture | `castCount` | `spokenTotal` | Expected |
+|---|---|---|---|
+| Pure-narration non-fiction | 0 | 0 | `ok` |
+| Cast built, nothing attributed | 47 | 0 | `missing` |
+| No cache at all | — | — | `unmeasurable` |
+
+A test that only asserts the middle row passes with the rule written as
+`spokenTotal === 0` alone — which would badge every non-fiction book. The
+`castCount` half of the condition is only proven by the first row.
 
 **Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
 only when the field is absent; the dismiss endpoint resolves `analysedAt`
@@ -604,6 +622,10 @@ live view all move in the shipping PR.
    **in the library as well as in the Cast view.**
 7. The backfill stamps every existing book; the books Wave 1 identified as
    damaged badge, and books Wave 1 measured as healthy do not.
+8. A book with a cast and no attributed sentences badges as `missing` and gates
+   generation. **Named case:** if _Ночной дозор_ is still in its 2026-08-06 state
+   (47 cast members, 0 sentences) it must badge — it read as `ok` under
+   revision 2.
 
 ## Review findings
 
@@ -627,3 +649,11 @@ re-verified against the tree before folding:
 | R-Mi2 | Minor | Two specified tests could not fail | Fixtures respecified; neutralisation proof widened to every assertion |
 | R-Mi3 | Minor | A subset re-run re-arms the whole book's dismissal | Accepted and documented — correct under a per-chapter trigger |
 | R-Mi4 | Minor | mtime is not a stable identity across restore/move | `cache.updatedAt` used; mtime only as a legacy fallback |
+
+**Round 2 — repo owner, 2026-08-06.** Verified against the live workspace, not
+the tree:
+
+| ID | Severity | Finding | Disposition |
+|---|---|---|---|
+| R-O1 | Critical | A book with a cast and **zero attributed sentences** scored `share: null` → `ok`. _Ночной дозор_ — 47 cast members, nothing attributed — would have rendered as perfectly healthy: #1984's failure shape inside the fix for #1984 | D11 added — `missing` is its own alarm state, badged and gating |
+| R-O2 | Major | The threshold could not be calibrated against the one book that most stresses the dash rule, because that book has nothing to measure | Wave 1 prerequisite added: re-analyse _Ночной дозор_ before setting the threshold |
