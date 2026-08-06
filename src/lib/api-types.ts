@@ -3802,6 +3802,27 @@ export interface components {
             progress: number;
             label?: string;
         };
+        /**
+         * @description Non-fatal advisory on the analysis SSE stream. The analysis continues;
+         *     a `warning` never replaces the terminal `result`. Follows the same
+         *     `code` + `message` envelope the splice, generation and QA-repair
+         *     streams use, so a caller can dedupe and route without parsing prose.
+         */
+        AnalyseWarningEvent: {
+            /** @enum {string} */
+            kind: "warning";
+            /**
+             * @description Stable machine-readable warning code. Today only
+             *     `cast_merge_base_stale` — emitted when another route wrote
+             *     `cast.json` between two of this run's own merge-base writes, so the
+             *     analysis result was merged onto an older cast and that write may
+             *     have been overwritten. Replayed once per code on reconnect.
+             * @enum {string}
+             */
+            code: "cast_merge_base_stale";
+            /** @description Human-readable advisory text. */
+            message: string;
+        };
         AnalyseResponse: {
             /** @example ns */
             bookId: string;
@@ -6593,7 +6614,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyseResponse"];
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
         };
@@ -6624,7 +6645,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
         };

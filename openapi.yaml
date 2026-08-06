@@ -561,6 +561,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
   /api/manuscripts/{manuscriptId}/analysis/chapters:
@@ -599,6 +600,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/AnalysePhaseEvent'
+                  - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
 
   /api/books/{bookId}/chapters/{chapterId}/exclude:
@@ -5169,6 +5171,29 @@ components:
         phaseId: { type: integer, minimum: 0 }
         progress: { type: number, minimum: 0, maximum: 1 }
         label: { type: string }
+
+    AnalyseWarningEvent:
+      type: object
+      description: |
+        Non-fatal advisory on the analysis SSE stream. The analysis continues;
+        a `warning` never replaces the terminal `result`. Follows the same
+        `code` + `message` envelope the splice, generation and QA-repair
+        streams use, so a caller can dedupe and route without parsing prose.
+      required: [kind, code, message]
+      properties:
+        kind: { type: string, enum: [warning] }
+        code:
+          type: string
+          description: |
+            Stable machine-readable warning code. Today only
+            `cast_merge_base_stale` — emitted when another route wrote
+            `cast.json` between two of this run's own merge-base writes, so the
+            analysis result was merged onto an older cast and that write may
+            have been overwritten. Replayed once per code on reconnect.
+          enum: [cast_merge_base_stale]
+        message:
+          type: string
+          description: Human-readable advisory text.
 
     AnalyseResponse:
       type: object
