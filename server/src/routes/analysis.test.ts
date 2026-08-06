@@ -2271,6 +2271,325 @@ describe('bookIdForRetirementCleanup — M6 (fix round, #2163)', () => {
   });
 });
 
+/* F8 (fix round 2, #2163) — the three unit tests above only pin the helper
+   in isolation; they prove nothing about whether all FOUR real call sites
+   (two in runMainAnalyzerJob's dedup + persist blocks, two in
+   runSubsetAnalyzerJob's own dedup + persist blocks) actually call it,
+   rather than still hand-rolling `record.bookId ?? bookIdFromTitle(record.title)`
+   inline. "Mutate every entry point" is the rule this wave kept being
+   bitten by — reverting ANY ONE of the four call sites back to the old
+   inline fallback must turn at least one of the two tests below red.
+
+   Neither test needs a real retirement to fire: `bookIdForRetirementCleanup`
+   is called (and warns, since `record.bookId` is never set by the raw
+   `putManuscript` fixture these tests use — the production-only path,
+   `loadManuscriptForBook`, is what actually populates it) once PER SITE,
+   independent of whether that site's retirement list ends up empty. Each
+   job's two sites are made to fire in the SAME run — the dedup site needs
+   only `priorCastForMerge.length > 1` (main) / is unconditional (subset),
+   the persist site needs only a normal completing run — so the warn COUNT
+   is the number of sites in that job still wired to the real helper. */
+describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)', () => {
+  function bookIdAbsentWarnings(warnSpy: { mock: { calls: unknown[][] } }): string[] {
+    return warnSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((m: string) => m.includes('record.bookId is absent'));
+  }
+
+  function buildTrivialAnalyzer(roster: CharacterOutput[], sentences: SentenceOutput[]): {
+    phase0: Analyzer;
+    phase1: Analyzer;
+  } {
+    return {
+      phase0: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+          return { characters: roster };
+        },
+        runStage2Chapter: () =>
+          Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.reject(new Error('not used')),
+      },
+      phase1: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () =>
+          Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+        async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+          return { sentences };
+        },
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () =>
+          Promise.reject(new Error('no flagged windows — escalation should never be called')),
+      },
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function setPhase1Selection(sel: AnalyzerSelection): void {
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = sel;
+  }
+  function clearPhase1Selection(): void {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  }
+
+  afterEach(() => {
+    clearPhase1Selection();
+  });
+
+  it(
+    'runMainAnalyzerJob — dedup site + persist site both call it (warn fires exactly twice)',
+    async () => {
+      const manuscriptId = `test-f8-main-${Date.now()}-${Math.random()}`;
+      const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-f8-main-e2e-test-'));
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+      writeFileSync(
+        join(bookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'b_f8_main_e2e_test',
+          manuscriptId,
+          title: 'F8 Main E2E Test Book',
+          author: 'Test Author',
+          series: 'Standalones',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.md',
+          castConfirmed: false,
+          chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+      // Deliberately NO `bookId` field here — mirrors the raw putManuscript
+      // fixture pattern every other e2e-style test in this file already
+      // uses (the production-only loadManuscriptForBook path is what
+      // actually populates it), so `record.bookId` is genuinely falsy.
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'F8 Main E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      // 2 prior characters -> priorCastForMerge.length > 1 -> reaches the
+      // MAIN job's dedup call site regardless of whether either name
+      // actually collides with anything.
+      writeFileSync(
+        join(bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { id: 'filler-a', name: 'Filler A' },
+            { id: 'filler-b', name: 'Filler B' },
+          ],
+        }),
+      );
+
+      const roster: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+        {
+          id: 'anton',
+          name: 'Anton',
+          role: 'lead',
+          color: '#111111',
+          gender: 'male',
+          evidence: [{ quote: 'Anton asked' }],
+        },
+      ];
+      const sentences: SentenceOutput[] = [
+        { id: 101, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Are you sure this will work' },
+      ];
+      const { phase0, phase1 } = buildTrivialAnalyzer(roster, sentences);
+      const phase0Selection = buildSelection(phase0, 'phase0-model');
+      const phase1Selection = buildSelection(phase1, 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+        // Sanity check on the fixture itself, not the fix: this run's
+        // record genuinely has no bookId, so both call sites below are
+        // exercising the warn path, not silently no-op-ing on a truthy one.
+        expect(recordRef.bookId).toBeFalsy();
+
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        // One from the dedup site (priorCastForMerge.length > 1 above), one
+        // from the final authoritative persist. If EITHER call site reverts
+        // to the old inline fallback, this drops from 2 to 1.
+        expect(bookIdAbsentWarnings(warnSpy)).toHaveLength(2);
+      } finally {
+        warnSpy.mockRestore();
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'runSubsetAnalyzerJob — dedup site + persist site both call it (warn fires exactly twice)',
+    async () => {
+      const manuscriptId = `test-f8-subset-${Date.now()}-${Math.random()}`;
+      const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-f8-subset-e2e-test-'));
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+      writeFileSync(
+        join(bookDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'b_f8_subset_e2e_test',
+          manuscriptId,
+          title: 'F8 Subset E2E Test Book',
+          author: 'Test Author',
+          series: 'Standalones',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.md',
+          castConfirmed: false,
+          chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+      // Same deliberate omission as the main-job test above.
+      putManuscript({
+        manuscriptId,
+        format: 'plaintext',
+        title: 'F8 Subset E2E Test Book',
+        wordCount: 100,
+        byteSize: 1000,
+        uploadedAt: new Date().toISOString(),
+        sourceText: CHAPTER_BODY,
+        chapterHints,
+        bookDir,
+      });
+
+      const roster: CharacterOutput[] = [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+        {
+          id: 'anton',
+          name: 'Anton',
+          role: 'lead',
+          color: '#111111',
+          gender: 'male',
+          evidence: [{ quote: 'Anton asked' }],
+        },
+      ];
+      const sentences: SentenceOutput[] = [
+        { id: 101, chapterId: 1, characterId: 'anton', confidence: 0.9, text: 'Are you sure this will work' },
+      ];
+      const { phase0, phase1 } = buildTrivialAnalyzer(roster, sentences);
+      const phase0Selection = buildSelection(phase0, 'phase0-model-subset');
+      const phase1Selection = buildSelection(phase1, 'phase1-model-subset');
+
+      // stage1Existed === true, so the subset route actually reaches Phase 1
+      // / the persist block the F8 persist site lives in, rather than
+      // stopping after cast-update.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: roster,
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: chapterHints.map((c) => c.id),
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+        expect(recordRef.bookId).toBeFalsy();
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // One from the subset dedup site (unconditional — always reached),
+        // one from the subset final authoritative persist. If EITHER call
+        // site reverts to the old inline fallback, this drops from 2 to 1.
+        expect(bookIdAbsentWarnings(warnSpy)).toHaveLength(2);
+      } finally {
+        warnSpy.mockRestore();
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
 describe('castInFlightEntryToLiveChapter — live tick chapter map (Phase-0a cast)', () => {
   it('live tick chapters carry section counts', () => {
     /* A chapter chunked into 4 sections with 2 done — the live tick entry
