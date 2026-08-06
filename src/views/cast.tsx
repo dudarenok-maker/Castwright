@@ -1340,19 +1340,29 @@ export function CastView({
                           <span className="text-xs text-ink/60">
                             {info.segments} segment{info.segments === 1 ? '' : 's'}
                           </span>
-                          {/* #2129 — 'alias' (resolved through the id-history
-                              side-table) answers "does this id resolve today?",
-                              not "was the rendered audio ever produced under
-                              the resolved voice?" — `scripts/repair-cast-id-
-                              drift.mjs` can (and does) list these same rows as
-                              damage needing a re-render (register row A32:
-                              `the-torment` resolves via a normalised-history
-                              tier yet was narrator-rendered for 67 segments).
-                              'normalised' (a live id-shape match with no
-                              history entry) isn't marked here — this is
-                              scoped to the alias tier only, per the chosen
-                              fix. */}
-                          {info.resolution === 'alias' && (
+                          {/* #2129, widened by I2 (fix round, #2158) — any
+                              non-exact resolution answers "does this id
+                              resolve today?", not "was the rendered audio
+                              ever produced under the resolved voice?" —
+                              `scripts/repair-cast-id-drift.mjs` can (and
+                              does) list these same rows as damage needing a
+                              re-render (register row A32:
+                              `docs/testing/onbox-acceptance-register.md`
+                              — *Playing with Fire*'s `the-torment`, 67
+                              segments, resolves via the **normalised-id**
+                              tier, not history, and was still
+                              narrator-rendered). #2107's ruling (same
+                              register, ~line 1508) is that only the
+                              `'exact'` tier means the rendered bytes are
+                              fine — `'alias'` (the `'history'`/
+                              `'normalised-history'` tiers) AND `'normalised'`
+                              (the `'normalised-id'` tier) both need this
+                              note; this section never contains an `'exact'`
+                              row to begin with (an exact match isn't an
+                              orphan), so gating on `resolution !==
+                              'unresolved'` covers every row actually
+                              rendered here. */}
+                          {info.resolution !== 'unresolved' && (
                             <span
                               data-testid={`orphaned-alias-audio-note-${orphanedId}`}
                               className="text-xs text-amber-700"

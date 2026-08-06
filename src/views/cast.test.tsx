@@ -799,7 +799,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(section.id).toBe('orphaned-auto-reconciled-list');
     });
 
-    it("#2129 — an alias-resolved row is marked so the banner stops implying the audio is fine; a normalised-id row isn't", () => {
+    it("#2129, widened by I2 (fix round, #2158) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
       const store = configureStore({
         reducer: {
           ui: uiSlice.reducer,
@@ -817,15 +817,17 @@ describe('CastView Qwen status pill (plan 117)', () => {
             characters: [narrator, marrow],
             orphanedCharacterFallbacks: {
               // 'alias' — resolved through the id-history side-table
-              // (`'history'`/`'normalised-history'` server-side). The repair
-              // pass can list this exact shape as damage needing a
-              // re-render (register row A32) even though it resolves live —
-              // the banner must say so.
+              // (`'history'`/`'normalised-history'` server-side).
               mayrin: { resolution: 'alias' as const, resolvedCharacterId: 'marrow', segments: 6 },
               // 'normalised' — a live id-shape match with no history entry
-              // (`'normalised-id'` server-side). Out of scope for this fix
-              // (the brief scopes the wording change to the alias tier
-              // only) — must NOT gain the note.
+              // (`'normalised-id'` server-side). The repair pass can list
+              // THIS exact shape as damage needing a re-render — register
+              // row A32's own fixture (`docs/testing/onbox-acceptance-
+              // register.md`) is a normalised-id match, not a history one
+              // (67-segment `the-torment`, RC2's underscore-vs-hyphen
+              // split) — so per #2107's ruling ("only 'exact' means the
+              // rendered bytes are fine") this must ALSO carry the note,
+              // not be excluded from it.
               Mayrin_: { resolution: 'normalised' as const, resolvedCharacterId: 'marrow', segments: 2 },
             },
           },
@@ -837,7 +839,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(within(section).getByTestId('orphaned-alias-audio-note-mayrin')).toHaveTextContent(
         /resolves now.*audio may still need a re-render/i,
       );
-      expect(within(section).queryByTestId('orphaned-alias-audio-note-Mayrin_')).toBeNull();
+      expect(within(section).getByTestId('orphaned-alias-audio-note-Mayrin_')).toHaveTextContent(
+        /resolves now.*audio may still need a re-render/i,
+      );
     });
 
     it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
