@@ -38,11 +38,6 @@ export interface PublicDevice {
   revoked: boolean;
 }
 
-interface DeviceTokensFile {
-  schema: 1 | 2;
-  devices: DeviceTokenRecord[];
-}
-
 export function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
@@ -59,6 +54,16 @@ export function findValidDevice(
     if (d.revoked) continue;
     const exp = d.expiresAt === undefined ? NaN : Date.parse(d.expiresAt);
     if (!Number.isFinite(exp) || now > exp) continue;
+    // #2149 — defence-in-depth, mirroring the expiresAt guard above.
+    // loadSync validates tokenHash before a record ever reaches `cache`, so
+    // this should be unreachable in practice — but Buffer.from throws a
+    // TypeError on a non-string, and this loop is the SYNCHRONOUS auth
+    // guard: an unguarded throw here wouldn't just fail this one record, it
+    // would abort matching for every record after it (a live availability
+    // defect, not just hardening — see #2149). Decision: make this call
+    // throw-safe too, so any future path that populates `devices` without
+    // going through loadSync can't reintroduce the bug.
+    if (typeof d.tokenHash !== 'string') continue;
     const dh = Buffer.from(d.tokenHash);
     if (dh.length === h.length && timingSafeEqual(dh, h)) return d;
   }
@@ -85,13 +90,49 @@ export function clampTtlDays(raw: unknown): number {
 
 let cache: DeviceTokenRecord[] | null = null;
 
+/** Validate a raw parsed device record against every field the auth path
+ *  trusts (#2149). Returns the name of the first field that failed, or
+ *  `null` if the record is trustworthy.
+ *
+ *  Of the options considered — refuse to start, repair in place, drop
+ *  silently, drop with a warning — this repo chose "drop with a warning":
+ *  refusing to start lets one bad field brick the whole install; repairing
+ *  in place (e.g. re-deriving expiresAt from createdAt + ttlDays) would
+ *  silently re-issue an expiry the operator never granted; dropping
+ *  silently leaves no trace an operator could act on. A record that fails
+ *  any check here is dropped by `loadSync` (with a warning) and never
+ *  reaches an authentication decision. See #2149 for the recorded decision. */
+function invalidDeviceField(raw: unknown): string | null {
+  if (raw === null || typeof raw !== 'object') return 'record';
+  const r = raw as Record<string, unknown>;
+  if (typeof r.tokenHash !== 'string' || r.tokenHash.length === 0) return 'tokenHash';
+  // Mirrors findValidDevice's own #2144 formula — absent (legacy schema-1)
+  // and unparseable are both untrustworthy, the same rule that already
+  // rejects the record at auth time, applied one step earlier at load time.
+  const exp = r.expiresAt === undefined ? NaN : Date.parse(r.expiresAt as string);
+  if (!Number.isFinite(exp)) return 'expiresAt';
+  if (r.revoked !== undefined && typeof r.revoked !== 'boolean') return 'revoked';
+  if (r.createdAt !== undefined && !Number.isFinite(Date.parse(r.createdAt as string))) return 'createdAt';
+  return null;
+}
+
 function loadSync(): DeviceTokenRecord[] {
   if (cache) return cache;
   const path = deviceTokensJsonPath();
   if (!existsSync(path)) return (cache = []);
   try {
-    const f = JSON.parse(readFileSync(path, 'utf8')) as DeviceTokensFile;
-    cache = Array.isArray(f.devices) ? f.devices : [];
+    const f = JSON.parse(readFileSync(path, 'utf8')) as { devices?: unknown };
+    const raw = Array.isArray(f.devices) ? f.devices : [];
+    cache = raw.filter((d: unknown, i: number) => {
+      const field = invalidDeviceField(d);
+      if (field === null) return true;
+      const id =
+        d !== null && typeof d === 'object' && typeof (d as Record<string, unknown>).id === 'string'
+          ? (d as Record<string, unknown>).id
+          : `index ${i}`;
+      console.warn(`[device-tokens] dropping malformed device record "${id}": invalid ${field}`);
+      return false;
+    }) as DeviceTokenRecord[];
   } catch {
     cache = [];
   }
@@ -105,9 +146,17 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
 
 const LASTSEEN_THROTTLE_MS = 60 * 60 * 1000; // ~1h — bounds disk writes on the hot guard path
 
-/** Pure: has it been long enough since lastSeenAt to be worth a write? */
+/** Pure: has it been long enough since lastSeenAt to be worth a write?
+ *  #2149 — a malformed lastSeenAt (Date.parse -> NaN) is treated the same
+ *  as an absent one (touch now), not left frozen forever: `now - NaN` is
+ *  NaN, and NaN compared against the threshold is always false, so an
+ *  unguarded parse would silently and permanently stop touching the
+ *  record. The record has already survived load-time validation on the
+ *  fields that matter for auth, so treating a bad lastSeenAt as "never
+ *  seen" is the safe reading here. */
 export function shouldTouchLastSeen(record: DeviceTokenRecord, now: number): boolean {
-  const last = record.lastSeenAt ? Date.parse(record.lastSeenAt) : 0;
+  const parsed = record.lastSeenAt ? Date.parse(record.lastSeenAt) : NaN;
+  const last = Number.isFinite(parsed) ? parsed : 0;
   return now - last > LASTSEEN_THROTTLE_MS;
 }
 
