@@ -8,20 +8,21 @@
    diagnostic isn't available yet (so the reporter can never itself become
    noise on an ordinary green run).
 
-   Unlike the server copy, this imports vitest.config.ts STATICALLY: unlike
-   server/vitest.config.ts (which sits outside server/src, the server
-   tsconfig's rootDir, and needs a dynamic import to dodge tsc's rootDir
-   check), this repo's root tsconfig has no rootDir restriction and already
-   lists vitest.config.ts in its own "include" — src/test/force-rerun-
-   triggers.test.ts sets the precedent for a static import of this exact
-   file. */
+   Unlike the server copy, the reporter lives in its OWN module
+   (src/test/retry-hazard-reporter.ts) rather than being a named export of
+   vitest.config.ts, so this imports it directly and statically. That split is
+   PR #2160 review finding 5: a config file with both a default and a named
+   export makes rolldown print a `[MIXED_EXPORTS]` warning on the first line of
+   stdout for every root `vitest` run. The wiring tests below still spawn the
+   REAL on-disk vitest.config.ts, so nothing about the installation proof
+   changes — see that module's own doc comment. */
 import { describe, it, expect, vi } from 'vitest';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import type { TestCase } from 'vitest/node';
-import { retryHazardReporter } from '../vitest.config';
+import { retryHazardReporter } from './test/retry-hazard-reporter';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -196,6 +197,44 @@ describe('github-actions reporter — real wiring under CI (#2028, #2063, PR #20
     const withoutCi = runVitestOnFixture('__wire_fixture_gha_off__.test.ts', OUTRIGHT_FAIL_FIXTURE, {
       GITHUB_ACTIONS: undefined,
     });
-    expect(`${withoutCi.stdout ?? ''}${withoutCi.stderr ?? ''}`).not.toContain('::error');
+    const combined = `${withoutCi.stdout ?? ''}${withoutCi.stderr ?? ''}`;
+    /* POSITIVE CONTROL FIRST (PR #2160 review, finding 1). The `not.toContain`
+       below is a bare negative over spawned-process output: it passes just as
+       happily when vitest never ran at all. Proven, not suspected — pointing
+       --config at a nonexistent file makes vitest die at startup with exit 1
+       and no '::error' anywhere, and the assertion still passed. These two
+       lines pin that the fixture genuinely executed and genuinely failed, so
+       the absence below is evidence rather than silence. */
+    expect(withoutCi.status).toBe(1);
+    expect(combined).toContain('deliberately fails outright');
+    expect(combined).not.toContain('::error');
+  });
+});
+
+/* PR #2160 review, finding 3 — nothing asserted the BASE half of the
+   reporters ternary. Both wire describes above prove the appended reporters
+   fire, but a "simplification" to `[retryHazardReporter]` /
+   `['github-actions', retryHazardReporter]` would drop vitest's own summary
+   reporter and stay green across every other test here — i.e. it would
+   reintroduce exactly PR #2049 Finding 1, the regression this config's
+   comment says it is pre-empting.
+
+   Asserted through the base reporter's OWN output rather than by importing
+   the config and inspecting the array: the array's contents are a mechanism,
+   the summary line is the outcome, and only the outcome proves the reporter
+   was actually installed in the spawned run. */
+describe('the base reporter survives the ternary (#2063, PR #2049 review F1)', () => {
+  it("vitest's own summary reporter still runs in BOTH env branches", { timeout: 60_000 }, () => {
+    for (const GITHUB_ACTIONS of [undefined, 'true'] as const) {
+      const out = runVitestOnFixture(
+        `__wire_fixture_base_reporter_${GITHUB_ACTIONS ?? 'off'}__.test.ts`,
+        OUTRIGHT_FAIL_FIXTURE,
+        { GITHUB_ACTIONS },
+      );
+      const combined = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+      expect(combined, `GITHUB_ACTIONS=${GITHUB_ACTIONS}`).toMatch(
+        /Test Files\s+\d+ (passed|failed)/,
+      );
+    }
   });
 });

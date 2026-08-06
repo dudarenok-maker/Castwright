@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { availableParallelism } from 'node:os';
-import type { Reporter, TestCase } from 'vitest/node';
+import { retryHazardReporter } from './src/test/retry-hazard-reporter';
 import { isAgent } from 'std-env';
 
 /* Contention throttle (plan 156). When LOW_CONCURRENCY is set — manually, or
@@ -17,43 +17,6 @@ const lowConcurrency =
 const poolCap = lowConcurrency
   ? Math.max(1, Math.floor(availableParallelism() / 2))
   : undefined;
-
-/* #2063 (survey of #2028 for the frontend suite) — retry: 1 below can turn a
-   genuine red-phase test green: for a test asserting on module-level mutable
-   state (a Map/Set/counter at module scope, or fixture state on disk keyed
-   by a fixed path), attempt 1 fails and leaks its mutation; attempt 2 reads
-   state attempt 1 already touched and passes for the wrong reason. See
-   CONTRIBUTING.md's "When you ship a change" section (the "#2028" note) for
-   the full writeup and the `--retry=0` verification convention this
-   reporter exists to surface.
-
-   Ported from server/vitest.config.ts's retryHazardReporter (#2028), which
-   carries the full narrow-vs-global rationale. The frontend-specific survey
-   for THIS suite: `npx vitest run --retry=0` against unmodified `main` came
-   back 328 files / 4560 tests, all passing, on 2026-08-06 — clean. A clean
-   survey does not by itself justify dropping retry:1 (it says nothing about
-   the transient jsdom/timer flakes the retry exists to absorb — see the
-   comment above `retry: 1` below), so this ships the same shape server did:
-   keep the retry, and make any test that only passes because of it
-   impossible to miss. Any test that fails on attempt 1 and only passes
-   after a retry prints a `[retry-hazard]` line naming the file and test. A
-   human then re-runs it with `--retry=0` to judge whether it's a genuine
-   transient (route through quarantinedIt, docs/testing/flaky-register.md)
-   or a red-phase test the retry hid. */
-export const retryHazardReporter: Reporter = {
-  onTestCaseResult(testCase: TestCase) {
-    const diagnostic = testCase.diagnostic();
-    if (diagnostic && diagnostic.retryCount > 0 && testCase.result().state === 'passed') {
-      console.warn(
-        `[retry-hazard] ${testCase.module.moduleId} :: "${testCase.fullName}" failed on its ` +
-          `first attempt and only passed after ${diagnostic.retryCount} retry(ies). If this test ` +
-          'asserts on module-level mutable state, retry:1 may be hiding a genuine red-phase ' +
-          'failure (#2028) — re-run with --retry=0 to check. See CONTRIBUTING.md "When you ' +
-          'ship a change" (the "#2028" note).',
-      );
-    }
-  },
-};
 
 export default defineConfig({
   plugins: [react()],
@@ -131,6 +94,25 @@ export default defineConfig({
          type`, erased at transform time, so regenerating the types doesn't
          create an edge either. */
       '{**/openapi.yaml,**/.*/**/openapi.yaml}',
+      /* #2051 (PR #2160 review, finding 2) — api.design-sse-event-types.test.ts
+         readFile()s BOTH of these at RUNTIME to cross-check
+         readCastDesignStream's `case` labels against the generated event
+         union. It imports neither, so there is no module-graph edge, and
+         `vitest --changed` — which verify.yml uses for the frontend leg —
+         would never select it for a diff that touches only api.ts. That diff
+         is precisely the one the guard exists to catch: delete a `case` and
+         nothing else, and the required check goes green.
+
+         The openapi.yaml trigger above does NOT cover this: it fires only when
+         the contract itself moves, not on an api.ts edit or an api-types.ts
+         regeneration commit.
+
+         Cost measured, not assumed: with these absent, a diff touching api.ts
+         already selects 330 of 332 files, because api.ts is a near-universal
+         transitive import. The marginal cost of forcing the full run is ~2
+         files. */
+      '{**/src/lib/api.ts,**/.*/**/src/lib/api.ts}',
+      '{**/src/lib/api-types.ts,**/.*/**/src/lib/api-types.ts}',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See
@@ -138,8 +120,9 @@ export default defineConfig({
        Vitest's defaults — jsdom suites are CPU-bound, not subprocess-
        bound; the server suite is where the worker-crash pattern lives. */
     retry: 1,
-    // #2063 (ported from server/vitest.config.ts) — see retryHazardReporter
-    // above for why retry:1 stays and what this adds on top of it. Vitest
+    // #2063 (ported from server/vitest.config.ts) — see retryHazardReporter's
+    // own module (src/test/retry-hazard-reporter.ts) for why retry:1 stays
+    // and what this adds on top of it. Vitest
     // only auto-selects its OWN built-in reporters when the resolved
     // `reporters` array is EMPTY — setting one explicitly, unconditionally,
     // would silently override TWO separate auto-selections (PR #2049
