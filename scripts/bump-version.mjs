@@ -682,13 +682,12 @@ async function main() {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);
     info(`       git tag -d ${newTag}`);
-    // Mirrors the real call at :666: --cleanup=verbatim (load-bearing, see
-    // :649) and a BOM-safe route via stdin — a bare `-F <path>` hands git the
-    // raw bytes and can re-introduce the #2114 BOM bug this script itself
-    // guards against.
-    info(
-      `       node -e "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8').replace(/^\\uFEFF/,''))" <path-to-notes.md> | git tag -a ${newTag} --cleanup=verbatim -F -`,
-    );
+    // --cleanup=verbatim mirrors the real call at :666 (load-bearing, see
+    // :649). -F <path> hands git the file's raw bytes — no strip like the
+    // script's own buildTagMessage (#2114) runs — so the note below is the
+    // guard against re-introducing a BOM here.
+    info(`       git tag -a ${newTag} --cleanup=verbatim -F <path-to-notes.md>`);
+    info(`       (that file must not carry a UTF-8 BOM — git passes it through verbatim)`);
   }
   process.exit(0);
 }

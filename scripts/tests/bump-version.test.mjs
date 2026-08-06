@@ -177,14 +177,18 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
    notes file (placeholder-tag branch) omitted --cleanup=verbatim, silently
    re-issuing the v1.4.0 header-stripping regression as advice. This pins
    the printed hint, not just the real tag call the test above already
-   covers. */
-test('bump-version placeholder-tag fallback hint includes --cleanup=verbatim', () => {
+   covers. Also pins the adjacent BOM caveat (round 1 review: keep the
+   recipe a plain, typeable `git tag` line — a long inline BOM-strip
+   pipeline is realistically mistyped under release pressure, which is the
+   exact failure this hint exists to prevent). */
+test('bump-version placeholder-tag fallback hint includes --cleanup=verbatim and the BOM note', () => {
   const dir = setupRepo('1.2.3');
   try {
     const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /\[NOTE\] Tag annotation is a placeholder/);
-    assert.match(out.stdout, /git tag -a v1\.2\.4 --cleanup=verbatim -F -/);
+    assert.match(out.stdout, /git tag -a v1\.2\.4 --cleanup=verbatim -F <path-to-notes\.md>/);
+    assert.match(out.stdout, /must not carry a UTF-8 BOM/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
