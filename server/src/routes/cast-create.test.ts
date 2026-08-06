@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { buildCastResolver } from '../store/cast-resolve.js';
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -69,11 +70,13 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-create-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ castCreateRouter }, { castMergeRouter }, { makeBookId }] = await Promise.all([
-    import('./cast-create.js'),
-    import('./cast-merge.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const [{ castCreateRouter }, { castMergeRouter }, { castRejectOrphanRouter }, { makeBookId }] =
+    await Promise.all([
+      import('./cast-create.js'),
+      import('./cast-merge.js'),
+      import('./cast-reject-orphan.js'),
+      import('../workspace/paths.js'),
+    ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK_WITH_CAST);
   bookIdNoCast = makeBookId(AUTHOR, SERIES, BOOK_NO_CAST);
 
@@ -81,6 +84,7 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', castCreateRouter);
   app.use('/api/books', castMergeRouter);
+  app.use('/api/books', castRejectOrphanRouter);
 });
 
 beforeEach(() => {
@@ -375,5 +379,60 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  /* F1 (fix round 2, #2163) — a THIRD path to #2110's end state, reachable by
+     UI clicks alone with no analysis run: "Not the same character"
+     (`cast-reject-orphan.ts`'s POST) calls `forgetSupersededId`, which
+     deletes `supersededBy[from]` unconditionally on every successful
+     reject — so unlike the drop path C1 covers (`displacedKeys`), the freed
+     key doesn't even land in `displaced`; it survives ONLY inside
+     `rejectedPairs`. Drives the full chain through the REAL routes (reject,
+     then create by the same name) rather than hand-writing
+     cast-id-history.json, so a regression in either route's own write path
+     would also be caught. */
+  it('F1 — a name minted after "Not the same character" does not re-mint the rejected id (#2163)', async () => {
+    // 1. Seed the auto-reconciled state: "marrow" is live, "mayrin" is an
+    //    orphaned id currently redirecting onto it via supersededBy (as if a
+    //    merge/analysis had recorded that alias).
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'marrow', name: 'Marrow', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(historyPath(), JSON.stringify({ schema: 1, supersededBy: { mayrin: 'marrow' } }));
+
+    // 2. Click "Not the same character" on the (marrow, mayrin) pair — the
+    //    real reject-orphan-match route, so forgetSupersededId's delete and
+    //    rejectOrphanedPair's write both happen exactly as the UI triggers
+    //    them.
+    const rejectRes = await request(app)
+      .post(`/api/books/${bookId}/cast/marrow/reject-orphan-match`)
+      .set('Content-Type', 'application/json')
+      .send({ orphanedId: 'mayrin' });
+    expect(rejectRes.status).toBe(200);
+
+    const historyAfterReject = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    // supersededBy.mayrin is gone (forgetSupersededId) — the only surviving
+    // record of "mayrin" is rejectedPairs[].from.
+    expect(historyAfterReject.supersededBy).toEqual({});
+    expect(historyAfterReject.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'marrow', forgotSupersededTo: 'marrow' },
+    ]);
+
+    // 3. Create a brand-new character named "Mayrin" — the naive mint is the
+    //    now-unprotected-by-supersededBy, but still-rejected, bare id.
+    const createRes = await callCreate(bookId, { name: 'Mayrin' });
+    expect(createRes.status).toBe(200);
+    expect(createRes.body.character.id).not.toBe('mayrin');
+
+    // 4. resolve('mayrin') must not land on the new row (or anywhere else) —
+    //    the segments that still carry the raw id "mayrin" must not silently
+    //    start reading as the brand-new, empty character.
+    const castAfterCreate = JSON.parse(readFileSync(join(bookDir(), '.audiobook', 'cast.json'), 'utf8'));
+    const historyAfterCreate = JSON.parse(readFileSync(historyPath(), 'utf8'));
+    const resolution = buildCastResolver(castAfterCreate.characters, historyAfterCreate).resolve(
+      'mayrin',
+    );
+    expect(resolution).toBeUndefined();
   });
 });

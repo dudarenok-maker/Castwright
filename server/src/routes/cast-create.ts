@@ -142,7 +142,36 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        drops a key that was RECLAIMED as a live cast id, so it's already in
        `existingIds` by the time it could appear in `displaced` too. */
     const displacedKeys = new Set(Object.keys(history.displaced ?? {}));
-    const takenIds = new Set([...existingIds, ...historyKeys, ...displacedKeys]);
+    /* F1 (fix round 2, #2163) — a `rejectedPairs[].from` id needs the same
+       reservation, for a THIRD path to the same #2110 end state that C1
+       (`displacedKeys`, above) closed for the drop path: the banner's "Not
+       the same character" button (`cast-reject-orphan.ts`'s POST) calls
+       `forgetSupersededId`, which unconditionally deletes
+       `supersededBy[from]` on every successful reject — so `from` leaves
+       `historyKeys` too, the same way a drop leaves it. After that, the
+       pair's `from` survives ONLY inside `rejectedPairs`, which this route
+       never read. Reachable by UI clicks alone, no analysis run: reject an
+       auto-reconciled orphan as "not the same", then create a new character
+       whose name mints that same id bare — `resolve()` lands `exact`, and
+       `segments-io.ts`'s `if (resolution?.via === 'exact') continue` makes
+       the hijacked segments invisible on every surface (banner, chips,
+       repair-pass listing).
+
+       Only `from` needs reserving here, not `to` or `forgotSupersededTo` —
+       the other two fields on a `RejectedPair` name where `from` resolves
+       (or used to resolve) TO, not an id any rendered segment carries as
+       ITS OWN character id. `to` is always a live character id at reject
+       time (`cast-reject-orphan.ts` 404s otherwise) and so is already in
+       `existingIds`; `forgotSupersededTo` was `supersededBy[from]`'s
+       target, i.e. also a `to`-shaped value, not a second orphaned key.
+       Reserving them too would protect ids nothing here needs protected. */
+    const rejectedPairFromKeys = new Set((history.rejectedPairs ?? []).map((p) => p.from));
+    const takenIds = new Set([
+      ...existingIds,
+      ...historyKeys,
+      ...displacedKeys,
+      ...rejectedPairFromKeys,
+    ]);
     const takenNorm = new Set([...takenIds].map(normaliseIdKey));
     const isTaken = (id: string) => takenIds.has(id) || takenNorm.has(normaliseIdKey(id));
 
