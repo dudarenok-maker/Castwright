@@ -122,6 +122,9 @@ function loadSync(): DeviceTokenRecord[] {
   if (!existsSync(path)) return (cache = []);
   try {
     const f = JSON.parse(readFileSync(path, 'utf8')) as { devices?: unknown };
+    if (!Array.isArray(f.devices)) {
+      console.warn(`[device-tokens] ${path} has no valid "devices" array — treating as empty (0 devices will authenticate until repaired)`);
+    }
     const raw = Array.isArray(f.devices) ? f.devices : [];
     cache = raw.filter((d: unknown, i: number) => {
       const field = invalidDeviceField(d);
@@ -133,7 +136,10 @@ function loadSync(): DeviceTokenRecord[] {
       console.warn(`[device-tokens] dropping malformed device record "${id}": invalid ${field}`);
       return false;
     }) as DeviceTokenRecord[];
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[device-tokens] failed to read/parse ${path}: ${err instanceof Error ? err.message : String(err)} — treating as empty (0 devices will authenticate until repaired)`,
+    );
     cache = [];
   }
   return cache;

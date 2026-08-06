@@ -185,6 +185,13 @@ it('drops a record that is not an object at all (null, a string, a number, an ar
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
   expect(warn).toHaveBeenCalledTimes(3);
+  // Not just "called 3 times" — each of the 3 non-object shapes must be
+  // named as an invalid *record*, not just counted (a narrowed `raw === null`
+  // check would still call warn 3 times for these inputs, via the tokenHash
+  // guard one line down, without ever naming the "record" shape itself).
+  for (const call of warn.mock.calls) {
+    expect(call[0]).toEqual(expect.stringContaining('invalid record'));
+  }
   warn.mockRestore();
 });
 
@@ -197,6 +204,11 @@ it('a store with one malformed record and three good records authenticates the t
   const good3 = goodRecord('g3', dt.hashToken(t3));
   const bad = { ...goodRecord('bad', 'x'), tokenHash: null };
   writeRawStore(dir, [good1, bad, good2, bad, good3]);
+
+  // The malformed records must be gone at LOAD time, not merely unmatched by
+  // findValidDevice's own tokenHash guard — otherwise this test is satisfied
+  // by defence-in-depth alone and never exercises loadSync's validation.
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1', 'g2', 'g3']);
 
   expect(dt.isValidDeviceToken(t1)).toBe(true);
   expect(dt.isValidDeviceToken(t2)).toBe(true);
@@ -216,5 +228,29 @@ it('a wholly malformed store does not throw, does not prevent startup, and authe
   expect(() => dt.listDevices()).not.toThrow();
   expect(dt.listDevices()).toEqual([]);
   expect(dt.isValidDeviceToken('anything')).toBe(false);
+  warn.mockRestore();
+});
+
+// #2181 review — a corrupt/unparseable store or a store whose "devices"
+// field isn't an array was silently swallowed (0 warnings). Fail-closed
+// behaviour (cache = []) is unchanged and NOT under test here — only that
+// the operator now gets a log line naming what went wrong.
+it('warns when device-tokens.json is corrupt (unparseable JSON), and still fails closed', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(() => dt.listDevices()).not.toThrow();
+  expect(dt.listDevices()).toEqual([]);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('[device-tokens]'));
+  warn.mockRestore();
+});
+
+it('warns when device-tokens.json\'s "devices" field is not an array, and still fails closed', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), JSON.stringify({ schema: 2, devices: 'oops' }), 'utf8');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(() => dt.listDevices()).not.toThrow();
+  expect(dt.listDevices()).toEqual([]);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('[device-tokens]'));
   warn.mockRestore();
 });
