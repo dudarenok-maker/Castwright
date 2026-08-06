@@ -124,7 +124,25 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        only `historyKeys`. */
     const history = await loadCastIdHistory(located.bookDir);
     const historyKeys = new Set(Object.keys(history.supersededBy));
-    const takenIds = new Set([...existingIds, ...historyKeys]);
+    /* C1 (fix round, #2158) — `displaced` keys are just as taken as
+       `supersededBy` keys. `dropSupersededTargetsNoLongerLive` deletes an
+       entry from `supersededBy` and files it under `displaced` the moment
+       its target stops being live — but a key that leaves `supersededBy`
+       is a key this route would otherwise happily re-mint, and that key is
+       exactly what every already-rendered segment covered by the pruned
+       alias still carries on disk. Without this, the prune doesn't close
+       the #2110 hazard, it just relocates it one write later: the id
+       becomes free again, a same-name re-create mints it bare, and
+       `buildCastResolver` resolves it via the `exact` tier — which
+       `segments-io.ts` treats as "rendered bytes are fine, nothing to
+       report" (#2107), so the hijack produces no orphan row, no chip, and
+       no `repair-cast-id-drift.mjs` listing at all. Folding `displaced`
+       into `takenIds` is a no-op for the sibling
+       `dropSupersededIdsReclaimedByLiveCast`: that function only ever
+       drops a key that was RECLAIMED as a live cast id, so it's already in
+       `existingIds` by the time it could appear in `displaced` too. */
+    const displacedKeys = new Set(Object.keys(history.displaced ?? {}));
+    const takenIds = new Set([...existingIds, ...historyKeys, ...displacedKeys]);
     const takenNorm = new Set([...takenIds].map(normaliseIdKey));
     const isTaken = (id: string) => takenIds.has(id) || takenNorm.has(normaliseIdKey(id));
 

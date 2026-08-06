@@ -406,4 +406,102 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
     },
     60_000,
   );
+
+  /* C1 (fix round, #2158) — the hazard the review found one tier up from
+     #2110's own fix: pruning `anton -> антон` out of `supersededBy` frees
+     the raw KEY 'anton' unless something else keeps it reserved.
+     `dropSupersededTargetsNoLongerLive` moves it into `displaced`
+     specifically so `POST /cast/create`'s taken-set can still see it — but
+     only if that route actually reads `displaced`. Before the C1 fix it
+     didn't, so re-creating by the id's OWN spelling ("Anton", not the safe
+     "Антон" direction the test above covers) minted the bare 'anton' id
+     again, and `buildCastResolver` then resolved 'anton' via the 'exact'
+     tier — the one tier `segments-io.ts` treats as "rendered bytes are
+     fine, nothing to report" (#2107), so the hijack this whole prune exists
+     to prevent would have produced no orphan row, no chip, and no
+     `repair-cast-id-drift.mjs` listing at all. */
+  it(
+    'a later re-create spelled like the pruned id itself must not mint the bare id and hijack the original alias (C1)',
+    async () => {
+      const manuscriptId = `test-dangling-target-e2e-c1-${Date.now()}-${Math.random()}`;
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+      seedStateJson();
+      seedPriorCastWithDyingAnton();
+      // Same pre-existing retirement as the test above: 'anton' -> 'антон',
+      // 'антон' live but unvoiced.
+      await retireCharacterId(bookDir, 'anton', 'антон');
+      registerManuscript(manuscriptId);
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
+      setPhase1Selection(phase1Selection);
+
+      const job: AnalysisJob = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        // Step 1: same re-analysis as the safe-direction test — drops the
+        // dangling 'антон' row and prunes 'anton' -> 'антон' into
+        // `displaced`.
+        await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+          requestedFresh: false,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+
+        const historyAfterAnalysis = await loadCastIdHistory(bookDir);
+        expect(historyAfterAnalysis.supersededBy).not.toHaveProperty('anton');
+        expect(historyAfterAnalysis.displaced).toEqual({ anton: 'антон' });
+
+        // Step 2 (the actual C1 hazard): re-create by the ORIGINAL id's own
+        // spelling ("Anton", not "Антон") — must NOT mint the bare 'anton'
+        // id. That key is still what every segment rendered under the old
+        // alias carries; `displaced` exists precisely to keep it reserved.
+        const createRes = await request(app)
+          .post(`/api/books/${bookId}/cast/create`)
+          .set('Content-Type', 'application/json')
+          .send({ name: 'Anton' });
+        expect(createRes.status).toBe(200);
+        expect(createRes.body.character.id).not.toBe('anton');
+
+        // Step 3: the legacy 'anton' id must not resolve onto the new row
+        // via the 'exact' tier — the one tier segments-io.ts treats as
+        // "rendered bytes are fine, nothing to report" (#2107's ruling:
+        // only 'exact' means that; the other three tiers all list).
+        const finalCast = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as {
+          characters: Array<{ id: string }>;
+        };
+        const finalHistory = await loadCastIdHistory(bookDir);
+        const resolver = buildCastResolver(finalCast.characters, finalHistory);
+        const resolved: CastResolution | undefined = resolver.resolve('anton');
+        expect(resolved?.via).not.toBe('exact');
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        clearPhase1Selection();
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
 });

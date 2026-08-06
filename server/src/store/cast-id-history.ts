@@ -463,10 +463,25 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  all, hijacking every segment the original alias covered. That is
  *  strictly worse than those segments sitting orphaned-and-visible.
  *
+ *  Dropping the entry out of `supersededBy` does not, by itself, close that
+ *  hazard — it relocates it one write later. The moment 'anton' leaves
+ *  `supersededBy`, it is free to re-mint again unless something else keeps
+ *  it reserved. That something is `displaced` (below): `POST /cast/create`
+ *  (`cast-create.ts`, C1 fix round, #2158) treats a `displaced` key as
+ *  taken exactly the same way it already treats a `supersededBy` key, so
+ *  the id stays reserved across the drop rather than reopening the hijack
+ *  window this function exists to close. This is why the drop is written
+ *  to move entries into `displaced` instead of discarding them outright —
+ *  losing the pair here would mean losing the last thing keeping the key
+ *  out of circulation.
+ *
  *  MUST be called only against the full, final roster of an AUTHORITATIVE
- *  write — never an interim one. The three mid-run "Cast so far" writes
- *  (`analysis.ts:3633`, `:3845`, `:5613`) persist via
- *  `overlayInterimCastForLiveView` precisely because `buildInterimCast` has
+ *  write — never an interim one. The three mid-run "Cast so far" writes —
+ *  two inside `runMainAnalyzerJob` (`analysis.ts`, the
+ *  `overlayInterimCastForLiveView` calls around line 3710 and line 3922)
+ *  and one inside `runSubsetAnalyzerJob` (same call, around line 5715) —
+ *  go through `overlayInterimCastForLiveView`, never this function,
+ *  precisely because `buildInterimCast` has
  *  folded only the chapters analysed so far there: a character who simply
  *  hasn't been reached yet is indistinguishable from one the analyzer
  *  actually dropped, so pruning against an interim roster would destroy a
