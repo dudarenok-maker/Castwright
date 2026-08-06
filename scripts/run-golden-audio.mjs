@@ -62,7 +62,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { maxNvidiaSmiUtil } from './verify-cache.mjs';
+import { maxNvidiaSmiUtil, GPU_BUSY_THRESHOLD } from './verify-cache.mjs';
 
 // Re-exported for backward compatibility: scripts/tests/run-golden-audio.test.mjs
 // imports maxNvidiaSmiUtil from this module. The implementation itself moved to
@@ -102,7 +102,11 @@ if (assemblyOnly && sidecarOnly) {
 // would need a background timer/interval this deliberately one-shot script
 // doesn't otherwise carry, to catch a narrower case with no reported incident
 // behind it — file a follow-up if that changes.
-const GPU_BUSY_THRESHOLD = 40; // % utilization -- mirrors verify-cache.mjs's own threshold
+//
+// GPU_BUSY_THRESHOLD is imported from verify-cache.mjs (above), not
+// redeclared — #2164 review finding 4: two independent `= 40`s meant raising
+// one could silently leave the bless-time warning here firing at the old
+// value while a comment merely claimed they mirror.
 
 // #2164: maxNvidiaSmiUtil moved to verify-cache.mjs (imported above) so
 // scripts/verify-cache.mjs's own GPU-contention probe can share it instead of

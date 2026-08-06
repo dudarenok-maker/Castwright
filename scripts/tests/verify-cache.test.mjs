@@ -42,6 +42,12 @@ import {
 
 const { SCHEMA_VERSION } = _internals;
 
+// Resolve relative to THIS file, not the process cwd — same rationale as
+// scripts/tests/run-golden-audio.test.mjs's own HERE/SRC_PATH.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
+const src = readFileSync(SRC_PATH, 'utf8');
+
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
   assert.equal(isVitestPoolCrash('Error: [vitest-pool]: Worker forks emitted error.'), true);
@@ -932,6 +938,58 @@ test('gpuContentionFor: falls back to busy:false, util:null on unparseable outpu
   // pure function must resolve the same way.
   assert.deepEqual(gpuContentionFor(''), { busy: false, util: null });
   assert.deepEqual(gpuContentionFor('N/A\n'), { busy: false, util: null });
+});
+
+// #2164 review finding 1: `gpuContentionFor` itself is fully unit-tested
+// above, but `detectGpuContention` — the actual production wire, which spawns
+// a real nvidia-smi and is not exported — was never asserted to actually call
+// it. A one-line revert of detectGpuContention's body back to
+// `parseNvidiaSmiUtil(r.stdout)` (the pre-#2164 first-line-only bug) left
+// every other test in this file green. Since detectGpuContention isn't
+// directly testable without spawning a real nvidia-smi, this pins the
+// production wire at the source level instead — same technique as
+// BLESS_ENV_SHAPE in scripts/tests/run-golden-audio.test.mjs.
+function detectGpuContentionBody() {
+  const match = src.match(/function detectGpuContention\(\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "could not locate detectGpuContention's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /return gpuContentionFor\(r\.stdout\);/,
+    'detectGpuContention must return gpuContentionFor(r.stdout) — the pure decision seam — ' +
+      'not inline its own threshold check',
+  );
+  assert.doesNotMatch(
+    body,
+    /parseNvidiaSmiUtil\(/,
+    'detectGpuContention must not call parseNvidiaSmiUtil directly — that is the first-line-only ' +
+      'parser this fix moved away from; calling it here silently reintroduces the #2164 bug ' +
+      'even though gpuContentionFor itself stays correct',
+  );
+});
+
+// #2164 review finding 2: the `--query-gpu` argument is unpinned and silently
+// determines correctness. parseNvidiaSmiUtil/maxNvidiaSmiUtil both read the
+// FIRST CSV field as the utilization percentage, which is only true because
+// the query requests utilization.gpu ALONE. Widening it — e.g. to
+// `index,utilization.gpu`, the richer shape #2164's own issue body pastes
+// ("1, NVIDIA GeForce RTX 5070 Ti, 91 %, 15455 MiB") — shifts the first field
+// to the GPU index (0 or 1, always under GPU_BUSY_THRESHOLD), reintroducing
+// #2164's always-idle bug through the query string instead of the parser,
+// with every existing test still green (they all pass CSV directly, not
+// through a real nvidia-smi query).
+test('detectGpuContention pins the --query-gpu=utilization.gpu flag the parsers depend on', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /'--query-gpu=utilization\.gpu'/,
+    "detectGpuContention must query ONLY utilization.gpu — adding a field (e.g. 'index,') " +
+      'shifts the first CSV column the parsers read away from the utilization percentage',
+  );
 });
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------

@@ -761,7 +761,12 @@ export function branchDiffFiles(cwd) {
 // pressure (that incident also had Ollama holding ~14GB of system RAM) is
 // real contention neither utilisation nor VRAM occupancy measures — known
 // out of scope, not implemented.
-const GPU_BUSY_THRESHOLD = 40; // % utilization
+//
+// Exported so run-golden-audio.mjs's own bless-time contention warning shares
+// this exact value instead of redeclaring it (#2164 review finding 4) — two
+// independent `= 40`s meant raising one could silently leave the other
+// stale despite a comment claiming they mirror.
+export const GPU_BUSY_THRESHOLD = 40; // % utilization
 
 // Parse the first GPU's utilization (%) from nvidia-smi CSV output. Returns a
 // number, or null if unparseable / no GPU line.
@@ -777,15 +782,16 @@ export function parseNvidiaSmiUtil(stdout) {
 }
 
 // Max utilization (%) across EVERY GPU line in nvidia-smi CSV output — unlike
-// parseNvidiaSmiUtil above, which deliberately stays a single-line parser (see
-// its own doc comment; #2036 chose not to widen it, since it has its own
-// callers with first-line semantics). On a multi-GPU box the busy card is not
-// always index 0 (#2164: this dev box is cuda:0 4070 8GB idle / cuda:1 5070 Ti
-// 16GB busy) — a first-line-only read misses exactly the contention this guard
-// exists to catch. Lives here (moved from a local copy in run-golden-audio.mjs,
-// #2036) so both callers share one implementation; run-golden-audio.mjs now
-// imports this rather than keeping its own. Returns the max over every
-// parseable line, or null when none parse.
+// parseNvidiaSmiUtil above, which deliberately stays a single-line parser: that
+// is its documented contract (see its own doc comment; #2036 chose not to
+// widen it), and this function composes over it rather than duplicating it —
+// re-applying parseNvidiaSmiUtil one line at a time and taking the max. On a
+// multi-GPU box the busy card is not always index 0 (#2164: this dev box is
+// cuda:0 4070 8GB idle / cuda:1 5070 Ti 16GB busy) — a first-line-only read
+// misses exactly the contention this guard exists to catch. Lives here (moved
+// from a local copy in run-golden-audio.mjs, #2036) so both callers share one
+// implementation; run-golden-audio.mjs now imports this rather than keeping
+// its own. Returns the max over every parseable line, or null when none parse.
 export function maxNvidiaSmiUtil(stdout) {
   if (!stdout) return null;
   const lines = stdout
@@ -811,6 +817,16 @@ export function gpuContentionFor(stdout) {
 
 // Returns { busy, util }. nvidia-smi absent / errors → { busy:false, util:null }
 // (e.g. CI ubuntu runners, non-NVIDIA boxes). Cheap (~100ms).
+//
+// The `--query-gpu=utilization.gpu` argument is load-bearing and must request
+// ONLY that field: both parseNvidiaSmiUtil and maxNvidiaSmiUtil blindly read
+// the FIRST CSV column of each line as the utilization percentage. Widening
+// the query — e.g. to `index,utilization.gpu`, the richer shape #2164's own
+// issue body pastes ("1, NVIDIA GeForce RTX 5070 Ti, 91 %, 15455 MiB") — would
+// shift that first column to the GPU index (0/1, always under threshold) and
+// silently reintroduce #2164's always-idle bug through the query string
+// instead of the parser. Pinned by a source-regex test in
+// scripts/tests/verify-cache.test.mjs.
 function detectGpuContention() {
   const r = spawnSync(
     'nvidia-smi',
