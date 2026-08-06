@@ -22,25 +22,31 @@
 // real `gh` process is ever spawned — see bump-version.test.mjs's sibling
 // comment on why that's impractical cross-platform) and pattern-match two
 // shapes:
-//   1. ANY call expression whose first argument is the literal string 'gh'
-//      or "gh" — matched on the ARGUMENT, not the callee's name. This is
-//      what catches a custom local wrapper (`run('gh', …)` — the actual
-//      shape generate-release-notes-wiki.mjs shipped with until this same
-//      round: a real chokepoint bypass this guard originally MISSED,
-//      because the first version only recognized execFileSync/spawnSync and
-//      their tracked node:child_process import aliases, not an arbitrary
-//      wrapper function that happens to forward to one of those
-//      internally) exactly as readily as a direct `execFileSync('gh', …)`
-//      or an aliased import (`import { execFileSync as _x } from
-//      'node:child_process'` then `_x('gh', …)`) — callee identity no
-//      longer matters at all for this shape. Backtick-quoted literals are
-//      deliberately NOT matched here (single/double only): a backtick is
-//      common in prose that merely *mentions* `gh` rather than calling it
-//      (e.g. bump-version.mjs's own error-message text, `"...GitHub CLI
-//      (\`gh\`) authenticated, but \`gh\` was not found..."`, which reads as
-//      `('gh')`-shaped to a naive scan if backtick were an accepted quote
-//      char here) — matching it would false-positive on exactly that kind
-//      of comment/string, not a real call site.
+//   1. ANY call expression whose first argument is the literal string 'gh',
+//      "gh", or `gh`, immediately followed by a comma — matched on the
+//      ARGUMENT, not the callee's name. This is what catches a custom local
+//      wrapper (`run('gh', …)` — the actual shape
+//      generate-release-notes-wiki.mjs shipped with until this same round: a
+//      real chokepoint bypass this guard originally MISSED, because the
+//      first version only recognized execFileSync/spawnSync and their
+//      tracked node:child_process import aliases, not an arbitrary wrapper
+//      function that happens to forward to one of those internally) exactly
+//      as readily as a direct `execFileSync('gh', …)` or an aliased import
+//      (`import { execFileSync as _x } from 'node:child_process'` then
+//      `_x('gh', …)`) — callee identity no longer matters at all for this
+//      shape. The trailing-comma requirement is what makes backtick a safe
+//      quote char here: every real `gh`-spawning call passes at least one
+//      more argument (the args array, or an options object) after the
+//      binary name, so the closing quote is always followed by a comma —
+//      but bump-version.mjs's own error-message prose, `'...GitHub CLI
+//      (\`gh\`) authenticated, but \`gh\` was not found...'`, closes its
+//      first backtick-quoted "gh" with `)`, not `,` (prose, not a call), so
+//      it stays unmatched even with backtick included in the quote class.
+//      An EARLIER version of this rule dropped backtick entirely to dodge
+//      that same false positive — but that also silently stopped catching
+//      a backtick-quoted real call (`run(\`gh\`, …)`), which is worse: an
+//      undocumented hole, not a documented trade-off. The comma requirement
+//      closes the false positive without giving up backtick coverage.
 //   2. execSync('gh ...') / exec('gh ...') — a single shell-command string
 //      whose first token is "gh". This shape stays scoped to the four
 //      canonical node:child_process entry points (plus any local alias a
@@ -60,8 +66,8 @@
 // KNOWN BLIND SPOTS (a source-text scan can't see everything):
 //   - The binary held in a variable (`const bin = 'gh'; execFileSync(bin, …)`
 //     or `run(bin, …)`) is NOT caught — this scanner only recognizes a
-//     LITERAL 'gh'/"gh" string as the call's own argument text, it does not
-//     do any data-flow analysis.
+//     LITERAL 'gh'/"gh"/`gh` string as the call's own argument text, it does
+//     not do any data-flow analysis.
 //   - A command string built by concatenation split across an expression
 //     (e.g. `execSync('g' + 'h ...')`) is NOT caught, same reason.
 //   - Shape 2 (the full shell-command-string call) is still scoped to the
@@ -72,6 +78,15 @@
 //     'gh issue list' text never appears as an argument to execSync/exec
 //     at THAT call site — only shape 1's exact-'gh'-argument case was
 //     generalized to an arbitrary callee.
+//   - Shape 1 requires a comma after the closing quote (the trade for
+//     letting backtick back into the quote class without reopening the
+//     bump-version.mjs prose false positive — see the shape-1 comment
+//     above). A call whose ONLY argument is the literal 'gh'/"gh"/`gh`
+//     itself, with nothing after it — e.g. `probe('gh')` — is NOT caught.
+//     No real call site in this repo is shaped that way today (every real
+//     `gh` invocation also passes an args array and/or an options object),
+//     so this is a live, deliberate trade-off, not an accident — flagged
+//     here so it stays a documented one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -131,14 +146,18 @@ function collectShellAliases(source) {
 }
 
 // Shape 1: any call expression whose first argument is the literal string
-// 'gh' or "gh" — the callee can be ANY identifier (or property-access name),
-// not just execFileSync/spawnSync or a tracked alias of them. This is what
-// catches a custom local wrapper (`run('gh', …)`) as readily as a direct
-// call. Nothing but a matching close-quote may follow "gh" (so this never
-// matches a longer string that merely STARTS with "gh", e.g. 'ghost' or
-// 'gh-labels'). Single/double quotes only — see the header comment for why
-// backtick is deliberately excluded here.
-const DIRECT_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(\s*(['"])gh\2/g;
+// 'gh', "gh", or `gh` — the callee can be ANY identifier (or property-access
+// name), not just execFileSync/spawnSync or a tracked alias of them. This is
+// what catches a custom local wrapper (`run('gh', …)`) as readily as a
+// direct call. The closing quote must be followed by a comma (optionally
+// preceded by whitespace) — every real `gh`-spawning call passes at least
+// one more argument after the binary name, so this is never a real call
+// site's own coverage cost; it's what lets backtick stay in the quote class
+// without reopening the bump-version.mjs prose false positive (see header
+// comment). This also means nothing but a matching close-quote may follow
+// "gh" itself (so this never matches a longer string that merely STARTS
+// with "gh", e.g. 'ghost' or 'gh-labels').
+const DIRECT_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(\s*(['"`])gh\2\s*,/g;
 
 // Shape 2: execSync('gh …') / exec('gh …') — or a local alias of either —
 // a single shell-command string whose first token is "gh" (followed by
@@ -238,6 +257,23 @@ test('findRawGhCalls does not false-positive on a git call or a comment mentioni
     '// see gh.mjs for the gh() wrapper',
     "const label = 'gh-labels';",
   ].join('\n');
+  assert.deepEqual(findRawGhCalls(src), []);
+});
+
+test('findRawGhCalls catches a backtick-quoted "gh" followed by a comma (the previously-undocumented hole)', () => {
+  const violations = findRawGhCalls('myRunner(`gh`, ["release", "list"]);');
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].kind, 'myRunner');
+});
+
+test('findRawGhCalls does not false-positive on bump-version.mjs\'s own backtick prose mentioning gh', () => {
+  // The real string from bump-version.mjs:275 — `(`gh`)` reads as a call
+  // shape to a naive scan (identifier "CLI" + "(" + backtick-quoted "gh"),
+  // but the closing backtick is followed by ")", not ",", so the
+  // comma-requirement keeps this out.
+  const src =
+    "'The cross-OS gate needs the GitHub CLI (`gh`) authenticated, but `gh` was not found. ' +\n" +
+    "  'Install it + `gh auth login`, or pass --skip-cross-os to bypass the gate.'";
   assert.deepEqual(findRawGhCalls(src), []);
 });
 
