@@ -127,6 +127,7 @@ rule heals strictly more and risks strictly no more.
 | `openapi.yaml` | modify | The POST's 500 contract — it documents the single-500 behaviour Task 1 replaces |
 | `src/lib/api-types.ts` | regenerate | `npm run openapi:types` — a prose-only openapi edit still stales it (`:2417`) |
 | `docs/features/278-cast-character-identity.md` | modify | Invariant 10 becomes an enforced rule |
+| `docs/features/INDEX.md` | — | **Already done** — indexed in the PR that landed this plan doc |
 | `docs/release-notes-next.md`, `RELEASE_NOTES.md` | modify | Shipping notes |
 
 ---
@@ -1882,15 +1883,10 @@ Then replace `#NNNN` in Step 1 with the issue number, and add the same number to
   time it's analysed.
 ```
 
-- [ ] **Step 4: Add this plan to `docs/features/INDEX.md`**
-
-Under its area, beside plan 280 (`INDEX.md:48`). Before-shipping step 4 wants a new plan indexed
-in the PR that ships it, not after the merge.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docs/features/278-cast-character-identity.md docs/features/INDEX.md \
+git add docs/features/278-cast-character-identity.md \
         docs/release-notes-next.md RELEASE_NOTES.md \
         docs/superpowers/specs/2026-08-06-reject-edge-atomicity-design.md
 git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
