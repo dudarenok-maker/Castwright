@@ -130,10 +130,17 @@
  * workspace, these ids have no snapshot entry under ANY spelling, so there
  * is nothing a smarter lookup would find. Also considered and rejected:
  * splitting the annotation-vs-veto question by Tier A vs Tier B — it would
- * restore only the resolve-time-no-op case (`the-torment`, Tier B, already
- * resolves via `'normalised-id'`) while still blocking every
- * `mayrin`-shaped Tier A case, where there is no id-shape fallback and the
- * alias is the only mechanism that reconnects the id.
+ * restore only the `the-torment`-shaped case (Tier B, already resolves via
+ * `'normalised-id'`) while still blocking every `mayrin`-shaped Tier A case,
+ * where there is no id-shape fallback and the alias is the only mechanism
+ * that reconnects the id. NOT because the Tier B case is low-stakes or a
+ * no-op, the way an earlier version of this comment argued — #2107
+ * (register row A32, `the-torment` itself) proved the opposite: a
+ * `'normalised-id'` match resolves correctly today but says nothing about
+ * whether the rendered bytes are correct, so recording the alias is real
+ * work, not cosmetic promotion. The split stays rejected on its own
+ * narrower merits — it would leave every Tier A case (the more common,
+ * more damaging shape) still blocked.
  *
  * A fifth guard was added on top of these four, independently, by the
  * #2107 widening (Important 2, independent review, 2026-08-05) —
@@ -1089,13 +1096,21 @@ export function planBookRepairs(input, deps) {
       // bak/cache availability), carrying an honest annotation instead of
       // a false "verified consistent". Deliberately NOT split by tier
       // (Tier A vs Tier B) — considered and rejected: it would restore
-      // only `the-torment` (a Tier B id-shape match that's already a
-      // resolve-time no-op — recording it only promotes an existing
-      // `'normalised-id'` resolution to `'history'`, same character
-      // either way) while still blocking every `mayrin`-shaped Tier A
-      // case, where the letters differ, there is no `normalised-id`
+      // only `the-torment` (a Tier B id-shape match, already resolving via
+      // `'normalised-id'`) while still blocking every `mayrin`-shaped Tier
+      // A case, where the letters differ, there is no `normalised-id`
       // fallback, and the alias is the ONLY mechanism that reconnects the
-      // id — exactly the case that matters most.
+      // id — exactly the case that matters most. This is NOT because
+      // recording `the-torment`'s alias would be a low-stakes no-op — an
+      // earlier version of this comment argued exactly that ("same
+      // character either way"), which #2107 overturned: register row A32
+      // is `the-torment` itself, 67 segments narrator-rendered despite
+      // resolving live via `'normalised-id'`. The Cast screen's banner
+      // reflects the same correction (src/views/cast.tsx's auto-reconciled
+      // section marks an alias-resolved row as "resolves now — existing
+      // audio may still need a re-render", not "nothing to do here"). The
+      // split stays rejected on the Tier A coverage gap alone, not on any
+      // claim that the Tier B case doesn't matter.
       //
       // 'conflict' is unaffected by any of this — real, disagreeing
       // snapshot evidence for a NAMED, non-reserved id (the case

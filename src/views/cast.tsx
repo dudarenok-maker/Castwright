@@ -1340,6 +1340,26 @@ export function CastView({
                           <span className="text-xs text-ink/60">
                             {info.segments} segment{info.segments === 1 ? '' : 's'}
                           </span>
+                          {/* #2129 — 'alias' (resolved through the id-history
+                              side-table) answers "does this id resolve today?",
+                              not "was the rendered audio ever produced under
+                              the resolved voice?" — `scripts/repair-cast-id-
+                              drift.mjs` can (and does) list these same rows as
+                              damage needing a re-render (register row A32:
+                              `the-torment` resolves via a normalised-history
+                              tier yet was narrator-rendered for 67 segments).
+                              'normalised' (a live id-shape match with no
+                              history entry) isn't marked here — this is
+                              scoped to the alias tier only, per the chosen
+                              fix. */}
+                          {info.resolution === 'alias' && (
+                            <span
+                              data-testid={`orphaned-alias-audio-note-${orphanedId}`}
+                              className="text-xs text-amber-700"
+                            >
+                              resolves now — existing audio may still need a re-render
+                            </span>
+                          )}
                           <button
                             type="button"
                             disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}

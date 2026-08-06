@@ -84,6 +84,32 @@ async function seedOrphanedFallback(page: Page): Promise<void> {
   });
 }
 
+/* #2129 — a second seed with both non-exact resolution tiers represented,
+   so the "resolves now — may still need a re-render" note can be pinned
+   against a real 'normalised' row that must NOT carry it (see
+   src/views/cast.tsx's own comment on the `info.resolution === 'alias'`
+   gate: this is deliberately scoped to the alias tier only). */
+async function seedOrphanedFallbackWithNormalised(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: { dispatch(a: unknown): void } }).__store__;
+    store.dispatch({
+      type: 'cast/setOrphanedCharacterFallbacks',
+      payload: {
+        mayrin: {
+          resolution: 'alias',
+          resolvedCharacterId: 'narrator',
+          segments: 6,
+        },
+        Mayrin_: {
+          resolution: 'normalised',
+          resolvedCharacterId: 'narrator',
+          segments: 2,
+        },
+      },
+    });
+  });
+}
+
 test.describe('cast view — orphaned-characterId advisory banner (#2023, split #2040 Task 17)', () => {
   test('shows both sections once the book-state hydrate carries orphaned-id substitutions', async ({
     page,
@@ -201,5 +227,31 @@ test.describe('cast view — orphaned-characterId advisory banner (#2023, split 
     const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
     await expect(autoReconciled).toContainText('mayrin');
     await expect(autoReconciled.getByText('Not Narrator')).toHaveCount(0);
+  });
+
+  /* #2129 — the banner must distinguish "resolves today" (auto-reconciled)
+     from "the already-rendered audio is definitely fine" — an alias-
+     resolved row (server tier 'history'/'normalised-history') can still be
+     the exact damage `scripts/repair-cast-id-drift.mjs` lists as needing a
+     re-render (register row A32: `the-torment` resolved via a normalised-
+     history alias yet was narrator-rendered for 67 segments). A
+     'normalised'-resolved row (a live id-shape match with no history entry
+     involved) is NOT in scope for this note. */
+  test('an alias-resolved auto-reconciled row is marked "audio may still need a re-render"; a normalised-id row is not', async ({
+    page,
+  }) => {
+    await reachCastView(page);
+    await seedOrphanedFallbackWithNormalised(page);
+
+    await page.getByRole('button', { name: /character ids.*auto-reconciled/i }).click();
+    const autoReconciled = page.getByTestId('orphaned-auto-reconciled');
+    await expect(autoReconciled).toBeVisible();
+
+    const aliasNote = page.getByTestId('orphaned-alias-audio-note-mayrin');
+    await expect(aliasNote).toBeVisible();
+    await expect(aliasNote).toContainText(/resolves now/i);
+    await expect(aliasNote).toContainText(/re-render/i);
+
+    await expect(page.getByTestId('orphaned-alias-audio-note-Mayrin_')).toHaveCount(0);
   });
 });
