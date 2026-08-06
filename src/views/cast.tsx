@@ -138,10 +138,18 @@ function OrphanRejectedChips({
   busyId: string | null;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
-  if (!targets?.length) return null;
+  /* Finding B (#2133 comment) — `rejectedPairsGoverning`'s rule 1 has no
+     liveness check on `to` (`cast-resolve.ts:282`), so a target can name an
+     id that's no longer in the live cast (e.g. folded into another
+     character since the reject). The pair is already inert for resolution
+     either way, and Undo for a dead target 404s forever (there's no live
+     character for the DELETE route to find) — hide the chip client-side
+     rather than render a permanently-broken button. */
+  const liveTargets = targets?.filter((targetId) => characters.some((c) => c.id === targetId));
+  if (!liveTargets?.length) return null;
   return (
     <>
-      {targets.map((targetId) => {
+      {liveTargets.map((targetId) => {
         const name = characters.find((c) => c.id === targetId)?.name ?? targetId;
         return (
           <span

@@ -1167,6 +1167,67 @@ describe('CastView Qwen status pill (plan 117)', () => {
       expect(screen.queryByTestId('orphaned-rejected-chip-The-Torment-marrow')).not.toBeInTheDocument();
     });
 
+    it('finding B (#2133) — a rejectedAgainst target absent from the live cast renders no chip', () => {
+      // rejectedPairsGoverning's rule 1 has no liveness check on `to`
+      // (cast-resolve.ts:282), so a pair can name an id no longer in the
+      // live cast (e.g. folded away by an unrelated merge since the
+      // reject). The pair is already inert for resolution either way, and
+      // Undo for a dead target would 404 forever — the chip must not
+      // render at all, rather than falling back to the raw id as a label.
+      // 'marrow' (live) sits alongside 'ghost-target' (not in `characters`)
+      // to prove the hide is scoped to the dead entry, not the whole row.
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              coalfall: {
+                resolution: 'unresolved' as const,
+                segments: 67,
+                rejectedAgainst: ['marrow', 'ghost-target'],
+              },
+            },
+          },
+        },
+      });
+      render(
+        <Provider store={store}>
+          <CastView
+            characters={[narrator, marrow]}
+            setCharacters={() => {}}
+            library={library}
+            title="The Northern Star"
+            onOpenProfile={() => {}}
+            onShowMatchDetail={() => {}}
+            driftEvents={[]}
+            onShowDrift={() => {}}
+            onContinueToManuscript={() => {}}
+          />
+        </Provider>,
+      );
+
+      // The row itself still renders (segment count intact).
+      const section = screen.getByTestId('orphaned-needs-decision');
+      expect(within(section).getByText(/67 segments/)).toBeInTheDocument();
+      // The live target's chip renders as usual.
+      expect(screen.getByTestId('orphaned-rejected-chip-coalfall-marrow')).toBeInTheDocument();
+      // The dead target's chip does not — neither under its own id nor any
+      // fallback label.
+      expect(screen.queryByTestId('orphaned-rejected-chip-coalfall-ghost-target')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Not ghost-target/i)).not.toBeInTheDocument();
+    });
+
     it('needs-your-decision: the reject button is disabled until a candidate is picked, then rejects against it', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
