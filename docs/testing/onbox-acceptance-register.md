@@ -170,7 +170,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**56 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**57 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
