@@ -19,7 +19,10 @@ two folders.
   (`server/src/routes/cast-design.ts:684`), so the machinery is proven and the
   cost on a normal rename is one `Map.get`. **No lock is taken** — it is a pure
   predicate, so it cannot interact with the documented
-  `design → library-voice → cast` lock order.
+  `design → library-voice → cast` lock order. It is checked **twice** (once up
+  front, once immediately before the move) because check-then-rename spans two
+  `await`s; even so a narrow race survives, documented and accepted in
+  [Design decisions](#is-there-any-path-that-renames-a-book-without-going-through-the-409).
 - **Layer 2 — the follow (defence in depth).** `createCastMergeBase` takes a
   `() => string` accessor instead of a `string`, and `writeChecked` resolves the
   directory once per call. In `analysis.ts` a small `liveBookDir(job)` helper
@@ -74,15 +77,43 @@ Every task's requirements implicitly include these.
   call may be routed through a live accessor.
 - **Assert outcomes, not mechanisms.** "cast.json is at the new path and the old
   directory does not exist" is the assertion. "the call site passes a function"
-  is not — it passes vacuously.
+  is not — it passes vacuously. Beware the subtler version: after a `renameSync`
+  the *seeded* file is already at the new path, so "the file exists there" is
+  satisfied by a run that never wrote anything. Assert contents that only the
+  run itself can produce.
+- **The 409 narrows a TOCTOU window; it does not close it.** Do not write a code
+  comment, a PR sentence, or a plan line asserting that the guard makes the
+  pinned busy key correct. It does not — see
+  [Design decisions](#is-there-any-path-that-renames-a-book-without-going-through-the-409).
+  An earlier draft of this plan made that claim twice and both were wrong.
+  Shipping a comment that asserts soundness you do not have is worse than the
+  gap it papers over.
 - **`--retry=0` on every verification run.** `retry: 1` is live in this repo and
   has produced a false green (#2028).
 - **`server/src/routes/book-state.test.ts` is in the slow tier**
-  (`server/vitest.config.slow.ts`'s `SLOW_FILES`) and is therefore **skipped by
-  `npm run test:server`**. This plan deliberately puts the new guard tests in a
-  *new* file so they run in the fast tier. Do not "consolidate" them into
-  `book-state.test.ts` — that would move the primary fix's coverage out of
+  (`server/vitest.config.slow.ts`'s `SLOW_FILES[2]`, verified) and is therefore
+  **skipped by `npm run test:server`**. This plan deliberately puts the new guard
+  tests in a *new* file so they run in the fast tier. Do not "consolidate" them
+  into `book-state.test.ts` — that would move the primary fix's coverage out of
   pre-push and out of the scoped fast lane.
+
+  **Why the new file is safe in the parallel tier, given it has a similar
+  shape.** That config's stated reason for pinning its ten files is
+  "`mkdtempSync` + module imports in `beforeAll` racing on the Windows tmpdir
+  under parallel-fork pressure", and the two new test files do both of those
+  things. The placement is still right, on precedent and on size:
+  `book-state-preserve-voices.test.ts`, `book-state.merge-tombstone.test.ts`,
+  `book-state.reparse.test.ts` and `analysis.fresh-cast-lock.test.ts` all have
+  the same tmpdir-plus-dynamic-import shape and all run in the parallel tier
+  today without flaking — what pushed `book-state.test.ts` over was its *size*
+  (~1700 lines, many suites, one shared workspace and a hook budget to match),
+  not the shape as such. The new files are single-purpose and small.
+  **If either one flakes under `npm run test:server`, the fix is a
+  `quarantinedIt` + a `docs/testing/flaky-register.md` row, or moving that file
+  into `SLOW_FILES` — never a bare `it.skipIf(process.env.CI)`.** Note that
+  moving a file into `SLOW_FILES` requires adding it to `server/vitest.config.ts`'s
+  `test.exclude` in the same change (that config's mirror invariant), or it
+  double-runs.
 - **Never `--no-verify`.**
 
 ---
@@ -171,15 +202,25 @@ underflows to `<= 0` and is deleted, releasing a guard that a sibling job may
 still hold. Pinning is the *correct* behaviour for a matched pair — this is the
 one of the four sites that is not defective.
 
-The obvious alternative — a `renameAnalysisBusy(oldDir, newDir)` re-key called
-from the rename branch — is **rejected as unreachable code**: layer 1 refuses the
-rename precisely when the registry is non-empty for that book, so the re-key
-could only ever run in the case it is not needed. Adding it would be a
-permanently-untestable branch.
+A `renameAnalysisBusy(oldDir, newDir)` re-key called from the rename branch is
+**rejected — but not as unreachable code** (an earlier draft of this plan said
+that, and it was wrong; see the TOCTOU section below). It is rejected because it
+would *create* a permanently stuck guard. The only run it could ever re-key is
+one that registered against `oldDir` in the TOCTOU window; that run's
+`clearAnalysisBusy(job.bookDir)` at `endJob` (`analysis.ts:2596`) still holds the
+pinned `oldDir`, which after the re-key has no entry — `(map.get(old) ?? 0) - 1`
+is `-1`, so the `n <= 0` branch deletes a key that isn't there, a silent no-op —
+while `newDir`'s re-keyed count is **never decremented**. `isAnalysisBusy(newDir)`
+would then be true for the life of the process, blocking every future rename
+*and* every bulk cast design for that book. That is strictly worse than the gap
+it tries to close.
 
 ### Is there any path that renames a book without going through the 409?
 
-**Verified: no, not in-process.** `renameWithRetry(bookDir, newDir)` at
+**No in-process code path, but the guard has a TOCTOU window. Read this section
+before touching Task 3.**
+
+**The code-path sweep is clean.** `renameWithRetry(bookDir, newDir)` at
 `book-state.ts:848` is the only site in `server/src` that moves a *book
 directory* — every other `renameWithRetry` caller moves a file within a book
 (`cover/store.ts`, `cover/upload.ts`, `export/sync-folder.ts`,
@@ -189,14 +230,61 @@ directory* — every other `renameWithRetry` caller moves a file within a book
 `rec.bookDir = newDir` at `book-state.ts:856` is likewise the only assignment to
 a record's `bookDir` outside record construction.
 
-One gap remains and is **explicitly out of scope**: a user (or OneDrive, or
-Explorer) renaming the folder *outside* the process. That bypasses the guard,
-but it also bypasses `rec.bookDir = newDir`, so the in-memory record is stale
-and layer 2 does not help either — the whole record is wrong, not just one field.
-That is a separate, pre-existing problem with a different shape (workspace
-re-scan / record invalidation), not a variant of this one. Do not attempt it
-here; if the implementer wants it tracked, file it as its own `bug` issue rather
-than widening this branch.
+**But check-then-rename is not atomic.** Between the guard and the move there are
+**two `await`s** — `await mkdir(dirname(newDir), { recursive: true })` (`:845`)
+and `await renameWithRetry(bookDir, newDir)` (`:848`) — and the guard reads
+in-memory state that another request can change at any yield. Concretely: a
+`POST /api/manuscripts/:id/analysis` already in flight finishes its own async
+prelude during that window and calls `markAnalysisBusy(record.bookDir)`
+(`analysis.ts:2764`) against the **pre-rename** directory. The rename then
+completes. `isAnalysisBusy(newDir)` is false for that run's entire life, so
+`cast-design.ts:684`'s "no bulk design while an analysis is running" refusal
+silently evaporates for the renamed book — the failure mode the design
+investigation called *"arguably worse than the reported bug"*. Because the busy
+key is (correctly) pinned, layer 2 does not cover this by construction: the busy
+pair is the one of the four sites layer 2 deliberately does not touch.
+
+**Mitigation (Task 3, step 3.3): re-check immediately before the rename.** Still
+lock-free, still refuse-only, so it adds no deadlock risk and no new lock-order
+interaction. It narrows the window from "the whole `mkdir` round-trip plus the
+rename" to "the rename call itself".
+
+**Accepted residual risk — say this out loud rather than claiming soundness.**
+The re-check does **not** close the window: check-then-rename is still two
+operations, and a `markAnalysisBusy` landing between the second check and
+`renameWithRetry`'s own first `await` still produces a busy key pinned to a
+directory that no longer exists. What remains possible, precisely:
+
+- a rename racing an analysis *start* can still leave that run's busy key on the
+  pre-rename path, silently disabling the analysis↔bulk-design mutual exclusion
+  for that book until the run ends;
+- the run's `cast.json` and `analysis-state.json` writes are **not** affected —
+  layer 2 makes those follow the rename regardless.
+
+This is accepted, not overlooked. Closing it properly needs a mutual-exclusion
+primitive that spans the registration and the rename (a per-book lock, or
+registering the analysis against a stable book **id** rather than a path), which
+is a design change well outside this fix. **Do not paper over it in a code
+comment** — step 2.6 and step 3.3 both carry a comment naming the residual
+window, and the PR body should too.
+
+**One further gap, explicitly out of scope:** a user (or OneDrive, or Explorer)
+renaming the folder *outside* the process. That bypasses the guard, but it also
+bypasses `rec.bookDir = newDir`, so the in-memory record is stale and layer 2
+does not help either — the whole record is wrong, not just one field. Separate,
+pre-existing, different shape (workspace re-scan / record invalidation). Do not
+attempt it here; file it as its own `bug` issue if you want it tracked.
+
+### A note on the cast lock across a rename
+
+After a rename, `writeChecked` takes `withCastLock(newDir)` while any concurrent
+writer that resolved `oldDir` before the move still holds `withCastLock(oldDir)`
+— two different keys, so they no longer exclude each other. This is **inherent to
+keying the lock on a mutable path**, not introduced by this change (the same is
+true today of every `withCastLock(record.bookDir)` caller), and the 409 makes it
+unreachable through the normal route. Noted so it is not discovered later and
+mistaken for a regression from this PR. Out of scope here; it disappears if the
+lock is ever re-keyed on book id.
 
 ### Release notes: yes, both files
 
@@ -410,9 +498,9 @@ function liveBookDir(job: AnalysisJob): string | null;
      NOT for markAnalysisBusy/clearAnalysisBusy. Those are a matched pair over
      a ref-counted Map; clearing under a different key than the one marked
      would leak the old entry forever AND underflow the new one, releasing a
-     guard a sibling job may still hold. The busy key stays pinned — and
-     book-state.ts's #2165 guard is what keeps it correct, by refusing the
-     rename while the analysis is registered. */
+     guard a sibling job may still hold. The busy key stays pinned — see the
+     accepted-gap note at the clearAnalysisBusy site for the race that the
+     rename guard narrows but does not close. */
   function liveBookDir(job: AnalysisJob): string | null {
     return getManuscript(job.manuscriptId)?.bookDir ?? job.bookDir;
   }
@@ -465,15 +553,32 @@ function liveBookDir(job: AnalysisJob): string | null;
 
 - [ ] 2.6 Leave `markAnalysisBusy(job.bookDir)` (`:2764`, `:5501`) and
       `clearAnalysisBusy(job.bookDir)` (`:2596`) **exactly as they are.** Add a
-      one-line comment at `:2596` so the asymmetry is not read as an oversight:
+      comment at `:2596` so the asymmetry is not read as an oversight — and so
+      the residual window is on the record in the code, not only in this plan:
 
   ```ts
-    /* Pinned deliberately (#2165) — mark/clear must use the same key or the
-       ref count leaks on one side and underflows on the other. */
+    /* Pinned deliberately (#2165) — mark/clear must use the same key, or the
+       ref count leaks on one side and underflows on the other, releasing a
+       guard a sibling job may still hold.
+
+       KNOWN, ACCEPTED GAP: book-state.ts's rename guard narrows but does NOT
+       close the race that makes this key wrong. An analysis whose
+       markAnalysisBusy lands between that route's last check and its
+       renameWithRetry registers against the pre-rename directory, so
+       isAnalysisBusy(newDir) is false for this run's whole life and
+       cast-design.ts's analysis-vs-bulk-design exclusion silently disappears
+       for that book. The run's own disk writes are unaffected (liveBookDir
+       above). Closing it needs a primitive spanning registration and rename —
+       a per-book lock, or keying busy state on book id instead of path — which
+       is out of scope for #2165. */
     if (job.bookDir) clearAnalysisBusy(job.bookDir);
   ```
 
-- [ ] 2.7 Wire the main-path merge base (`:3020`):
+  **Do not write a comment here claiming the 409 makes this key correct.** It
+  does not; an earlier draft of this plan said so and it was wrong.
+
+- [ ] 2.7 Wire the main-path merge base — the `createCastMergeBase(...)` call is
+      on **`:3021`** (the `const castBase` declaration opens on `:3020`):
 
   ```ts
       const castBase: CastMergeBase | null = recordRef.bookDir
@@ -487,8 +592,9 @@ function liveBookDir(job: AnalysisJob): string | null;
         : null;
   ```
 
-- [ ] 2.8 Wire the subset-path merge base (`:5618`) the same way — note the
-      record is named `record` in `runSubsetAnalyzerJob`, not `recordRef`:
+- [ ] 2.8 Wire the subset-path merge base the same way — the call is on
+      **`:5619`** (declaration opens on `:5618`). Note the record is named
+      `record` in `runSubsetAnalyzerJob`, not `recordRef`:
 
   ```ts
     const castBase: CastMergeBase | null = record.bookDir
@@ -515,6 +621,19 @@ function liveBookDir(job: AnalysisJob): string | null;
       and it does not need the `state-io` `readJson` interceptor at all, so that
       `vi.mock` is dropped.
 
+      **Verified — the stubbed run does reach a merge-base write site, and it is
+      the first one after the gate releases.** The chain, traced on `main`: the
+      hanging `runStage1Chapter` is awaited at `analysis.ts:3697`; its
+      `result.characters` lands in `chapterCast[ch.id]` at `:3775`; the
+      `recordRef.bookDir` block at `:3815` feeds that through `buildInterimCast`
+      (`:3816`, defined at `:775`); `interim.length > 0` at `:3822` gates
+      `castBase!.writeChecked(...)` at **`:3833`** — the first of the five sites
+      (`:3833`, `:4046`, `:5087` main; `:5863`, `:6399` subset). The stub returns
+      one character, so `interim` is non-empty and the write fires. **The whole
+      case rests on this**: if a future refactor moves the interim write out of
+      the Phase-0 per-chapter loop, the test must go red rather than green —
+      which is why the assertions below check file *contents*, not existence.
+
   ```ts
   /* #2165 — the DEFENCE-IN-DEPTH layer. book-state.ts now refuses a rename
      while an analysis is registered (see
@@ -530,7 +649,15 @@ function liveBookDir(job: AnalysisJob): string | null;
      hangs on a gate so the test owns a deterministic mid-run window. */
 
   import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-  import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+  import {
+    mkdtempSync,
+    rmSync,
+    mkdirSync,
+    writeFileSync,
+    readFileSync,
+    existsSync,
+    renameSync,
+  } from 'node:fs';
   import { tmpdir } from 'node:os';
   import { join } from 'node:path';
   import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
@@ -615,6 +742,7 @@ function liveBookDir(job: AnalysisJob): string | null;
     manuscriptId: string;
     oldDir: string;
     newDir: string;
+    seededCast: string;
     job: AnalysisJob;
     releasePhase0: () => void;
     phase0Selection: AnalyzerSelection;
@@ -645,13 +773,18 @@ function liveBookDir(job: AnalysisJob): string | null;
       }),
     );
     writeFileSync(join(oldDir, 'manuscript.md'), `# Chapter One\n\n${CHAPTER_BODY}\n`);
+    /* The seed roster deliberately does NOT contain `nova`. `renameSync` below
+       carries this file to newDir intact, so "cast.json exists at newDir" is
+       true before the run writes anything — a seed containing the analyzer's
+       own character would make the whole case a placebo. `seed-marker` is the
+       control: only a real merge-base write can put `nova` in this file. */
     const { castJsonPath } = await import('../workspace/paths.js');
-    writeFileSync(
-      castJsonPath(oldDir),
-      JSON.stringify({
-        characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
-      }),
-    );
+    const seededCast = JSON.stringify({
+      characters: [
+        { id: 'seed-marker', name: 'Seed Marker', role: 'character', color: '#abc', aliases: [] },
+      ],
+    });
+    writeFileSync(castJsonPath(oldDir), seededCast);
 
     const { putManuscript } = await import('../store/manuscripts.js');
     putManuscript({
@@ -709,6 +842,7 @@ function liveBookDir(job: AnalysisJob): string | null;
       manuscriptId,
       oldDir,
       newDir,
+      seededCast,
       job,
       releasePhase0,
       phase0Selection: buildSelection(phase0Analyzer, 'phase0-model'),
@@ -759,9 +893,17 @@ function liveBookDir(job: AnalysisJob): string | null;
           process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
         }
 
-        /* Per-mechanism assertions — one mechanism at a time, so a failure
-           names the site that broke. */
-        expect(existsSync(castJsonPath(seed.newDir))).toBe(true);
+        /* POSITIVE CONTROL FIRST. `renameSync` carried the seeded cast.json to
+           newDir, so mere existence there proves nothing — a run that died
+           immediately after the rename would satisfy it. These two assertions
+           are what prove a merge-base write actually landed at the new path: */
+        const after = readFileSync(castJsonPath(seed.newDir), 'utf8');
+        expect(after).not.toBe(seed.seededCast);
+        expect(
+          (JSON.parse(after).characters as Array<{ id: string }>).map((c) => c.id),
+        ).toContain('nova');
+
+        /* Per-mechanism assertion — the write did NOT also go to the old path. */
         expect(existsSync(castJsonPath(seed.oldDir))).toBe(false);
         /* Whole-outcome assertion: NOTHING recreated the pre-rename folder. */
         expect(existsSync(seed.oldDir)).toBe(false);
@@ -830,9 +972,18 @@ cases above.
 **The mutation that makes each fail:**
 - Case 1: revert step 2.7 to `createCastMergeBase(recordRef.bookDir, …)` (with
   Task 1's signature widened back to a string). The interim per-chapter write
-  then mkdir's `oldDir` back and writes there:
-  `existsSync(castJsonPath(seed.oldDir))` becomes `true` and
-  `existsSync(castJsonPath(seed.newDir))` becomes `false`.
+  then mkdir's `oldDir` back and writes `nova` **there**, leaving the file at
+  `newDir` byte-identical to the seed. Three assertions flip:
+  `expect(after).not.toBe(seed.seededCast)` fails (it *is* the seed), the
+  `toContain('nova')` fails (the seed has only `seed-marker`), and
+  `existsSync(castJsonPath(seed.oldDir))` becomes `true`. Note that a
+  bytes-only check would be the weaker test — the `toContain('nova')` is what
+  makes "the run's own write landed here" the thing being asserted, rather than
+  "something changed the file".
+- Case 1, second mutation (the placebo check — run this too): make the stub's
+  `runStage1Chapter` return `{ characters: [] }` so no write site is ever
+  reached. Both content assertions must fail. If they pass, the case is a
+  placebo and the write site is no longer being exercised.
 - Case 2: revert step 2.4's `liveBookDir(job)` to `job.bookDir` in
   `persistTerminalSnapshot`. The paused snapshot lands in the resurrected
   `oldDir`: `existsSync(analysisStateJsonPath(seed.newDir))` becomes `false`.
@@ -900,7 +1051,42 @@ writes both follow a rename; the pre-rename directory is never recreated.
           if (existsSync(newDir)) {
   ```
 
-- [ ] 3.3 Create `server/src/routes/book-state.rename-analysis-busy.test.ts`:
+- [ ] 3.3 Add the **second check**, immediately before `renameWithRetry` and
+      *after* the `mkdir` (`book-state.ts:845-848`). Placement matters: it must
+      sit after the `mkdir` `await` so it actually covers that yield — and so
+      the regression test in step 3.4, which marks the book busy from inside a
+      stubbed `mkdir`, can reach it.
+
+  ```ts
+          await mkdir(dirname(newDir), { recursive: true });
+          /* #2165 — re-check after the mkdir yield. The guard above reads
+             in-memory state, and there are two `await`s between it and the
+             move; an analysis start that lands in that window would call
+             markAnalysisBusy(record.bookDir) against the PRE-rename path
+             (analysis.ts:2764), and since the busy key is pinned by design,
+             isAnalysisBusy(newDir) would then be false for that run's whole
+             life — silently disabling cast-design.ts:684's analysis-vs-design
+             mutual exclusion for this book.
+
+             ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
+             itself, it does NOT close it. Check-then-rename is still two
+             operations. Closing it properly needs a primitive that spans the
+             analysis registration and the rename (a per-book lock, or keying
+             busy state on book id rather than path) — out of scope for #2165,
+             deliberately, not by oversight. */
+          if (isAnalysisBusy(bookDir)) {
+            return res.status(409).json({
+              error:
+                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+            });
+          }
+          await renameWithRetry(bookDir, newDir);
+  ```
+
+  Extract the duplicated response into a local `const analysisBusyRefusal = …`
+  if the implementer prefers — the two bodies must not drift apart.
+
+- [ ] 3.4 Create `server/src/routes/book-state.rename-analysis-busy.test.ts`:
 
   ```ts
   /* #2165 — the PRIMARY guard: PUT /:bookId/state refuses with 409 when the
@@ -918,13 +1104,33 @@ writes both follow a rename; the pre-rename directory is never recreated.
      is exactly what a real run calls at job creation (analysis.ts:2764), so
      driving the registry directly tests the guard at its real seam. */
 
-  import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+  import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
   import { rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-  import { mkdtemp } from 'node:fs/promises';
   import { tmpdir } from 'node:os';
   import { join } from 'node:path';
   import express, { type Express } from 'express';
   import request from 'supertest';
+
+  /* Module-scoped mkdir swap, so the TOCTOU case can act inside the window
+     book-state.ts opens between its first guard and renameWithRetry. Same
+     pattern as cast-merge-base.test.ts's readFile swap: a hoisted vi.mock (so
+     book-state.ts's own binding, taken at ITS module-load time, is the mocked
+     one) that delegates to the real impl unless a test installs a spy. */
+  type MkdirFn = (path: string, opts?: unknown) => Promise<string | undefined>;
+  let mkdirSpy: MkdirFn | null = null;
+  let realMkdir: MkdirFn;
+
+  vi.mock('node:fs/promises', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    return {
+      ...actual,
+      mkdir: (path: string, opts?: unknown) =>
+        (mkdirSpy ?? (actual.mkdir as unknown as MkdirFn))(path, opts),
+    };
+  });
+
+  /* After vi.mock, so `mkdtemp` here is the (pass-through) mocked module. */
+  const { mkdtemp } = await import('node:fs/promises');
 
   const AUTHOR = 'Busy Rename Author';
   const SERIES = 'Standalones';
@@ -940,6 +1146,8 @@ writes both follow a rename; the pre-rename directory is never recreated.
   let clearAnalysisBusy: (d: string) => void;
 
   beforeAll(async () => {
+    const actualFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    realMkdir = actualFsp.mkdir as unknown as MkdirFn;
     workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-busy-rename-test-'));
     process.env.WORKSPACE_DIR = workspaceRoot;
 
@@ -992,6 +1200,7 @@ writes both follow a rename; the pre-rename directory is never recreated.
   }
 
   afterEach(() => {
+    mkdirSpy = null;
     /* Belt and braces — a leaked busy entry would make every later case 409.
        clearAnalysisBusy is a decrement, so call it until the map is clean. */
     for (let i = 0; i < 4; i++) clearAnalysisBusy(bookDir);
@@ -1049,6 +1258,35 @@ writes both follow a rename; the pre-rename directory is never recreated.
       expect(existsSync(bookDir)).toBe(false);
     });
 
+    it('refuses when the analysis registers AFTER the first check but before the rename', async () => {
+      seedBook();
+      /* The TOCTOU window: book-state.ts awaits mkdir between its first guard
+         and renameWithRetry. Stub that mkdir to mark the book busy on the way
+         through — i.e. simulate a POST /analysis whose markAnalysisBusy lands
+         in exactly that window — and the SECOND check must catch it.
+
+         Without this case a mutation that deletes only the second check passes
+         every other test in this file. */
+      let marked = false;
+      mkdirSpy = async (target: string, opts?: unknown) => {
+        if (!marked) {
+          marked = true;
+          markAnalysisBusy(bookDir);
+        }
+        return realMkdir(target, opts as never);
+      };
+
+      const res = await request(app)
+        .put(`/api/books/${bookId}/state`)
+        .set('Content-Type', 'application/json')
+        .send({ slice: 'state', patch: { title: NEW_TITLE } });
+
+      expect(marked).toBe(true); // the window was actually entered
+      expect(res.status).toBe(409);
+      expect(existsSync(newDir)).toBe(false);
+      expect(existsSync(bookDir)).toBe(true);
+    });
+
     it('keeps the guard ref-counted — a sibling subset job still holds it', async () => {
       seedBook();
       markAnalysisBusy(bookDir); // main
@@ -1066,8 +1304,12 @@ writes both follow a rename; the pre-rename directory is never recreated.
   });
   ```
 
-- [ ] 3.4 Update `openapi.yaml`'s `putBookState` 409 description (`:3329-3335`)
-      to name the fourth cause:
+- [ ] 3.5 Update `openapi.yaml`'s `putBookState` 409 description to name the
+      fourth cause. **The `'409':` key is on `:3330` and its body is `:3331-3335`
+      — replace exactly that.** Do **not** touch `:3329`, which is
+      `description: Book not found`, the *404*'s body; an earlier draft of this
+      plan cited `:3329-3335` and a blind edit of that range would have
+      destroyed the 404.
 
   ```yaml
           '409':
@@ -1081,20 +1323,20 @@ writes both follow a rename; the pre-rename directory is never recreated.
               directories — retry once the run finishes).
   ```
 
-- [ ] 3.5 Run `npm run openapi:types` from the repo root and **commit the
+- [ ] 3.6 Run `npm run openapi:types` from the repo root and **commit the
       resulting `src/lib/api-types.ts` diff**. `openapi-typescript` emits every
       `description` into the generated file as JSDoc, so a prose-only
       `openapi.yaml` edit *does* stale `api-types.ts` — and `verify.yml` has a
       dedicated leg that regenerates and diffs it
       (`::error::src/lib/api-types.ts is stale`). Skipping this reds CI.
 
-- [ ] 3.6 Run `cd server && npx vitest run src/routes/book-state.rename-analysis-busy.test.ts --retry=0`,
+- [ ] 3.7 Run `cd server && npx vitest run src/routes/book-state.rename-analysis-busy.test.ts --retry=0`,
       then `cd server && npm run test:server-slow` — `book-state.test.ts`'s
       existing rename suite lives there and must stay green (its three rename
       cases never mark the book busy, so they must all still pass).
 
 **Paired tests:** `server/src/routes/book-state.rename-analysis-busy.test.ts` —
-four cases.
+five cases.
 
 **The mutation that makes each fail:**
 - Case 1 ("409s a title change"): delete the `if (isAnalysisBusy(bookDir))`
@@ -1106,14 +1348,26 @@ four cases.
 - Case 3 ("accepts the same rename once cleared"): make the guard unconditional
   (e.g. `if (true)`) or key it on `isAnyAnalysisBusy()` instead of this book.
   Returns 409 and the folder never moves.
-- Case 4 (ref-counting): change `clearAnalysisBusy` to `analysisBusy.delete` in
+- Case 4 (the TOCTOU re-check): delete **only** the second check added in step
+  3.3, leaving the first one intact. Every other case in this file still passes —
+  which is the whole reason this case exists. The stubbed `mkdir` marks the book
+  busy after the first check has already run, so with the re-check gone the PUT
+  returns 204 and `existsSync(newDir)` becomes `true`.
+- Case 5 (ref-counting): change `clearAnalysisBusy` to `analysisBusy.delete` in
   `design-lock.ts`, or key the guard on a boolean set. The first clear releases
   the guard, the PUT 204s, and `existsSync(newDir)` becomes `true`.
+
+**What no test here covers, and cannot:** the residual window between the second
+check and `renameWithRetry`'s own first `await`. It is real (see
+[Design decisions](#is-there-any-path-that-renames-a-book-without-going-through-the-409))
+and accepted. Do not add a test that appears to cover it — a test that stubs
+`renameWithRetry` itself would be asserting a mechanism, and would go green
+against code that still has the gap.
 
 **Deliverable:** the rename is refused, with a message the user can act on, and
 every non-renaming `slice: 'state'` PUT is unaffected.
 
-- [ ] 3.7 Commit: `fix(server,openapi): refuse a book rename while an analysis is running`
+- [ ] 3.8 Commit: `fix(server,openapi): refuse a book rename while an analysis is running`
 
 ---
 
@@ -1216,15 +1470,15 @@ still rejects with an `Error`; only the message changes.
   });
   ```
 
-  **Note:** `api.putBookState` resolves to `realPutBookState` only when
-  `VITE_USE_MOCKS` is off. If the frontend test env has mocks on, this file must
-  import `realPutBookState`'s module-level binding the same way its sibling
-  `api-analysis-state.test.ts` reaches a real implementation through `api`;
-  verify by running the file and, if `fetch` is never called, export nothing new
-  — instead assert against the real function via the same `api` object after
-  confirming `import.meta.env.VITE_USE_MOCKS` is unset for the vitest run
-  (`vitest.config.ts` / `src/test-setup`). Do not add a production export purely
-  for the test.
+  **Verified — `api.putBookState` *is* `realPutBookState` under vitest, so the
+  `fetch` stub is reached.** `USE_MOCKS` is `import.meta.env.VITE_USE_MOCKS === 'true'`
+  (`src/lib/api.ts:101`); the only env files in the repo are `.env.development`
+  (which sets `VITE_USE_MOCKS=false`), `.env.e2e`, `.env.local` (worktree ports
+  only) and `.env.marketing` — there is no `.env` or `.env.test`. So `USE_MOCKS`
+  is `false` and `api.putBookState` binds `realPutBookState` (`api.ts:10640`).
+  `api-analysis-state.test.ts` already depends on exactly this. **Do not add a
+  production export of `realPutBookState` for the test's benefit** — it is
+  reachable through `api` as written.
 
 - [ ] 4.3 Run `npx vitest run src/lib/api-put-book-state-error.test.ts --retry=0`,
       then `npm run test -- --retry=0` for the whole frontend suite —
@@ -1301,7 +1555,12 @@ readable sentence in the existing error toast.
   - **Body:** must contain the literal line `Closes #2165` (not backticked, not
     qualified — a backticked or "at ship time" phrasing does not auto-close).
     Keep the template's `## Summary` / `## Test plan` sections; link this plan
-    doc. State explicitly that no on-box acceptance row is owed and why.
+    doc. State explicitly that no on-box acceptance row is owed and why — **and
+    state the accepted residual TOCTOU risk** (an analysis registering between
+    the second guard check and `renameWithRetry` still pins its busy key to the
+    pre-rename path, disabling the analysis↔bulk-design exclusion for that book
+    until the run ends; the run's own disk writes are unaffected). A reviewer
+    must not have to find that in the plan.
   - **Review gate:** a `code-review` pass at `medium` effort (single-scope
     `fix` semantics, multi-scope diff → treat as `high` if the reviewer's
     routing table says so), dispatched to the Premium tier, before merge.
