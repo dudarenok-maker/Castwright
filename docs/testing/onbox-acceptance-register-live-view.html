@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">57</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">55</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">1</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -195,7 +195,7 @@
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>37</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>4</td></tr>
-      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>3</td></tr>
+      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>1</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>8</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
@@ -802,37 +802,49 @@
   <!-- C -->
   <section class="group" id="gc">
     <header>
-      <h3 class="gtitle"><span class="gtag">C</span> One <span lang="ru">Ночной дозор</span> re-analysis <span class="gcount">3 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">C</span> One <span lang="ru">Ночной дозор</span> re-analysis <span class="gcount">1 row</span></h3>
       <p class="setup">
-        Three rows re-analyze the <strong>same manuscript</strong> for different reasons. One local pass
-        plus one cloud pass — captured with scene-break output, attribution output and truncation/429
-        telemetry all in mind — discharges all three. No TTS or GPU synthesis.
+        <b>One row left.</b> The <b>local pass ran 2026-08-06</b> — 9 chapters, <b>15,069 sentences</b>,
+        <code>qwen36-cw-iq4-32k</code> via local Ollama, structure engine on,
+        <code>escalation='local'</code>, no mock mode — discharging the two local rows
+        (plan 261 scene separators, plan 247 srv-59 attribution). Only the <b>cloud</b> pass remains.
+        No TTS or GPU synthesis.
       </p>
+      <div class="flag">
+        <b>Discharged 2026-08-06 — results recorded, one target missed.</b>
+        <b>Scene separators (plan 261): PASS.</b> 24 separators found, 22 flagged (2 dropped by the
+        leading-separator rule, by design); median separator→opener distance <b>5 characters</b> — the
+        <code>* * *</code> glyph itself. The old ~92k forward-overshoot is mechanically gone: binding is
+        index-adjacent (<code>lastBefore + 1</code>), not a forward search. Chapters 1–4 contain no
+        separators at all, so their zero flags are correct.
+        <b>srv-59 attribution (plan 247): targets missed.</b> Flagged <b>6,568</b> against the ≤~500 target.
+        Cause: only chapter 9 cleared the hardcoded <b>80% alignment floor</b> (ch5 4%, ch6 2%, ch7 66%,
+        ch8 73%, ch9 95%); the rest degraded chapter-wide to flag-only. Where the engine actually ran,
+        <b>it met the target</b> — ch9 landed <code>confirmed=580 corrected=531 flagged=488</code>. The
+        <b>aligner, not the engine</b>, is the bottleneck, filed as
+        <a href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a>.
+        <b>Caveat:</b> the provenance report covers <b>chapters 5–9 only</b> — chapters 1–4 were served
+        from the resume cache after two environmental restarts and contributed nothing to the aggregate.
+        Deliberately not re-run: the diagnostic is conclusive without it.
+      </div>
     </header>
     <details class="item">
-      <summary><span class="num">C1</span><span class="iname">Manuscript scene separator — Russian re-run (plan 261)</span><span class="risk low">Cosmetic risk</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>This book couldn't be measured in the original round — it was mid-re-analysis and its <code>manuscript-edits.json</code> was deleted by the reparse. The marker-anchored rule change is claimed to <em>mechanically</em> eliminate the old ~92k-character forward-overshoot; that claim is what the re-run confirms.</p>
-        <p>Failure here is always cosmetic: a divider off by a sentence, never data corruption.</p>
-        <p class="src"><code>plan 261:203-206</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">C2</span><span class="iname">srv-59 dialogue-structure attribution (plan 247)</span><span class="risk">Batches with C1</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Re-analyze the same book — 9 chapters, 14,065 sentences — on the default pipeline. Ship notes: “Not yet shipped: on-box acceptance is owed post-merge.”</p>
-        <p class="src">Core engine merged PR #1482 (2026-07-09); still unrun as of 2026-07-21 · <code>plan 247:247-249,338-340</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">C3</span><span class="iname">Cloud request sizing + input-fraction calibration</span><span class="risk low">Key already set</span><span class="chev">›</span></summary>
+      <summary><span class="num">C1</span><span class="iname">Cloud request sizing + input-fraction calibration</span><span class="risk low">Key already set</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Uses the free-tier <code>GEMINI_API_KEY</code> <b>already configured</b> in <code>server/.env</code> — the credential this run exercises, not a blocker.</p>
         <ul>
           <li>Re-analyze end-to-end on <code>gemma-4-31b-it</code> <b>including the script-review pass</b> — the pass that actually 429'd (all 22 logged failures were <code>task: script-review</code>). Confirm a per-minute 429 is retried rather than misclassified as daily-quota.</li>
           <li>Calibrate <code>analyzer.stage2.localInputFraction</code> (ships at 0.3) downward until a full local re-analysis completes with <b>zero</b> stage-2 truncation drops. Record the working value.</li>
         </ul>
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — 3 unchecked items</p>
+        <p><b>Established by the 2026-08-06 local pass:</b> <code>gemini-*</code> really does
+        RECITATION-block this book — a queued Ollama call timed out into the cloud fallback and
+        <code>gemini-3.5-flash-lite</code> returned <code>PROHIBITED_CONTENT</code> on a stage-2 section.
+        Note <code>server/.env</code> sets <code>GEMINI_MODEL=gemini-3.5-flash-lite</code>, which
+        <em>overrides</em> the RECITATION-safe <code>gemma-4-31b-it</code> code default — that line, not the
+        code, is what must change. Run it against a <b>throwaway re-import</b>: the analysis cache is keyed
+        by <code>manuscriptId</code> only, so re-analyzing the library entry would overwrite the qwen36
+        sentences and cast the owner is keeping for generation.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — 3 unchecked items · was <b>C3</b> before 2026-08-06</p>
       </div>
     </details>
   </section>
