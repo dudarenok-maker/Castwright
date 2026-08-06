@@ -206,13 +206,28 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        every `unprotectedId !== newId`: a live id colliding on a RAW (not
        merely normalised) match is the ordinary, pre-#2085 "second/third
        character shares a name" path — already silently handled before this
-       fix existed, and not part of what it reports on. */
+       fix existed, and not part of what it reports on.
+
+       F6 (fix round 2, #2163) — widened again for the two buckets C1 and F1
+       folded into `takenIds` after this M4 paragraph was written:
+       `displacedKeys` and `rejectedPairFromKeys`. Each avoids a mint the
+       same way a history/live collision does, but neither `collidingHistoryKey`
+       nor `collidingLiveId` above ever matches one (a displaced key has
+       already left `historyKeys`, by definition; a rejected pair's `from`
+       was never in it to begin with) — measured before this fix: a
+       displaced-key-only avoidance logged only the minted id, with no
+       reason, exactly the silent gap this block's own comment says it
+       exists to close. */
     const unprotectedId = safeId(name, { taken: existingIds });
     const unprotectedNorm = normaliseIdKey(unprotectedId);
     const collidingHistoryKey = [...historyKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
     const collidingLiveId = !existingIds.has(unprotectedId)
       ? [...existingIds].find((id) => normaliseIdKey(id) === unprotectedNorm)
       : undefined;
+    const collidingDisplacedKey = [...displacedKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
+    const collidingRejectedPair = (history.rejectedPairs ?? []).find(
+      (p) => normaliseIdKey(p.from) === unprotectedNorm,
+    );
 
     if (unprotectedId !== newId && collidingHistoryKey) {
       /* Review round 2 (M3) — `history.supersededBy[collidingHistoryKey]` is
@@ -229,6 +244,22 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
       console.log(
         `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — normalises the same as ` +
           `live character id "${collidingLiveId}"; minted "${newId}" instead.`,
+      );
+    } else if (unprotectedId !== newId && collidingDisplacedKey) {
+      // F6 — same "recorded, not a guarantee" caveat as the history branch
+      // above: `history.displaced[collidingDisplacedKey]` is what the entry
+      // resolved to at the moment it was pruned out of `supersededBy`, not a
+      // claim about whether that target is still live.
+      console.log(
+        `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+          `displaced id "${collidingDisplacedKey}" (pruned from history, previously recorded as ` +
+          `retired in favour of "${history.displaced?.[collidingDisplacedKey]}"); minted "${newId}" instead.`,
+      );
+    } else if (unprotectedId !== newId && collidingRejectedPair) {
+      console.log(
+        `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+          `rejected-pair id "${collidingRejectedPair.from}" (rejected against ` +
+          `"${collidingRejectedPair.to}"); minted "${newId}" instead.`,
       );
     }
 

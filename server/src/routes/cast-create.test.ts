@@ -435,4 +435,76 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
     );
     expect(resolution).toBeUndefined();
   });
+
+  /* F6 (fix round 2, #2163) — C1's `displacedKeys` avoidance matched neither
+     `collidingHistoryKey` (already left `historyKeys` by the time it's in
+     `displaced`) nor `collidingLiveId`, so it minted a suffixed id with no
+     stated reason. */
+  it('F6 — is reported, not silent, when a DISPLACED id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'lightning-dave', name: 'Lightning Dave', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        displaced: { the_torment: 'lightning-dave' },
+      }),
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'The Torment' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('the-torment');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) =>
+            m.includes('avoided re-minting "the-torment"') &&
+            m.includes('displaced id "the_torment"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  /* F6 — same silent gap, for a `rejectedPairs`-only avoidance (F1's new
+     bucket): `from` was never in `historyKeys` to begin with, so neither
+     existing branch ever named it either. */
+  it('F6 — is reported, not silent, when a REJECTED-PAIR id is avoided', async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_WITH_CAST, bookId, [
+      { id: 'marrow', name: 'Marrow', role: 'character', color: 'unset' },
+    ]);
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'marrow' }],
+      }),
+    );
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await callCreate(bookId, { name: 'Mayrin' });
+      expect(res.status).toBe(200);
+      expect(res.body.character.id).not.toBe('mayrin');
+      const messages = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(
+        messages.some(
+          (m) =>
+            m.includes('avoided re-minting "mayrin"') &&
+            m.includes('rejected-pair id "mayrin"') &&
+            m.includes('rejected against "marrow"'),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
