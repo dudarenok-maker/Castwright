@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 114 knobs across 12 groups in total. High-risk groups (marked
+attribution — 116 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -228,9 +228,10 @@ app-pinnable, so it just reports what the daemon is currently doing.
   <img alt="Per-sentence QA gates" src="images/advanced-settings/07-per-sentence-qa-gates.png">
 </picture>
 
-Group risk is **low** overall, but 4 knobs in this group are individually
-**medium** risk (Voice-QA device, Content-QA device, Content-QA model, Auto-fix
-voice mismatches) — the table's risk column shows each correctly.
+Group risk is **low** overall, but 6 knobs in this group are individually
+**medium** risk (Voice-QA device, Content-QA device, Content-QA model,
+Content-QA compute type, Content-QA concurrency, Auto-fix voice mismatches) —
+the table's risk column shows each correctly.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
@@ -253,6 +254,8 @@ voice mismatches) — the table's risk column shows each correctly.
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) model | faster-whisper model size/name; cap at `base` on an 8 GB card | `base` | string | restart · sidecar | **medium** |
+| Content-QA (Whisper) compute type | CTranslate2 compute type; `auto` leaves it to the sidecar's own device-dependent fallback | `auto` | enum | restart · sidecar | **medium** |
+| Content-QA (Whisper) transcribe concurrency | Documented sidecar thread-pool width — no code currently reads it (#2014) | 2 | integer | restart · sidecar | **medium** |
 | Auto-fix voice mismatches | Re-render+replace severe voice mismatches | `false` | boolean | live | **medium** |
 | ASR max deletion run | Longest deletion run → truncation/drop drift | 4 | integer | live | low |
 | ASR min chars | Sentences shorter than this aren't scored | 12 | integer | live | low |

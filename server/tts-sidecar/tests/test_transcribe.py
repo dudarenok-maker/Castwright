@@ -144,6 +144,44 @@ def test_load_cuda_uses_int8_float16(fake_whisper_module, monkeypatch) -> None:
     assert model.compute_type == "int8_float16"
 
 
+def test_load_asr_compute_type_auto_is_treated_as_unset_on_cpu(fake_whisper_module, monkeypatch) -> None:
+    """#2014 — the config-registry knob's own default/sentinel is the literal
+    string "auto" (a static registry default can't represent the
+    device-dependent int8/int8_float16 fallback below). main.py must treat an
+    explicit ASR_COMPUTE_TYPE=auto the SAME as unset — resolving the normal
+    device-dependent default — rather than passing CTranslate2's own distinct
+    "auto" compute type straight through."""
+    monkeypatch.delenv("ASR_DEVICE", raising=False)
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "auto")
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.compute_type == "int8"
+
+
+def test_load_asr_compute_type_auto_is_treated_as_unset_on_cuda(fake_whisper_module, monkeypatch) -> None:
+    """Same sentinel, cuda side: ASR_COMPUTE_TYPE=auto resolves to
+    int8_float16, not the literal "auto" string (#2014)."""
+    monkeypatch.setenv("ASR_DEVICE", "cuda")
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "auto")
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.compute_type == "int8_float16"
+
+
+def test_load_asr_compute_type_concrete_override_passes_through_unchanged(fake_whisper_module, monkeypatch) -> None:
+    """A concrete ASR_COMPUTE_TYPE override (not "auto") reaches WhisperModel
+    verbatim, on either device — the escape hatch for a roomier card
+    (main.py docstring, #2014)."""
+    monkeypatch.setenv("ASR_DEVICE", "cpu")
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "float32")
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.compute_type == "float32"
+
+
 def test_load_omits_revision_pin_by_default(fake_whisper_module, monkeypatch) -> None:
     """#2047/R8 — no ASR_MODEL_REVISION set: production stays unpinned,
     byte-for-byte the pre-#2047 call. Asserts the `revision` kwarg is

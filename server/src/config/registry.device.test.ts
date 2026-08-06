@@ -46,4 +46,21 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     const k = getKnob('qa.asr.model')!;
     expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_MODEL', 'string', 'restart-sidecar', 'base']);
   });
+
+  it('adds ASR_COMPUTE_TYPE registry knob (enum, restart-sidecar, default auto) with a closed CTranslate2 option set (#2014)', () => {
+    const k = getKnob('qa.asr.computeType')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_COMPUTE_TYPE', 'enum', 'restart-sidecar', 'auto']);
+    // 'auto' MUST be a valid option (it's also the default) — the sentinel
+    // meaning "let the sidecar resolve its own device-dependent fallback"
+    // (int8 on cpu / int8_float16 on cuda; main.py's _compute_type, #2014).
+    expect(k.options).toContain('auto');
+    expect(k.options).toContain('int8');
+    expect(k.options).toContain('int8_float16');
+  });
+
+  it('adds ASR_CONCURRENCY registry knob (integer, restart-sidecar, default 2) documented alongside ASR_MODEL (#2014)', () => {
+    const k = getKnob('qa.asr.concurrency')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_CONCURRENCY', 'integer', 'restart-sidecar', 2]);
+    expect(k.min).toBe(1);
+  });
 });

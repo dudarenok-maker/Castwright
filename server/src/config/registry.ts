@@ -385,6 +385,44 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'restart-sidecar', risk: 'medium',
   },
   {
+    key: 'qa.asr.computeType',
+    env: 'ASR_COMPUTE_TYPE',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) compute type',
+    help: 'CTranslate2 compute type for the Whisper model. "auto" (default) leaves '
+        + 'this to the sidecar\'s own device-dependent fallback — int8 on cpu, '
+        + 'int8_float16 on cuda (main.py\'s `_compute_type`); a single static '
+        + 'registry default cannot represent that (#2014), so "auto" doubles as '
+        + 'the sentinel main.py treats identically to unset. Pick a concrete '
+        + 'type (e.g. "float16") to force it on a roomier card — ASR_DEVICE and '
+        + 'this must agree, or a cpu device with a cuda-only type 500s every '
+        + '/transcribe. Changing this restarts the sidecar.',
+    type: 'enum',
+    options: ['auto', 'default', 'int8', 'int8_float32', 'int8_float16', 'int8_bfloat16', 'int16', 'float16', 'bfloat16', 'float32'],
+    default: 'auto', // 'auto' → no ASR_COMPUTE_TYPE env, OR the literal string "auto" →
+                      // main.py's _compute_type() treats both as "resolve the device-
+                      // dependent default" (#2014), not CTranslate2's own distinct "auto"
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
+    key: 'qa.asr.concurrency',
+    env: 'ASR_CONCURRENCY',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) transcribe concurrency',
+    help: 'Documented sidecar transcribe thread-pool width. NOTE (#2014): repo-wide '
+        + 'search found NO code anywhere — sidecar or server — that reads '
+        + 'ASR_CONCURRENCY; it has been .env.example-only documentation since it '
+        + 'was first written, so changing it currently has no observable effect. '
+        + 'Registered per the ticket owner\'s explicit call (an already-documented '
+        + 'operator-facing var falls under CLAUDE.md\'s "new env var MUST be a '
+        + 'knob" rule) so it is at least reachable/consistent with .env.example, '
+        + 'not to imply it is wired up. Changing this restarts the sidecar.',
+    type: 'integer', min: 1,
+    default: 2, // ← .env.example's own documented default; there is no sidecar
+                // code fallback to match — none exists (see help above, #2014)
+    apply: 'restart-sidecar', risk: 'medium',
+  },
+  {
     key: 'qa.speaker.autoRepair',
     env: 'SEG_SPK_AUTO_REPAIR',
     group: 'qa-gates',

@@ -7169,10 +7169,19 @@ class WhisperEngine:
         """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
         Override via ASR_COMPUTE_TYPE for a roomier card. `device` (#1730 gap 2)
         computes the type off the load's threaded card rather than the shared
-        `self._device`; `None` falls back to it (the pre-admission behaviour)."""
+        `self._device`; `None` falls back to it (the pre-admission behaviour).
+
+        #2014 — the config-registry knob (`qa.asr.computeType`) can't ship a
+        single static default that matches this method's own device-dependent
+        fallback, so its registry default is the sentinel string "auto". An
+        explicit ASR_COMPUTE_TYPE=auto is therefore treated identically to
+        unset/empty here — NOT passed through as CTranslate2's own distinct
+        "auto" compute type, which picks per-device differently than this
+        int8/int8_float16 pair does."""
         family, _ = _parse_device(device if device is not None else self._device)
         default = "int8_float16" if family == "cuda" else "int8"
-        return (os.environ.get("ASR_COMPUTE_TYPE", default).strip() or default)
+        raw = os.environ.get("ASR_COMPUTE_TYPE", "").strip()
+        return default if raw in ("", "auto") else raw
 
     def _ensure_loaded(self, device: Optional[str] = None) -> None:
         if self._model is not None:
