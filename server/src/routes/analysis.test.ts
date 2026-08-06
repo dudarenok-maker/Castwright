@@ -3465,6 +3465,12 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
               name: 'Legacy Duplicate',
               voiceState: 'generated',
             },
+            // #2110 — 'eliza' must be genuinely LIVE after this run for the
+            // 'old-eliza' -> 'eliza' assertion below to prove what it claims
+            // (an entry with a live target surviving untouched); voiced so
+            // the carry-forward loop rescues her even though the fresh
+            // roster never mentions her this run.
+            { id: 'eliza', name: 'Eliza', voiceState: 'reused' },
           ],
         }),
       );
@@ -4474,8 +4480,19 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
      row named "Anton" at Stage 1; foldMinorCast's bucket-id invariant then
      canonicalises the NAME to "Unknown male" while leaving the id untouched
      (see the "Invariant (plan 122)" comment in fold-minor-cast.ts) — this
-     test only asserts on the id, so that's inert here. */
-  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+     test only asserts on the id, so that's inert here.
+
+     #2110 — 'eliza' is given real dialogue (3+ lines, `foldMinorCast`'s
+     `MIN_LINES_DEFAULT`) so she survives THIS run's own fresh roster under
+     her own id, making her a genuinely LIVE target — needed so the
+     'old-eliza' -> 'eliza' assertion below still proves what it claims (an
+     entry with a live target surviving untouched) now that the dangling-
+     TARGET prune (#2110) runs at the same write as the reclaim drop this
+     test pins. Kept out of a prior-cast.json on purpose (this fixture is
+     deliberately prior-cast-less, below) — she is simply part of this run's
+     own detected cast, same as Anton. */
+  const CHAPTER_BODY =
+    '“Are you sure this will work,” Anton asked.\n\n“Yes,” Eliza said.\n\n“Let us go,” Eliza added.\n\n“Agreed,” Eliza replied.\n\nOlga nodded and looked away.';
 
   function stage1RosterForChapter(): CharacterOutput[] {
     return [
@@ -4488,6 +4505,14 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         gender: 'male',
         evidence: [{ quote: 'Anton asked' }],
       },
+      {
+        id: 'eliza',
+        name: 'Eliza',
+        role: 'lead',
+        color: '#333333',
+        gender: 'female',
+        evidence: [{ quote: 'Eliza said' }, { quote: 'Eliza added' }, { quote: 'Eliza replied' }],
+      },
     ];
   }
 
@@ -4499,6 +4524,27 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         characterId: 'unknown-male',
         confidence: 0.9,
         text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Yes',
+      },
+      {
+        id: chapterId * 100 + 3,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Let us go',
+      },
+      {
+        id: chapterId * 100 + 4,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Agreed',
       },
     ];
   }
@@ -5314,8 +5360,17 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
      cache.stage1 must be pre-seeded so the subset route takes the "book
      already fully analysed" branch (stage1Existed === true) and actually
      reaches Phase 1 / the persist block where the drop lives — otherwise it
-     ends after cast-update and none of this ever runs. */
-  const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
+     ends after cast-update and none of this ever runs.
+
+     #2110 — 'eliza' is given real dialogue (3+ lines, `foldMinorCast`'s
+     `MIN_LINES_DEFAULT`) so she survives this run's own fresh roster under
+     her own id, making her a genuinely LIVE target — needed so the
+     'old-eliza' -> 'eliza' assertion below still proves what it claims (an
+     entry with a live target surviving untouched) now that the
+     dangling-TARGET prune (#2110) runs at the same write as the reclaim
+     drop this test pins. */
+  const CHAPTER_BODY =
+    '“Are you sure this will work,” Anton asked.\n\n“Yes,” Eliza said.\n\n“Let us go,” Eliza added.\n\n“Agreed,” Eliza replied.\n\nOlga nodded and looked away.';
 
   function stage1RosterForChapter(): CharacterOutput[] {
     return [
@@ -5328,6 +5383,14 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         gender: 'male',
         evidence: [{ quote: 'Anton asked' }],
       },
+      {
+        id: 'eliza',
+        name: 'Eliza',
+        role: 'lead',
+        color: '#333333',
+        gender: 'female',
+        evidence: [{ quote: 'Eliza said' }, { quote: 'Eliza added' }, { quote: 'Eliza replied' }],
+      },
     ];
   }
 
@@ -5339,6 +5402,27 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         characterId: 'unknown-male',
         confidence: 0.9,
         text: 'Are you sure this will work',
+      },
+      {
+        id: chapterId * 100 + 2,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Yes',
+      },
+      {
+        id: chapterId * 100 + 3,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Let us go',
+      },
+      {
+        id: chapterId * 100 + 4,
+        chapterId,
+        characterId: 'eliza',
+        confidence: 0.9,
+        text: 'Agreed',
       },
     ];
   }
@@ -5504,6 +5588,248 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         expect(
           job.replay.logs.some(
             (l) => l.message.includes('Dropped 1 history alias') && l.message.includes('unknown-male -> timkin'),
+          ),
+        ).toBe(true);
+      } finally {
+        removeManuscript(manuscriptId);
+        await clearAnalysisCache(manuscriptId);
+        rmSync(bookDir, { recursive: true, force: true });
+        process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+      }
+    },
+    60_000,
+  );
+});
+
+describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pruned (#2110)', () => {
+  /* Mirrors "runSubsetAnalyzerJob — a re-minted live id drops its history
+     entry" above, but for the MIRROR-IMAGE drop `dropSupersededTargetsNoLongerLive`
+     performs: cast-id-history.json holds `{anton: 'антон'}` from an earlier
+     retirement; 'антон' is a live-but-UNVOICED prior character. This run's
+     fresh roster never mentions her, so the carry-forward drops her with no
+     retirement of her own ever recorded — the entry dangles. Proves the
+     SUBSET call site (analysis.ts's subset persist block, a separate call
+     from the main path's) is actually wired, the same way the sibling
+     "reclaim" describe block above proves its own subset call site. */
+  const CHAPTER_BODY = '“Are you sure this will work,” Olga asked.\n\nOlga nodded and looked away.';
+
+  function stage1RosterForChapter(): CharacterOutput[] {
+    return [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+      {
+        id: 'olga',
+        name: 'Olga',
+        role: 'lead',
+        color: '#222222',
+        gender: 'female',
+        evidence: [{ quote: 'Olga asked' }],
+      },
+    ];
+  }
+
+  function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
+    return [
+      {
+        id: chapterId * 100 + 1,
+        chapterId,
+        characterId: 'olga',
+        confidence: 0.9,
+        text: 'Are you sure this will work',
+      },
+    ];
+  }
+
+  function buildPhase0Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        return { characters: stage1RosterForChapter() };
+      },
+      runStage2Chapter: () =>
+        Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.reject(new Error('not used')),
+    };
+  }
+
+  function buildPhase1Analyzer(): Analyzer {
+    return {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: () =>
+        Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+      async runStage2Chapter(
+        _manuscriptId: string,
+        chapterId: number,
+        _prompt: string,
+        _call: StageCall,
+      ): Promise<Stage2ChapterOutput> {
+        return { sentences: mockAttributionSentencesForChapter(chapterId) };
+      },
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () =>
+        Promise.reject(new Error('no flagged windows — escalation should never be called')),
+    };
+  }
+
+  function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
+    return { analyzer, engine: 'gemini', model, fallbackModel: null };
+  }
+
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-subset-dangling-target-e2e-test-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  function seedStateJson(bookDir: string, manuscriptId: string): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_subset_dangling_target_e2e_test',
+        manuscriptId,
+        title: 'Subset Dangling Target E2E Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  function seedPriorCastWithDyingAntonAndEliza(bookDir: string): void {
+    writeFileSync(
+      castJsonPath(bookDir),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+          {
+            id: 'антон',
+            name: 'Антон',
+            role: 'character',
+            color: 'unset',
+            voiceState: 'generated',
+          },
+          // Voiced (via `voiceState: 'reused'`), unlike 'антон' above — the
+          // carry-forward loop rescues a voiced/reused prior row even when
+          // the fresh roster never mentions it, so she stays LIVE after
+          // this run. Needed so the 'old-eliza' -> 'eliza' entry has a
+          // genuinely live target and the test can prove it survives
+          // untouched, not merely that it happens to die along with 'антон'.
+          { id: 'eliza', name: 'Eliza', role: 'character', color: 'unset', voiceState: 'reused' },
+        ],
+      }),
+    );
+  }
+
+  function registerManuscript(manuscriptId: string, bookDir: string): ChapterHint[] {
+    const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: CHAPTER_BODY }];
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Subset Dangling Target E2E Test Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+      chapterHints,
+      bookDir,
+    });
+    return chapterHints;
+  }
+
+  function makeSubsetJob(manuscriptId: string, bookDir: string, chapterIds: number[]): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'subset',
+      subsetChapterIds: chapterIds,
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it(
+    'a fresh roster that drops a live-but-unvoiced "антон" prunes the dangling alias keyed to her, on the subset path',
+    async () => {
+      const manuscriptId = `test-subset-dangling-target-e2e-${Date.now()}-${Math.random()}`;
+      const bookDir = makeBookDir();
+      const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      seedStateJson(bookDir, manuscriptId);
+      seedPriorCastWithDyingAntonAndEliza(bookDir);
+      await retireCharacterId(bookDir, 'anton', 'антон');
+      // Unrelated legacy entry with a LIVE target — must survive untouched.
+      await retireCharacterId(bookDir, 'old-eliza', 'eliza');
+      const chapterHints = registerManuscript(manuscriptId, bookDir);
+
+      // stage1Existed === true so Phase 1 (and the persist block the prune
+      // lives in) actually runs this pass.
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1RosterForChapter(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+
+      const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      const job = makeSubsetJob(
+        manuscriptId,
+        bookDir,
+        chapterHints.map((c) => c.id),
+      );
+
+      try {
+        const recordRef = getManuscript(manuscriptId);
+        if (!recordRef) throw new Error('stub manuscript not found');
+
+        await runSubsetAnalyzerJob(
+          job,
+          recordRef as never,
+          phase0Selection,
+          phase1Selection,
+          recordRef.chapterHints,
+          true,
+        );
+
+        // Sanity check: 'антон' really vanished (unvoiced, no name match in
+        // the fresh roster) so the scenario actually fired.
+        const castAfter = JSON.parse(
+          readFileSync(castJsonPath(bookDir), 'utf8'),
+        ) as { characters: Array<{ id: string }> };
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('антон');
+
+        const history = await loadCastIdHistory(bookDir);
+        expect(history.supersededBy).not.toHaveProperty('anton');
+        expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
+        expect(history.displaced).toEqual({ anton: 'антон' });
+        expect(
+          job.replay.logs.some(
+            (l) =>
+              l.message.includes('Dropped 1 history alias') &&
+              l.message.includes('anton -> антон') &&
+              l.message.includes('target no longer exists'),
           ),
         ).toBe(true);
       } finally {

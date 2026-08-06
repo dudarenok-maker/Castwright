@@ -119,6 +119,7 @@ import {
 import {
   retireCharacterId,
   dropSupersededIdsReclaimedByLiveCast,
+  dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
 } from '../store/cast-id-history.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -5016,6 +5017,25 @@ export async function runMainAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
+            /* #2110 — the mirror-image drop: an entry whose TARGET (not key)
+               has quietly stopped being live (this run's carry-forward
+               dropped an unvoiced character with no name-fallback match, and
+               nothing else ever recorded that as a retirement). Left alone
+               it's worse than inert — see the function's own doc comment —
+               so prune it against this exact just-persisted roster, same as
+               the reclaim drop above. */
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
@@ -6272,6 +6292,21 @@ export async function runSubsetAnalyzerJob(
               log(
                 1,
                 `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+            // #2110 — mirrors the main path's same-named block above: prune
+            // an entry whose TARGET quietly died, against this exact
+            // just-persisted roster.
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
                   .map((d) => `${d.id} -> ${d.supersededBy}`)
                   .join(', ')}) — affected segments need review.`,
               );

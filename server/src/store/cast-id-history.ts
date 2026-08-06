@@ -15,12 +15,14 @@ import { withKeyLock } from '../workspace/file-lock.js';
 export interface CastIdHistory {
   schema: 1;
   supersededBy: Record<string, string>;
-  /** #2040 Task 14 review item 2b — ids `dropSupersededIdsReclaimedByLiveCast`
-   *  dropped from `supersededBy` because a fresh roster reclaimed the key as a
-   *  live cast id, keyed the same way `supersededBy` was before the drop
-   *  (id -> what it used to resolve to). This is the only surviving record of
-   *  that pair once the drop runs — losing it would mean every book that
-   *  re-analyses before Wave 3's banner ships loses the pair for good.
+  /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
+   *  fresh roster reclaimed the KEY as a live cast id
+   *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
+   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110)
+   *  — keyed the same way `supersededBy` was before the drop (id -> what it
+   *  used to resolve to). This is the only surviving record of that pair
+   *  once the drop runs — losing it would mean every book that re-analyses
+   *  before Wave 3's banner ships loses the pair for good.
    *  Additive and backwards-compatible: optional, never bumps `schema`. An
    *  old reader that doesn't know this key still works — it only ever reads
    *  `supersededBy`, which is unaffected. A file written before this change
@@ -372,8 +374,10 @@ export function refuseRetirementsOfLiveIds<T extends { from: string; to: string 
 }
 
 /** A history entry dropped because a fresh roster reintroduced its key as a
- *  live cast id. `id` is the (formerly-superseded) history key; `supersededBy`
- *  is what it used to resolve to before the live row reclaimed it. */
+ *  live cast id (`dropSupersededIdsReclaimedByLiveCast`), OR because its
+ *  TARGET quietly stopped being live (`dropSupersededTargetsNoLongerLive`,
+ *  #2110). `id` is the history key; `supersededBy` is what it used to
+ *  resolve to before the drop. */
 export interface DisplacedHistoryEntry {
   id: string;
   supersededBy: string;
@@ -419,6 +423,80 @@ export async function dropSupersededIdsReclaimedByLiveCast(
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (live.has(key)) {
+        dropped.push({ id: key, supersededBy: target });
+        delete history.supersededBy[key];
+      }
+    }
+    if (dropped.length) {
+      const displaced = { ...(history.displaced ?? {}) };
+      for (const entry of dropped) {
+        displaced[entry.id] = entry.supersededBy;
+      }
+      history.displaced = displaced;
+    }
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return dropped;
+  });
+}
+
+/** A `supersededBy` entry whose TARGET (`to`, not `from`) is no longer a
+ *  live cast id — #2110, the mirror-image failure of
+ *  `dropSupersededIdsReclaimedByLiveCast` above (that one prunes an entry
+ *  whose KEY was reclaimed; this one prunes an entry whose TARGET died).
+ *
+ *  The real case: `supersededBy` holds `{anton: 'антон'}` — 'антон' is live
+ *  but unvoiced. A later re-analysis's carry-forward only re-adds
+ *  voiced/reused survivors (`isVoicedOrReused`,
+ *  `merge-analysis-cast.ts`), and the id-drift name-fallback only retires an
+ *  id when a same-name fresh row exists to retire it onto; with neither,
+ *  'антон' simply vanishes with NO `Retirement` ever recorded — nothing else
+ *  notices, and `buildCastResolver` already skips a history entry whose
+ *  target isn't live (`cast-resolve.ts:89-90`), so the dangling entry looks
+ *  perfectly inert. It is not: `POST /cast/create` only treats a
+ *  `supersededBy` KEY as taken, not a value (a live value is already in
+ *  `existingIds`, which holds only while the target stays live) — so once
+ *  'антон' dies, nothing stops a later mint from producing 'антон' again
+ *  (the id is usually the character's own display name, so this is the
+ *  expected case, not an edge one). The moment that happens, the dangling
+ *  entry's raw key ('anton') resolves via tier 2 straight onto the
+ *  brand-new, unrelated, empty row — SILENTLY, with no orphan report at
+ *  all, hijacking every segment the original alias covered. That is
+ *  strictly worse than those segments sitting orphaned-and-visible.
+ *
+ *  MUST be called only against the full, final roster of an AUTHORITATIVE
+ *  write — never an interim one. The three mid-run "Cast so far" writes
+ *  (`analysis.ts:3633`, `:3845`, `:5613`) persist via
+ *  `overlayInterimCastForLiveView` precisely because `buildInterimCast` has
+ *  folded only the chapters analysed so far there: a character who simply
+ *  hasn't been reached yet is indistinguishable from one the analyzer
+ *  actually dropped, so pruning against an interim roster would destroy a
+ *  valid alias for a character who is merely not yet on stage (#2086's
+ *  exact hazard). Only the two end-of-run writes that call
+ *  `mergeAnalysisResultWithExistingCast` (analysis.ts's main and subset
+ *  persist blocks, both already the sole callers of
+ *  `dropSupersededIdsReclaimedByLiveCast`) call this too, with the same
+ *  `liveIds` binding (`mergedFinal.characters`, the exact roster the write
+ *  just persisted).
+ *
+ *  Dropped pairs move into `displaced`, the same bookkeeping
+ *  `dropSupersededIdsReclaimedByLiveCast` already established — once
+ *  dropped, `supersededBy` is the only place they lived. Deliberately does
+ *  NOT touch `rejectedPairs`' `forgotSupersededTo` (a stashed id on a
+ *  DIFFERENT record, restorable later via `restoreSupersededId`, which is
+ *  outside this function's write): a dangling `forgotSupersededTo` is a
+ *  separate, narrower hazard (only reachable if that specific pair's Undo
+ *  is later clicked) that needs its own call-site decision, not a
+ *  side-effect of pruning `supersededBy`. */
+export async function dropSupersededTargetsNoLongerLive(
+  bookDir: string,
+  liveIds: ReadonlyArray<string>,
+): Promise<DisplacedHistoryEntry[]> {
+  const live = new Set(liveIds);
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    const dropped: DisplacedHistoryEntry[] = [];
+    for (const [key, target] of Object.entries(history.supersededBy)) {
+      if (!live.has(target)) {
         dropped.push({ id: key, supersededBy: target });
         delete history.supersededBy[key];
       }
