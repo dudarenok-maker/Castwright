@@ -310,7 +310,9 @@ describe('preserveNotLinkedToOnCastWrite', () => {
 
   it('[P2] restores notLinkedTo the client dropped entirely', () => {
     const existing = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] }];
-    const incoming = [{ id: 'a' }];
+    const incoming: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> = [
+      { id: 'a' },
+    ];
 
     expect(preserveNotLinkedToOnCastWrite(existing, incoming)[0].notLinkedTo).toEqual([
       { bookId: 'b1', characterId: 'x' },
