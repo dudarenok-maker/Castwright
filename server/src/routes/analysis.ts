@@ -2182,6 +2182,10 @@ export interface AnalysisJobReplayState {
       first subscriber would see the SeriesPriorPill but the second
       one — post-reload, post-navigate-back — would miss it). */
   lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
+  /** #2015 — advisories emitted during the run, keyed by `code` so a burst
+      across the five merge-base write sites replays as ONE. Not cleared:
+      a stale merge base stays true for the rest of the run. */
+  warnings: Map<string, { kind: 'warning'; code: string; message: string }>;
 }
 
 export interface AnalysisJob {
@@ -2416,6 +2420,17 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
       }
       break;
     }
+    case 'warning': {
+      const e = ev as { code?: string; message?: string };
+      if (typeof e.code === 'string' && typeof e.message === 'string') {
+        job.replay.warnings.set(e.code, {
+          kind: 'warning',
+          code: e.code,
+          message: e.message,
+        });
+      }
+      break;
+    }
     /* heartbeat / throttle / result / error: not replayed (heartbeat +
        throttle are ephemeral; result + error are terminal and the route
        closes the connection right after emitting them anyway). */
@@ -2429,6 +2444,7 @@ export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): vo
   if (job.replay.lastCastUpdate) send(job.replay.lastCastUpdate);
   if (job.replay.lastSeriesPrior) send(job.replay.lastSeriesPrior);
   for (const failed of job.replay.failedByChapterId.values()) send(failed);
+  for (const warning of job.replay.warnings.values()) send(warning);
 }
 
 function endJob(job: AnalysisJob, finalEv?: unknown): void {
@@ -2648,6 +2664,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };
@@ -5358,6 +5375,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };

@@ -1062,6 +1062,70 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
   });
 });
 
+describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
+  function makeJob(): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: 'm1',
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it('replays a warning emitted while nobody was listening', () => {
+    const job = makeJob();
+    trackForReplay(job, {
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+
+    expect(sent).toContainEqual({
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+  });
+
+  it('dedupes by code — five sites conflicting once replay ONE advisory, not five', () => {
+    const job = makeJob();
+    for (let i = 0; i < 5; i++) {
+      trackForReplay(job, {
+        kind: 'warning',
+        code: 'cast_merge_base_stale',
+        message: `attempt ${i}`,
+      });
+    }
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent.filter((e) => (e as { kind?: string }).kind === 'warning')).toHaveLength(1);
+  });
+
+  it('ignores a malformed warning rather than storing an undefined key', () => {
+    const job = makeJob();
+    trackForReplay(job, { kind: 'warning' });
+    trackForReplay(job, { kind: 'warning', code: 'x' });
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 /* Bug-3 diagnosis (Task B4): a page reload re-subscribes to the sticky job and
    the server replays `job.replay.lastPhase` verbatim via replayCatchUp. The
    live elapsed/sentence rows survive a reload IFF that snapshot is kept fresh.
@@ -1077,6 +1141,7 @@ describe('replayCatchUp forwards live chapter rows on reconnect (bug 3 buffer)',
         lastPhase,
         logs: [],
         failedByChapterId: new Map(),
+        warnings: new Map(),
       },
     } as unknown as Parameters<typeof replayCatchUp>[0];
   }
