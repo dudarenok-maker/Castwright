@@ -544,4 +544,43 @@ describe('book-state PUT cast — notLinkedTo is server-owned', () => {
     expect(mairin.color).toBe('#def');
     expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
   });
+
+  it('[P9] a repaired edge survives the next unrelated cast PUT', async () => {
+    /* The oscillation the spec's review round found. Without Task 4, redux's
+       `existing.notLinkedTo ?? inc.notLinkedTo` merge means the next ordinary
+       cast edit re-PUTs the stale array and silently undoes the repair —
+       which would make Task 3's reconciliation a coin-flip against the
+       client rather than a fix. */
+    const { reconcileRejectEdgesOnDisk } = await import('./analysis.js');
+
+    // The stranded state: a same-book edge with NO rejectedPairs entry.
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+
+    await reconcileRejectEdgesOnDisk(bookDir, bookId, () => {});
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([]);
+
+    // What a client that hydrated BEFORE the repair would send next.
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin Renamed',
+              role: 'character',
+              color: '#abc',
+              notLinkedTo: [{ bookId, characterId: 'm2' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.notLinkedTo).toEqual([]);
+    expect(mairin.name).toBe('Mairin Renamed');
+  });
 });
