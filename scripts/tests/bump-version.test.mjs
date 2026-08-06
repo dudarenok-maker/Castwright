@@ -262,6 +262,58 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
   }
 });
 
+// #2168 review, Important 2 — release.yml's release-body.mjs publishes the
+// GitHub release body from DEFAULT_NOTES_FILE only, never from whatever
+// --notes-file supplied the tag annotation. Before #2168 a non-default
+// --notes-file published fine; now it guarantees resolveReleaseBody's Rule 4
+// fails the tag at PUBLISH time (after verify/cross-os-verify/mobile-e2e/
+// companion-apk-build have all run, tag already pushed) unless the two
+// files' contents happen to normalise-equal. A WARNING only, deliberately
+// not a refusal — refusing is a behaviour decision left open.
+test('bump-version warns at cut time when --notes-file differs from the default the release body publishes from', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-nondefault-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(
+      out.stdout,
+      /\[WARN\] --notes-file .* was given, but release\.yml publishes the release body from docs\/release-notes-next\.md/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version does not warn on the default path (no --notes-file given)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /\[WARN\] --notes-file/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('bump-version rejects an unknown --level', () => {
   const dir = setupRepo('1.0.0');
   try {

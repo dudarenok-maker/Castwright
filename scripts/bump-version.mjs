@@ -409,6 +409,28 @@ async function main() {
   // placeholder body (the refusal is enforced after the cheap pre-flights).
   args.notesFile = resolveNotesFile(args.notesFile, existsSync);
 
+  // #2168 review, Important 2 — a heads-up, not a refusal (that's a
+  // behaviour decision left open on purpose). release.yml's release-body.mjs
+  // sources the PUBLISHED GitHub release body from DEFAULT_NOTES_FILE only —
+  // never from whatever --notes-file supplied the tag annotation. Before
+  // #2168 a non-default --notes-file published fine; now it guarantees
+  // resolveReleaseBody's Rule 4 fails the tag at PUBLISH time — after
+  // verify, cross-os-verify, mobile-e2e and companion-apk-build have all
+  // run, and with the tag already pushed — unless the two files' contents
+  // happen to normalise-equal. Fires only when there's an actual divergence
+  // hazard: an explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that
+  // exists to disagree with it (resolveNotesFile only returns something
+  // other than DEFAULT_NOTES_FILE when an explicit path was given, or when
+  // the default is absent — the latter can't trip this, since the "exists"
+  // check below is then false).
+  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(DEFAULT_NOTES_FILE)) {
+    info(
+      `[WARN] --notes-file ${args.notesFile} was given, but release.yml publishes the release ` +
+        `body from ${DEFAULT_NOTES_FILE} — this tag will fail the publish job unless ` +
+        `${args.notesFile}'s content matches ${DEFAULT_NOTES_FILE} exactly.`,
+    );
+  }
+
   // Pre-flight 1: clean working tree (unless dry-run).
   const status = git(['status', '--porcelain'], { capture: true });
   if (status.trim().length > 0 && !args.dryRun) {

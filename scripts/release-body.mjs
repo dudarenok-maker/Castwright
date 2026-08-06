@@ -78,34 +78,51 @@ export function readTagAnnotation(repoRoot, tag) {
  * annotation and (maybe) file text so it's testable without a real git tag
  * or filesystem read.
  *
- * Returns `{ ok: true, body, echo }` or `{ ok: false, reason, echo }`.
+ * Returns `{ ok: true, body, echo, source }` or `{ ok: false, reason, echo }`.
  * `echo` (possibly null) is the "an armed mojibake-allowlist marker is never
  * silent" line (#1990) — a caller should print it whenever non-null,
- * regardless of `ok`, matching release-notes-gate.mjs's own CLI.
+ * regardless of `ok`, matching release-notes-gate.mjs's own CLI. `source` is
+ * `'annotation'` (Rule 2) or `'file'` (Rule 3) — an explicit label rather
+ * than something a caller re-derives by comparing `body` against `annotation`
+ * by value, which would mislabel itself in the near-unreachable case where
+ * the file and annotation happen to be byte-identical.
  */
 export function resolveReleaseBody({ annotation, fileExists, fileText, notesLabel = DEFAULT_NOTES_FILE }) {
+  // #2168 review, Important 1 — compute the mojibake check + echo FIRST,
+  // before either check below that can exit early, so "an armed marker is
+  // never silent" holds even on a run that fails for a DIFFERENT reason
+  // (BOM or a conflict marker). Mirrors release-notes-gate.mjs's own CLI
+  // ordering, which states this is load-bearing, not incidental (PR #2049
+  // review, F5): a file carrying both a conflict marker and an armed marker
+  // must not die naming only the conflict with the armed marker never
+  // echoed. This script is the ONLY place an armed marker in an annotation
+  // can ever be surfaced — the gate never reads the annotation at all, and
+  // the Rule-2 (file-absent) path has no file to echo from either. Which
+  // check FAILS the run is unchanged (BOM, then conflict, then mojibake) —
+  // only the echo's computation moves earlier.
+  const mojibakeRes = checkMojibake(annotation, ANNOTATION_LABEL);
+  const echo = formatHonouredEcho(ANNOTATION_LABEL, mojibakeRes.honoured);
+
   // Rule 1 — validate the annotation itself, unconditionally, before either
   // source is even compared. Labelled as the annotation so a failure never
   // reads as if a file was the problem.
   const bomRes = checkBOM(annotation, ANNOTATION_LABEL);
-  if (!bomRes.ok) return { ok: false, reason: bomRes.reason, echo: null };
+  if (!bomRes.ok) return { ok: false, reason: bomRes.reason, echo };
 
   const conflictRes = checkConflictMarkers(annotation, ANNOTATION_LABEL);
-  if (!conflictRes.ok) return { ok: false, reason: conflictRes.reason, echo: null };
+  if (!conflictRes.ok) return { ok: false, reason: conflictRes.reason, echo };
 
-  const mojibakeRes = checkMojibake(annotation, ANNOTATION_LABEL);
-  const echo = formatHonouredEcho(ANNOTATION_LABEL, mojibakeRes.honoured);
   if (!mojibakeRes.ok) return { ok: false, reason: mojibakeRes.reason, echo };
 
   // Rule 2 — no file to compare against: the placeholder-tag path.
   if (!fileExists) {
-    return { ok: true, body: annotation, echo };
+    return { ok: true, body: annotation, echo, source: 'annotation' };
   }
 
   // Rule 3 — the normal case: file and annotation agree, publish the
   // guarded file rather than the unchecked annotation copy.
   if (normalise(fileText) === normalise(annotation)) {
-    return { ok: true, body: fileText, echo };
+    return { ok: true, body: fileText, echo, source: 'file' };
   }
 
   // Rule 4 — genuine divergence. Fail closed; name both sources and sizes,
@@ -158,6 +175,16 @@ if (invokedHref && import.meta.url === invokedHref) {
   }
 
   writeFileSync(resolve(outPath), res.body, 'utf8');
-  const source = res.body === annotation ? 'the tag annotation' : DEFAULT_NOTES_FILE;
-  process.stdout.write(`[release-body] OK — wrote ${outPath} from ${source}\n`);
+  // #2168 review, Minor 4 — label from resolveReleaseBody's own explicit
+  // `source`, not re-derived by comparing res.body === annotation, which
+  // would mislabel itself if the file ever happened to be byte-identical to
+  // the annotation. Minor 5 — the operator's only way to sanity-check the
+  // published body against `git show <tag>:docs/release-notes-next.md`
+  // (on-box register row G2) without a full `cat` of a body that can run to
+  // tens of KB.
+  const sourceLabel = res.source === 'annotation' ? ANNOTATION_LABEL : DEFAULT_NOTES_FILE;
+  const bodyBytes = Buffer.byteLength(res.body, 'utf8');
+  process.stdout.write(
+    `[release-body] OK — wrote ${outPath} from ${sourceLabel} (${bodyBytes} bytes)\n`,
+  );
 }
