@@ -50,6 +50,10 @@ import {
   checkMojibake,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
+// #2169 — git resolves the repo from an inherited GIT_DIR/GIT_WORK_TREE
+// before it falls back to discovery from `cwd`; scrubbed here for the same
+// reason bump-version.mjs's shared git() helper scrubs it (see git-env.mjs).
+import { scrubGitEnv } from './git-env.mjs';
 
 export const DEFAULT_NOTES_FILE = 'docs/release-notes-next.md';
 export const ANNOTATION_LABEL = 'the tag annotation';
@@ -70,6 +74,7 @@ export function readTagAnnotation(repoRoot, tag) {
   return execFileSync('git', ['tag', '-l', '--format=%(contents)', tag], {
     cwd: repoRoot,
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
 }
 

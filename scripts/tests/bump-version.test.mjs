@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
 import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag } from '../bump-version.mjs';
+import { scrubGitEnv } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -100,6 +101,17 @@ function setupRepo(startVersion) {
     resolve(dir, 'scripts', 'release-notes-gate.mjs'),
     readFileSync(resolve(here, '..', 'release-notes-gate.mjs'), 'utf8'),
   );
+  // #2169/#2170 — bump-version.mjs also imports ./git-env.mjs (the shared
+  // GIT_* env scrub) and ./release-body.mjs (the shared normaliser); mirror
+  // both, or the throwaway script crashes on module resolution.
+  writeFileSync(
+    resolve(dir, 'scripts', 'git-env.mjs'),
+    readFileSync(resolve(here, '..', 'git-env.mjs'), 'utf8'),
+  );
+  writeFileSync(
+    resolve(dir, 'scripts', 'release-body.mjs'),
+    readFileSync(resolve(here, '..', 'release-body.mjs'), 'utf8'),
+  );
 
   // Init throwaway git repo with a local identity so commits work in CI.
   // env: cleanGitEnv() so a parent git-hook context doesn't redirect these
@@ -123,6 +135,37 @@ function runBump(dir, args) {
     encoding: 'utf8',
     env: cleanGitEnv(),
   });
+}
+
+// #2169 — unlike runBump above (which always scrubs GIT_* from the child's
+// env, so it can never exercise the production script's OWN internal
+// scrub), this starts from the same clean baseline and then deliberately
+// re-adds exactly the env vars under test — so a passing assertion proves
+// bump-version.mjs's own git()/execGit scrub protected the run, not the test
+// harness.
+function runBumpWithEnv(dir, args, envOverrides) {
+  return spawnSync('node', [resolve(dir, 'scripts', 'bump-version.mjs'), ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...cleanGitEnv(), ...envOverrides },
+  });
+}
+
+// A second, independent throwaway git repo standing in for "whatever
+// repository an inherited GIT_DIR/GIT_WORK_TREE happens to point at" —
+// deliberately on a NON-'main' branch by default so a misdirected
+// `git rev-parse --abbrev-ref HEAD` (bump-version's own pre-flight 2) fails
+// loudly and unambiguously rather than coincidentally reading 'main' too.
+function setupDecoyRepo(branchName = 'decoy-branch') {
+  const dir = mkdtempSync(resolve(tmpdir(), 'bump-version-decoy-'));
+  const env = cleanGitEnv();
+  gitExec(['init', '-q', '-b', branchName], { cwd: dir, env });
+  gitExec(['config', 'user.email', 'test@example.com'], { cwd: dir, env });
+  gitExec(['config', 'user.name', 'Test'], { cwd: dir, env });
+  writeFileSync(resolve(dir, 'seed.txt'), 'seed\n');
+  gitExec(['add', '.'], { cwd: dir, env });
+  gitExec(['commit', '-q', '-m', 'chore: seed decoy'], { cwd: dir, env });
+  return dir;
 }
 
 test('bump-version --dry-run prints the plan and does not mutate', () => {
@@ -376,6 +419,149 @@ test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () =>
       else process.env[k] = v;
     }
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2169 — pure unit test of the scrub itself: every repository-discovery
+// override git checks BEFORE falling back to `cwd` gets stripped, and
+// nothing else does. Mutation-sensitive per key: dropping any one entry from
+// GIT_ENV_SCRUB_KEYS fails exactly that assertion.
+test('scrubGitEnv strips every git repo-discovery override and preserves everything else', () => {
+  const fakeEnv = {
+    PATH: '/usr/bin',
+    GIT_DIR: '/decoy/.git',
+    GIT_WORK_TREE: '/decoy',
+    GIT_INDEX_FILE: '/decoy/.git/index',
+    GIT_OBJECT_DIRECTORY: '/decoy/.git/objects',
+    GIT_COMMON_DIR: '/decoy/.git',
+    GIT_AUTHOR_NAME: 'Someone', // NOT a discovery override — must survive
+  };
+  const scrubbed = scrubGitEnv(fakeEnv);
+  assert.equal(scrubbed.GIT_DIR, undefined);
+  assert.equal(scrubbed.GIT_WORK_TREE, undefined);
+  assert.equal(scrubbed.GIT_INDEX_FILE, undefined);
+  assert.equal(scrubbed.GIT_OBJECT_DIRECTORY, undefined);
+  assert.equal(scrubbed.GIT_COMMON_DIR, undefined);
+  assert.equal(scrubbed.PATH, '/usr/bin');
+  assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+});
+
+// #2169's own regression test, as specified on the ticket: set GIT_DIR to a
+// decoy repo, call createAnnotatedTag({ repoRoot: realRepo, … }) DIRECTLY
+// (bypassing main()'s spawn, the same shape as the BOM direct-call test
+// above), and assert the tag exists in the real repo and is ABSENT from the
+// decoy — not merely present in the real one, which a no-op fix could also
+// satisfy if git happened to write to both. Empirically confirmed before
+// writing this test (`git tag -a` with only GIT_DIR set, cwd elsewhere,
+// writes into whatever GIT_DIR names — the tag never reaches the real repo
+// at all when unfixed, it doesn't just ALSO land in the decoy).
+test('createAnnotatedTag resolves repoRoot even with an inherited GIT_DIR pointing at a decoy repo (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = setupDecoyRepo();
+  const notes = resolve(tmpdir(), `bump-notes-gitdir-decoy-${process.pid}-${Date.now()}.md`);
+  writeFileSync(notes, '# v9.9.8\n\nFixes:\n- the GIT_DIR leak\n');
+  const savedGitEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('GIT_')) {
+      savedGitEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  process.env.GIT_DIR = resolve(decoy, '.git');
+  try {
+    createAnnotatedTag({
+      repoRoot: dir,
+      newTag: 'bump-version-test-gitdir-decoy',
+      notesFile: notes,
+    });
+
+    const realTags = gitExec(['tag', '--list', 'bump-version-test-gitdir-decoy'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(realTags, 'bump-version-test-gitdir-decoy');
+
+    const decoyTags = gitExec(['tag', '--list', 'bump-version-test-gitdir-decoy'], {
+      cwd: decoy,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(decoyTags, '', 'the tag must NOT land in the decoy repo GIT_DIR pointed at');
+  } finally {
+    delete process.env.GIT_DIR;
+    for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
+    rmSync(notes, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+// #2169's GIT_WORK_TREE half, deliberately NOT shaped like the GIT_DIR test
+// above. Empirically verified (see this PR's own investigation, not
+// asserted from memory): `git tag -a` reads/writes only the ref + object
+// database, which GIT_DIR controls — GIT_WORK_TREE alone does not affect it
+// at all, with or without a fix, so a createAnnotatedTag-shaped test for
+// GIT_WORK_TREE would be exactly the "test that cannot fail" shape this
+// repo's history warns about (it would pass identically whether or not the
+// scrub strips GIT_WORK_TREE). What GIT_WORK_TREE alone DOES misdirect is
+// any git call that reads/writes working-tree files — `git status
+// --porcelain`, the shared git() helper's pre-flight 1 clean-tree check —
+// confirmed empirically: from a clean real repo, `GIT_WORK_TREE=<empty
+// decoy dir> git status --porcelain` reports every tracked file as deleted.
+// This test drives that through the real script end-to-end (runBumpWithEnv,
+// not runBump — see its own comment) so a passing run proves the git()
+// helper's scrub, not the createAnnotatedTag one.
+test('bump-version resolves the working tree from repoRoot even with an inherited GIT_WORK_TREE (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = mkdtempSync(resolve(tmpdir(), 'bump-version-decoy-worktree-'));
+  try {
+    const out = runBumpWithEnv(
+      dir,
+      ['--level', 'patch', '--skip-cross-os', '--allow-placeholder'],
+      { GIT_WORK_TREE: decoy },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+    const tags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(tags, 'v1.0.1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+// The GIT_DIR counterpart to the GIT_WORK_TREE test above, driven through
+// the same runBumpWithEnv path so it exercises the shared git() helper (used
+// by EVERY other git call in main() — status, rev-parse, tag --list) rather
+// than only createAnnotatedTag's own call site. The decoy is on a
+// non-'main' branch so an unfixed run can't accidentally read a coincidental
+// 'main' back off it. Mutation-confirmed failure mode (GIT_ENV_SCRUB_KEYS
+// with GIT_DIR removed): with GIT_WORK_TREE unset, git treats `cwd` (the
+// real repo) as the work tree but the DECOY's `.git` as the index/ref
+// database — so `git status --porcelain` (pre-flight 1) compares the real
+// repo's files against the decoy's index and reports every real file as
+// untracked/deleted, dying "Working tree is not clean" before pre-flight 2's
+// branch check is even reached. Either die is proof of misdirection; this
+// test only asserts the fixed run succeeds end-to-end.
+test('bump-version resolves the repository from repoRoot even with an inherited GIT_DIR pointing at a decoy repo on another branch (#2169)', () => {
+  const dir = setupRepo('1.0.0');
+  const decoy = setupDecoyRepo('decoy-branch');
+  try {
+    const out = runBumpWithEnv(
+      dir,
+      ['--level', 'patch', '--skip-cross-os', '--allow-placeholder'],
+      { GIT_DIR: resolve(decoy, '.git') },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+
+    const realTags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(realTags, 'v1.0.1');
+
+    const decoyTags = gitExec(['tag', '--list'], { cwd: decoy, encoding: 'utf8' }).trim();
+    assert.equal(decoyTags, '', 'the tag must NOT land in the decoy repo GIT_DIR pointed at');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
   }
 });
 
@@ -709,18 +895,19 @@ test('buildTagMessage produces BOM-free output from BOM-prefixed input', () => {
 // EF BB BF bytes on disk (writeBOMFile above), not a JS string, for the same
 // reason the pre-flight tests use them.
 //
-// Unlike every other git call in this file, createAnnotatedTag's own
-// execFileSync has no `env` override (it doesn't accept one — matching the
-// production call site, which is only ever reached via a freshly spawned
-// `node bump-version.mjs` process whose env a test harness already
-// sanitises). Called DIRECTLY, in-process, it inherits process.env
-// verbatim — so when this suite itself runs from inside a `git commit`
+// Historical note (pre-#2169): createAnnotatedTag's own execFileSync used to
+// have no `env` override at all — called DIRECTLY, in-process, it inherited
+// process.env verbatim, so when this suite ran from inside a `git commit`
 // (husky's pre-commit hook), the parent commit's GIT_DIR / GIT_WORK_TREE /
-// GIT_INDEX_FILE leak straight through and redirect the tag write at the
+// GIT_INDEX_FILE leaked straight through and redirected the tag write at the
 // REAL calling repo instead of the throwaway fixture (caught during this
-// test's own development: it left a stray tag in this repo). Sanitise
-// process.env around the call, the same GIT_* stripping cleanGitEnv() does
-// for every other git invocation, restoring it afterwards.
+// test's own development: it left a stray tag in this repo). #2169 fixed
+// createAnnotatedTag to scrub those vars itself (via the shared
+// scrubGitEnv(), see git-env.mjs and the dedicated GIT_DIR-decoy test
+// above), so this manual sanitise-around-the-call is now redundant
+// belt-and-suspenders rather than load-bearing — kept anyway so this test
+// still passes unmodified even if a future change ever narrowed the
+// production scrub back down.
 test('createAnnotatedTag strips a BOM even when called directly, bypassing pre-flight 6c', () => {
   const dir = setupRepo('1.0.0');
   try {

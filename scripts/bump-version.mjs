@@ -32,6 +32,7 @@ import {
   stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -193,8 +194,18 @@ export function pickWorkflowRun(runs, { headSha, sinceMs, skewMs = 10000 }) {
   return matches.length > 0 ? matches[0].databaseId : null;
 }
 
+// #2169 — every git invocation in this script routes through here so the
+// env scrub (dropping an inherited GIT_DIR / GIT_WORK_TREE / etc. that would
+// otherwise silently override `cwd`) can't be forgotten by a call site that
+// builds its own execFileSync options. createAnnotatedTag below is the one
+// call site that needs different stdio/input, so it calls this directly
+// rather than growing a second copy of the scrub.
+function execGit(args, options) {
+  return execFileSync('git', args, { ...options, env: scrubGitEnv() });
+}
+
 function git(args, opts = {}) {
-  return execFileSync('git', args, {
+  return execGit(args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
@@ -389,7 +400,7 @@ export function buildTagMessage(fileText) {
  *  place; preserve them by default from here on. */
 export function createAnnotatedTag({ repoRoot, newTag, notesFile }) {
   const tagMessage = buildTagMessage(readFileSync(resolve(notesFile), 'utf8'));
-  execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
+  execGit(['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
     cwd: repoRoot,
     input: tagMessage,
     stdio: ['pipe', 'inherit', 'inherit'],
