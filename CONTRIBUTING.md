@@ -687,9 +687,12 @@ platform-independent zip + SHA-256 using the tag annotation as the body. Full sp
   (the bumper refuses to run if they've drifted).
 - Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
 to X.Y.Z` commit. Lightweight tags do NOT fire the workflow.
-- Release notes live in the tag annotation, not the GitHub Release UI. The
-  workflow reads `git tag -l --format='%(contents)' vX.Y.Z` and uses that
-  verbatim as the body.
+- Release notes live in `docs/release-notes-next.md`, not the GitHub Release
+  UI. The bumper builds the tag annotation from that file, and since #2168
+  `release.yml` publishes the release body from the **file** — not from the
+  annotation. It still reads the annotation back
+  (`git tag -l --format='%(contents)' vX.Y.Z`) to compare the two, and fails
+  the publish job if they diverge.
 - A non-default `--notes-file` MUST agree with `docs/release-notes-next.md`
   (compared normalised: CRLF -> LF, trailing whitespace stripped) — a genuine
   divergence refuses the cut, since `release.yml` publishes the GitHub release
