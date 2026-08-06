@@ -305,15 +305,14 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
   }
 });
 
-// #2168 review, Important 2 — release.yml's release-body.mjs publishes the
-// GitHub release body from DEFAULT_NOTES_FILE only, never from whatever
-// --notes-file supplied the tag annotation. Before #2168 a non-default
-// --notes-file published fine; now it guarantees resolveReleaseBody's Rule 4
+// #2170 (decided 2026-08-06, superseding the #2168-review WARNING-only shape) —
+// release.yml's release-body.mjs publishes the GitHub release body from
+// DEFAULT_NOTES_FILE only, never from whatever --notes-file supplied the tag
+// annotation. A genuine divergence guarantees resolveReleaseBody's Rule 4
 // fails the tag at PUBLISH time (after verify/cross-os-verify/mobile-e2e/
-// companion-apk-build have all run, tag already pushed) unless the two
-// files' contents happen to normalise-equal. A WARNING only, deliberately
-// not a refusal — refusing is a behaviour decision left open.
-test('bump-version warns at cut time when --notes-file differs from the default the release body publishes from', () => {
+// companion-apk-build have all run, tag already pushed) — refuse at cut time
+// instead, comparing under release-body.mjs's own `normalise`.
+test('bump-version refuses at cut time when --notes-file genuinely diverges from the default', () => {
   const dir = setupRepo('1.0.0');
   try {
     mkdirSync(resolve(dir, 'docs'));
@@ -328,11 +327,70 @@ test('bump-version warns at cut time when --notes-file differs from the default 
     writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
     const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
     rmSync(notes, { force: true });
-    assert.equal(out.status, 0, out.stderr);
-    assert.match(
-      out.stdout,
-      /\[WARN\] --notes-file .* was given, but release\.yml publishes the release body from docs\/release-notes-next\.md/,
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /--notes-file .* and docs\/release-notes-next\.md disagree after normalising/);
+    assert.match(out.stderr, /--allow-notes-divergence/);
+    // Refuses BEFORE any of the expensive pre-flights (e.g. the clean-tree
+    // check) even run — no working-tree mutation, no [PLAN] output at all.
+    assert.doesNotMatch(out.stdout, /\[PLAN\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The identical-content-modulo-normalisation case: this is also the trap
+// test for "same normaliser as release-body.mjs" (#2170 acceptance) — the
+// two files differ RAW (CRLF vs LF line endings) but agree once normalised.
+// If the implementation were ever swapped for a raw `===` comparison instead
+// of the imported `normalise()`, this run would incorrectly refuse and this
+// test would go red.
+test('bump-version does not refuse when --notes-file normalise-equals the default (CRLF-only difference)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the same content.\n',
     );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-crlf-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\r\n\r\nFixes:\r\n- the same content.\r\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.doesNotMatch(out.stderr, /disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version --allow-notes-divergence permits a genuine divergence, with a warning', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-override-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--skip-cross-os',
+      '--allow-notes-divergence',
+    ]);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[WARN\] --allow-notes-divergence:.*disagree after normalising/);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

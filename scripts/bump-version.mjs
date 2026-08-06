@@ -7,6 +7,7 @@
 // Usage:
 //   node scripts/bump-version.mjs --level patch|minor|major
 //                                  [--notes-file <path>]
+//                                  [--allow-notes-divergence]
 //                                  [--dry-run]
 //                                  [--force]
 //                                  [--skip-cross-os]
@@ -33,6 +34,9 @@ import {
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+// #2170 — same normaliser release.yml's publish step applies, imported
+// rather than copied so the two can't drift apart (see the refusal below).
+import { normalise } from './release-body.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -54,6 +58,7 @@ function parseArgs(argv) {
     force: false,
     skipCrossOs: false,
     allowPlaceholder: false,
+    allowNotesDivergence: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -63,6 +68,7 @@ function parseArgs(argv) {
     else if (a === '--force') out.force = true;
     else if (a === '--skip-cross-os') out.skipCrossOs = true;
     else if (a === '--allow-placeholder') out.allowPlaceholder = true;
+    else if (a === '--allow-notes-divergence') out.allowNotesDivergence = true;
     else if (a === '--help' || a === '-h') {
       printHelpAndExit(0);
     } else {
@@ -75,7 +81,12 @@ function parseArgs(argv) {
 function printHelpAndExit(code) {
   process.stdout.write(
     'Usage: node scripts/bump-version.mjs --level patch|minor|major ' +
-      '[--notes-file <path>] [--allow-placeholder] [--dry-run] [--force] [--skip-cross-os]\n',
+      '[--notes-file <path>] [--allow-placeholder] [--allow-notes-divergence] ' +
+      '[--dry-run] [--force] [--skip-cross-os]\n' +
+      '\n' +
+      `  --allow-notes-divergence  Cut anyway when --notes-file disagrees with ` +
+      `${DEFAULT_NOTES_FILE} — the publish job WILL FAIL unless you reconcile ` +
+      'the two before pushing the tag.\n',
   );
   process.exit(code);
 }
@@ -420,26 +431,38 @@ async function main() {
   // placeholder body (the refusal is enforced after the cheap pre-flights).
   args.notesFile = resolveNotesFile(args.notesFile, existsSync);
 
-  // #2168 review, Important 2 — a heads-up, not a refusal (that's a
-  // behaviour decision left open on purpose). release.yml's release-body.mjs
-  // sources the PUBLISHED GitHub release body from DEFAULT_NOTES_FILE only —
-  // never from whatever --notes-file supplied the tag annotation. Before
-  // #2168 a non-default --notes-file published fine; now it guarantees
-  // resolveReleaseBody's Rule 4 fails the tag at PUBLISH time — after
-  // verify, cross-os-verify, mobile-e2e and companion-apk-build have all
-  // run, and with the tag already pushed — unless the two files' contents
-  // happen to normalise-equal. Fires only when there's an actual divergence
-  // hazard: an explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that
-  // exists to disagree with it (resolveNotesFile only returns something
-  // other than DEFAULT_NOTES_FILE when an explicit path was given, or when
-  // the default is absent — the latter can't trip this, since the "exists"
-  // check below is then false).
+  // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
+  // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
+  // from DEFAULT_NOTES_FILE only — never from whatever --notes-file supplied
+  // the tag annotation. Before #2168 a non-default --notes-file published
+  // fine; now a genuine divergence guarantees resolveReleaseBody's Rule 4
+  // fails the tag at PUBLISH time — after verify, cross-os-verify, mobile-e2e
+  // and companion-apk-build have all run, and with the tag already pushed.
+  // Refuse here, before any of the expensive pre-flights below, comparing
+  // under the SAME normaliser release-body.mjs applies at publish time
+  // (imported, not copied — two normalisers that drift apart reintroduce
+  // exactly the failure this closes) so the refusal fires if and only if the
+  // publish job actually would fail. --allow-notes-divergence opts into the
+  // deliberate case. Fires only when there's an actual divergence hazard: an
+  // explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that exists to
+  // disagree with it (resolveNotesFile only returns something other than
+  // DEFAULT_NOTES_FILE when an explicit path was given, or when the default
+  // is absent — the latter can't trip this, since the "exists" check below
+  // is then false).
   if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(DEFAULT_NOTES_FILE)) {
-    info(
-      `[WARN] --notes-file ${args.notesFile} was given, but release.yml publishes the release ` +
-        `body from ${DEFAULT_NOTES_FILE} — this tag will fail the publish job unless ` +
-        `${args.notesFile}'s content matches ${DEFAULT_NOTES_FILE} exactly.`,
-    );
+    const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
+    const defaultText = readFileSync(resolve(DEFAULT_NOTES_FILE), 'utf8');
+    if (normalise(explicitText) !== normalise(defaultText)) {
+      const msg =
+        `--notes-file ${args.notesFile} and ${DEFAULT_NOTES_FILE} disagree after normalising ` +
+        `(CRLF -> LF, trailing whitespace stripped) — release.yml publishes the release body ` +
+        `from ${DEFAULT_NOTES_FILE} only, so this tag would fail the publish job after verify, ` +
+        `cross-os-verify, mobile-e2e, and companion-apk-build have all run, with the tag already ` +
+        `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
+        `publish job WILL FAIL unless you fix it before pushing the tag).`;
+      if (args.allowNotesDivergence) info(`[WARN] --allow-notes-divergence: ${msg}`);
+      else die(msg);
+    }
   }
 
   // Pre-flight 1: clean working tree (unless dry-run).
