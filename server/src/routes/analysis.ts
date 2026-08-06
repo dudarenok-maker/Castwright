@@ -2832,6 +2832,22 @@ export async function runMainAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${c.expected.slice(0, 12)} observed=${c.observed.slice(0, 12)}`,
+    );
+    send({
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message:
+        'Another change to this book’s cast landed while the analysis was running. ' +
+        'The analysis result was applied on top of the older cast, so that change may have been overwritten.',
+    });
+  };
   /* `lastStep` mirrors the most recent phase milestone to the server log (so a
      stall's last log line names where it wedged) and feeds the fatal-error log
      below (so a failure names its phase, not just a stack). */
@@ -3689,9 +3705,10 @@ export async function runMainAnalyzerJob(
                  able to swap a persisted id. Only §4.4's five listed sites
                  record retirements, and none of them is this one. */
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('interim'),
+              );
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
@@ -3901,9 +3918,10 @@ export async function runMainAnalyzerJob(
             // produces no retirements — see the interim-write comment above
             // for the full rationale.
             const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
-            await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergedStage1,
-            });
+            await castBase!.writeChecked(
+              { characters: mergedStage1 },
+              reportCastConflict('stage1'),
+            );
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
@@ -4941,9 +4959,10 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          await castBase!.writeChecked(
+            { characters: mergedFinal.characters },
+            reportCastConflict('final'),
+          );
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write, and never let a throwing history
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
@@ -5404,6 +5423,22 @@ export async function runSubsetAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${c.expected.slice(0, 12)} observed=${c.observed.slice(0, 12)}`,
+    );
+    send({
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message:
+        'Another change to this book’s cast landed while the analysis was running. ' +
+        'The analysis result was applied on top of the older cast, so that change may have been overwritten.',
+    });
+  };
   /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to
      the server log (so a stall's last server-log line names where it wedged)
      and folded into the fatal-error log below (so a failure names the phase it
@@ -5675,9 +5710,10 @@ export async function runSubsetAnalyzerJob(
               // no name-fallback and produces no retirements — see the main
               // route's interim-write comment for the full rationale.
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('subset-interim'),
+              );
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
@@ -6210,9 +6246,10 @@ export async function runSubsetAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          await castBase!.writeChecked(
+            { characters: mergedFinal.characters },
+            reportCastConflict('subset-final'),
+          );
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write; wrapped so a throwing history
              write can't skip cast.json / state.json. */

@@ -58,27 +58,30 @@
         which it previously bypassed entirely (see "Fixed" in the
         false-positives list below).
 
-   ACCEPTANCE TARGET (pinned literally, not derived): `routes/analysis.ts` is
-   the one allowed exception — its five merge-base `writeJsonAtomic` calls are
-   deferred to #2015 (four rejected designs are recorded in cast-lock.ts's own
-   header; this guard is not the place to attempt a fifth). Its one `rm` (the
-   "Start fresh" delete, Task 11) IS locked. `routes/voice-override-linked.ts`
-   is the second allowed exception, added by this hardening pass — its one
-   `writeJsonAtomic` (inside `applyToBookLocked`) IS genuinely locked, via
-   `applyToBook`'s `withCastLock(bookDir, () => applyToBookLocked(...))`, but
-   this scan is deliberately syntactic-only (see "Removed" above) and cannot
-   prove a call crosses a function boundary, so it reports the site as
-   unlocked; an unsound fold that pretended otherwise was worse. The allowlist
-   below is keyed on FILE **AND** COUNT, never file alone, and the count is
-   asserted in BOTH directions — a fix that makes a file's unlocked count go
-   DOWN must shrink or remove its entry just as much as a regression that
+   ACCEPTANCE TARGET (pinned literally, not derived): `routes/voice-override-
+   linked.ts` is the one allowed exception — its one `writeJsonAtomic` (inside
+   `applyToBookLocked`) IS genuinely locked, via `applyToBook`'s
+   `withCastLock(bookDir, () => applyToBookLocked(...))`, but this scan is
+   deliberately syntactic-only (see "Removed" above) and cannot prove a call
+   crosses a function boundary, so it reports the site as unlocked; an unsound
+   fold that pretended otherwise was worse. `routes/analysis.ts` was the
+   second allowed exception through #2015/#2155 — its five merge-base
+   `writeJsonAtomic` calls (four rejected designs for closing them are
+   recorded in cast-lock.ts's own header) and its one `rm` (the "Start fresh"
+   delete, Task 11) were both deferred, the writes with an entry here, the rm
+   already locked. #2155 Task 5 closed that: the five writes now go through
+   `createCastMergeBase`'s `writeChecked`, which takes the lock itself, so the
+   file scans clean and its entry is gone (see below), not zeroed. The
+   allowlist is keyed on FILE **AND** COUNT, never file alone, and the count
+   is asserted in BOTH directions — a fix that makes a file's unlocked count
+   go DOWN must shrink or remove its entry just as much as a regression that
    makes it go UP must fail the guard; drifting either way without updating
-   the entry means the allowlist is stale, not that the file is clean. For
-   `analysis.ts` specifically that means a file-level exemption would also
-   blind the guard to the one `rm` that Task 11 correctly locked, which is
-   exactly spec §5 class 6's hole — a sixth unlocked write in that file, or a
-   fewer/greater count anywhere else (including `voice-override-linked.ts`),
-   fails the guard rather than silently passing under a stale exemption.
+   the entry means the allowlist is stale, not that the file is clean. A
+   file-level exemption would blind the guard to any OTHER unlocked write in
+   that file — for `voice-override-linked.ts` that means a second, genuinely
+   unlocked write landing there would inherit the same exemption as the one
+   verified site; keying on count instead means it fails the guard, not
+   silently passes under a stale exemption.
 
    FALSE NEGATIVES (unlocked writes the guard does NOT catch — it stays
    green when it should not):
@@ -387,21 +390,20 @@ function scanFile(content: string): ScanResult | null {
   return { writes, rms, details };
 }
 
-/* Two entries by design.
+/* One entry by design.
 
    Keyed on file AND expected count, never on file alone, and the count check
    below fires on a mismatch in EITHER direction — a fix that removes an
    unlocked write must shrink or delete its entry, exactly as a regression
-   that adds one must fail the guard. A file-level exemption for analysis.ts
-   would also blind the guard to the one rm that IS locked (Task 11) — the
-   exact hole spec §5 class 6 exists to close. A sixth unlocked write in that
-   file, or any drift in voice-override-linked.ts's count, must fail the
-   guard, not inherit a stale exemption. */
+   that adds one must fail the guard.
+
+   #2015/#2155 — routes/analysis.ts's entry is GONE, not zeroed: its five
+   merge-base writes now go through createCastMergeBase (which takes the lock)
+   and its reuse-carryover rm rides the same hold as cast.json's. A file that
+   scans clean must not stay on the allowlist; `scanFile` returns null for it
+   and the trailing unmatched-key check below would fail. Any NEW unlocked
+   write in that file now fails the guard directly, with no entry to inherit. */
 const ALLOWED_UNLOCKED = new Map<string, { writes: number; rms: number; why: string }>([
-  [
-    'routes/analysis.ts',
-    { writes: 5, rms: 0, why: 'merge-base writes deferred to #2015; the rm IS locked (Task 11)' },
-  ],
   [
     'routes/voice-override-linked.ts',
     {
