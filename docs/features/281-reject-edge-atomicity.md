@@ -561,11 +561,12 @@ exactly the behaviour this task changes. Two places:
 
 ```yaml
         '500':
-          description: >-
-            Failed to durably record the rejection (nothing was written), or
-            failed to save the character link after the rejection landed —
-            retry is safe either way
+          description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
 ```
+
+One line naming both causes, matching this endpoint's own DELETE sibling at `:3479`
+(`Failed to restore the forgotten alias entry, or to durably remove the rejection — retry`) rather
+than the `>-` block scalar used elsewhere in the file. The nearest precedent wins.
 
 - [ ] **Step 4c: Regenerate the API types**
 
