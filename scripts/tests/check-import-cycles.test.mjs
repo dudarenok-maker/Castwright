@@ -15,7 +15,40 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cycleSignature, findUnallowedCycles, loadAllowlist } from '../check-import-cycles.mjs';
+import {
+  cycleSignature,
+  findUnallowedCycles,
+  loadAllowlist,
+  checkCycleFloor,
+} from '../check-import-cycles.mjs';
+
+/* PR #2159 review, finding 2 — the subset check alone passes VACUOUSLY on an
+   empty current list, and madge exits 0 with stdout `[]` whenever it walks a
+   graph it cannot build (a wrong --extensions token, an empty source dir).
+   Without a floor the guard prints a reassuring success line forever while
+   checking nothing. */
+test('checkCycleFloor FAILS when madge reports zero cycles against a non-empty allowlist', () => {
+  const err = checkCycleFloor([], [['a.ts', 'b.ts'], ['c.ts', 'd.ts']]);
+  assert.ok(err, 'expected an error message, got null');
+  assert.match(err, /ZERO cycles/);
+  assert.match(err, /allowlist pins 2/);
+});
+
+test('checkCycleFloor passes when cycles are found', () => {
+  assert.equal(checkCycleFloor([['a.ts', 'b.ts']], [['a.ts', 'b.ts']]), null);
+});
+
+test('checkCycleFloor allows a genuinely emptied allowlist (every cycle really was fixed)', () => {
+  assert.equal(checkCycleFloor([], []), null);
+});
+
+test('the committed allowlist is non-empty, so the floor is live rather than vacuous', () => {
+  /* If the real allowlist were empty, checkCycleFloor would return null for
+     every input and the two tests above would be testing a code path
+     production never reaches. */
+  const real = loadAllowlist();
+  assert.ok(real.length > 0, 'committed allowlist is empty — the floor guard is inert');
+});
 
 test('cycleSignature is order-invariant over a cycle\'s members', () => {
   assert.equal(

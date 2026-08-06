@@ -201,6 +201,14 @@ export const STEPS = [
         // above.
         'server/src/config/registry.ts',
         'docs/wiki/Advanced-Settings.md',
+        // #2053: the SAME trap one file over (PR #2159 review, finding 3).
+        // check-import-cycles.test.mjs asserts this allowlist's STRUCTURE and
+        // runs under test:hooks — but the file was an input to `check:cycles`
+        // only, which is cloud/full-verify-only. An allowlist-only commit
+        // therefore left test:hooks [cached] locally and skipped its CI leg,
+        // so the structural test never ran on the one diff shape it exists
+        // to catch.
+        'server/madge-cycles-allowlist.json',
       ],
       includeLockfiles: ['root'],
     },
@@ -313,14 +321,13 @@ export const STEPS = [
       globs: ['server/src/**'],
       extraFiles: [
         'server/madge-cycles-allowlist.json',
+        // The madge VERSION is pinned inside this script's `npx --yes
+        // madge@8.0.0` spawn line rather than in server/package.json (see the
+        // script header for why it is not a devDependency), so this one file
+        // covers both "the guard logic changed" and "the tool version
+        // changed". No server manifest/lockfile input is needed here.
         'scripts/check-import-cycles.mjs',
-        // server/package.json: same lockfile-vs-manifest gap as `test:server`
-        // above — includeLockfiles below only special-cases the literal
-        // server/package-lock.json path, and a madge version bump changes
-        // what this step actually runs.
-        'server/package.json',
       ],
-      includeLockfiles: ['server'],
     },
   },
   {

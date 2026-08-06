@@ -421,8 +421,12 @@ Design rationale:
   `npm run check:cycles` (`scripts/check-import-cycles.mjs`) against the
   committed cycle LIST in `server/madge-cycles-allowlist.json` — not a
   hand-typed count, which is blind to a swapped cycle. Runs as a `verify.yml`
-  leg scope-gated to `server/**` (see "Commands" and "Commit gate"); add a
-  new cycle to that file if it's new and intentional, otherwise break it
+  leg scope-gated to `server/**`, and in the full local `npm run verify` — not
+  in pre-commit or pre-push, so it never slows a commit. It shells out to a
+  version-pinned `npx --yes madge@8.0.0` rather than a `server/` devDependency
+  (madge 8 declares `peerOptional typescript@^5.4.4` and this repo is on
+  TypeScript 6, which makes the lockfile unresolvable for `npm ci`). Add a new
+  cycle to the allowlist if it's new and intentional, otherwise break it
   instead of allowlisting it.
 - **`cast.json` writes go through `withCastLock`/`withCastLocks`, never a
   bare `writeJsonAtomic`/`rm`** (`server/src/workspace/cast-lock.ts`). Four

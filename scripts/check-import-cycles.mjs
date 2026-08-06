@@ -2,10 +2,21 @@
 // scripts/check-import-cycles.mjs
 //
 // Guards server/src's import graph against an ALLOWLISTED set of circular
-// dependencies (#2053). Runs madge — a `server/` devDependency (lockfile-
-// pinned, not `npx --yes`, so the verdict is reproducible run to run) — and
-// asserts the CURRENT cycle list is a subset of the committed allowlist
-// (server/madge-cycles-allowlist.json).
+// dependencies (#2053). Runs madge at a PINNED version via `npx --yes
+// madge@8.0.0` and asserts the CURRENT cycle list is a subset of the committed
+// allowlist (server/madge-cycles-allowlist.json).
+//
+// Why `npx --yes madge@8.0.0` rather than a server/ devDependency: madge 8
+// declares `peerOptional typescript@^5.4.4` and this repo is on typescript 6,
+// so adding it to server/package.json produces a lockfile `npm ci` then
+// REJECTS (PR #2159's first CI run: "Missing: ts-toolbelt@9.6.0 from lock
+// file"). Forcing past the peer conflict would leave a lockfile that has to be
+// re-forced on every future TypeScript bump. The version is still pinned in
+// the spawn line below, so the verdict stays reproducible run to run — and
+// this matches CLAUDE.md's own documented command shape. The cost is a network
+// fetch on a cold cache, which is acceptable because this step is
+// cloud/full-verify-only (never pre-commit, never pre-push) and the job it
+// runs in already does `npm ci`.
 //
 // Deliberately NOT a count check: a count is blind to a SWAPPED cycle
 // (remove one, introduce a different one, the count stays put, the guard
@@ -47,7 +58,7 @@ export function runMadge({ cwd = serverDir } = {}) {
   // scripts/quarantine-health.mjs's runVitestJson). `npx` itself must stay
   // UNQUOTED in the command string — quoting it breaks Windows' npx.cmd
   // shim's own self-location logic.
-  const args = ['madge', '--circular', '--extensions', 'ts', '--json', 'src'];
+  const args = ['--yes', 'madge@8.0.0', '--circular', '--extensions', 'ts', '--json', 'src'];
   const command = `npx ${args.map((a) => `"${a}"`).join(' ')}`;
   const result = spawnSync(command, {
     cwd,
@@ -95,6 +106,36 @@ export function findUnallowedCycles(currentCycles, allowlistCycles) {
   return currentCycles.filter((cycle) => !allowed.has(cycleSignature(cycle)));
 }
 
+/**
+ * The subset check above treats an EMPTY current list as "every cycle was
+ * fixed" and passes. That is indistinguishable from madge walking a graph it
+ * could not build — and madge exits 0 with stdout `[]` in exactly that case
+ * (verified against 8.0.0: one wrong token in `--extensions`, or an empty
+ * source dir, both yield `[] / exit 0`). The guard would then print a
+ * reassuring success line forever while checking nothing.
+ *
+ * The committed allowlist is a free lower bound, so use it: a run that finds
+ * zero cycles against a non-empty allowlist is either a real, celebratory
+ * change that must update the allowlist in the same commit, or a broken
+ * invocation. Both need a human, so fail closed and say which is which.
+ *
+ * @param {string[][]} currentCycles
+ * @param {string[][]} allowlistCycles
+ * @returns {string | null} an error message, or null when the floor holds
+ */
+export function checkCycleFloor(currentCycles, allowlistCycles) {
+  if (allowlistCycles.length === 0 || currentCycles.length > 0) return null;
+  return (
+    `madge reported ZERO cycles, but the allowlist pins ${allowlistCycles.length}. ` +
+    'A subset check passes vacuously on an empty list, so this fails instead of ' +
+    'reporting a green it cannot justify.\n' +
+    '  - If you genuinely broke every cycle: empty server/madge-cycles-allowlist.json ' +
+    'in this same commit.\n' +
+    '  - Otherwise madge walked nothing (a bad --extensions token or an empty ' +
+    'source dir both exit 0 with `[]`) — check the invocation.'
+  );
+}
+
 const invokedHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';
 if (invokedHref && import.meta.url === invokedHref) {
   let current;
@@ -110,6 +151,12 @@ if (invokedHref && import.meta.url === invokedHref) {
     allowlist = loadAllowlist();
   } catch (err) {
     process.stderr.write(`check-import-cycles: FAILED to load allowlist — ${err.message}\n`);
+    process.exit(1);
+  }
+
+  const floorError = checkCycleFloor(current, allowlist);
+  if (floorError) {
+    process.stderr.write(`check-import-cycles: FAIL — ${floorError}\n`);
     process.exit(1);
   }
 
