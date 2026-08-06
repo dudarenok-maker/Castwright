@@ -202,7 +202,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     expect(res.body.error).toMatch(/failed to durably record/i);
   });
 
-  it('rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)', async () => {
+  it('rejectOrphanedPair failing leaves cast.json untouched — the edge is never written (#2166)', async () => {
     rejectOrphanedPairMock.mockImplementation(() => {
       throw new Error('disk full');
     });
@@ -210,7 +210,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
 
     const cast = readCast();
     const mairin = cast.characters.find((c) => c.id === 'mairin');
-    expect(mairin?.notLinkedTo).toEqual([{ bookId, characterId: 'mayrin' }]);
+    expect(mairin?.notLinkedTo).toBeUndefined();
   });
 
   it('a subsequent successful retry after a rejectOrphanedPair failure returns 200', async () => {
@@ -225,9 +225,10 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
     // override is consumed — this call succeeds.
     const second = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(second.status).toBe(200);
-    // The notLinkedTo write is idempotent — already present from the first
-    // (failed-only-at-history) attempt.
-    expect(second.body.alreadyPresent).toBe(true);
+    // The first attempt wrote nothing (#2166 — the fatal pair write runs
+    // before the edge), so the retry writes the notLinkedTo edge for the
+    // first time.
+    expect(second.body.alreadyPresent).toBe(false);
   });
 
   it('I1 (review round 1) — a rejectOrphanedPair failure on attempt 1 never reaches forgetSupersededId, so the retry writes the stash', async () => {
@@ -355,11 +356,21 @@ describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLink
       join(bookDir, '.audiobook', 'cast-id-history.json'),
       JSON.stringify({ schema: 1, supersededBy: {} }),
     );
-    rejectOrphanedPairMock.mockImplementation(() => {
-      throw new Error('disk full');
-    });
-    const posted = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
-    expect(posted.status).toBe(500);
+    // #2166 — POST can no longer create this abandoned-half-write state: the
+    // edge is now written AFTER the fatal pair write, never before it. Seed
+    // it directly instead, as if left behind by a book rejected under the
+    // OLD write order before this fix shipped — this case now covers books
+    // stranded pre-fix, not a state POST can produce today.
+    writeBookOnDisk([
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [{ bookId, characterId: 'mayrin' }],
+      },
+    ]);
 
     // Confirms the abandoned-half-write precondition: the edge landed, the
     // pair did not.
@@ -385,6 +396,11 @@ describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLink
     // Same abandoned-half-write shape, but the row also carries an edge for
     // a different orphaned id recorded some other way — proves the
     // unconditional clear is scoped to THIS orphanedId, not a blanket wipe.
+    //
+    // #2166 — POST can no longer create the `mayrin` edge (the fatal pair
+    // write now runs before it), so both edges are seeded directly, as if
+    // left behind by a book rejected under the OLD write order before this
+    // fix shipped.
     writeBookOnDisk([
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
@@ -392,18 +408,21 @@ describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLink
         name: 'Mairin',
         role: 'character',
         color: 'unset',
-        notLinkedTo: [{ bookId, characterId: 'someone-else' }],
+        notLinkedTo: [
+          { bookId, characterId: 'someone-else' },
+          { bookId, characterId: 'mayrin' },
+        ],
       },
     ]);
     writeFileSync(
       join(bookDir, '.audiobook', 'cast-id-history.json'),
       JSON.stringify({ schema: 1, supersededBy: {} }),
     );
-    rejectOrphanedPairMock.mockImplementation(() => {
-      throw new Error('disk full');
-    });
-    const posted = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
-    expect(posted.status).toBe(500);
+    // A fixture whose emptiness is load-bearing should assert its own
+    // emptiness — the unconditional clear at cast-reject-orphan.ts's DELETE
+    // handler is what this case exists to pin, and it only fires when no
+    // matching pair exists to route the clear through the pair loop instead.
+    expect(readHistory()?.rejectedPairs ?? []).toEqual([]);
 
     const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
     expect(res.status).toBe(200);
