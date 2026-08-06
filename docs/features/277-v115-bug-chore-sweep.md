@@ -6,11 +6,14 @@ owner: null
 
 # 277 — v1.15 bug & chore sweep: triage and round plan
 
-> Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues) and
-> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues). Round 3 outstanding.
-> See "Round 1 outcome" and "Round 2 outcome" below; the latter carries the
-> round's substantive findings, including seven cases of a guard or test
-> reporting green while checking nothing.
+> Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues),
+> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues), and **Round 3 RAN
+> 2026-08-05** (design-first; four PRs, four issues closed, five items left
+> needing design). See "Round 1 outcome", "Round 2 outcome" and "Round 3
+> outcome" below. Round 2's carries seven cases of a guard or test reporting
+> green while checking nothing; Round 3's carries the finding that **four of
+> ten issue premises did not survive verification**, and the cold-brief
+> handoff that caught what self-review structurally cannot.
 > Key files: this document is a coordination record, not a feature plan. The
 > per-item detail lives in each linked GitHub issue, which stays canonical.
 > URL surface: none
@@ -505,6 +508,125 @@ deliverable per item is a **phase-1 pass — ticket + plan doc**, not a diff.
   get **zero** CI coverage; this is why #1942's regression test never ran in
   cloud CI. Which runner, which weights, and how long are real questions.
 
+## Round 3 outcome (2026-08-05)
+
+Four PRs merged, **four issues closed** (#2033, #1808, #2144, and #898's design
+phase), two filed (#2144, #2149), one item paused deliberately, and five left
+untouched. The round's value was **not** in the diffs.
+
+### Four of ten premises did not survive verification, and a fifth was solved elsewhere
+
+The round opened with a read-only premise check across all ten issues before any
+design started. It took about twenty minutes and it changed the round:
+
+| # | Filed premise | What was actually true |
+|---|---|---|
+| #2033 | Qwen's batch path drops `voiceSubstitutedFrom` | **Not a defect.** Qwen never *sets* it — only `CoquiEngine` and `KokoroEngine` do — and batching is Qwen-only. Rescoped to a latent-gap guard. |
+| #1808 | Wave-3a deferred-minor sweep outstanding | **9 of 10 already shipped**, most carrying `#1808` markers in their own test titles. Item g is unreachable dead code. |
+| #898 | Device tokens need TTL **and** scope | **TTL shipped in `74fb2901`** — the day the issue was filed. Only the scope half was open. |
+| #1393 | Needs an in-flight-render registry | **The registry already exists** (`inFlightByBook`). |
+| #1950 | Needs a design decision on runner/weights | **Already designed elsewhere** — defect C of PR #2142's verify-scope unification, merged an hour earlier the same morning. |
+
+Verified as holding, byte-for-byte: #1984 (all four claims), #1309, #1932, #1996
+(though PR #2029 had already tried and reverted its proposed lever).
+
+**The rule this earns:** a design-first round starts with a premise pass, not a
+design pass. Two plan docs would have been written against defects that do not
+exist. An issue's age is the signal — every stale premise here was on a ticket
+filed 14+ days before, in a repo where 30+ PRs a week land next to it.
+
+### `gh issue view --json body` silently excludes comments
+
+The ten issues were batch-fetched with `--json number,title,state,labels,body`.
+That **omits comments**, and in this repo comments are where scope gets
+broadened and owner decisions land. #1393's 2026-07-06 comment carried a
+standing decision — the keep-set must come from real render facts, **not**
+`computeUsedQwenTiers(fullCast)` — which was invisible to the fetch and got
+publicly contradicted the same day, after a spec had already been drafted
+against the wrong scope. Use `--comments`, or add `comments` to the field list.
+Of ten issues, only two carried comments; both changed the work materially.
+
+### The dominant error shape: claims about absence, derived from a too-narrow grep
+
+Across three independent spec authors and the coordinating thread, **every**
+false statement this round was of one shape — an assertion about what is or
+isn't there, presented as observation but actually inferred from a grep whose
+pattern was never doubted:
+
+- "There are zero `403:` entries" — the pattern was `^ *403:`; the file had
+  `'403':`, quoted.
+- "The only `on ApiException catch` is `:176`" — missed every untyped
+  `catch (_)`.
+- "`ChapterSegment.modelKey` is stamped, written at `synthesise-chapter.ts:2490`"
+  — **the field does not exist**; `:2490` is a `provider.synthesize({…})`
+  argument, discarded after the call.
+- "The pytest pins that neither substituting engine can expose
+  `synthesizeBatch`" — it pins the *Python* `synthesize_batch`; the Node method
+  is unconditional on `SidecarTtsProvider` (`tts/sidecar.ts:322`).
+
+The checks that *succeeded* were the other kind: re-deriving an allowlist from
+scratch, standing up a real Express app to see what it does. **A claim about
+what isn't there needs a command, not a reading** — and the command's pattern is
+the thing to doubt. This is the same family as Round 2's green-checking-nothing
+cases: a search that finds nothing and a guard that checks nothing both report
+success by default.
+
+### The cold-brief handoff found what no amount of self-review could
+
+Both #1393 and #898 had two specs rejected by adversarial passes. #898 was
+rescued by **briefing a fresh agent from the issue and its comments alone**,
+with no access to the earlier drafts. That agent immediately found the one
+defect every reviewer had missed: the triage comment named `pairing.ts:145` as a
+mint site but never said it serves a **LAN browser running the full desktop
+UI**. Scoping every device token to `companion` — the obvious reading — would
+have 403'd the entire web app.
+
+That class of error is *a fact the author knew and did not write down*. It is
+invisible to the author specifically because they know it, so no amount of
+re-reading finds it. **Keep the cold-brief handoff as a step, not an
+experiment**: for anything whose deliverable is a brief, have someone read the
+brief cold before trusting it. It is also the honest test of whether phase 1
+produced a self-sufficient contract, which is the whole point of the
+[Execution model](../../CLAUDE.md#execution-model-default-for-all-non-trivial-work)'s
+design/implementation split.
+
+### What shipped
+
+| PR | Closes | What |
+|---|---|---|
+| [#2143](https://github.com/dudarenok-maker/Castwright/pull/2143) | #2033, #1808 | The latent-gap guard, both arms — no substituting engine has a *usable* `synthesize_batch` (AST-based, so a base-class stub is not a false positive), and `QwenEngine` never constructs a `SynthResult` with a non-`None` `substituted_from`. |
+| [#2147](https://github.com/dudarenok-maker/Castwright/pull/2147) | — | #898's design of record. |
+| [#2151](https://github.com/dudarenok-maker/Castwright/pull/2151) | — | #898's implementation plan: 10 tasks, 65 steps, 28 mutations, two PRs in a load-bearing order. |
+| [#2150](https://github.com/dudarenok-maker/Castwright/pull/2150) | #2144 | The auth bypass below. |
+
+**#2144 was found by an assumption-checker attacking #898's migration
+argument** — not by anyone looking for it. `device-tokens.ts:60` read
+`now > Date.parse(d.expiresAt)`, which is `false` for `NaN`, so a record with
+`expiresAt: null`, `""`, or garbage **authenticated forever**; only the literal
+`undefined` was caught. Its review then found a Before-shipping step-1 violation
+the first revision missed: `docs/features/225` is `status: active` and its
+invariant #2 stated the *vulnerable* predicate verbatim, so a future agent
+"restoring the invariant" would have reopened the bypass **and it would have
+read as conformance**. A stale invariant is worse than no invariant.
+
+### #1393 was abandoned rather than attempted a fourth time
+
+Three drafts, three rejections. Instead of a fourth revision the ticket now
+carries the verified ground: there is **no per-segment tier stamp**, and
+`inFlightByBook` cannot see splice or QA-repair renders (they register into
+`chapter-job-coordination.ts:13`'s separate map). So the cross-book race is
+reachable by a path no union over `inFlightByBook` can close — **#1393 is
+bigger than filed**, and restarting it needs a fresh thread from the
+`synthesiseChapter` publishing question, not another revision of a design its
+own facts rule out.
+
+### Still open from Round 3
+
+#1984 (needs a product-surface brainstorm with the repo owner), #1996 (blocked
+on on-box measurement), #1932, #1309, #485, #1393 (paused), and #898's phase 2 —
+which is fully briefed and needs only execution. #1950's work merged with
+someone else's PR and the issue is open only for want of a linkage.
+
 ## Invariants to preserve
 
 1. **Lane files must not overlap.** The Round 1 grouping above is the constraint,
@@ -574,9 +696,26 @@ against 13 closed. Every finding was either fixed in the lane that surfaced it
 or, where it was a false premise, corrected in place on the issue that carried
 it.
 
-**Still open from this sweep:** Round 3's design-first list, headed by #2033
-(pulled out of Round 2 because it changes the sidecar batch wire contract).
-
 The round's substantive findings are in "Round 2 outcome" above — in particular
 the seven green-checking-nothing cases and the proposed rule that a new guard
 must ship with a demonstration that neutralising it turns something red.
+
+**Round 3 — ran 2026-08-05.** Design-first. Four PRs
+[#2143](https://github.com/dudarenok-maker/Castwright/pull/2143),
+[#2147](https://github.com/dudarenok-maker/Castwright/pull/2147),
+[#2151](https://github.com/dudarenok-maker/Castwright/pull/2151) and
+[#2150](https://github.com/dudarenok-maker/Castwright/pull/2150); **#2033,
+#1808 and #2144 closed**, plus #898's entire design phase (spec, plan, handover
+brief). #2144 and #2149 filed.
+
+Unlike Rounds 1 and 2 this round's return was in **triage, not diffs**: four of
+ten filed premises did not survive verification and a fifth was already solved
+by a concurrent session. Two plan docs would otherwise have been written against
+defects that do not exist. Full detail in "Round 3 outcome" above, including the
+`gh issue view` comment-blindness trap and the cold-brief handoff.
+
+**Still open from this sweep:** #1984, #1996, #1932, #1309, #485, #1393 (paused
+after three rejected designs — its own verified facts rule out the shape it was
+filed as), and #898's phase 2, which is fully briefed and needs only execution.
+#1950 shipped inside another session's PR and stays open only for want of an
+issue linkage.
