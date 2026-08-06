@@ -101,5 +101,11 @@ describe('fingerprintOfWrite — coupling guard against writeJsonAtomic', () => 
   it('ABSENT can never collide with a real sha256 hex digest', () => {
     expect(ABSENT).not.toMatch(/^[0-9a-f]{64}$/);
     expect(hashBytes('')).toMatch(/^[0-9a-f]{64}$/);
+    /* The name of this test claims the guarantee comes from the NUL prefix, so
+       assert THAT, not merely that the sentinel fails a hex-digest regex — a
+       plain 'ABSENT' with no prefix would pass the regex check too. A sha256
+       hex digest can only contain [0-9a-f], so a leading NUL makes collision
+       impossible by construction rather than by length. */
+    expect(ABSENT.startsWith(String.fromCharCode(0))).toBe(true);
   });
 });
