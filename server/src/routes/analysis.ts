@@ -106,7 +106,10 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { readJsonWithFingerprint } from '../workspace/cast-fingerprint.js';
+import {
+  readJsonWithFingerprint,
+  describeFingerprintForLog,
+} from '../workspace/cast-fingerprint.js';
 import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
   mergeAnalysisResultWithExistingCast,
@@ -2726,6 +2729,15 @@ export async function resolveBookAuthorForManuscript(manuscriptId: string): Prom
   }
 }
 
+/* #2015 §4 — shared by both job bodies' `reportCastConflict` (below). Hoisted
+   so the code + message can't drift between the main/subset copies, and so
+   Task 6's test and Task 8's frontend read the same literal rather than a
+   fresh copy of each. */
+const CAST_MERGE_BASE_STALE_CODE = 'cast_merge_base_stale';
+const CAST_MERGE_BASE_STALE_MESSAGE =
+  'Another change to this book’s cast landed while the analysis was running. ' +
+  'The analysis result was applied on top of the older cast, so that change may have been overwritten.';
+
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
@@ -2838,14 +2850,12 @@ export async function runMainAnalyzerJob(
   const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
     console.warn(
       `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
-        `expected=${c.expected.slice(0, 12)} observed=${c.observed.slice(0, 12)}`,
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
     );
     send({
       kind: 'warning',
-      code: 'cast_merge_base_stale',
-      message:
-        'Another change to this book’s cast landed while the analysis was running. ' +
-        'The analysis result was applied on top of the older cast, so that change may have been overwritten.',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
     });
   };
   /* `lastStep` mirrors the most recent phase milestone to the server log (so a
@@ -5429,14 +5439,12 @@ export async function runSubsetAnalyzerJob(
   const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
     console.warn(
       `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
-        `expected=${c.expected.slice(0, 12)} observed=${c.observed.slice(0, 12)}`,
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
     );
     send({
       kind: 'warning',
-      code: 'cast_merge_base_stale',
-      message:
-        'Another change to this book’s cast landed while the analysis was running. ' +
-        'The analysis result was applied on top of the older cast, so that change may have been overwritten.',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
     });
   };
   /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to

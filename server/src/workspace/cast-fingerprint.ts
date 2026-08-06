@@ -17,6 +17,18 @@ export const ABSENT = '\0ABSENT' as const;
 /** Three states, never two — see design §1a. */
 export type CastFingerprint = string | typeof ABSENT | null;
 
+/** Render a fingerprint value for a log line. The NUL-prefixed `ABSENT`
+    encoding exists purely as an internal collision guard (see the comment
+    above) — it must never reach a log consumer raw, since a leading 0x00
+    byte truncates some log pipelines right after `expected=`/`observed=`.
+    Everything else is a real sha256 hex digest; a 12-char prefix is enough
+    to eyeball a match without spamming the log line. Takes a plain `string`
+    (not `CastFingerprint`) because callers here already hold the
+    `String(...)`-converted conflict fields, not the typed union. */
+export function describeFingerprintForLog(value: string): string {
+  return value === ABSENT ? 'ABSENT' : value.slice(0, 12);
+}
+
 export function hashBytes(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
 }
