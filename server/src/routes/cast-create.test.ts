@@ -472,6 +472,34 @@ describe('POST /api/books/:bookId/cast/create — history-protected ids (srv-86 
     }
   });
 
+  /* F7 (fix round 2, #2163) — C1's own comment claimed folding `displaced`
+     into `takenIds` is a no-op for `dropSupersededIdsReclaimedByLiveCast`,
+     because that function only ever drops a key already in `existingIds`.
+     True only at the INSTANT of the drop: `existingIds` is a per-request
+     snapshot, re-read fresh every call, while `displaced` is never pruned.
+     Here the character that reclaimed "the_torment" (`lightning-dave`) has
+     ITSELF since been removed from the live cast — `existingIds` no longer
+     protects the key, so this fold is the ONLY thing still reserving it.
+     Without it, re-creating "The Torment" would mint the bare id and hijack
+     whatever the ORIGINAL `the_torment` alias still covers on disk. */
+  it('F7 — a displaced key stays reserved even after the character that reclaimed it is itself later dropped', async () => {
+    // No "lightning-dave" in the live cast — it reclaimed "the_torment" once,
+    // then was itself dropped by a later analysis/merge.
+    mkdirSync(join(bookDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      historyPath(),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        displaced: { the_torment: 'lightning-dave' },
+      }),
+    );
+
+    const res = await callCreate(bookId, { name: 'The Torment' });
+    expect(res.status).toBe(200);
+    expect(res.body.character.id).not.toBe('the-torment');
+  });
+
   /* F6 — same silent gap, for a `rejectedPairs`-only avoidance (F1's new
      bucket): `from` was never in `historyKeys` to begin with, so neither
      existing branch ever named it either. */

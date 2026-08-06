@@ -136,11 +136,23 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        `buildCastResolver` resolves it via the `exact` tier — which
        `segments-io.ts` treats as "rendered bytes are fine, nothing to
        report" (#2107), so the hijack produces no orphan row, no chip, and
-       no `repair-cast-id-drift.mjs` listing at all. Folding `displaced`
-       into `takenIds` is a no-op for the sibling
-       `dropSupersededIdsReclaimedByLiveCast`: that function only ever
-       drops a key that was RECLAIMED as a live cast id, so it's already in
-       `existingIds` by the time it could appear in `displaced` too. */
+       no `repair-cast-id-drift.mjs` listing at all.
+
+       F7 (fix round 2, #2163) — corrected: folding `displaced` into
+       `takenIds` is NOT a no-op for the sibling
+       `dropSupersededIdsReclaimedByLiveCast`, except at the instant of the
+       drop. That function only ever drops a key that was RECLAIMED as a
+       live cast id, so it IS already in `existingIds` at drop time — but
+       `existingIds` is a per-request snapshot of the CURRENT live roster,
+       re-read fresh on every call, while `displaced` is never pruned once
+       written. If that reclaiming character is later itself dropped (a
+       further re-analysis, or a merge), its id leaves `existingIds` on
+       every future request but stays in `displaced` forever — at which
+       point this fold is what keeps the key reserved, not a redundant
+       belt-and-suspenders check. Defensible on the merits (every segment
+       the ORIGINAL alias covered still carries this key on disk, same as
+       any other `displaced` entry), but it is a genuine widening beyond
+       C1's stated scope, not the no-op C1 originally described it as. */
     const displacedKeys = new Set(Object.keys(history.displaced ?? {}));
     /* F1 (fix round 2, #2163) — a `rejectedPairs[].from` id needs the same
        reservation, for a THIRD path to the same #2110 end state that C1
