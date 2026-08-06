@@ -323,7 +323,13 @@ describe('preserveNotLinkedToOnCastWrite', () => {
 
     /* Absent on disk means absent after the write — otherwise the PUT is
        still a writer of this field, just a quieter one. */
-    expect(preserveNotLinkedToOnCastWrite(existing, incoming)[0].notLinkedTo).toBeUndefined();
+    const out = preserveNotLinkedToOnCastWrite(existing, incoming);
+    expect(out[0].notLinkedTo).toBeUndefined();
+    /* Not merely undefined — the key must be GONE. `toBeUndefined()` alone
+       passes for `{ notLinkedTo: undefined }`, and JSON.stringify drops both
+       shapes identically, so no round-trip assertion can tell them apart
+       either. This is the only place the distinction is observable. */
+    expect(Object.prototype.hasOwnProperty.call(out[0], 'notLinkedTo')).toBe(false);
   });
 
   it('[P4] leaves a brand-new character alone', () => {
