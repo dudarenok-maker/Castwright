@@ -115,7 +115,7 @@ rule heals strictly more and risks strictly no more.
 |---|---|---|
 | `server/src/routes/cast-reject-orphan.ts` | modify | POST write order + both halves fatal + two distinct 500 messages |
 | `server/src/routes/cast-reject-orphan-atomicity.test.ts` | **create** | Fault-injection + ordering pins. New file so its `vi.mock` cannot poison the existing suite's `Promise.all` dynamic import (`cast-reject-orphan.test.ts:106-109`) |
-| `server/src/routes/cast-reject-orphan.failure-modes.test.ts` | modify | **Three of its cases pin the old order and go red.** See Task 1 Step 5 — **four** of its cases move; this file is the one the fix breaks |
+| `server/src/routes/cast-reject-orphan.failure-modes.test.ts` | modify | **Four of its cases move** — three go red (`:205`, `:216`, `:340`), one (`:384`) stays green while silently testing nothing. See Task 1 Step 5 |
 | `server/src/store/reject-edge-reconcile.ts` | **create** | Pure `(bookId, characters, history) → { adds, removes, next }`. No I/O, no locking |
 | `server/src/store/reject-edge-reconcile.test.ts` | **create** | Unit tests for every reconciliation rule |
 | `server/src/routes/analysis.ts` | modify | New best-effort `reconcileRejectEdges` helper + two call sites |
@@ -124,7 +124,10 @@ rule heals strictly more and risks strictly no more.
 | `server/src/workspace/preserve-cast-voices.test.ts` | modify | Unit tests for that pass |
 | `server/src/routes/book-state.ts` | modify | Wire the pass into `preserveDesignedVoices`'s chain |
 | `server/src/routes/book-state-preserve-voices.test.ts` | modify | Route-level: a PUT cannot move `notLinkedTo`; the oscillation regression |
+| `openapi.yaml` | modify | The POST's 500 contract — it documents the single-500 behaviour Task 1 replaces |
+| `src/lib/api-types.ts` | regenerate | `npm run openapi:types` — a prose-only openapi edit still stales it (`:2417`) |
 | `docs/features/278-cast-character-identity.md` | modify | Invariant 10 becomes an enforced rule |
+| `docs/features/INDEX.md` | — | **Already done** — indexed in the PR that landed this plan doc |
 | `docs/release-notes-next.md`, `RELEASE_NOTES.md` | modify | Shipping notes |
 
 ---
@@ -528,6 +531,54 @@ it with the spine rule and keep its I5 sentence, which is still true of DELETE:
    was changed".
 ```
 
+- [ ] **Step 4b: Update `openapi.yaml` — it states the old single-500 contract**
+
+`openapi.yaml` is the API contract and the type source of truth, and it currently documents
+exactly the behaviour this task changes. Two places:
+
+`:3419-3422`, inside the POST description:
+
+```yaml
+        (re-)recorded. The `rejectedPairs` write failing surfaces as a 500
+        (it is the only mechanism enforcing the reject for a normalised-tier
+        match); a stale `supersededBy`-entry cleanup failure does not. Use
+        the DELETE on this same path to undo.
+```
+
+→
+
+```yaml
+        (re-)recorded. The `rejectedPairs` entry is written FIRST and the
+        `notLinkedTo` edge second (#2166), so a half-failure always leaves the
+        visible half — the chip renders and Undo works. BOTH writes failing
+        surface as a 500, with distinct meanings: a `rejectedPairs` failure
+        means nothing was written; a cast.json failure means the rejection is
+        durably recorded but the character link is not. Retry is safe after
+        either. A stale `supersededBy`-entry cleanup failure is non-fatal. Use
+        the DELETE on this same path to undo.
+```
+
+`:3441-3442`, the response entry:
+
+```yaml
+        '500':
+          description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
+```
+
+One line naming both causes, matching this endpoint's own DELETE sibling at `:3479`
+(`Failed to restore the forgotten alias entry, or to durably remove the rejection — retry`) rather
+than the `>-` block scalar used elsewhere in the file. The nearest precedent wins.
+
+- [ ] **Step 4c: Regenerate the API types**
+
+```bash
+npm run openapi:types
+```
+
+A **prose-only** `openapi.yaml` edit still stales `src/lib/api-types.ts` — it carries the same
+description text (`api-types.ts:2417`). Commit the regenerated file with the rest of this task;
+leaving it stale is a diff a reviewer will catch and a check may not.
+
 - [ ] **Step 5: Rewrite the four cases in `cast-reject-orphan.failure-modes.test.ts` that pin the OLD order**
 
 **Do this deliberately, in this task, with the reasoning in the commit body.** These four tests
@@ -554,21 +605,43 @@ on purpose".
 | `:340` | `"POST's notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge"` | it manufactures the stranded state **through the POST route**, which this task makes impossible | Keep the test — DELETE's unconditional clear (`:537-540`) is still worth pinning for legacy books. Replace **only `:358-362`** (the `rejectOrphanedPairMock` throw, the POST, and its 500 assertion) with a `writeBookOnDisk([...])` seeding `mairin.notLinkedTo = [{ bookId, characterId: 'mayrin' }]`. Add a comment that POST can no longer create this state, so the case now covers books stranded *before* this fix |
 | `:384` | `'leaves an UNRELATED notLinkedTo edge on the same character untouched'` | **it stays green while testing nothing.** It builds its `mayrin` edge with the same failing POST (`:402-406`); post-reorder no such edge is written, so DELETE's unconditional clear (`:537`) returns false, `changed` stays false, the cast write at `:538-540` never runs, and `:412-414` passes because *nothing happened*. Its stated purpose (`:386-387` — "proves the unconditional clear is scoped to THIS orphanedId, not a blanket wipe") is no longer exercised at all | Same treatment: replace `:402-406` with a seeded roster. `writeBookOnDisk` at `:388-397` already seeds `someone-else`; add `{ bookId, characterId: 'mayrin' }` beside it so the clear has something in scope to remove. Keep `:398-401` and the final assertion |
 
-**Keep the fresh-history `writeFileSync` in both tests** (`:354-357` and `:398-401`). Its own
-comment at `:349-353` says why it is load-bearing: `beforeEach` (`:142-153`) resets `cast.json`
-only, and the earlier tests at `:216`/`:233`/`:272` let the real `rejectOrphanedPair` persist a
-`{from:'mayrin', to:'mairin'}` pair into the **same** `bookDir`. Delete it and that leftover pair
-makes `rejectedPairsGoverning` non-empty, so `:376`/`:377` (`wasRejected: false`,
-`removedFrom: []`) go red — and the tempting response to *that* is to weaken the assertion, which
-would erase the #2133 fold's own regression coverage.
+**Keep the fresh-history `writeFileSync` in both tests** (`:354-357` and `:398-401`) — but for
+**two different reasons**. Both rest on the same fact, stated once at `:349-353`: `beforeEach`
+(`:142-153`) resets `cast.json` only, and every non-throwing call in this file reaches the real
+`rejectOrphanedPair` (the mock at `:64-65` falls through to the actual primitive under
+`beforeEach:150`'s `mockReturnValue(undefined)`), so `:175`, `:216`, `:233`, `:258` and `:272` all
+persist a `{from:'mayrin', to:'mairin'}` pair into the **same** `bookDir`.
+
+- **`:340` — deleting it turns the test RED.** The leftover pair makes `rejectedPairsGoverning`
+  non-empty, so `:376`/`:377` (`wasRejected: false`, `removedFrom: []`) fail. The tempting response
+  to *that* is to weaken the assertion, which would erase the #2133 fold's regression coverage.
+- **`:384` — deleting it leaves the test GREEN and pointing at the wrong mechanism.** It has no
+  `wasRejected`/`removedFrom` assertion, so nothing fails. But with a leftover pair,
+  `matchingPairs` is non-empty and the edge is cleared by the **pair loop at
+  `cast-reject-orphan.ts:502-504`** — not by the unconditional clear at `:537`, which is the only
+  thing this case exists to pin. It would be back to proving nothing, by a different route than
+  the one this step just closed.
+
+**Make `:384` self-guarding** rather than relying on a reader honouring the paragraph above: add
+`expect(readHistory()?.rejectedPairs ?? []).toEqual([]);` after its seed, the same precondition
+assertion `:340` already carries at `:370`. A fixture whose emptiness is load-bearing should assert
+its own emptiness.
 
 Verified unaffected, do not touch: `:175`, `:196` (its `/failed to durably record/i` still matches
 the new message), `:233`, `:258`, `:272`, `:290`.
 
-**Before moving on, audit `cast-reject-orphan.test.ts` the same way.** Step 6 requires that file
-to stay green *untouched* — but "green" is not the bar; `:384` was green and proved nothing. Grep
-it for any case that manufactures state through a failing POST and re-derive what it still
-exercises post-reorder.
+**`cast-reject-orphan.test.ts` has been audited the same way — no case goes red and no case
+becomes vacuous.** That file declares **no `vi.mock`** and injects no failure anywhere, by design
+(`failure-modes.test.ts:36-38`: the main file needs the real `cast-id-history.ts` primitives). All
+33 of its cases are guard checks (400/404/409) or happy paths, and a *successful* POST's end state
+is byte-identical under either write order: `rejectOrphanedPair` reads only
+`cast-id-history.json`, `resolveOrphanedId` (`cast-reject-orphan.ts:404`) runs after both writes
+either way, and `alreadyPresent` derives from the in-memory `changed`. The `#1981` lock-overlap
+test at `:828` is unaffected — both writes stay inside the same `withCastLock` span and the
+nesting order is unchanged.
+
+Recorded as an answer, not an instruction, because "audit it yourself" is what left `:384`
+mis-classified for two rounds.
 
 - [ ] **Step 6: Run all three suites**
 
@@ -591,7 +664,8 @@ confirm red, revert. Then mutate the *fix* — restore the old cast-write-first 
 ```bash
 git add server/src/routes/cast-reject-orphan.ts \
         server/src/routes/cast-reject-orphan-atomicity.test.ts \
-        server/src/routes/cast-reject-orphan.failure-modes.test.ts
+        server/src/routes/cast-reject-orphan.failure-modes.test.ts \
+        openapi.yaml src/lib/api-types.ts
 git commit -m "fix(server): write the reject's pair before its edge (#2166)"
 ```
 
@@ -1315,7 +1389,10 @@ it('[C7] is wired into BOTH authoritative persists', () => {
   const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
   const calls = src.match(/await reconcileRejectEdgesOnDisk\(record\.bookDir,/g) ?? [];
 
-  expect(calls).toHaveLength(2);
+  expect(
+    calls,
+    'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3',
+  ).toHaveLength(2);
   expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log)');
   expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log)');
 });
@@ -1326,17 +1403,14 @@ Two weaknesses, stated rather than hidden:
   is what is available here.
 - It is an exact-string match against another file's source, so a rename of `retirementBookId` /
   `subsetBookId`, or an added argument, reddens it with a failure message that does not explain
-  itself. **Give it a failure hint** using Vitest's second `expect` argument — note this is an
-  argument to `expect`, *not* to the matcher:
-
-  ```ts
-  expect(calls, 'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3').toHaveLength(2);
-  ```
+  itself. That is why the snippet's `toHaveLength` carries a hint via **Vitest's second `expect`
+  argument** — an argument to `expect`, *not* to the matcher. Keep it.
 
 (`readFileSync` is already in Step 1's `node:fs` import; `import.meta.url` resolves to the real
 source path under Vitest here — `openapi-design-parity.test.ts:64` is an in-directory precedent.
-Prettier's `printWidth` is 100 and both call lines are ~84 chars at their indent, so neither wraps
-out from under the `toContain`.)
+Prettier's `printWidth` is 100 and both `toContain` call lines are ~84 chars at their indent, so
+neither wraps out from under the string match; the hinted `expect` will be wrapped across lines by
+Prettier, which is harmless.)
 
 - [ ] **Step 5: Run to verify it passes, and that the lock guard is still green**
 
@@ -1809,15 +1883,12 @@ Then replace `#NNNN` in Step 1 with the issue number, and add the same number to
   time it's analysed.
 ```
 
-- [ ] **Step 4: Add this plan to `docs/features/INDEX.md`**
-
-Under its area, beside plan 280 (`INDEX.md:48`). Before-shipping step 4 wants a new plan indexed
-in the PR that ships it, not after the merge.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docs/features/278-cast-character-identity.md docs/features/INDEX.md \n        docs/release-notes-next.md RELEASE_NOTES.md \n        docs/superpowers/specs/2026-08-06-reject-edge-atomicity-design.md
+git add docs/features/278-cast-character-identity.md \
+        docs/release-notes-next.md RELEASE_NOTES.md \
+        docs/superpowers/specs/2026-08-06-reject-edge-atomicity-design.md
 git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
 ```
 
