@@ -1029,7 +1029,7 @@ describe('failedChapterErrors records (spec A4)', () => {
 describe('chapter-failed replay map (spec A4 — reconnect carries code/remediation)', () => {
   function makeJob() {
     return {
-      replay: { failedByChapterId: new Map(), logs: [] },
+      replay: { failedByChapterId: new Map(), logs: [], warnings: new Map() },
     } as unknown as Parameters<typeof trackForReplay>[0];
   }
   it('stores code + remediation off a chapter-failed event', () => {
@@ -1064,6 +1064,71 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
   });
 });
 
+describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
+  function makeJob(): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: 'm1',
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+
+  it('replays a warning emitted while nobody was listening', () => {
+    const job = makeJob();
+    trackForReplay(job, {
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+
+    expect(sent).toContainEqual({
+      kind: 'warning',
+      code: 'cast_merge_base_stale',
+      message: 'Another change landed.',
+    });
+  });
+
+  it('dedupes by code — five sites conflicting once replay ONE advisory, not five', () => {
+    const job = makeJob();
+    for (let i = 0; i < 5; i++) {
+      trackForReplay(job, {
+        kind: 'warning',
+        code: 'cast_merge_base_stale',
+        message: `attempt ${i}`,
+      });
+    }
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent.filter((e) => (e as { kind?: string }).kind === 'warning')).toHaveLength(1);
+  });
+
+  it('ignores a malformed warning rather than storing an undefined key', () => {
+    const job = makeJob();
+    trackForReplay(job, { kind: 'warning' });
+    trackForReplay(job, { kind: 'warning', code: 'x' });
+    trackForReplay(job, { kind: 'warning', message: 'no code' });
+    const sent: unknown[] = [];
+    replayCatchUp(job, (ev) => sent.push(ev));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 /* Bug-3 diagnosis (Task B4): a page reload re-subscribes to the sticky job and
    the server replays `job.replay.lastPhase` verbatim via replayCatchUp. The
    live elapsed/sentence rows survive a reload IFF that snapshot is kept fresh.
@@ -1079,6 +1144,7 @@ describe('replayCatchUp forwards live chapter rows on reconnect (bug 3 buffer)',
         lastPhase,
         logs: [],
         failedByChapterId: new Map(),
+        warnings: new Map(),
       },
     } as unknown as Parameters<typeof replayCatchUp>[0];
   }
@@ -2106,7 +2172,9 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
         JSON.stringify({ characters: [{ id: 'stale', voiceId: 'stale' }] }),
       );
       const prior = await readPriorCastForMerge(dir);
-      expect(prior.map((c) => c.id)).toEqual(['live']);
+      expect(prior.rows.map((c) => c.id)).toEqual(['live']);
+      expect(prior.source).toBe('cast');
+      expect(prior.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2124,17 +2192,40 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
         }),
       );
       const prior = await readPriorCastForMerge(dir);
-      expect(prior).toHaveLength(1);
-      expect(prior[0]).toMatchObject({ id: 'wren', voiceId: 'wren', voiceState: 'reused' });
+      expect(prior.rows).toHaveLength(1);
+      expect(prior.rows[0]).toMatchObject({ id: 'wren', voiceId: 'wren', voiceState: 'reused' });
+      expect(prior.source).toBe('carryover');
+      /* Design §1a — carryover rows describe bytes cast.json never held, so
+         there is no compare-and-set available. `null` says "I cannot check",
+         which is the honest answer and is what disables detection for the run
+         rather than producing a wrong verdict. */
+      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('returns [] when neither file exists', async () => {
+  it('returns no rows and no fingerprint when neither file exists', async () => {
     const dir = makeBookDir();
     try {
-      expect(await readPriorCastForMerge(dir)).toEqual([]);
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior.rows).toEqual([]);
+      expect(prior.source).toBe('none');
+      expect(prior.fingerprint).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an EMPTY characters[] in cast.json still falls through to the carryover', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castPath(dir), JSON.stringify({ characters: [] }));
+      writeFileSync(carryPath(dir), JSON.stringify({ characters: [{ id: 'wren' }] }));
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior.rows.map((c) => c.id)).toEqual(['wren']);
+      expect(prior.source).toBe('carryover');
+      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2940,6 +3031,7 @@ describe('runMainAnalyzerJob — analyzer device cache wiring (W2.6)', () => {
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -3336,6 +3428,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3445,6 +3538,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3538,6 +3632,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3853,6 +3948,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -3963,6 +4059,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4077,6 +4174,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4322,6 +4420,7 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4560,6 +4659,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -4768,6 +4868,7 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -5022,10 +5123,10 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
       // untouched; nothing in this run's roster reclaims 'old-eliza'.
       await retireCharacterId(bookDir, 'old-eliza', 'eliza');
 
-      // No prior cast.json — readPriorCastForMerge returns [] for a missing
-      // file, keeping this fixture isolated to the reclaim scenario (no
-      // dedup/remap machinery needs to fire for a single fresh row with no
-      // same-name prior).
+      // No prior cast.json — readPriorCastForMerge returns no rows for a
+      // missing file, keeping this fixture isolated to the reclaim scenario
+      // (no dedup/remap machinery needs to fire for a single fresh row with
+      // no same-name prior).
       expect(existsSync(castJsonPath(bookDir))).toBe(false);
 
       const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
@@ -5046,6 +5147,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -5240,6 +5342,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -5886,6 +5989,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         lastCastUpdate: null,
         failedByChapterId: new Map(),
         lastSeriesPrior: null,
+        warnings: new Map(),
       },
       lastDiskWriteAt: 0,
     } as unknown as AnalysisJob;
@@ -6385,6 +6489,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -6473,6 +6578,7 @@ describe('#1447 third-party front-matter guard — main-route integration', () =
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
@@ -6869,6 +6975,7 @@ describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 
           lastCastUpdate: null,
           failedByChapterId: new Map(),
           lastSeriesPrior: null,
+          warnings: new Map(),
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;

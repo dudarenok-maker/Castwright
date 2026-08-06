@@ -28,6 +28,14 @@
  * (#2006). Four designs for that have been attempted and none survived review;
  * do not add a fifth here without reading those issues first.
  *
+ * #2015's merge-base half is now DETECTED rather than serialised (see
+ * workspace/cast-merge-base.ts) — the validate/write window is deliberately
+ * left exactly as wide as before, but a write landing inside it is no longer
+ * silent. That is not a fifth attempt at the general problem this section
+ * warns about: it does not try to make validate-then-write safe. The warning
+ * above still stands, in full, for the #2006 half and for any attempt to
+ * actually close the window rather than just see into it.
+ *
  * Key derivation lives here and ONLY here. A site that derived the key slightly
  * differently would get a second mutex that never contends with the first, and
  * every test would still pass.

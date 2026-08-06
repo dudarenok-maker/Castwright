@@ -107,6 +107,11 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import {
+  readJsonWithFingerprint,
+  describeFingerprintForLog,
+} from '../workspace/cast-fingerprint.js';
+import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
+import {
   mergeAnalysisResultWithExistingCast,
   overlayInterimCastForLiveView,
   seedReuseGuardsFromPriorCast,
@@ -172,22 +177,49 @@ import { GeminiAnalyzer } from '../analyzer/gemini.js';
    it) fall back to the reuse-carryover snapshot the reparse handler wrote, so
    continuity survives the reparse → re-analysis window. Once this run writes a
    fresh cast.json it takes precedence and the carryover goes inert until the
-   next reparse refreshes it. */
-export async function readPriorCastForMerge(
-  bookDir: string,
-): Promise<Array<{ id: string } & Record<string, unknown>>> {
-  const fromCast = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
-      castJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  if (fromCast?.length) return fromCast;
-  const fromCarryover = (
-    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+   next reparse refreshes it.
+
+   #2015 / #2155 — the whole two-file fallback runs INSIDE the cast lock, which
+   is what makes "which file did these rows come from" a decidable question
+   answered atomically with the read itself. That is the capture problem the
+   four earlier designs died on: fingerprinting cast.json from outside this
+   fallback describes bytes the snapshot may not have come from.
+
+   Rule 1 (one level only) holds: both production callers sit at the top of
+   their run outside any lock, and applyReparse never calls this. */
+export interface PriorCastSnapshot {
+  rows: Array<{ id: string } & Record<string, unknown>>;
+  /** sha256 of cast.json's raw bytes when the rows came from it. `null` means
+      "no compare-and-set is available for this run" — carryover-sourced or
+      empty. A null fingerprint DISABLES conflict detection rather than
+      producing a wrong verdict (design §1a). */
+  fingerprint: string | null;
+  source: 'cast' | 'carryover' | 'none';
+}
+
+export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastSnapshot> {
+  type Rows = Array<{ id: string } & Record<string, unknown>>;
+  return withCastLock(bookDir, async () => {
+    const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
+    const fromCast = cast.value?.characters;
+    if (fromCast?.length) {
+      /* fingerprint is a hash, never ABSENT, on this branch — the file
+         demonstrably parsed. The guard is for the type, not the case. */
+      return {
+        rows: fromCast,
+        fingerprint: typeof cast.fingerprint === 'string' ? cast.fingerprint : null,
+        source: 'cast' as const,
+      };
+    }
+    const carry = await readJsonWithFingerprint<{ characters?: Rows }>(
       castReuseCarryoverJsonPath(bookDir),
-    ).catch(() => null)
-  )?.characters;
-  return fromCarryover ?? [];
+    );
+    const fromCarryover = carry.value?.characters;
+    if (fromCarryover) {
+      return { rows: fromCarryover, fingerprint: null, source: 'carryover' as const };
+    }
+    return { rows: [], fingerprint: null, source: 'none' as const };
+  });
 }
 
 /* §4.4 — the choke point every id-retiring call site records through.
@@ -2242,6 +2274,10 @@ export interface AnalysisJobReplayState {
       first subscriber would see the SeriesPriorPill but the second
       one — post-reload, post-navigate-back — would miss it). */
   lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
+  /** #2015 — advisories emitted during the run, keyed by `code` so a burst
+      across the five merge-base write sites replays as ONE. Not cleared:
+      a stale merge base stays true for the rest of the run. */
+  warnings: Map<string, { kind: 'warning'; code: string; message: string }>;
 }
 
 export interface AnalysisJob {
@@ -2476,6 +2512,17 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
       }
       break;
     }
+    case 'warning': {
+      const e = ev as { code?: string; message?: string };
+      if (typeof e.code === 'string' && typeof e.message === 'string') {
+        job.replay.warnings.set(e.code, {
+          kind: 'warning',
+          code: e.code,
+          message: e.message,
+        });
+      }
+      break;
+    }
     /* heartbeat / throttle / result / error: not replayed (heartbeat +
        throttle are ephemeral; result + error are terminal and the route
        closes the connection right after emitting them anyway). */
@@ -2489,6 +2536,7 @@ export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): vo
   if (job.replay.lastCastUpdate) send(job.replay.lastCastUpdate);
   if (job.replay.lastSeriesPrior) send(job.replay.lastSeriesPrior);
   for (const failed of job.replay.failedByChapterId.values()) send(failed);
+  for (const warning of job.replay.warnings.values()) send(warning);
 }
 
 function endJob(job: AnalysisJob, finalEv?: unknown): void {
@@ -2708,6 +2756,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };
@@ -2788,6 +2837,15 @@ export async function resolveBookAuthorForManuscript(manuscriptId: string): Prom
     return '';
   }
 }
+
+/* #2015 §4 — shared by both job bodies' `reportCastConflict` (below). Hoisted
+   so the code + message can't drift between the main/subset copies, and so
+   Task 6's test and Task 8's frontend read the same literal rather than a
+   fresh copy of each. */
+const CAST_MERGE_BASE_STALE_CODE = 'cast_merge_base_stale';
+const CAST_MERGE_BASE_STALE_MESSAGE =
+  'Another change to this book’s cast landed while the analysis was running. ' +
+  'The analysis result was applied on top of the older cast, so that change may have been overwritten.';
 
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
@@ -2895,6 +2953,20 @@ export async function runMainAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+    );
+    send({
+      kind: 'warning',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
+    });
+  };
   /* `lastStep` mirrors the most recent phase milestone to the server log (so a
      stall's last log line names where it wedged) and feeds the fatal-error log
      below (so a failure names its phase, not just a stack). */
@@ -2937,11 +3009,17 @@ export async function runMainAnalyzerJob(
        snapshot the prior on a fresh run — with reuse continuity stripped, since
        fresh legitimately re-derives that. Read happens before the fresh block
        below rm's cast.json, so the value survives that deletion. */
-    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = recordRef.bookDir
-      ? requestedFresh
-        ? dropReuseContinuityKeepDesignedVoice(await readPriorCastForMerge(recordRef.bookDir))
-        : await readPriorCastForMerge(recordRef.bookDir)
-      : [];
+    const priorSnapshot = recordRef.bookDir
+      ? await readPriorCastForMerge(recordRef.bookDir)
+      : { rows: [], fingerprint: null, source: 'none' as const };
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
+      ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
+      : priorSnapshot.rows;
+    /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+       every merge-base write and reset by the Start-fresh delete below. */
+    const castBase: CastMergeBase | null = recordRef.bookDir
+      ? createCastMergeBase(recordRef.bookDir, priorSnapshot.fingerprint)
+      : null;
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
        feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
@@ -3015,15 +3093,26 @@ export async function runMainAnalyzerJob(
            the roster this delete exists to remove (design §4 rule 1 — this
            is the innermost, one-level lock around the whole read-through-
            delete span; the delete itself has no read of its own to pull
-           inside it). This file's five merge-base writes plus
-           readPriorCastForMerge are deliberately out of scope here — tracked
-           on #2015, not folded into this lock. */
+           inside it). #2015/#2155 update: the five merge-base writes and
+           readPriorCastForMerge are no longer out of scope here — they are
+           locked too, and the carryover's delete now rides this same hold. */
         const freshBookDir = recordRef.bookDir;
-        await withCastLock(freshBookDir, () => rm(castJsonPath(freshBookDir), { force: true }));
+        await withCastLock(freshBookDir, async () => {
+          await rm(castJsonPath(freshBookDir), { force: true });
+          /* Start fresh intentionally discards reuse continuity — drop the
+             reparse carryover too so it can't resurrect links (srv-13).
+             #2155: inside the SAME hold as cast.json's delete, so a concurrent
+             analysis can no longer observe the intermediate state where the
+             carryover is written but cast.json is not yet gone. */
+          await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
+          /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
+             this delete (so the rows survive it), which means the captured
+             hash describes a file we are now removing. Without this reset the
+             first write site re-reads an absent file against a live hash and
+             reports a guaranteed false conflict on every fresh run. */
+          castBase?.markDeleted();
+        });
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
-        /* Start fresh intentionally discards reuse continuity — drop the
-           reparse carryover too so it can't resurrect links (srv-13). */
-        await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
@@ -3741,9 +3830,10 @@ export async function runMainAnalyzerJob(
                  able to swap a persisted id. Only §4.4's five listed sites
                  record retirements, and none of them is this one. */
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('interim'),
+              );
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
@@ -3953,9 +4043,10 @@ export async function runMainAnalyzerJob(
             // produces no retirements — see the interim-write comment above
             // for the full rationale.
             const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
-            await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
-              characters: mergedStage1,
-            });
+            await castBase!.writeChecked(
+              { characters: mergedStage1 },
+              reportCastConflict('stage1'),
+            );
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
@@ -4993,9 +5084,10 @@ export async function runMainAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          await castBase!.writeChecked(
+            { characters: mergedFinal.characters },
+            reportCastConflict('final'),
+          );
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write, and never let a throwing history
              write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
@@ -5401,6 +5493,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       lastCastUpdate: null,
       failedByChapterId: new Map(),
       lastSeriesPrior: null,
+      warnings: new Map(),
     },
     lastDiskWriteAt: 0,
   };
@@ -5476,6 +5569,20 @@ export async function runSubsetAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+     proceeds with the same base it uses today, so NO data is lost that is not
+     already lost today; what changes is that it is now visible. */
+  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+    console.warn(
+      `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+    );
+    send({
+      kind: 'warning',
+      code: CAST_MERGE_BASE_STALE_CODE,
+      message: CAST_MERGE_BASE_STALE_MESSAGE,
+    });
+  };
   /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to
      the server log (so a stall's last server-log line names where it wedged)
      and folded into the fatal-error log below (so a failure names the phase it
@@ -5502,9 +5609,15 @@ export async function runSubsetAnalyzerJob(
 
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
-  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
+  const priorSnapshot = record.bookDir
     ? await readPriorCastForMerge(record.bookDir)
-    : [];
+    : { rows: [], fingerprint: null, source: 'none' as const };
+  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+  /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+     every merge-base write. */
+  const castBase: CastMergeBase | null = record.bookDir
+    ? createCastMergeBase(record.bookDir, priorSnapshot.fingerprint)
+    : null;
 
   /* Heal cross-series/author reuse links in the prior cast before it feeds the
      seed + cast.json merges (see the streaming path for the full rationale —
@@ -5747,9 +5860,10 @@ export async function runSubsetAnalyzerJob(
               // no name-fallback and produces no retirements — see the main
               // route's interim-write comment for the full rationale.
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await writeJsonAtomic(castJsonPath(record.bookDir), {
-                characters: mergedInterim,
-              });
+              await castBase!.writeChecked(
+                { characters: mergedInterim },
+                reportCastConflict('subset-interim'),
+              );
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
@@ -6282,9 +6396,10 @@ export async function runSubsetAnalyzerJob(
             );
           }
           const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, enriched);
-          await writeJsonAtomic(castJsonPath(record.bookDir), {
-            characters: mergedFinal.characters,
-          });
+          await castBase!.writeChecked(
+            { characters: mergedFinal.characters },
+            reportCastConflict('subset-final'),
+          );
           /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
              authoritative cast.json write; wrapped so a throwing history
              write can't skip cast.json / state.json. */
