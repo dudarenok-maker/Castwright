@@ -18,6 +18,7 @@ frontend.
 
 **Spec:** [`docs/superpowers/specs/2026-08-06-cast-merge-base-serialise-and-detect-design.md`](../specs/2026-08-06-cast-merge-base-serialise-and-detect-design.md)
 **Issues:** `Closes #2155`, `Refs #2015` (detection only; the rebuild stays open)
+**Status:** implemented — all 10 tasks complete on `fix/server-cast-merge-base-serialise` (2026-08-06); PR [#2185](https://github.com/dudarenok-maker/Castwright/pull/2185), open, not yet merged.
 
 ## Global Constraints
 
@@ -660,12 +661,20 @@ Run each mutation, confirm the named test fails, then revert:
 | Mutation | Must fail |
 |---|---|
 | Delete the `if (baseline !== null) baseline = fingerprintOfWrite(payload);` line | "uncontended multi-chapter run emits ZERO conflicts" |
-| Change `markDeleted` to `baseline = null` | "WITHOUT markDeleted … proving the reset is load-bearing" (it would stop failing) |
+| Change `markDeleted` to `baseline = null` | "a fresh run still DETECTS a foreign write — markDeleted sets ABSENT, never null" |
 | Change `if (observed !== baseline)` to `if (false)` | both positive-control tests |
 | Drop the `withCastLock` wrapper | "two concurrent writeChecked calls do not interleave" |
 
 A control that still passes under its mutation is not a control. Fix it before
 moving on.
+
+**Note (found during implementation):** the row above originally named "WITHOUT
+markDeleted … proving the reset is load-bearing" as this mutation's target. That
+was wrong and could not have failed it — that test never calls `markDeleted()`,
+so mutating `markDeleted` cannot affect it. The real gap the dud row concealed:
+no test distinguished `markDeleted()` setting `ABSENT` from setting `null` —
+both leave an uncontended fresh run reporting zero conflicts, so the mutation
+was unguarded. The control now named above was added to close it.
 
 - [ ] **Step 6: Commit**
 

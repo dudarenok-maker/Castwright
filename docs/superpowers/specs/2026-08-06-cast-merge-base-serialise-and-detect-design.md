@@ -1,7 +1,7 @@
 # Serialising and detecting cast.json merge-base staleness
 
 **Date:** 2026-08-06
-**Status:** revised after adversarial review — awaiting owner approval
+**Status:** implemented — all 10 plan tasks complete on `fix/server-cast-merge-base-serialise` (2026-08-06); PR [#2185](https://github.com/dudarenok-maker/Castwright/pull/2185), open, not yet merged.
 **Issues:** #2155 (carryover's unlocked touchers), #2015 (merge-base staleness)
 **Supersedes nothing.** Builds on `docs/superpowers/specs/2026-07-31-cast-json-write-lock-design.md` §6, §12.2, §13.
 
