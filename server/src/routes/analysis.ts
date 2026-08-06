@@ -2952,15 +2952,26 @@ export async function runMainAnalyzerJob(
            the roster this delete exists to remove (design §4 rule 1 — this
            is the innermost, one-level lock around the whole read-through-
            delete span; the delete itself has no read of its own to pull
-           inside it). This file's five merge-base writes plus
-           readPriorCastForMerge are deliberately out of scope here — tracked
-           on #2015, not folded into this lock. */
+           inside it). #2015/#2155 update: the five merge-base writes and
+           readPriorCastForMerge are no longer out of scope here — they are
+           locked too, and the carryover's delete now rides this same hold. */
         const freshBookDir = recordRef.bookDir;
-        await withCastLock(freshBookDir, () => rm(castJsonPath(freshBookDir), { force: true }));
+        await withCastLock(freshBookDir, async () => {
+          await rm(castJsonPath(freshBookDir), { force: true });
+          /* Start fresh intentionally discards reuse continuity — drop the
+             reparse carryover too so it can't resurrect links (srv-13).
+             #2155: inside the SAME hold as cast.json's delete, so a concurrent
+             analysis can no longer observe the intermediate state where the
+             carryover is written but cast.json is not yet gone. */
+          await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
+          /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
+             this delete (so the rows survive it), which means the captured
+             hash describes a file we are now removing. Without this reset the
+             first write site re-reads an absent file against a live hash and
+             reports a guaranteed false conflict on every fresh run. */
+          castBase?.markDeleted();
+        });
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
-        /* Start fresh intentionally discards reuse continuity — drop the
-           reparse carryover too so it can't resurrect links (srv-13). */
-        await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);

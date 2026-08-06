@@ -14,17 +14,12 @@
    cast-aliases.ts) — it is rule-2-compliant, so once serialised against the
    delete it leaves cast.json deleted in BOTH orderings.
 
-   Scripts the interleaving instead of a bare race (a flaky race test on this
-   branch measured 50% detection in one run): a hoisted `vi.mock` on
-   `state-io.js` holds add-alias's own in-lock `readJson(cast.json)` call
-   open behind a manually-released gate. The real bytes are read (and so
-   captured, stale) BEFORE the delete ever runs; only the JS-visible
-   resolution is delayed — so add-alias's read genuinely happens-before the
-   delete, matching the resurrection bug's precondition. add-alias is fired
-   first and confirmed stuck behind the gate BEFORE the analysis job starts,
-   so the first interception is deterministically add-alias's read, not
-   analysis.ts's own earlier (unlocked, unrelated) `readPriorCastForMerge`
-   read.
+   #2015 update: analysis.ts's own readPriorCastForMerge is now LOCKED, and
+   reads via readFile (cast-fingerprint.ts) rather than state-io's readJson,
+   so it neither trips the readJson interceptor below nor races the delete.
+   It queues behind add-alias's held lock instead, which adds two extra lock
+   handoffs between `released()` and the delete actually landing — hence the
+   widened settle window below.
 
    The analysis job's own stub Phase-0 analyzer hangs on a SEPARATE gate,
    released only after this test has already inspected disk state. Nothing
@@ -307,8 +302,9 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
 
         released();
         resAlias = await aliasPromise;
-        // Let the now-unblocked delete run.
-        await new Promise((r) => setTimeout(r, 80));
+        /* #2015 — three handoffs now, not one: add-alias releases, the job's
+           locked capture acquires+releases, then the delete acquires. */
+        await new Promise((r) => setTimeout(r, 400));
 
         // Capture disk state NOW, before Phase 0 (still gated) is allowed to
         // proceed to the job's own later, legitimate cast.json write.
