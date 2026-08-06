@@ -19,9 +19,19 @@ export const GIT_ENV_SCRUB_KEYS = [
 
 /** A copy of `process.env` with the repository-discovery-overriding GIT_*
  *  vars above removed, so a git call scoped to an explicit `cwd` can't be
- *  silently redirected by an inherited environment. */
+ *  silently redirected by an inherited environment.
+ *
+ *  Matched case-insensitively: `{ ...process.env }` snapshots whatever
+ *  casing Windows happened to store a variable under (env lookup itself is
+ *  case-insensitive there), so a `delete out[key]` keyed on the canonical
+ *  uppercase name alone would leave a `git_dir`-cased survivor in `out` that
+ *  git still honours — a no-op fix for exactly the case this function
+ *  exists to close. */
 export function scrubGitEnv(env = process.env) {
   const out = { ...env };
-  for (const key of GIT_ENV_SCRUB_KEYS) delete out[key];
+  const targets = new Set(GIT_ENV_SCRUB_KEYS);
+  for (const key of Object.keys(out)) {
+    if (targets.has(key.toUpperCase())) delete out[key];
+  }
   return out;
 }

@@ -210,9 +210,15 @@ export function pickWorkflowRun(runs, { headSha, sinceMs, skewMs = 10000 }) {
 // otherwise silently override `cwd`) can't be forgotten by a call site that
 // builds its own execFileSync options. createAnnotatedTag below is the one
 // call site that needs different stdio/input, so it calls this directly
-// rather than growing a second copy of the scrub.
-function execGit(args, options) {
-  return execFileSync('git', args, { ...options, env: scrubGitEnv() });
+// rather than growing a second copy of the scrub. `options?.env` is merged
+// INTO the scrub rather than replaced by it (PR #2175 review) — a caller
+// that needs to pass its own env (none does today) still gets the scrub
+// applied to what it passed, not silently overridden by an unrelated
+// `scrubGitEnv()` of `process.env`; that's what "a git call added later
+// inherits the fix" actually requires. Exported (like buildTagMessage /
+// createAnnotatedTag below) as a thin, directly-testable seam.
+export function execGit(args, options) {
+  return execFileSync('git', args, { ...options, env: scrubGitEnv(options?.env) });
 }
 
 function git(args, opts = {}) {
@@ -250,16 +256,24 @@ function npm(args, opts = {}) {
 
 // `gh` wrapper. capture=true returns stdout; otherwise inherits stdio so
 // `gh run watch`'s live progress streams to the user.
+//
+// #2175 review, Finding 2 — `gh` resolves its target repository the same
+// GIT_DIR/GIT_WORK_TREE-first way git itself does (empirically: with GIT_DIR
+// pointed at a decoy, `gh repo view` reports "no git remotes found" instead
+// of the real repo's remotes). The scrub above was applied to every git()
+// call but not to gh — a workflow_dispatch could fire against a foreign
+// repository. Same fix, same shared scrub.
 function gh(args, opts = {}) {
   return execFileSync('gh', args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
 }
 
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = spawnSync('gh', ['--version'], { stdio: 'ignore', env: scrubGitEnv() });
   return !r.error && r.status === 0;
 }
 
@@ -324,6 +338,7 @@ async function runCrossOsGate({ ref, headSha }) {
   const watch = spawnSync('gh', ['run', 'watch', String(runId), '--exit-status'], {
     cwd: repoRoot,
     stdio: 'inherit',
+    env: scrubGitEnv(),
   });
   if (watch.status !== 0) {
     die(
@@ -449,10 +464,30 @@ async function main() {
   // DEFAULT_NOTES_FILE when an explicit path was given, or when the default
   // is absent — the latter can't trip this, since the "exists" check below
   // is then false).
-  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(DEFAULT_NOTES_FILE)) {
+  // #2175 review, Finding 3 — DEFAULT_NOTES_FILE is a path WITHIN THE REPO
+  // (same as release-body.mjs's own `resolve(repoRoot, DEFAULT_NOTES_FILE)`
+  // at publish time), so both the existence check and the read below must
+  // resolve it against `repoRoot`, not the invocation `process.cwd()`. Run
+  // from a subdirectory (e.g. `cd server && node ../scripts/bump-version.mjs
+  // … --notes-file <path>`) and the bare-relative `existsSync(DEFAULT_NOTES_FILE)`
+  // would find nothing, silently skipping this whole guard rather than
+  // refusing — the exact outcome #2170 exists to prevent. `args.notesFile`
+  // itself is intentionally left resolved against the invocation cwd (see
+  // the `--notes-file does not exist` pre-flight above, which does the same)
+  // — an operator's notes file legitimately lives wherever they're standing.
+  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))) {
     const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
-    const defaultText = readFileSync(resolve(DEFAULT_NOTES_FILE), 'utf8');
-    if (normalise(explicitText) !== normalise(defaultText)) {
+    const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
+    // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
+    // which strips a defensive BOM (see buildTagMessage's own doc comment);
+    // release-body.mjs's fileText is read raw. Comparing raw explicitText here
+    // would report a "divergence" for a BOM-only difference that publish would
+    // never have seen (pre-flight 6c below refuses a BOM'd --notes-file anyway,
+    // so this isn't exploitable — but this check runs FIRST, so an unfixed
+    // comparison hands the operator the misleading divergence message instead
+    // of the accurate BOM one). Comparing buildTagMessage(explicitText) makes
+    // this check agree with what publish actually compares.
+    if (normalise(buildTagMessage(explicitText)) !== normalise(defaultText)) {
       const msg =
         `--notes-file ${args.notesFile} and ${DEFAULT_NOTES_FILE} disagree after normalising ` +
         `(CRLF -> LF, trailing whitespace stripped) — release.yml publishes the release body ` +
@@ -460,7 +495,15 @@ async function main() {
         `cross-os-verify, mobile-e2e, and companion-apk-build have all run, with the tag already ` +
         `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
         `publish job WILL FAIL unless you fix it before pushing the tag).`;
+      // Finding 4 — every other CONDITIONAL pre-flight in main() reports
+      // rather than dies under --dry-run (the four that die unconditionally
+      // each carry their own comment explaining why — no legitimate reason
+      // for a conflict marker or a BOM to ship, ever). A dry run creates no
+      // tag, so refusing here protects nothing while destroying the preview;
+      // it's also exactly when an operator wants to be TOLD the real run
+      // would refuse.
       if (args.allowNotesDivergence) info(`[WARN] --allow-notes-divergence: ${msg}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] ${msg}`);
       else die(msg);
     }
   }

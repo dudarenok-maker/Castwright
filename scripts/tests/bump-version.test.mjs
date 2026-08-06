@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit } from '../bump-version.mjs';
 import { scrubGitEnv } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -396,6 +396,106 @@ test('bump-version --allow-notes-divergence permits a genuine divergence, with a
   }
 });
 
+// #2175 review, Finding 3 — the divergence check above must resolve
+// DEFAULT_NOTES_FILE against repoRoot, not the invocation's process.cwd().
+// Run from server/ (a subdirectory of the repo root), mirroring `cd server
+// && node ../scripts/bump-version.mjs … --notes-file <path>`: a bare-relative
+// `existsSync(DEFAULT_NOTES_FILE)` resolves to `<repo>/server/docs/…`, which
+// doesn't exist, so the unfixed check silently skips — the run succeeds with
+// a genuinely divergent --notes-file, exactly the outcome #2170 exists to
+// prevent. This test's --notes-file is an absolute tmpdir path (unaffected by
+// cwd) so the only variable under test is DEFAULT_NOTES_FILE's resolution.
+test('bump-version resolves DEFAULT_NOTES_FILE against repoRoot, not the invocation cwd, when checking notes divergence', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-subdir-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = spawnSync(
+      'node',
+      [resolve(dir, 'scripts', 'bump-version.mjs'), '--level', 'patch', '--notes-file', notes, '--skip-cross-os'],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv() },
+    );
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stderr, /--notes-file .* and docs\/release-notes-next\.md disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 4 — every other CONDITIONAL pre-flight in main()
+// reports rather than dies under --dry-run; a dry run mutates nothing, so
+// refusing protects nothing while destroying the preview, and a dry run is
+// exactly when an operator wants to be TOLD the real run would refuse.
+// Asserts BOTH the downgrade (exit 0, [DRY-RUN][WARN] naming the escape
+// hatch) AND that the run actually continued past the refusal ([PLAN] output
+// follows) — a fix that merely swallowed the die() without continuing would
+// pass the first assertion and fail the second.
+test('bump-version --dry-run reports a notes-file divergence instead of refusing', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the default file version.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-dryrun-divergence-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, '# v1.0.1\n\nFixes:\n- a DIFFERENT file entirely.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--dry-run']);
+    rmSync(notes, { force: true });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[DRY-RUN\]\[WARN\].*disagree after normalising/);
+    assert.match(out.stdout, /--allow-notes-divergence/);
+    assert.match(out.stdout, /\[PLAN\]/, 'the run must continue past the refusal under --dry-run');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 5 — the divergence check must compare
+// buildTagMessage(explicitText) (BOM-stripped, matching what actually becomes
+// the tag annotation), not raw explicitText, against the default file's raw
+// text (matching what release-body.mjs reads at publish time). A BOM-prefixed
+// --notes-file that is otherwise identical to the default must NOT report a
+// (misleading) divergence — pre-flight 6c still refuses it, but with the
+// accurate BOM diagnostic rather than the divergence one.
+test('bump-version divergence check compares the BOM-stripped explicit text, not raw, so a BOM-only difference reports the accurate BOM message', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'));
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- the same content.\n',
+    );
+    gitExec(['add', '.'], { cwd: dir });
+    gitExec(['commit', '-q', '-m', 'chore: add default notes file'], { cwd: dir });
+
+    const notes = resolve(tmpdir(), `bump-notes-bom-divergence-${process.pid}-${Date.now()}.md`);
+    // Real EF BB BF bytes on disk (writeBOMFile, defined below) — not a JS
+    // string escape — so this proves detection of the actual defect. See
+    // writeBOMFile's own doc comment.
+    writeBOMFile(notes, '# v1.0.1\n\nFixes:\n- the same content.\n');
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0, out.stdout);
+    assert.doesNotMatch(out.stderr, /disagree after normalising/);
+    assert.match(out.stderr, /BOM/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('bump-version does not warn on the default path (no --notes-file given)', () => {
   const dir = setupRepo('1.0.0');
   try {
@@ -502,6 +602,103 @@ test('scrubGitEnv strips every git repo-discovery override and preserves everyth
   assert.equal(scrubbed.GIT_COMMON_DIR, undefined);
   assert.equal(scrubbed.PATH, '/usr/bin');
   assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+});
+
+// #2175 review, Finding 1 — Windows env lookup is case-insensitive, but
+// `{ ...process.env }` snapshots whatever casing the OS happened to store a
+// variable under. A `delete out[key]` keyed on the canonical uppercase name
+// alone leaves a `git_dir`-cased survivor in the scrubbed object, and git
+// (case-insensitively, on Windows) still honours it — a no-op fix for
+// exactly this case. This fixture is deliberately mixed-case-only (unlike
+// the uppercase-only fixture above) so it cannot pass against the
+// pre-fix implementation.
+test('scrubGitEnv strips a git repo-discovery override regardless of stored casing', () => {
+  const fakeEnv = {
+    PATH: '/usr/bin',
+    git_dir: '/decoy/.git',
+    Git_Work_Tree: '/decoy',
+    GIT_AUTHOR_NAME: 'Someone', // NOT a discovery override — must survive
+  };
+  const scrubbed = scrubGitEnv(fakeEnv);
+  assert.equal(scrubbed.git_dir, undefined);
+  assert.equal(scrubbed.Git_Work_Tree, undefined);
+  assert.ok(!Object.keys(scrubbed).some((k) => k.toUpperCase() === 'GIT_DIR'));
+  assert.ok(!Object.keys(scrubbed).some((k) => k.toUpperCase() === 'GIT_WORK_TREE'));
+  assert.equal(scrubbed.PATH, '/usr/bin');
+  assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+});
+
+// #2175 review, Finding 6 — execGit spread `...options` THEN set
+// `env: scrubGitEnv()`, so a caller-supplied `options.env` was silently
+// discarded rather than merged into the scrub. No live bug today (no call
+// site passes one), but it breaks the file's own stated contract ("a git
+// call added later inherits the fix" — see execGit's doc comment): a future
+// call site passing its own env would have that env thrown away instead of
+// scrubbed-and-honoured. Proven by an observable side effect of the child
+// process (GIT_AUTHOR_DATE / GIT_COMMITTER_DATE change what `git log`
+// reports) rather than by inspecting execFileSync's call arguments, so this
+// can't be satisfied by a mock that merely records what it was passed.
+test('execGit merges a caller-supplied env with the scrub rather than discarding it', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    writeFileSync(resolve(dir, 'extra.txt'), 'x\n');
+    execGit(['add', 'extra.txt'], { cwd: dir, env: cleanGitEnv() });
+    const customDate = 'Wed, 15 Jan 2020 00:00:00 +0000';
+    execGit(['commit', '-m', 'chore: custom-date commit'], {
+      cwd: dir,
+      env: { ...cleanGitEnv(), GIT_AUTHOR_DATE: customDate, GIT_COMMITTER_DATE: customDate },
+      stdio: 'ignore',
+    });
+    const authorDate = execGit(['log', '-1', '--format=%aD'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(authorDate, customDate);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2175 review, Finding 2 — `gh` resolves its target repository the same
+// GIT_DIR-first way git does (empirically: with GIT_DIR pointed at a decoy,
+// `gh repo view` reports "no git remotes found" instead of the real repo's
+// remotes), so every `gh` call site needs the same scrub the git() helper
+// already gets. Spawning a real (or faked) `gh` binary from this cross-
+// platform node:test suite isn't practical — a `.cmd`/`.bat` stand-in hits
+// Node's CVE-2024-27980 EINVAL guard on Windows without `shell: true` (which
+// gh() deliberately doesn't set), and a genuine `.exe` stand-in needs a
+// native compiler this suite can't assume is present, especially in Ubuntu
+// CI. So this is a structural check on the source itself — the same
+// approach `workflow-wiring.test.mjs` already uses for GitHub Actions wiring
+// that's equally impractical to exercise behaviourally — extracting each of
+// the three call sites `runCrossOsGate` reaches (`ghAvailable`, the dispatch
+// + discovery calls inside `gh()`, and the `gh run watch` spawnSync) and
+// asserting each passes `env: scrubGitEnv()`. Mutation-sensitive per site:
+// dropping the env option from any one of the three fails only that
+// assertion, naming the site.
+test('every gh() / ghAvailable() / "gh run watch" call site scrubs its env', () => {
+  const source = readFileSync(bumpScript, 'utf8');
+
+  const ghAvailableBody = source.slice(
+    source.indexOf('function ghAvailable()'),
+    source.indexOf('function sleep('),
+  );
+  assert.match(
+    ghAvailableBody,
+    /spawnSync\('gh', \['--version'\], \{ stdio: 'ignore', env: scrubGitEnv\(\) \}\)/,
+    'ghAvailable() must scrub its env',
+  );
+
+  const ghFnBody = source.slice(
+    source.indexOf("function gh(args, opts = {}) {"),
+    source.indexOf('function ghAvailable()'),
+  );
+  assert.match(ghFnBody, /env: scrubGitEnv\(\),?\s*\n\s*\}\);/, 'gh() must scrub its env');
+
+  const watchCallStart = source.indexOf("spawnSync('gh', ['run', 'watch'");
+  assert.notEqual(watchCallStart, -1, 'the gh run watch call site must exist');
+  const watchCallBody = source.slice(watchCallStart, source.indexOf(');', watchCallStart));
+  assert.match(watchCallBody, /env: scrubGitEnv\(\)/, 'the gh run watch spawnSync call must scrub its env');
 });
 
 // #2169's own regression test, as specified on the ticket: set GIT_DIR to a
