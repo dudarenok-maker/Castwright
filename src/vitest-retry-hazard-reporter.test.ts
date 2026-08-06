@@ -223,17 +223,41 @@ describe('github-actions reporter — real wiring under CI (#2028, #2063, PR #20
    the config and inspecting the array: the array's contents are a mechanism,
    the summary line is the outcome, and only the outcome proves the reporter
    was actually installed in the spawned run. */
+/** Strip SGR colour escapes.
+
+    The assertion below spans several tokens, and on a GitHub runner vitest
+    colourises each separately — the child's real output there is
+    `<ESC>[2m Test Files <ESC>[22m <ESC>[1m<ESC>[31m1 failed<ESC>[39m`, so a
+    plain `Test Files\s+\d+` cannot cross the escapes. Locally the same spawn
+    is uncoloured and the naive pattern matches, which is exactly how this
+    test went green here and red on the runner on PR #2160's first run.
+
+    NOTE, so the next reader trusts no more than was established: that colour
+    difference could NOT be reproduced locally. Neither `FORCE_COLOR=1` nor
+    `CI=true` on the parent makes the spawned child colourise — both were run
+    against a control with this stripping removed, and the control passed both
+    times. The runner's behaviour is evidenced only by the captured assertion
+    diff in the failing job. Hence the deliberately tolerant pattern at the
+    call site AS WELL AS this stripping: two independent reasons for the
+    assertion to hold, because only one of them is checkable from here. */
+const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '');
+
 describe('the base reporter survives the ternary (#2063, PR #2049 review F1)', () => {
-  it("vitest's own summary reporter still runs in BOTH env branches", { timeout: 60_000 }, () => {
+  it("vitest's own summary reporter still runs in BOTH env branches", { timeout: 90_000 }, () => {
     for (const GITHUB_ACTIONS of [undefined, 'true'] as const) {
       const out = runVitestOnFixture(
         `__wire_fixture_base_reporter_${GITHUB_ACTIONS ?? 'off'}__.test.ts`,
         OUTRIGHT_FAIL_FIXTURE,
         { GITHUB_ACTIONS },
       );
-      const combined = `${out.stdout ?? ''}${out.stderr ?? ''}`;
+      const combined = stripAnsi(`${out.stdout ?? ''}${out.stderr ?? ''}`);
+      /* Tolerant of anything between the words — see stripAnsi's note: the
+         escape sequences are the known case, but stripping is verified only
+         against uncoloured local output, so the pattern does not depend on the
+         stripping having been exhaustive. `[^\n]{0,60}?` stays on one line, so
+         it cannot drift across into an unrelated part of the output. */
       expect(combined, `GITHUB_ACTIONS=${GITHUB_ACTIONS}`).toMatch(
-        /Test Files\s+\d+ (passed|failed)/,
+        /Test Files[^\n]{0,60}?\d+[^\n]{0,20}?(passed|failed)/,
       );
     }
   });
