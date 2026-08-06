@@ -77,7 +77,7 @@ Revision 1 claimed a same-book edge "can only ever have come from the reject-orp
 three writers.
 
 1. **`cast-reject-orphan.ts:339`** — the route this issue is about. Same-book by definition.
-2. **`cast-not-linked-to.ts:110-111`** — cross-book only. `:58-63` rejects a same-book pair
+2. **`cast-not-linked-to.ts:109-110`** — cross-book only. `:58-63` rejects a same-book pair
    outright with a 400 ("not-linked-to is for CROSS-book pairs; use cast/merge for same-book
    duplicates"), so it can never produce the shape the reconciliation targets. This one was
    correctly excluded.

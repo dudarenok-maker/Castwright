@@ -67,13 +67,26 @@ Every task's requirements implicitly include this section.
 The spec's reconciliation rule reads: *"`p ∈ rejectedPairs`, `p.to` is a live cast row, and **no**
 edge anywhere in this book has `characterId === p.from` → write the edge on `p.to`."*
 
-Taken literally that **under-heals a case the product supports**. D1 pair scope means one
-`from` can legitimately be rejected against two different characters — `{from: 'x', to: 'A'}` and
-`{from: 'x', to: 'B'}` both exist, and the original POSTs wrote an edge on A *and* on B. If both
-edges are lost, the spec's rule restores only one, because after A is healed "no edge anywhere in
-this book has `characterId === 'x'`" is false for B. The multi-pair shape is not hypothetical:
-`cast-reject-orphan.ts:502` and `:560` loop over `matchingPairs` precisely because a row can
-govern more than one.
+Taken literally that **under-heals a case the product supports**. D1 pair scope means one `from`
+can legitimately be rejected against two different characters — `{from: 'x', to: 'A'}` and
+`{from: 'x', to: 'B'}` both exist, and the original POSTs wrote an edge on A *and* on B.
+
+The shape is documented, not hypothetical: `cast-id-history.ts:211-221` describes it directly —
+*"reject X against both Y and Y' (two separate pairs), then retire Y into Y'"* — and
+`cast-reject-orphan.ts:11-21` records D1 pair scope as existing precisely so a second, different
+target stays independently rejectable.
+
+**The failing case is PARTIAL loss, not total loss.** Edge on A survives, edge on B is lost. The
+spec's rule asks "does any edge in this book name `x`?", sees A's, and skips **both** pairs — so B
+never heals, and no amount of re-running fixes it. (Total loss is *not* a counter-example: read as
+a set precomputed over the input roster, the spec's predicate is false for both pairs and both
+would heal. The distinction matters because it decides which mutation can prove the rule — see
+Task 2 Step 5.)
+
+> Do not cite `cast-reject-orphan.ts:502`/`:560` for this. Those loops are real, but
+> `matchingPairs = governingPairs.filter((p) => p.to === characterId)` (`:490`) means every element
+> shares one `to` and varies by `from` — the many-`from`-one-`to` normalised-spelling shape, the
+> mirror image of the case above.
 
 The spec's blanket book-scoping exists to protect **one** case: `merge-analysis-cast.ts:473-480`
 copies `old.notLinkedTo` onto a fresh row matched by *name*, so a legitimate edge can sit on a row
@@ -85,7 +98,14 @@ naming the case directly:
 > (fail-safe: never duplicate). Otherwise add per-pair on `p.to` when that row lacks the edge.
 
 **Removal stays exactly as the spec states it** — book-scoped, fail-safe, unchanged. Only the add
-rule is tightened. Both behaviours are pinned by tests (Task 2, cases R7 and R8).
+rule is tightened. Both behaviours are pinned by tests (Task 2, cases R7, R8 and **R8b** — R8b is
+the discriminating one).
+
+**Is the new rule ever worse than the spec's?** No. Removal is untouched. An add only ever lands
+on a row that is some pair's own `to`. If a relocated edge for `from` exists, every add for that
+`from` is skipped — identical to the spec's blanket behaviour. If none exists, every surviving edge
+for that `from` already sits on a `to` of that `from`, so a per-pair add can never duplicate. The
+rule heals strictly more and risks strictly no more.
 
 ---
 
@@ -95,11 +115,12 @@ rule is tightened. Both behaviours are pinned by tests (Task 2, cases R7 and R8)
 |---|---|---|
 | `server/src/routes/cast-reject-orphan.ts` | modify | POST write order + both halves fatal + two distinct 500 messages |
 | `server/src/routes/cast-reject-orphan-atomicity.test.ts` | **create** | Fault-injection + ordering pins. New file so its `vi.mock` cannot poison the existing suite's `Promise.all` dynamic import (`cast-reject-orphan.test.ts:106-109`) |
+| `server/src/routes/cast-reject-orphan.failure-modes.test.ts` | modify | **Three of its cases pin the old order and go red.** See Task 1 Step 4 — this file is the one the fix breaks |
 | `server/src/store/reject-edge-reconcile.ts` | **create** | Pure `(bookId, characters, history) → { adds, removes, next }`. No I/O, no locking |
 | `server/src/store/reject-edge-reconcile.test.ts` | **create** | Unit tests for every reconciliation rule |
 | `server/src/routes/analysis.ts` | modify | New best-effort `reconcileRejectEdges` helper + two call sites |
 | `server/src/routes/analysis-reject-edge-reconcile.test.ts` | **create** | The helper's locking, reporting and no-op-write behaviour |
-| `server/src/workspace/preserve-cast-voices.ts` | modify | `preserveNotLinkedToOnCastWrite` — the new server-owned-field pass |
+| `server/src/workspace/preserve-cast-voices.ts` | modify | `preserveNotLinkedToOnCastWrite` — the new server-owned-field pass, inserted after `preserveDesignedVoicesOnCastWrite` (which ends `:75`) |
 | `server/src/workspace/preserve-cast-voices.test.ts` | modify | Unit tests for that pass |
 | `server/src/routes/book-state.ts` | modify | Wire the pass into `preserveDesignedVoices`'s chain |
 | `server/src/routes/book-state-preserve-voices.test.ts` | modify | Route-level: a PUT cannot move `notLinkedTo`; the oscillation regression |
@@ -114,6 +135,8 @@ rule is tightened. Both behaviours are pinned by tests (Task 2, cases R7 and R8)
 - Modify: `server/src/routes/cast-reject-orphan.ts:339-402` (the write block) and `:97-110`
   (the module doc paragraph that states the superseded rule)
 - Test: `server/src/routes/cast-reject-orphan-atomicity.test.ts` (create)
+- Test: `server/src/routes/cast-reject-orphan.failure-modes.test.ts` (**modify — three cases at
+  `:205`, `:216`, `:340` pin the behaviour this task inverts**)
 
 **Interfaces:**
 - Consumes: nothing from other tasks.
@@ -401,16 +424,17 @@ Expected against unmodified `main`:
 |---|---|---|
 | [A1] | **FAIL** | `cast.json` already carries the edge when the history write throws — this *is* #2166 |
 | [A2] | **FAIL** | the "nothing was written" wording does not exist yet |
-| [A3] | **FAIL** | the cast write cannot fail the request today (it throws into `errorHandler`), so there is no such message |
-| [A4] | **FAIL** | same — the first call returns 200, so the retry assertions never describe a recovery |
+| [A3] | **FAIL** | the cast write throws out of the handler into finalhandler (express 5 auto-forwards a rejected handler promise, and this test app registers no error handler), so `res.body.error` is `undefined` and `.toMatch` throws |
+| [A4] | PASS | **a pin, not a regression.** On `main` the cast write throws *first*, so nothing at all reaches disk and the retry trivially succeeds. It becomes load-bearing only *after* the reorder, where the retry has to complete a genuinely half-written state |
 | [A5] | PASS | retry-after-pair-failure is the case the current module doc already reasons about |
 | [A6] | **FAIL** | order is `['cast', 'history']` today |
 | [A7] | PASS | DELETE already has the right order — that is the point of pinning it |
 | [A8] | PASS | same |
 
-Four already-green cases are deliberate: [A5], [A7] and [A8] are **pins**, not regressions. If any
-of them fails here, the branch is not starting from the state this plan assumes — stop and
-re-baseline rather than "fixing" them.
+Four already-green cases are deliberate: [A4], [A5], [A7] and [A8] are **pins**, not regressions.
+If any of them fails here, the branch is not starting from the state this plan assumes — stop and
+re-baseline rather than "fixing" them. Equally, if a case predicted **FAIL** passes, stop: do not
+"strengthen" it against a defect that is not there.
 
 - [ ] **Step 3: Reorder the writes in `cast-reject-orphan.ts`**
 
@@ -503,27 +527,50 @@ it with the spine rule and keep its I5 sentence, which is still true of DELETE:
    was changed".
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 5: Rewrite the three cases in `cast-reject-orphan.failure-modes.test.ts` that pin the OLD order**
+
+**Do this deliberately, in this task, with the reasoning in the commit body.** These three tests
+encode the pre-fix contract — one of them pins #2166's defect *as correct behaviour*. Leaving them
+to surface at Ship time reads as "the fix broke something" instead of "the fix changed a contract
+on purpose".
+
+| Line | Case | Why it goes red | What to do |
+|---|---|---|---|
+| `:205` | `'rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)'` | asserts `mairin?.notLinkedTo` equals `[{ bookId, characterId: 'mayrin' }]` after the pair write throws. **This is #2166, pinned as correct.** | **Invert it.** Retitle to `'rejectOrphanedPair failing leaves cast.json untouched — the edge is never written (#2166)'` and assert `expect(mairin?.notLinkedTo).toBeUndefined();` |
+| `:216` | `'a subsequent successful retry after a rejectOrphanedPair failure returns 200'` | final line `expect(second.body.alreadyPresent).toBe(true);` — post-reorder the first attempt writes no edge, so the retry's `appendNotLinked` returns `true` and `alreadyPresent` is `false` | Flip to `expect(second.body.alreadyPresent).toBe(false);` and replace the "already present from the first attempt" comment with: the first attempt wrote nothing, so the retry writes the edge for the first time |
+| `:340` | `"POST's notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge"` | it manufactures the stranded state **through the POST route**, which this task makes impossible | Keep the test — DELETE's unconditional clear (`:537-540`) is still worth pinning for legacy books. **Change only its setup:** seed the stranded edge directly via `writeBookOnDisk` with `notLinkedTo` pre-populated and no `cast-id-history.json`, instead of producing it with a failing POST. Add a comment that the POST can no longer create this state and the case now covers books stranded *before* this fix |
+
+Verified unaffected, do not touch: `:175`, `:196` (its `/failed to durably record/i` still matches
+the new message), `:233`, `:258`, `:272`, `:290`, `:384`.
+
+- [ ] **Step 6: Run all three suites**
 
 ```bash
-cd server && npx vitest run src/routes/cast-reject-orphan-atomicity.test.ts src/routes/cast-reject-orphan.test.ts
+cd server && npx vitest run src/routes/cast-reject-orphan-atomicity.test.ts src/routes/cast-reject-orphan.test.ts src/routes/cast-reject-orphan.failure-modes.test.ts
 ```
 
-Expected: PASS, both files. The existing suite must stay green — if `alreadyPresent` or the log
-line moved, fix the route, not the old test.
+Expected: PASS, all three. `cast-reject-orphan.test.ts` must stay green **untouched** — if
+something in *that* file moved, fix the route, not the test. That instruction does **not** extend
+to `failure-modes.test.ts`, whose three cases Step 5 changed on purpose.
 
-- [ ] **Step 6: Prove each new assertion can fail**
+- [ ] **Step 7: Prove each new assertion can fail**
 
 For each of [A1]–[A8]: mutate that assertion's own line (e.g. flip `toBe(before)` to `toBe('x')`),
 confirm red, revert. Then mutate the *fix* — restore the old cast-write-first order — and confirm
 [A1] and [A6] go red while [A7]/[A8] stay green. Record both in the commit body.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add server/src/routes/cast-reject-orphan.ts server/src/routes/cast-reject-orphan-atomicity.test.ts
+git add server/src/routes/cast-reject-orphan.ts \
+        server/src/routes/cast-reject-orphan-atomicity.test.ts \
+        server/src/routes/cast-reject-orphan.failure-modes.test.ts
 git commit -m "fix(server): write the reject's pair before its edge (#2166)"
 ```
+
+The commit body must name the three inverted cases and say why each moved — a reviewer seeing
+`toEqual([...])` become `toBeUndefined()` in a failure-modes suite needs to know that was the
+point, not collateral.
 
 ---
 
@@ -689,6 +736,31 @@ describe('reconcileRejectEdges', () => {
     expect(out.next[1].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'mairin_2' }]);
   });
 
+  it('[R8b] heals the SURVIVING half when one of two pairs kept its edge', () => {
+    /* THE discriminating case for the plan's declared deviation. The spec's
+       blanket rule ("no edge anywhere in this book names this `from`") sees
+       mairin's surviving edge and skips BOTH pairs, so `mara` never heals and
+       re-running never fixes it. Unlike [R8], this case reddens under EITHER
+       reading of the blanket rule — precomputed or live — which is what makes
+       it the mutation target in Step 5. */
+    const cast = [row('mairin', [{ bookId: BOOK, characterId: 'mairin_2' }]), row('mara')];
+    const out = reconcileRejectEdges(
+      BOOK,
+      cast,
+      history({
+        rejectedPairs: [
+          { from: 'mairin_2', to: 'mairin' },
+          { from: 'mairin_2', to: 'mara' },
+        ],
+      }),
+    );
+
+    expect(out.adds).toEqual([{ characterId: 'mara', orphanedId: 'mairin_2' }]);
+    expect(out.removes).toEqual([]);
+    expect(out.next[0].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'mairin_2' }]);
+    expect(out.next[1].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'mairin_2' }]);
+  });
+
   it('[R9] reports nothing for an already-consistent book', () => {
     const cast = [
       row('mairin', [{ bookId: BOOK, characterId: 'mairin_2' }]),
@@ -721,13 +793,29 @@ describe('reconcileRejectEdges', () => {
     expect(out.next[0].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'mairin_2' }]);
   });
 
-  it('[R11] does not mutate its input', () => {
+  it('[R11] does not mutate its input on the REMOVE path', () => {
     const edges = [{ bookId: BOOK, characterId: 'mairin_2' }];
     const cast = [{ id: 'mairin', notLinkedTo: edges }];
     reconcileRejectEdges(BOOK, cast, history());
 
     expect(cast[0].notLinkedTo).toBe(edges);
     expect(edges).toEqual([{ bookId: BOOK, characterId: 'mairin_2' }]);
+  });
+
+  it('[R12] does not mutate its input on the ADD path', () => {
+    /* [R11] runs with an empty history, so pass 2 never executes and the
+       `next[idx] = { ...row, … }` line it is meant to cover is never reached. */
+    const cast = [{ id: 'mairin' }, { id: 'mara' }];
+    const snapshot = JSON.stringify(cast);
+    const out = reconcileRejectEdges(
+      BOOK,
+      cast,
+      history({ rejectedPairs: [{ from: 'mairin_2', to: 'mairin' }] }),
+    );
+
+    expect(JSON.stringify(cast)).toBe(snapshot);
+    expect(out.next[0]).not.toBe(cast[0]);
+    expect(out.next[1]).toBe(cast[1]); // untouched rows pass through by reference
   });
 });
 ```
@@ -839,9 +927,15 @@ export function reconcileRejectEdges<T extends CastRow>(
     return kept.length === existing.length ? c : ({ ...c, notLinkedTo: kept } as T);
   });
 
-  /* Which `from`s still have a RELOCATED edge after pass 1 — one sitting on a
-     row that is not a `to` for that `from`. Computed from `next`, not
-     `characters`, so an edge pass 1 just removed cannot suppress an add. */
+  /* Which `from`s have a RELOCATED edge — one sitting on a row that is not a
+     `to` for that `from` (merge-analysis-cast.ts moved it onto a name match).
+     Its presence suppresses every add for that `from`, so a relocated edge is
+     never duplicated onto `p.to`.
+
+     Read from `next` only because that is the array in hand; the set is the
+     same either way. An edge pass 1 removed can never reach this branch — the
+     `targetsByFrom.get(...)` guard is true only for a `from` that has a pair,
+     which is exactly what put it in `backedFroms` and made pass 1 keep it. */
   const relocated = new Set<string>();
   for (const c of next) {
     for (const e of c.notLinkedTo ?? []) {
@@ -874,17 +968,22 @@ export function reconcileRejectEdges<T extends CastRow>(
 cd server && npx vitest run src/store/reject-edge-reconcile.test.ts
 ```
 
-Expected: PASS, 11 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Prove each assertion can fail**
 
-Mutate each of R1–R11 on its own line, confirm red, revert. Then mutate the **implementation** at
+Mutate each of R1–R12 (including R8b) on its own line, confirm red, revert. Then mutate the **implementation** at
 the two places the spec's Criticals live and confirm the right test catches each:
 - delete `|| legacyRejected.has(e.characterId)` → **[R3] must go red**, nothing else.
-- replace pass 2's `if (relocated.has(p.from)) continue;` with a blanket
-  `if (anyEdgeExistsFor(p.from)) continue;` → **[R8] must go red**, and [R7] must stay green.
+- replace pass 2's `if (relocated.has(p.from)) continue;` with the spec's blanket rule — a set of
+  every `from` named by any surviving same-book edge, **precomputed before pass 2** — and confirm
+  **[R8b] goes red** while [R7] stays green.
 
-Record both in the commit body. A mutation that reddens nothing means the case is not covered.
+  Target **[R8b], not [R8]**. Under a *precomputed* blanket set, [R8] (both edges lost) still
+  passes, so mutating against it proves nothing — precisely the "mutation that reddens nothing"
+  this step exists to catch. [R8b] reddens under either reading.
+
+Record all three in the commit body. A mutation that reddens nothing means the case is not covered.
 
 - [ ] **Step 6: Commit**
 
@@ -1005,14 +1104,12 @@ describe('reconcileRejectEdgesOnDisk', () => {
     expect(lines).toEqual([]);
   });
 
-  it('[C4] skips entirely when bookId is undefined', async () => {
+  it('[C4] touches nothing when bookId is undefined', async () => {
     seed({ characters: [{ id: 'mairin', notLinkedTo: [{ bookId: BOOK_ID, characterId: 'm2' }] }] }, null);
     const { log } = collectLog();
 
     await reconcileRejectEdgesOnDisk(bookDir, undefined, log);
 
-    /* An undefined bookId cannot match any edge's bookId; guessing one would
-       silently reconcile against a book that isn't this one. */
     expect(readCast().characters[0].notLinkedTo).toEqual([{ bookId: BOOK_ID, characterId: 'm2' }]);
   });
 
@@ -1028,14 +1125,26 @@ describe('reconcileRejectEdgesOnDisk', () => {
     /* #2133's helper is per-RETIREMENT: retireCharacterId drops a self-loop
        pair from history and the helper clears the matching edge. This
        reconciliation is per-PERSIST and derived from state — so it must see
-       that as consistent, not as "a pair whose edge is missing". If it ever
-       re-added the edge, the two would fight every analysis. */
-    seed({ characters: [{ id: 'mairin' }] }, { schema: 1, supersededBy: {}, rejectedPairs: [] });
+       that as consistent, not as "a pair whose edge is missing".
+
+       The book carries a LIVE pair+edge alongside the dropped one, so the
+       reconciliation has real work-shaped input rather than an empty file it
+       could ignore for any reason at all. */
+    seed(
+      {
+        characters: [
+          { id: 'mairin', notLinkedTo: [{ bookId: BOOK_ID, characterId: 'm2' }] },
+          { id: 'mara' },
+        ],
+      },
+      { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'm2', to: 'mairin' }] },
+    );
     const { lines, log } = collectLog();
 
     await reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log);
 
-    expect(readCast().characters[0].notLinkedTo).toBeUndefined();
+    expect(readCast().characters[1].notLinkedTo).toBeUndefined();
+    expect(readCast().characters[0].notLinkedTo).toEqual([{ bookId: BOOK_ID, characterId: 'm2' }]);
     expect(lines).toEqual([]);
   });
 });
@@ -1126,8 +1235,11 @@ export async function reconcileRejectEdgesOnDisk(
 }
 ```
 
-Confirm `loadCastIdHistory` is already in this file's `cast-id-history.js` import group
-(`:124`); add it if not.
+**Add `loadCastIdHistory` to this file's `cast-id-history.js` import group** — it is **not**
+currently imported. The group at `:119-124` is `retireCharacterId`,
+`dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`,
+`refuseRetirementsOfLiveIds`. Everything else the helper needs is already present: `readJson` /
+`writeJsonAtomic` (`:107`), `withCastLock` (`:108`), `castJsonPath`, `CharacterOutput` (`:94`).
 
 - [ ] **Step 4: Add the two call sites**
 
@@ -1152,6 +1264,35 @@ binding name:
 Note the binding names differ by scope: `retirementBookId` (`:5012`) vs `subsetBookId` (`:6300`).
 Both are `string | undefined` from `bookIdForRetirementCleanup`.
 
+- [ ] **Step 4b: Pin that the two call sites exist**
+
+Without this, `reconcileRejectEdgesOnDisk` could be exported and **never called** and every test on
+the branch would still pass — [C1]–[C6] and [P9] all drive the helper directly. The analysis persist
+path is not unit-drivable, so a source-level pin is the honest instrument, the same shape
+`cast-lock.guard.test.ts` already uses. Add to `analysis-reject-edge-reconcile.test.ts`:
+
+`readFileSync` is already in that file's `node:fs` import from Step 1; add only `node:url`.
+
+```ts
+import { fileURLToPath } from 'node:url';
+
+it('[C7] is wired into BOTH authoritative persists', () => {
+  /* A source scan, not a behavioural test — deliberately. The two call sites
+     live inside the analysis persist path, which no unit test stands up, so
+     without this the helper could be exported and never called and the whole
+     branch would stay green. Mirrors cast-lock.guard.test.ts's approach. */
+  const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
+  const calls = src.match(/await reconcileRejectEdgesOnDisk\(record\.bookDir,/g) ?? [];
+
+  expect(calls).toHaveLength(2);
+  expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log)');
+  expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log)');
+});
+```
+
+Its weakness is stated rather than hidden: it proves the *text* is present, not that it executes.
+That is strictly more than zero, and it is what is available here.
+
 - [ ] **Step 5: Run to verify it passes, and that the lock guard is still green**
 
 ```bash
@@ -1170,8 +1311,20 @@ has watched fail is a guard nobody knows works.
 
 - [ ] **Step 7: Prove each new assertion can fail**
 
-Mutate [C1]–[C6] on their own lines; revert. Then delete the `if (!adds.length && !removes.length)
-return;` early exit and confirm **[C3]** goes red.
+Mutate [C1]–[C7] on their own lines; revert. Then delete the `if (!adds.length && !removes.length)
+return;` early exit and confirm **[C3]** goes red, and delete one call site and confirm **[C7]**
+goes red.
+
+**Two cases here cannot be neutralised, and that is recorded rather than hidden:**
+- **[C4]** pins the *outcome* of an absent `bookId`, not the `if (!bookId) return;` guard. Delete
+  the guard and `reconcileRejectEdges(undefined, …)` compares `e.bookId !== undefined` → every edge
+  is kept → no write → the test still passes. The guard is defensive and its effect is
+  unobservable; keep it for clarity, but do not count [C4] as covering it.
+- **[C6]** cannot redden against any implementation that derives adds solely from `rejectedPairs`.
+  Its value is documentary — it states the #2133 interaction — not evidential.
+
+Say both in the commit body. A pin that cannot fail is fine; a pin that cannot fail *and is
+counted as coverage* is how this repo has shipped green-checking-nothing before.
 
 - [ ] **Step 8: Commit**
 
@@ -1185,8 +1338,9 @@ git commit -m "feat(server): reconcile reject edges at the authoritative persist
 ## Task 4: `notLinkedTo` becomes server-owned on the cast PUT
 
 **Files:**
-- Modify: `server/src/workspace/preserve-cast-voices.ts` (append after
-  `preserveDesignedVoicesOnCastWrite`, which ends `:74`)
+- Modify: `server/src/workspace/preserve-cast-voices.ts` (**insert** at `:76`, after
+  `preserveDesignedVoicesOnCastWrite` which ends `:75` — not an append; `rejectForeignCloneKeys`
+  (`:123`), `sameStoredVoice` (`:181`) and `preserveClonedSlotsOnCastWrite` (`:229`) follow it)
 - Modify: `server/src/routes/book-state.ts:126-146` (`preserveDesignedVoices`) and its import
   group at `:64-68`
 - Test: `server/src/workspace/preserve-cast-voices.test.ts` (append a describe block)
@@ -1289,8 +1443,9 @@ Expected: FAIL — `preserveNotLinkedToOnCastWrite` is not exported.
 
 - [ ] **Step 3: Implement the pass**
 
-Append to `server/src/workspace/preserve-cast-voices.ts` after `preserveDesignedVoicesOnCastWrite`
-(ends `:74`):
+Insert into `server/src/workspace/preserve-cast-voices.ts` at `:76`, directly after
+`preserveDesignedVoicesOnCastWrite` (which ends at `:75`). This is an insertion, not an append —
+three more exports follow in that file.
 
 ```ts
 /* #2166 — `notLinkedTo` is server-owned. Unlike PRESERVED_DESIGN_FIELDS above,
@@ -1622,15 +1777,19 @@ git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
 
 - [ ] `npm run verify:fast:branch` from the worktree root. Then `cd server && npm run test` in
       full — Tasks 1–5 touch four suites and a scoped run can hide a cross-suite break.
+- [ ] **Add this plan to `docs/features/INDEX.md`** under its area, in **this** PR (before-shipping
+      step 4). `280` is at `INDEX.md:48`; `281` currently has no entry.
 - [ ] Push; open the PR titled `fix(server): make the reject's two writes fail recoverably`,
       body linking this plan and `Closes #2166`, plus "Also filed, found in passing: #NNNN".
+      The body must also declare the three inverted `failure-modes.test.ts` cases (Task 1 Step 5)
+      — an unannounced test inversion reads as scope creep to a reviewer.
 - [ ] **On-box acceptance: none owed.** Every behaviour is provable by fault injection in unit
       tests — no GPU, no sidecar, no analyzer, no real book. Stated explicitly rather than
       silently skipped (CLAUDE.md before-shipping step 3). No register row, no run sheet.
 - [ ] Mandatory `code-review` pass at **Premium** tier, effort `medium` (single-scope `fix`),
       before merge.
 - [ ] After merge: set this plan's `status:` to `stable`, fill Ship notes, `git mv` to
-      `docs/features/archive/`, update `docs/features/INDEX.md`.
+      `docs/features/archive/`, and move its `INDEX.md` entry to `## Shipped (archive)`.
 
 ## Ship notes
 
