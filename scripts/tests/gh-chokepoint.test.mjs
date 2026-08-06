@@ -27,6 +27,25 @@
 //   2. execSync('gh ...') / exec('gh ...') — a single shell-command string
 //      that STARTS with `gh` as its own token, same three quote styles.
 //
+// The match is keyed off the ARGUMENT (a literal 'gh'), not a hardcoded
+// callee name — a file that does `import { execFileSync as run } from
+// 'node:child_process'` and then calls `run('gh', …)` is just as much a
+// chokepoint bypass as calling `execFileSync('gh', …)` directly, and an
+// author reaching for an alias (accidentally or to dodge this exact guard)
+// must not silently escape it. Each source file is scanned for its own
+// `import { … } from 'node:child_process'` statement(s) first, and any
+// local alias bound there to execFileSync/spawnSync/execSync/exec is added
+// to the set of recognized callee names alongside the canonical ones — so
+// `_x('gh', …)` is caught when (and only when) `_x` really is one of those
+// four imports under another name. This is narrower than "any call whose
+// first argument is 'gh', regardless of callee" would be: a same-shaped
+// call through an unrelated, non-aliased wrapper — e.g. a locally-defined
+// `run(cmd, args)` that forwards to spawnSync internally, called as
+// `run('gh', …)` — is NOT caught, because `run` is never bound to a
+// node:child_process import in that file. (One real instance of exactly
+// this shape exists today, outside this branch's scope: see the blind
+// spots below.)
+//
 // KNOWN BLIND SPOTS (a source-text scan can't see everything — stated
 // plainly, per the #2184 brief, the way the existing GIT_DIR-decoy test's
 // neighbour comment states its own impracticality):
@@ -40,10 +59,18 @@
 //     wrapper defined elsewhere, `util.promisify(exec)`, etc.) is NOT caught
 //     — only the four documented node:child_process entry points are
 //     pattern-matched.
-// What IS handled: both single- and double-quoted (and backtick) forms, and
-// a call whose arguments are split across multiple lines (the regexes allow
-// arbitrary whitespace, including newlines, between the opening paren and
-// the quoted binary/command).
+//   - A call through a locally-defined wrapper function that is not itself
+//     an aliased import of one of the four entry points — e.g. a helper
+//     `function run(cmd, args) { return spawnSync(cmd, args); }` called as
+//     `run('gh', …)` — is NOT caught. Import-alias tracking closes the
+//     direct-alias hole (`import { execFileSync as run } …`) but does not
+//     do call-graph analysis through an intermediate function.
+// What IS caught, in addition to the above: an execFileSync/spawnSync/
+// execSync/exec call under any locally-declared import alias for those
+// four names, both single- and double-quoted (and backtick, for the
+// direct-call shape) forms, and a call whose arguments are split across
+// multiple lines (the regexes allow arbitrary whitespace, including
+// newlines, between the opening paren and the quoted binary/command).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -68,25 +95,70 @@ const selfPath = resolve(here, 'gh-chokepoint.test.mjs');
 // A quote char shared by both patterns below: ', ", or `.
 const Q = `['"\`]`;
 
-// Shape 1: execFileSync('gh', …) / spawnSync('gh', …) — the binary is the
-// call's own first argument, and nothing but a matching close-quote may
-// follow "gh" (so this never matches a longer string that merely STARTS
-// with "gh", e.g. 'ghost' or 'gh-labels').
-const DIRECT_CALL_RE = new RegExp(`\\b(execFileSync|spawnSync)\\s*\\(\\s*(${Q})gh\\2`, 'g');
+// The canonical node:child_process entry points each shape recognizes by
+// default, before any per-file import-alias is added to them.
+const DIRECT_CANONICAL_NAMES = ['execFileSync', 'spawnSync'];
+const SHELL_CANONICAL_NAMES = ['execSync', 'exec'];
 
-// Shape 2: execSync('gh …') / exec('gh …') — a single shell-command string
-// whose first token is "gh" (followed by whitespace, or immediately closed
-// as a bare 'gh' with no args).
-const SHELL_CALL_RE = new RegExp(`\\b(execSync|exec)\\s*\\(\\s*(${Q})\\s*gh(?=[\\s'"\`])`, 'g');
+// Matches `import { … } from 'node:child_process'` (single- or
+// double-quoted module specifier only — a backtick can't legally appear
+// there, so Q is deliberately not reused for this one). `[^}]*` spans
+// newlines with no `/s` flag needed, so a specifier list broken across
+// multiple lines is still captured whole.
+const CHILD_PROCESS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*(['"])node:child_process\2/g;
 
-/** Scans one file's source text for a raw `gh` invocation via either shape.
- *  Returns an array of { kind, line, snippet }. Pure — exported so the
- *  per-shape mutation tests below can exercise it directly against
- *  synthetic fixtures, not just real repo files. */
+/** Finds every local alias this file's own `node:child_process` import(s)
+ *  bind to each of the four tracked entry points — e.g. `import {
+ *  execFileSync as run } from 'node:child_process'` adds 'run' to the
+ *  direct-shape names. Names with no alias present resolve to themselves,
+ *  and are already covered by the canonical defaults below, so only actual
+ *  `as`-renames add anything new. Returns { direct, shell } Sets seeded
+ *  with the canonical names. */
+function collectChildProcessAliases(source) {
+  const direct = new Set(DIRECT_CANONICAL_NAMES);
+  const shell = new Set(SHELL_CANONICAL_NAMES);
+  CHILD_PROCESS_IMPORT_RE.lastIndex = 0;
+  let importMatch;
+  while ((importMatch = CHILD_PROCESS_IMPORT_RE.exec(source))) {
+    const specifiers = importMatch[1]
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const spec of specifiers) {
+      const [imported, local = imported] = spec.split(/\s+as\s+/).map((s) => s.trim());
+      if (DIRECT_CANONICAL_NAMES.includes(imported)) direct.add(local);
+      if (SHELL_CANONICAL_NAMES.includes(imported)) shell.add(local);
+    }
+  }
+  return { direct, shell };
+}
+
+// Shape 1: execFileSync('gh', …) / spawnSync('gh', …) — or a local alias of
+// either, per collectChildProcessAliases() above — the binary is the call's
+// own first argument, and nothing but a matching close-quote may follow
+// "gh" (so this never matches a longer string that merely STARTS with
+// "gh", e.g. 'ghost' or 'gh-labels').
+function buildDirectCallRe(names) {
+  return new RegExp(`\\b(${[...names].join('|')})\\s*\\(\\s*(${Q})gh\\2`, 'g');
+}
+
+// Shape 2: execSync('gh …') / exec('gh …') — or a local alias of either —
+// a single shell-command string whose first token is "gh" (followed by
+// whitespace, or immediately closed as a bare 'gh' with no args).
+function buildShellCallRe(names) {
+  return new RegExp(`\\b(${[...names].join('|')})\\s*\\(\\s*(${Q})\\s*gh(?=[\\s'"\`])`, 'g');
+}
+
+/** Scans one file's source text for a raw `gh` invocation via either shape,
+ *  including through any local alias its own `node:child_process` import
+ *  declares for the four tracked entry points. Returns an array of {
+ *  kind, line, snippet }. Pure — exported so the per-shape mutation tests
+ *  below can exercise it directly against synthetic fixtures, not just
+ *  real repo files. */
 export function findRawGhCalls(source) {
+  const { direct, shell } = collectChildProcessAliases(source);
   const violations = [];
-  for (const re of [DIRECT_CALL_RE, SHELL_CALL_RE]) {
-    re.lastIndex = 0;
+  for (const re of [buildDirectCallRe(direct), buildShellCallRe(shell)]) {
     let m;
     while ((m = re.exec(source))) {
       const line = source.slice(0, m.index).split('\n').length;
@@ -166,6 +238,16 @@ test('findRawGhCalls does not false-positive on a git call or a comment mentioni
     "const label = 'gh-labels';",
   ].join('\n');
   assert.deepEqual(findRawGhCalls(src), []);
+});
+
+test('findRawGhCalls catches a call through a locally aliased import of execFileSync (#2184 aliasing hole)', () => {
+  const src = [
+    "import { execFileSync as _x } from 'node:child_process';",
+    "const _probe = _x('gh', ['--version'], { encoding: 'utf8' });",
+  ].join('\n');
+  const violations = findRawGhCalls(src);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].kind, '_x');
 });
 
 test('KNOWN BLIND SPOT: a gh binary held in a variable is not detected', () => {
