@@ -105,9 +105,14 @@ the `the-coalfall-commission.ru-dash.md` fixture from, because it is
 
 Every other book's cache holds its sentences normally (13,582 / 12,835 / 11,428
 / 10,849 / 10,475 / 10,198 in the six largest), so this is not a wrong
-assumption about where sentences live — it is this book. Phase 0 completed
-repeatedly; Phase 1 output is not persisted. The cause is not determinable from
-the files.
+assumption about where sentences live — it is this book.
+
+**Cause: none. The repo owner started a re-run and stopped it** (confirmed
+2026-08-06). Phase 0 wrote the cast, Phase 1 never ran, and the 0-byte
+`analysis-state.json` is the aborted snapshot write. Not a defect — which is
+precisely why D11 matters: this is the **normal path**, not a corruption, so any
+user who cancels an analysis leaves a book in a state the library rendered as
+healthy.
 
 **Consequence for Wave 1:** the book that most stresses the dash rule
 contributes a blank row, so a threshold set without re-analysing it is set from
@@ -203,9 +208,11 @@ pattern.
    `orphanSpoken`, and is separately visible.
 3. The script runs against the live workspace and prints a row for every book,
    skipping and reporting books with no cache.
-4. The script **flags a book with `castCount > 0 && spokenTotal === 0`
+4. The script **flags a book with a cast and no attributed sentences
    distinctly** from one with no cache at all — _Ночной дозор_ must be visibly a
-   damaged book, not a blank row (D11).
+   damaged book, not a blank row (D11). It also prints whether an
+   `analysis-state.json` snapshot exists, since that is what separates an
+   abandoned run from a resumable one.
 5. No threshold constant, no UI, no persisted state exists yet.
 
 ---
@@ -456,7 +463,7 @@ there are **four** states and the library shows all four:
 |---|---|---|---|---|
 | `ok` | — | nothing | nothing | no |
 | `collapsed` | share ≥ threshold, book or chapter | warning badge | full notice | yes |
-| `missing` | `castCount > 0 && spokenTotal === 0` | warning badge | full notice | **yes** |
+| `missing` | `castCount > 0 && spokenTotal === 0 && readAnalysisState() === null` | warning badge | full notice | **yes** |
 | `unmeasurable` | cache absent or corrupt | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
 **`missing` is D11, and it is not a rounding case.** Revision 2 gave a book with
@@ -478,6 +485,26 @@ by `spokenTotal`.** A non-fiction book or a pure-narration text has no
 non-narrator cast members, so `castCount === 0` and it stays `ok`. The alarm
 fires only on the contradiction: characters exist, and nothing is theirs.
 
+**It is distinguished from an interrupted run by the analysis snapshot** — and
+this half is what keeps it from becoming noise. Starting an analysis and
+stopping it is an ordinary user action, not a corruption: Phase 0 writes the
+cast, Phase 1 never runs, and the book is left with exactly the
+cast-and-no-sentences shape. That is how _Ночной дозор_ reached its state (the
+repo owner started a re-run and stopped it, confirmed 2026-08-06) — so this is
+a **reachable state on the normal path**, not an exotic one.
+
+Badging every paused analysis as damaged would fire the alarm during routine
+use, which is how a warning gets trained into background noise. So `missing`
+requires `readAnalysisState(bookDir) === null` as well. While a snapshot exists
+in any state — `running`, `paused` or `halted` — the book is not badged, because
+the existing AnalysisPill already owns that surface and says something truer.
+
+`readAnalysisState` returns `null` for an absent **or unparseable** file
+(`server/src/store/analysis-state.ts:85-93`), which is what makes the rule work
+on the real case: Night Watch's `analysis-state.json` is 0 bytes, so it reads as
+no rehydratable state and correctly badges. A book with a live or resumable
+snapshot does not.
+
 A book never analysed has neither cast nor sentences, so it is `ok` — not
 `missing`, not `unmeasurable`.
 
@@ -496,7 +523,8 @@ instead of reading as a clean bill of health.
 | Case | Behaviour |
 |---|---|
 | Zero spoken sentences, **no non-narrator cast** (non-fiction, pure narration) | `share: null`, state `ok`. Nothing is missing — there were never any characters. |
-| Zero spoken sentences, **cast present** | State `missing` (D11). The contradiction is the signal. |
+| Zero spoken sentences, **cast present**, no analysis snapshot | State `missing` (D11). The contradiction is the signal. |
+| Zero spoken sentences, **cast present**, snapshot `running`/`paused`/`halted` | State `ok`. An interrupted run is ordinary use; the AnalysisPill already says so, and badging it would train the warning into noise. |
 | Under 20 spoken sentences book-wide | `share: null`, no verdict. **Known gap:** a novella with 19 spoken lines, all narrator, is 100% collapsed and reports no verdict. Accepted — below 20 the figure is noise. |
 | Chapter with 6 spoken lines, all narrator | Shows `100%` in the breakdown; does **not** trigger (under the 20-line trigger floor). |
 | User excludes back-matter after analysis | Live compute picks it up; the library badge is patched in the same session. |
@@ -533,19 +561,25 @@ firing while the book-level share is far below it; a chapter at 100% with 19
 spoken lines **not** triggering and the same chapter with 20 triggering;
 `triggeredBy` and `worstChapterId` correct in both directions.
 
-**Wave 2 — the `missing` state (D11).** Three fixtures that must resolve to
-three different states, because the whole point of D11 is that revision 2
-collapsed them into one:
+**Wave 2 — the `missing` state (D11).** Four fixtures that must resolve to three
+different states, because the whole point of D11 is that revision 2 collapsed
+them into one:
 
-| Fixture | `castCount` | `spokenTotal` | Expected |
-|---|---|---|---|
-| Pure-narration non-fiction | 0 | 0 | `ok` |
-| Cast built, nothing attributed | 47 | 0 | `missing` |
-| No cache at all | — | — | `unmeasurable` |
+| Fixture | `castCount` | `spokenTotal` | `analysis-state.json` | Expected |
+|---|---|---|---|---|
+| Pure-narration non-fiction | 0 | 0 | absent | `ok` |
+| Cast built, nothing attributed, run abandoned | 47 | 0 | absent **or 0 bytes** | `missing` |
+| Cast built, nothing attributed, run **paused** | 47 | 0 | `state: 'paused'` | `ok` — the pill owns it |
+| No cache at all | — | — | — | `unmeasurable` |
 
-A test that only asserts the middle row passes with the rule written as
-`spokenTotal === 0` alone — which would badge every non-fiction book. The
-`castCount` half of the condition is only proven by the first row.
+Each row disproves a different way of writing the rule too loosely, and a test
+that omits any of them lets that looseness ship:
+
+- Omit row 1 → `spokenTotal === 0` alone passes, badging every non-fiction book.
+- Omit row 3 → dropping the `readAnalysisState` clause passes, badging every
+  paused analysis.
+- Row 2's **0-byte** variant is the real Night Watch file; a fixture using only
+  an absent file leaves the unparseable path unproven.
 
 **Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
 only when the field is absent; the dismiss endpoint resolves `analysedAt`
