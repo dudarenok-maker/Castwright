@@ -227,7 +227,36 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        behaviour while losing the merge does not. Mirrors the six analysis-path
        sites. */
     try {
-      await retireCharacterId(bookDir, sourceId, targetId);
+      const historyResult = await retireCharacterId(bookDir, sourceId, targetId);
+      /* #2133 — a reject's two writes (the `rejectedPairs` entry on
+         cast-id-history.json and the one-sided `notLinkedTo` edge on
+         cast.json) are created together and must be destroyed together (see
+         `docs/features/278-cast-character-identity.md`'s invariant of the
+         same name). `retireCharacterId` reports a dropped self-loop pair but
+         never touches cast.json itself — this merge already holds the cast
+         lock and has `nextCharacters` (the roster just persisted above) in
+         hand, so the cleanup is a plain in-place mutation plus a second write
+         in the SAME lock span, not a new `withCastLock` call (rule 1: a
+         locked function must not call another locked function on the same
+         book). Best-effort, mirroring the retirement write itself: a
+         surviving stale edge merely re-suppresses one future §4.4 name-match
+         rather than corrupting anything already on disk. */
+      if (historyResult.droppedSelfLoopRejections.length) {
+        const deadIds = new Set(historyResult.droppedSelfLoopRejections.map((p) => p.from));
+        let notLinkedChanged = false;
+        for (const character of nextCharacters) {
+          const existing = character.notLinkedTo ?? [];
+          if (!existing.length) continue;
+          const next = existing.filter((p) => !(p.bookId === bookId && deadIds.has(p.characterId)));
+          if (next.length !== existing.length) {
+            character.notLinkedTo = next;
+            notLinkedChanged = true;
+          }
+        }
+        if (notLinkedChanged) {
+          await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
+        }
+      }
     } catch (historyErr) {
       console.warn('[cast-merge] failed to record character-id retirement', historyErr);
     }

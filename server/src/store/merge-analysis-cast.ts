@@ -169,7 +169,9 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
 }
 
 /** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
-    writes (`analysis.ts:3633`, `:3845`, `:5613`). Same as
+    writes — two inside `analysis.ts`'s `runMainAnalyzerJob` and one inside
+    `runSubsetAnalyzerJob` (cited by symbol, not line: this comment's own
+    line citations were 110 lines stale, F3, #2163). Same as
     `mergeAnalysisResultWithExistingCast` MINUS the id-drift name-fallback: an
     interim roster is partial by construction (`buildInterimCast` only folds
     chapters already analysed), so a prior character who simply hasn't been
