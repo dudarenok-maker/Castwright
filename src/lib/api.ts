@@ -4505,10 +4505,22 @@ export interface RejectOrphanMatchArgs {
   characterId: string;
   orphanedId: string;
 }
+/** How `orphanedId` resolves against the live cast + id history, mirrors the
+    server's `ResolutionTier` (server/src/routes/cast-reject-orphan.ts) — kept
+    as a local literal union rather than importing the server type. `null`
+    when it doesn't resolve at all. */
+export type RejectOrphanResolutionTier =
+  | 'exact'
+  | 'history'
+  | 'normalised-id'
+  | 'normalised-history'
+  | null;
 export interface RejectOrphanMatchResponse {
   characterId: string;
   orphanedId: string;
   alreadyPresent: boolean;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
 }
 
 async function realRejectOrphanMatch(
@@ -4535,11 +4547,132 @@ async function realRejectOrphanMatch(
   return res.json();
 }
 
-async function mockRejectOrphanMatch(
+/* #2092/#2089 M5 (review round 1) — module-level mock state tracking which
+   (bookId, characterId, orphanedId) pairs this mock session has actually
+   rejected, so `mockUndoRejectOrphanMatch` can be honest about
+   `wasRejected` instead of unconditionally claiming success for a pair
+   that was never rejected (or already undone) — mirroring the real route,
+   which returns `wasRejected: false` for an absent pair. Without this, the
+   e2e Undo assertion at e2e/orphaned-character-fallback-banner.spec.ts
+   could not fail for any server-side reason: the mock always said "yes,
+   undone" regardless of what actually preceded the click. Same
+   module-level-mutable-state pattern as `mockTourCompletedAt`/
+   `mockMergeSuggestions` elsewhere in this file. */
+const mockRejectedOrphanPairs = new Set<string>();
+function rejectedOrphanPairKey(args: RejectOrphanMatchArgs): string {
+  return JSON.stringify([args.bookId, args.characterId, args.orphanedId]);
+}
+
+/** Review round 2 "Also fix" — `mockRejectedOrphanPairs` is module-level and
+    was never resettable, so two tests in one file (or one test calling
+    reject/undo more than once with the same tuple) would see cross-test
+    leakage. Same `_resetMock*` convention as `_resetMockListenStats`/
+    `_resetMockAppInfo`/`_resetMockScriptReviewInFlight` elsewhere in this
+    file — call from a test's `beforeEach`. */
+export function _resetMockRejectedOrphanPairs(): void {
+  mockRejectedOrphanPairs.clear();
+}
+
+export async function mockRejectOrphanMatch(
   args: RejectOrphanMatchArgs,
 ): Promise<RejectOrphanMatchResponse> {
   await wait(80);
-  return { characterId: args.characterId, orphanedId: args.orphanedId, alreadyPresent: false };
+  mockRejectedOrphanPairs.add(rejectedOrphanPairKey(args));
+  /* D2 — a reject always leaves `orphanedId` unresolved (null) in the mock:
+     the pair-scoped block the (fake) write just recorded applies, and mock
+     mode has no real resolver to consult for some other, unblocked tier. */
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    alreadyPresent: false,
+    resolution: null,
+    resolvedCharacterId: undefined,
+  };
+}
+
+/* DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (#2092/
+   #2089 D5) — undo a prior reject. Same path + body shape as the POST
+   (`RejectOrphanMatchArgs`) deliberately. */
+export interface UndoRejectOrphanMatchResponse {
+  characterId: string;
+  orphanedId: string;
+  wasRejected: boolean;
+  resolution: RejectOrphanResolutionTier;
+  resolvedCharacterId?: string;
+  /** Review round 3 (I-B/M-6) — the raw `from` id(s) of every rejectedPairs
+      entry this DELETE actually removed; always present (empty when
+      `wasRejected` is false). A governing pair's `from` need not equal
+      `orphanedId` itself, so this — not `orphanedId` — is what the caller
+      must key its `notLinkedTo` redux mirror off (see cast.tsx's
+      `handleUndoOrphanRejection`). */
+  removedFrom: string[];
+  /** C1 (fix round 1) — set (non-empty) when one or more removed pairs
+      skipped restoring their forgotten `supersededBy` alias because a newer
+      one already exists; see the server route's own doc comment. Round 3
+      (M-7) widened from a single string to an array, since more than one
+      removed pair can each skip independently. The mock never sets this
+      (it has no `supersededBy` state to conflict with). */
+  supersededByOther?: string[];
+}
+
+async function realUndoRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<UndoRejectOrphanMatchResponse> {
+  const { bookId, characterId, orphanedId } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/reject-orphan-match`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orphanedId }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Undo reject match failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+export async function mockUndoRejectOrphanMatch(
+  args: RejectOrphanMatchArgs,
+): Promise<UndoRejectOrphanMatchResponse> {
+  await wait(80);
+  const key = rejectedOrphanPairKey(args);
+  if (!mockRejectedOrphanPairs.has(key)) {
+    /* M5 — honest genuine-miss/never-rejected case: mirrors the real
+       route's `wasRejected: false` for a pair that was never rejected (or
+       already undone once). */
+    return {
+      characterId: args.characterId,
+      orphanedId: args.orphanedId,
+      wasRejected: false,
+      resolution: null,
+      resolvedCharacterId: undefined,
+      removedFrom: [],
+    };
+  }
+  mockRejectedOrphanPairs.delete(key);
+  /* Mock mode has no real resolver either, so it assumes the common/lossless
+     case: undo restores resolution onto the same `characterId` the reject
+     had blocked (a 'history' match — collapses to 'alias' in the frontend's
+     own banner taxonomy, same as the real server's typical case).
+     `removedFrom` is always `[args.orphanedId]` here — mock mode never
+     simulates a governing pair recorded under a DIFFERENT raw spelling than
+     the row's own id, so the row's own id is always what was "removed". */
+  return {
+    characterId: args.characterId,
+    orphanedId: args.orphanedId,
+    wasRejected: true,
+    resolution: 'history',
+    resolvedCharacterId: args.characterId,
+    removedFrom: [args.orphanedId],
+  };
 }
 
 async function realAddFromSeriesRoster(
@@ -10524,6 +10657,7 @@ const real = {
   notLinkedTo: realNotLinkedTo,
   removeNotLinkedTo: realRemoveNotLinkedTo,
   rejectOrphanMatch: realRejectOrphanMatch,
+  undoRejectOrphanMatch: realUndoRejectOrphanMatch,
   addFromSeriesRoster: realAddFromSeriesRoster,
   createCharacter: realCreateCharacter,
   deleteBook: realDeleteBook,
@@ -10831,6 +10965,7 @@ const mock = {
   notLinkedTo: mockNotLinkedTo,
   removeNotLinkedTo: mockRemoveNotLinkedTo,
   rejectOrphanMatch: mockRejectOrphanMatch,
+  undoRejectOrphanMatch: mockUndoRejectOrphanMatch,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   createCharacter: mockCreateCharacter,
   deleteBook: mockDeleteBook,

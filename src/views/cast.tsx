@@ -116,6 +116,56 @@ const EMPTY_FALLBACK_MAP: Record<string, string> = {};
    reading values instead of just keys. */
 const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {};
 
+/* #2092/#2089 D4 — one "Not <Name> · Undo" chip per rejectedAgainst target,
+   shared by BOTH banner sections (needs-decision and auto-reconciled): the
+   field lives on the orphan-map entry, not the section, so one component
+   serves both `<li>`s rather than duplicating this JSX. Not role="status" —
+   trap 6 (fix round 3's finding on the sibling toggle button, restated in
+   this issue's own brief): a live-region role on a button's only text
+   excludes that content from the button's accessible-name computation,
+   leaving the button with NO accessible name at all. The Undo button's name
+   comes from its own text content instead. */
+function OrphanRejectedChips({
+  orphanedId,
+  targets,
+  characters,
+  busyId,
+  onUndo,
+}: {
+  orphanedId: string;
+  targets: string[] | undefined;
+  characters: Character[];
+  busyId: string | null;
+  onUndo: (orphanedId: string, characterId: string) => void;
+}) {
+  if (!targets?.length) return null;
+  return (
+    <>
+      {targets.map((targetId) => {
+        const name = characters.find((c) => c.id === targetId)?.name ?? targetId;
+        return (
+          <span
+            key={targetId}
+            data-testid={`orphaned-rejected-chip-${orphanedId}-${targetId}`}
+            className="inline-flex items-center gap-1 rounded-full bg-ink/10 px-2 py-1 text-xs text-ink/70"
+          >
+            Not {name}
+            <button
+              type="button"
+              disabled={busyId === orphanedId}
+              onClick={() => onUndo(orphanedId, targetId)}
+              aria-label={`Undo "not ${name}" for "${orphanedId}"`}
+              className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Undo
+            </button>
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
    provenance chip last. Absent statuses are skipped, so a given cast only
@@ -276,19 +326,27 @@ export function CastView({
   /* #2040 Task 17 — "not the same character" for either banner section.
      targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
      or the user-picked live candidate for a needs-decision row. Writes the
-     rejection to the server (durable: cast-id-history.json `rejected` list +
-     a one-sided notLinkedTo edge), then mirrors it into redux via TWO
-     dispatches: applyOrphanRejection (flips the orphan-map entry to
-     unresolved) and applyNotLinked (the notLinkedTo mirror onto the live
-     character — reused as-is; the matcher it feeds ignores bookId, so a
-     same-book edge binds correctly even though the action was designed for
-     cross-book pairs). */
+     rejection to the server (durable, pair-scoped: cast-id-history.json's
+     `rejectedPairs` + a one-sided notLinkedTo edge — #2092/#2089 D1), then
+     mirrors it into redux via TWO dispatches: applyOrphanRejection (applies
+     the server's own post-write resolution and pushes targetCharacterId
+     onto rejectedAgainst, for the "Not <Name> · Undo" chip) and
+     applyNotLinked (the notLinkedTo mirror onto the live character — reused
+     as-is; the matcher it feeds ignores bookId, so a same-book edge binds
+     correctly even though the action was designed for cross-book pairs). */
   async function handleRejectOrphanMatch(orphanedId: string, targetCharacterId: string) {
     if (!bookId || !targetCharacterId) return;
     setOrphanRejectBusyId(orphanedId);
     try {
-      await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
-      dispatch(castActions.applyOrphanRejection({ orphanedId }));
+      const res = await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
+      dispatch(
+        castActions.applyOrphanRejection({
+          orphanedId,
+          characterId: targetCharacterId,
+          resolution: res.resolution,
+          resolvedCharacterId: res.resolvedCharacterId,
+        }),
+      );
       dispatch(
         castActions.applyNotLinked({
           characterId: targetCharacterId,
@@ -296,6 +354,9 @@ export function CastView({
           otherCharacterId: orphanedId,
         }),
       );
+      /* Reset the needs-decision row's candidate select — a no-op for the
+         auto-reconciled section, which has no select. */
+      setOrphanRejectCandidate((prev) => ({ ...prev, [orphanedId]: '' }));
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-reject-${orphanedId}`,
@@ -308,6 +369,113 @@ export function CastView({
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `orphan-reject-error-${orphanedId}`,
+          kind: 'error',
+          message: msg,
+        }),
+      );
+    } finally {
+      setOrphanRejectBusyId(null);
+    }
+  }
+
+  /* #2092/#2089 D5 — undo a prior reject via the chip's Undo control. Same
+     shape as handleRejectOrphanMatch above: writes the undo to the server
+     (removes the rejectedPairs entry + the same-book notLinkedTo edge,
+     restores a forgotten supersededBy alias when present — lossless), then
+     mirrors it via dispatches: undoOrphanRejection (applies the server's
+     own post-undo resolution and drops targetCharacterId out of
+     rejectedAgainst) and one removeNotLinked (the notLinkedTo mirror, same
+     fs-11 reducer the sibling "unmark variant" flow uses) PER entry in
+     `res.removedFrom` — review round 3 (I-B) — rather than one dispatch
+     keyed on `orphanedId`. A governing pair's `from` can differ from this
+     row's own raw `orphanedId` (the resolver's normalised-tier collision
+     shape — see `rejectedPairsGoverning`'s doc comment,
+     server/src/store/cast-resolve.ts); the server writes and removes the
+     notLinkedTo edge under the PAIR's own `from`, so mirroring off
+     `orphanedId` could silently miss it, leaving a stale edge that a later
+     hydrate could never self-correct (cast-slice.ts's merge prefers a
+     truthy EXISTING notLinkedTo over the server's own value). `removedFrom`
+     is the server's own record of exactly what it removed. */
+  async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
+    if (!bookId) return;
+    setOrphanRejectBusyId(orphanedId);
+    try {
+      const res = await api.undoRejectOrphanMatch({
+        bookId,
+        characterId: targetCharacterId,
+        orphanedId,
+      });
+      dispatch(
+        castActions.undoOrphanRejection({
+          orphanedId,
+          characterId: targetCharacterId,
+          resolution: res.resolution,
+          resolvedCharacterId: res.resolvedCharacterId,
+        }),
+      );
+      /* Round 4 review, cheap 5 — `?? []` defends a response missing the
+         (contractually required) field: without it, a malformed/legacy
+         response would throw HERE, after `undoOrphanRejection` above has
+         already dispatched — the row would read as undone while the
+         notLinkedTo mirror silently never ran, surfaced only as an error
+         toast rather than a clean all-or-nothing failure. */
+      for (const removed of res.removedFrom ?? []) {
+        dispatch(
+          castActions.removeNotLinked({
+            characterId: targetCharacterId,
+            otherBookId: bookId,
+            otherCharacterId: removed,
+          }),
+        );
+        /* F5 (fix round 5) — `removed` can name a DIFFERENT row than the one
+           clicked (the normalised-tier collision shape: one governing pair
+           surfaces a chip on both 'the_torment' and 'The-Torment'). The
+           clicked row is already handled above by the real
+           `undoOrphanRejection` dispatch; this clears the SAME stale chip
+           off every OTHER row `removedFrom` names, using the data already on
+           the wire instead of waiting for the next hydrate. */
+        if (removed !== orphanedId) {
+          dispatch(
+            castActions.clearOrphanRejectedAgainst({
+              orphanedId: removed,
+              characterId: targetCharacterId,
+            }),
+          );
+        }
+      }
+      /* C1 (fix round 1) shipped the server half of supersededByOther;
+         review round 2's "Also fix" is this half — the toast fired the same
+         unqualified "Undid…" message whether the forgotten alias was
+         actually restored or (C1) correctly skipped because a newer,
+         unrelated re-analysis has since recorded a different one. Name
+         that alias's target so the user understands why the row didn't
+         visibly change, instead of Undo reading as a silent no-op. Round 3
+         (M-6/M-7) — `supersededByOther` is now an array (more than one
+         removed pair can each skip independently) and the message also
+         says so when more than one pair was removed by this single click,
+         rather than reading as though only `orphanedId` itself moved. */
+      const otherNames = (res.supersededByOther ?? []).map(
+        (id) => characters.find((c) => c.id === id)?.name ?? id,
+      );
+      const removedFrom = res.removedFrom ?? [];
+      const multiNote =
+        removedFrom.length > 1 ? ` (undid ${removedFrom.length} rejected spellings of this id)` : '';
+      const aliasNote = otherNames.length
+        ? ` — its previous alias now points to ${otherNames.map((n) => `"${n}"`).join(' / ')}, so that was left as-is.`
+        : '.';
+      const message = `Undid "not the same character" for "${orphanedId}"${multiNote}${aliasNote}`;
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-undo-${orphanedId}-${targetCharacterId}`,
+          kind: 'info',
+          message,
+        }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      dispatch(
+        notificationsActions.pushToast({
+          dedupeKey: `orphan-undo-error-${orphanedId}`,
           kind: 'error',
           message: msg,
         }),
@@ -1080,7 +1248,11 @@ export function CastView({
                       </select>
                       <button
                         type="button"
-                        disabled={!orphanRejectCandidate[orphanedId] || orphanRejectBusyId === orphanedId}
+                        disabled={
+                          !orphanRejectCandidate[orphanedId] ||
+                          orphanRejectBusyId === orphanedId ||
+                          (info.rejectedAgainst?.includes(orphanRejectCandidate[orphanedId]) ?? false)
+                        }
                         onClick={() =>
                           handleRejectOrphanMatch(orphanedId, orphanRejectCandidate[orphanedId])
                         }
@@ -1088,6 +1260,13 @@ export function CastView({
                       >
                         Not the same character
                       </button>
+                      <OrphanRejectedChips
+                        orphanedId={orphanedId}
+                        targets={info.rejectedAgainst}
+                        characters={characters}
+                        busyId={orphanRejectBusyId}
+                        onUndo={handleUndoOrphanRejection}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -1164,6 +1343,13 @@ export function CastView({
                           >
                             Not the same character
                           </button>
+                          <OrphanRejectedChips
+                            orphanedId={orphanedId}
+                            targets={info.rejectedAgainst}
+                            characters={characters}
+                            busyId={orphanRejectBusyId}
+                            onUndo={handleUndoOrphanRejection}
+                          />
                         </li>
                       );
                     })}

@@ -199,13 +199,22 @@ export interface DivergentSentence {
     user-rejected reconciliation is honoured here too: without this, a
     rejected match still counted as "the same person" for divergence
     purposes, silently protecting a wrong id from ever being flagged as
-    diverged/re-recorded. */
+    diverged/re-recorded. #2092/#2089 task 3 — widened to also carry
+    `rejectedPairs` (both call sites already pass the whole loaded
+    `CastIdHistory` object through a variable, so this was already reaching
+    `buildCastResolver` intact at runtime; the narrower Pick here was
+    self-documentation drift, not a functional gap — but a stale, narrower
+    annotation on a `buildCastResolver` wrapper is exactly the shape that
+    invites a future caller to "fix" itself into passing a genuinely
+    truncated object). */
 export function findDivergentSentences(
   segments: ChapterSegment[],
   targetIndices: number[],
   currentSentences: Pick<SentenceOutput, 'id' | 'characterId' | 'text' | 'excludeFromSynthesis'>[],
   cast: readonly { id: string }[],
-  castIdHistory: Pick<CastIdHistory, 'supersededBy' | 'rejected'> = { supersededBy: {} },
+  castIdHistory: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'> = {
+    supersededBy: {},
+  },
 ): DivergentSentence[] {
   const byId = new Map(currentSentences.map((s) => [s.id, s]));
   const resolver = buildCastResolver(cast, castIdHistory);

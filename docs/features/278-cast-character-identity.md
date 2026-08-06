@@ -13,7 +13,7 @@ owner: null
 > `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
-> `POST /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
+> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
 
 ## Benefit / Rationale
 
@@ -58,8 +58,34 @@ owner: null
 - **Reversibility:** deleting `.audiobook/cast-id-history.json` for a book reverts
   it to pre-Wave-1 resolution (exact-id-only) with no other side effect — the file
   is never authoritative for identity, only a lookup aid. A rejected reconciliation
-  (`POST .../reject-orphan-match`) has **no in-app undo** — see "Out of scope"
-  and follow-up #2089.
+  **is now reversible** (#2092/#2089, design settled 2026-08-05, superseding the
+  "no in-app undo" state this section previously described):
+  `DELETE .../reject-orphan-match` — same path and body shape as the POST that
+  created it — removes EVERY `rejectedPairs` entry that governs `(orphanedId,
+  characterId)` (`rejectedPairsGoverning`, `server/src/store/cast-resolve.ts` —
+  ordinarily one, but a row can govern more than one differently-punctuated raw
+  spelling of the same underlying id that collide onto the same normalised key;
+  review round 2/#2092/#2089 found the original raw-exact match missed that case).
+  For each governing pair, removes the same-book `notLinkedTo` edge keyed on
+  `{bookId, characterId: pair.from}` — the PAIR's OWN raw spelling, which need
+  not equal `orphanedId` itself (never on `characterId` alone, so an unrelated
+  cross-book edge from `cast-not-linked-to.ts` can't be collaterally deleted) —
+  and, when that pair had forgotten a `supersededBy` entry, restores it via the
+  `forgotSupersededTo` value stashed on the pair at reject time. The response
+  echoes every removed pair's `from` as `removedFrom` (review round 3/#2092/
+  #2089), which the client keys its own redux `notLinkedTo` mirror off instead of
+  `orphanedId` — mirroring off `orphanedId` was itself a defect this same round
+  fixed, since a governing pair's `from` can differ from the row's own id. The
+  undo is
+  **lossless for resolution purposes**: `buildCastResolver(...).resolve(orphanedId)`
+  returns the exact same tier/target after a POST-then-DELETE round trip that it
+  returned before the POST, pinned directly against the resolver (not by
+  inspecting file contents) in `cast-reject-orphan.test.ts`'s "#2089 acceptance
+  bar" cases. No confirmation dialog on either verb (D5) — the reject's
+  consequence is invisible until the next render, so a confirm would ask for
+  certainty at the point the user has the least information; Undo is presented as
+  a sibling control instead. See "Deviations from the spec" below for how the
+  reject itself moved from id-scoped to pair-scoped in the same change.
 
 ## Invariants to preserve
 
@@ -82,21 +108,30 @@ owner: null
    `AUTO_REBIND_RANGE`) — #2090, closed by the same PR as #2093 below.
 3. **The resolver never matches on display names.** `buildCastResolver` is
    ids-only — four tiers, first hit wins: a live exact id (`via: 'exact'`), a
-   non-rejected `rejected`-checked-after-exact history hit (`via: 'history'`), a
-   normalised id (`via: 'normalised-id'`), a normalised history hit
-   (`via: 'normalised-history'`). Name matching happens only at merge/repair time
-   (`server/src/store/remap-fresh-to-prior.ts`, and the Tier A/B matcher inside
-   `scripts/repair-cast-id-drift.mjs`) — never inside the resolver itself.
+   non-rejected history hit (`via: 'history'`, gated against both the legacy
+   id-wide `rejected` list and the pair-scoped `rejectedPairs` — #2092/#2089,
+   now the only field production writes), a normalised id
+   (`via: 'normalised-id'`, gated the same way), a normalised history hit
+   (`via: 'normalised-history'`, likewise). Name matching happens only at
+   merge/repair time (`server/src/store/remap-fresh-to-prior.ts`, and the
+   Tier A/B matcher inside `scripts/repair-cast-id-drift.mjs`) — never inside
+   the resolver itself.
 4. **A tie never guesses.** If two cast rows (or two history entries) share a
    normalised key, `buildCastResolver.resolve()` returns `undefined` rather than
    picking one — silently rendering one character's lines in another's voice is
    strictly worse than the narrator-substitution fallback it would replace.
-5. **`rejected` is checked after `exact`, ahead of the other three tiers**
-   (`cast-resolve.ts:108-116`) — a live cast row always wins over a stale
-   rejection, so a reclaimed id (the character's own name minted again by a later
-   re-analysis) is never permanently shadowed by a past "not the same character"
-   decision. This is a deliberate deviation from spec §4.6's original wording; see
-   "Deviations from the spec" below.
+5. **`rejected`/`rejectedPairs` are checked after `exact`, ahead of the other
+   three tiers** (`cast-resolve.ts:164` for `rejected`; `:172`, `:184`, `:191`
+   for `rejectedPairs` against tiers 2/3/4 respectively — NOT the map
+   construction above them) — a live cast row always wins over a stale
+   rejection, so a reclaimed id (the character's own name minted again by a
+   later re-analysis) is never permanently shadowed by a past "not the same
+   character" decision. `rejectedPairs` (#2092/#2089) additionally scopes the
+   block to the SPECIFIC rejected target rather than every candidate — see
+   `rejectedPairs`'s own doc comment on `CastIdHistory`
+   (`server/src/store/cast-id-history.ts`) for the full design. This is a
+   deliberate deviation from spec §4.6's original wording; see "Deviations
+   from the spec" below.
 6. **Frozen `<slug>.segments.json` files are never rewritten to migrate ids**
    (spec §3) — the resolver reads through drift instead of correcting it at rest.
    `chapter-qa-repair.ts` rewriting a segments file as part of its own normal
@@ -186,21 +221,41 @@ and plan (`docs/superpowers/plans/2026-08-01-cast-character-identity.md`) are th
 design of record; four points shipped differently than either originally wrote them
 down, each a deliberate controller ruling made during implementation:
 
-- **The reject action writes a `rejected` list, not only a `notLinkedTo` edge.**
-  Spec §4.6 said rejecting "removes the history entry." On every real book in the
-  20-book workspace, **zero** `cast-id-history.json` files exist — every currently
-  orphaned segment resolves through the *normalised* tiers, where there is no
-  history entry to remove. A reject that only deleted history entries would have
-  been a button that does nothing on 100% of currently-affected books. The shipped
-  design (`server/src/routes/cast-reject-orphan.ts`) writes **three** things: a
-  `rejected` list in `cast-id-history.json`, honoured by `buildCastResolver` (this
-  is what actually stops read-side resolution); the one-sided `notLinkedTo` edge on
-  the live character naming the orphaned id (this is what stops the next
-  re-analysis's name matcher from re-recording it — spec §4.6's original durability
-  requirement, which stays correct as written); and, non-fatally
-  (`cast-reject-orphan.ts:148`), a `forgetSupersededId` call that clears any stale
-  `supersededBy` entry for the same id — redundant with `rejected` for resolution
-  purposes, but left in so a rejected id doesn't linger in two places at once.
+- **The reject action writes a `rejectedPairs` entry, not only a `notLinkedTo`
+  edge.** Spec §4.6 said rejecting "removes the history entry." On every real book
+  in the 20-book workspace, **zero** `cast-id-history.json` files exist — every
+  currently orphaned segment resolves through the *normalised* tiers, where there
+  is no history entry to remove. A reject that only deleted history entries would
+  have been a button that does nothing on 100% of currently-affected books. The
+  shipped design (`server/src/routes/cast-reject-orphan.ts`) writes **three**
+  things: a pair-scoped entry in `cast-id-history.json`'s `rejectedPairs`,
+  honoured by `buildCastResolver` (this is what actually stops read-side
+  resolution — of `orphanedId` onto THIS `characterId` specifically, see below);
+  the one-sided `notLinkedTo` edge on the live character naming the orphaned id
+  (this is what stops the next re-analysis's name matcher from re-recording it —
+  spec §4.6's original durability requirement, which stays correct as written);
+  and, non-fatally (`cast-reject-orphan.ts`), a `forgetSupersededId` call that
+  clears a stale `supersededBy` entry for the same id **when it targets this same
+  `characterId`** — left in so a rejected id doesn't linger in two places at once,
+  scoped rather than unconditional so it can't collaterally destroy a *different*,
+  still-valid alias for the same orphaned id.
+
+  **Revised again, #2092/#2089 (design settled 2026-08-05):** the write above
+  originally targeted a single id-wide `rejected: string[]` list — `orphanedId`
+  blocked against *every* candidate, forever. The repo owner approved a
+  pair-scoped design instead: `rejectedPairs: Array<{from, to, forgotSupersededTo?}>`
+  blocks `orphanedId` onto `characterId` SPECIFICALLY, so a later, *different*
+  reconciliation for the same orphaned id (the common "mayrin is not Mr. Marrow,
+  but mayrin IS Mairin" shape once a later analysis mints the right alias) stays
+  resolvable — `scripts/repair-cast-id-drift.mjs` pushes a rejected id to
+  `skipped` before any candidate is computed, so an id-wide block cost real,
+  permanent damage on the auto-reconciled path, not just an edge case. The legacy
+  `rejected` field is kept, read-only, for back-compat with a file written before
+  this change; no code path writes it anymore. This also made the reject
+  REVERSIBLE — see "Reversibility" above and `DELETE .../reject-orphan-match`
+  (`cast-reject-orphan.ts`) — because `forgetSupersededId` now returns what it
+  removed (D6) instead of discarding it, so the undo can restore the exact alias
+  the reject had shadowed.
 - **`rejected` is checked after the `exact` tier, not ahead of all four.** The
   first implementation round followed the brief literally (ahead of all four
   tiers, including `exact`) and it was wrong: a rejected id is, by construction,

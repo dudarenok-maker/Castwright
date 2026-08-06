@@ -17,7 +17,8 @@ import { existsSync, readdirSync } from 'node:fs';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
-import { buildCastResolver } from '../store/cast-resolve.js';
+import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 
 export interface CharacterSnapshot {
   tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
@@ -124,6 +125,17 @@ export interface OrphanedCharacterFallback {
   /** How many rendered segments (summed across every rendered chapter) carry
       this orphaned id. */
   segments: number;
+  /** #2092/#2089 D4 — every live cast id this orphaned id has been rejected
+      AGAINST (`cast-id-history.json`'s `rejectedPairs`, keyed on this
+      record's own orphaned id as the pair's `from`). Absent when the id has
+      never been rejected against anything. Populated regardless of
+      `resolution` — a rejected id is NOT filtered out of this map (D4's own
+      "do not filter rejected ids out of the banner as a tidy-up" trap: doing
+      so would delete the row, which is worse feedback than no chip at all,
+      and it would orphan the frontend's Undo control, which reads this
+      field to know what to undo). The frontend renders one "Not <Name> ·
+      Undo" chip per entry. */
+  rejectedAgainst?: string[];
 }
 
 /* #1105 — djb2 base-36 hash of a sentence's RAW text. Byte-identical to
@@ -314,27 +326,42 @@ export async function collectRenderedFallbackEngines(
    (`buildCastResolver`) — not a second matcher — so a segment is reported
    whether or not it happens to carry the #2023 stamp.
 
-   `rejectedIds` (#2040 Task 17) is threaded straight into `buildCastResolver`
-   so a user-rejected reconciliation reports as `'unresolved'` here on the very
-   next hydrate, rather than continuing to show the auto-match the user just
-   said was wrong — the banner's own idempotence depends on this collector
-   seeing the same rejection the resolver enforces everywhere else. */
+   `castIdHistory` (#2092/#2089 task 3) takes the WHOLE loaded `CastIdHistory`
+   object — not a bare `supersededBy` map with `rejected`/`rejectedPairs`
+   threaded separately as prior independent parameters. That used to let this
+   collector's caller (book-state.ts) pass `supersededBy` alone and silently
+   default the reject fields to empty — the exact shared-consumer-contract
+   defect shape #2040 Task 17 fix round 1 already closed for
+   `buildCastResolver` itself, and the SAME hazard this task exists to close
+   here structurally: a caller that forgets to thread `rejectedPairs` no
+   longer CAN, because there's only one parameter to pass. */
 export async function collectOrphanedCharacterFallbacks(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
   cast: ReadonlyArray<{ id: string }>,
-  castIdHistory: Readonly<Record<string, string>>,
-  rejectedIds: ReadonlyArray<string> = [],
+  castIdHistory: Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>,
 ): Promise<Record<string, OrphanedCharacterFallback>> {
   const out: Record<string, OrphanedCharacterFallback> = {};
   const segs = await loadSegmentsFiles(bookDir, chapters);
-  /* #2040 Task 17 fix round 1 — buildCastResolver now takes ONE history
-     object (`{ supersededBy, rejected }`) rather than two independent
-     parameters, so a caller can't pass one without the other. This
-     collector still keeps its own two params (`castIdHistory`/`rejectedIds`)
-     since book-state.ts loads them separately — bundled here at the single
-     internal call site instead. */
-  const resolver = buildCastResolver(cast, { supersededBy: castIdHistory, rejected: [...rejectedIds] });
+  const resolver = buildCastResolver(cast, castIdHistory);
+
+  /* #2092/#2089 D4, made tier-accurate by review round 2 (Important 1) —
+     `rejectedPairsGoverning` (cast-resolve.ts) is the ONE function both
+     this read side and the reject-undo route's write side call to decide
+     "which rejectedPairs apply to this raw id" — see its own doc comment
+     for the two-rule reasoning (raw always applies; normalised applies
+     only when the id's tier-3/4 resolution, computed IGNORING PAIR rejects,
+     says so). Round 1 unioned the raw and normalised keyspaces
+     unconditionally instead, which is broader than anything `resolver`
+     itself does for a single id — verified by review round 2's probe to
+     put a chip (and a disabled reject button) on a row the resolver had
+     never blocked, whose Undo the DELETE route couldn't find either since
+     it still matched pairs by raw `from` alone. Round 3 — the function now
+     takes `(cast, castIdHistory)` and builds its own ignoring-resolver
+     internally (see its own doc comment: this both closes M-1, a legacy
+     `rejected` block that used to get mis-attributed to an unrelated pair,
+     and makes passing the wrong resolver structurally unrepresentable),
+     so this call site no longer builds one itself. */
 
   for (const seg of segs) {
     for (const s of seg.segments ?? []) {
@@ -364,6 +391,8 @@ export async function collectOrphanedCharacterFallbacks(
           ? 'normalised'
           : 'alias';
 
+      const governingPairs = rejectedPairsGoverning(s.characterId, cast, castIdHistory);
+
       const existing = out[s.characterId];
       out[s.characterId] = {
         /* GATE 1 review — `resolveGroup` (synthesise-chapter.ts) stamps
@@ -379,6 +408,20 @@ export async function collectOrphanedCharacterFallbacks(
         resolution: resolutionTag,
         resolvedCharacterId: resolution?.character.id,
         segments: (existing?.segments ?? 0) + 1,
+        /* #2092/#2089 D4 — trap: never filtered out of this map even when
+           `resolutionTag` is 'unresolved' (which it always is for a
+           rejected id, per D2's no-fall-through). Doing so would delete the
+           row and orphan the frontend's Undo control. Tier-accurate per
+           review round 2 (Important 1) — see `rejectedPairsGoverning`'s own
+           doc comment for why a plain union of raw+normalised over-reports.
+           Deduped via `Set` (round 3, I-A) — `governingPairs` can legitimately
+           contain two DISTINCT pairs (different raw `from`) that both target
+           the SAME live `to` (the repo's own `the_torment`/`The-Torment`
+           shape, both rejected against the same character): without the
+           dedup, `.map` alone would carry that `to` twice, rendering two
+           identical "Not <Name> · Undo" chips with the same React key AND
+           the same `data-testid` (`OrphanRejectedChips`, src/views/cast.tsx). */
+        rejectedAgainst: governingPairs.length ? [...new Set(governingPairs.map((p) => p.to))] : undefined,
       };
     }
   }
