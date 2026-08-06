@@ -254,8 +254,8 @@ the table's risk column shows each correctly.
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) model | faster-whisper model size/name; cap at `base` on an 8 GB card | `base` | string | restart · sidecar | **medium** |
-| Content-QA (Whisper) compute type | CTranslate2 compute type; `auto` leaves it to the sidecar's own device-dependent fallback | `auto` | enum | restart · sidecar | **medium** |
-| Content-QA (Whisper) transcribe concurrency | Documented sidecar thread-pool width — no code currently reads it (#2014) | 2 | integer | restart · sidecar | **medium** |
+| Content-QA (Whisper) compute type | CTranslate2 compute type; `sidecar-default` leaves it to the sidecar's own device-dependent fallback — `auto` is CT2's own distinct value | `sidecar-default` | enum | restart · sidecar | **medium** |
+| Content-QA (Whisper) transcribe concurrency | Documented sidecar thread-pool width — no code currently reads it (#2014, tracked in #2177) | 2 | integer | restart · sidecar | **medium** |
 | Auto-fix voice mismatches | Re-render+replace severe voice mismatches | `false` | boolean | live | **medium** |
 | ASR max deletion run | Longest deletion run → truncation/drop drift | 4 | integer | live | low |
 | ASR min chars | Sentences shorter than this aren't scored | 12 | integer | live | low |

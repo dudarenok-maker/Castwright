@@ -144,36 +144,53 @@ def test_load_cuda_uses_int8_float16(fake_whisper_module, monkeypatch) -> None:
     assert model.compute_type == "int8_float16"
 
 
-def test_load_asr_compute_type_auto_is_treated_as_unset_on_cpu(fake_whisper_module, monkeypatch) -> None:
-    """#2014 — the config-registry knob's own default/sentinel is the literal
-    string "auto" (a static registry default can't represent the
-    device-dependent int8/int8_float16 fallback below). main.py must treat an
-    explicit ASR_COMPUTE_TYPE=auto the SAME as unset — resolving the normal
-    device-dependent default — rather than passing CTranslate2's own distinct
-    "auto" compute type straight through."""
+def test_load_asr_compute_type_sidecar_default_is_treated_as_unset_on_cpu(fake_whisper_module, monkeypatch) -> None:
+    """#2014, renamed by PR #2176 review finding 1 — the config-registry
+    knob's own default/sentinel is the literal string "sidecar-default" (a
+    static registry default can't represent the device-dependent
+    int8/int8_float16 fallback below, and "auto" is CTranslate2's OWN enum
+    member — see the next test — so the sentinel can't reuse that name).
+    main.py must treat an explicit ASR_COMPUTE_TYPE=sidecar-default the SAME
+    as unset — resolving the normal device-dependent default."""
     monkeypatch.delenv("ASR_DEVICE", raising=False)
-    monkeypatch.setenv("ASR_COMPUTE_TYPE", "auto")
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "sidecar-default")
     engine = main.WhisperEngine()
     engine._ensure_loaded()
     model = fake_whisper_module.instances[-1]
     assert model.compute_type == "int8"
 
 
-def test_load_asr_compute_type_auto_is_treated_as_unset_on_cuda(fake_whisper_module, monkeypatch) -> None:
-    """Same sentinel, cuda side: ASR_COMPUTE_TYPE=auto resolves to
-    int8_float16, not the literal "auto" string (#2014)."""
+def test_load_asr_compute_type_sidecar_default_is_treated_as_unset_on_cuda(fake_whisper_module, monkeypatch) -> None:
+    """Same sentinel, cuda side: ASR_COMPUTE_TYPE=sidecar-default resolves to
+    int8_float16 (#2014, renamed by PR #2176 review finding 1)."""
     monkeypatch.setenv("ASR_DEVICE", "cuda")
-    monkeypatch.setenv("ASR_COMPUTE_TYPE", "auto")
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "sidecar-default")
     engine = main.WhisperEngine()
     engine._ensure_loaded()
     model = fake_whisper_module.instances[-1]
     assert model.compute_type == "int8_float16"
 
 
+def test_load_asr_compute_type_auto_passes_through_to_ctranslate2_unchanged(fake_whisper_module, monkeypatch) -> None:
+    """PR #2176 review finding 1 — "auto" is CTranslate2's OWN enum member
+    ("automatically select the fastest computation type supported on this
+    system and device"), not this sidecar's sentinel. `_compute_type()` must
+    NOT intercept it: it has to reach WhisperModel verbatim, on either
+    device, exactly like any other concrete override. Only the literal
+    string "sidecar-default" (or unset) means "let the sidecar pick its own
+    int8/int8_float16 fallback" now."""
+    monkeypatch.setenv("ASR_DEVICE", "cuda")
+    monkeypatch.setenv("ASR_COMPUTE_TYPE", "auto")
+    engine = main.WhisperEngine()
+    engine._ensure_loaded()
+    model = fake_whisper_module.instances[-1]
+    assert model.compute_type == "auto"
+
+
 def test_load_asr_compute_type_concrete_override_passes_through_unchanged(fake_whisper_module, monkeypatch) -> None:
-    """A concrete ASR_COMPUTE_TYPE override (not "auto") reaches WhisperModel
-    verbatim, on either device — the escape hatch for a roomier card
-    (main.py docstring, #2014)."""
+    """A concrete ASR_COMPUTE_TYPE override (not the "sidecar-default"
+    sentinel) reaches WhisperModel verbatim, on either device — the escape
+    hatch for a roomier card (main.py docstring, #2014)."""
     monkeypatch.setenv("ASR_DEVICE", "cpu")
     monkeypatch.setenv("ASR_COMPUTE_TYPE", "float32")
     engine = main.WhisperEngine()

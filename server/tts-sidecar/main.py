@@ -7173,15 +7173,24 @@ class WhisperEngine:
 
         #2014 — the config-registry knob (`qa.asr.computeType`) can't ship a
         single static default that matches this method's own device-dependent
-        fallback, so its registry default is the sentinel string "auto". An
-        explicit ASR_COMPUTE_TYPE=auto is therefore treated identically to
-        unset/empty here — NOT passed through as CTranslate2's own distinct
-        "auto" compute type, which picks per-device differently than this
-        int8/int8_float16 pair does."""
+        fallback, so its registry default is the sentinel string
+        "sidecar-default". An explicit ASR_COMPUTE_TYPE=sidecar-default is
+        therefore treated identically to unset/empty here.
+
+        PR #2176 review finding 1 — the sentinel was originally named "auto",
+        which SHADOWED CTranslate2's own distinct "auto" compute type
+        ("automatically select the fastest computation type supported on
+        this system and device" — the one value that can never raise CT2's
+        "device or backend do not support efficient X computation" error).
+        Intercepting it here made CT2's real `auto` unreachable by any enum
+        member and silently changed behaviour for anyone who had hand-set
+        ASR_COMPUTE_TYPE=auto. The sentinel now lives outside CT2's
+        vocabulary, so "auto" falls through and reaches WhisperModel
+        verbatim like any other concrete value."""
         family, _ = _parse_device(device if device is not None else self._device)
         default = "int8_float16" if family == "cuda" else "int8"
         raw = os.environ.get("ASR_COMPUTE_TYPE", "").strip()
-        return default if raw in ("", "auto") else raw
+        return default if raw in ("", "sidecar-default") else raw
 
     def _ensure_loaded(self, device: Optional[str] = None) -> None:
         if self._model is not None:
