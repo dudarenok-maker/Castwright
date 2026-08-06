@@ -250,12 +250,18 @@ function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: s
 
 /** #2092/#2089 M2 (review round 1) — self-loop `rejectedPairs` entries
  *  `repointRejectedPairs` had to drop during this call, if any (see its own
- *  doc comment). Every current caller ignores this (a purely additive
- *  return, replacing the prior `Promise<void>`) — none of them manage
- *  `cast.json`'s `notLinkedTo` edges, which is what a dropped pair's
- *  original reject also wrote and this module has no access to clean up
- *  itself. A future caller that DOES care can consume it; today this is
- *  reported, not acted on further. */
+ *  doc comment). #2133 — a reject's two writes (this `rejectedPairs` entry
+ *  and the one-sided `notLinkedTo` edge the original reject also wrote onto
+ *  `cast.json`) are created together and must be destroyed together (see
+ *  `docs/features/278-cast-character-identity.md`'s invariant of the same
+ *  name) — a dropped pair with its `notLinkedTo` edge left behind would
+ *  permanently suppress §4.4's name matcher for a pairing that no longer
+ *  exists, invisibly. BOTH production callers now act on this return:
+ *  `analysis.ts`'s `recordRetirements` and `cast-merge.ts`'s
+ *  `performCastMerge` each locate any surviving `notLinkedTo` entry naming a
+ *  dropped pair's `from` id and remove it in the same write. This module
+ *  never touches `cast.json` itself (no access to it), so it can only
+ *  report the drop — cleanup is necessarily the caller's job. */
 export interface RetireCharacterIdResult {
   droppedSelfLoopRejections: RejectedPair[];
 }

@@ -213,6 +213,45 @@ owner: null
    93/161 before), and *Unlocked* alone still carries 34 orphaned segments
    under `unknown-male`; see the on-box register's A33 row) or a re-render
    to recover.
+10. **A reject's two writes are created together and must be destroyed
+    together** (#2133). `POST /reject-orphan-match` writes BOTH a
+    `rejectedPairs` entry on `cast-id-history.json` and a one-sided
+    `notLinkedTo` edge on `cast.json` — see this same doc's invariant 2 and
+    `rejectedPairs`'s own doc comment on `CastIdHistory`
+    (`server/src/store/cast-id-history.ts`) for why both are needed. Anything
+    that removes one must remove the other, or the survivor becomes a
+    decision about a pairing that no longer exists, applied forever,
+    invisibly:
+    - **`retireCharacterId` dropping a self-loop `rejectedPairs` entry**
+      (`RetireCharacterIdResult.droppedSelfLoopRejections`,
+      `cast-id-history.ts`) — when the id a pair was rejected `to` retires
+      into a replacement that IS that same pair's `from`, the pair becomes
+      nonsensical (`X !-> X`) and is dropped. `retireCharacterId` never
+      touches `cast.json` itself, so it can only report the drop; BOTH
+      production callers (`analysis.ts`'s `recordRetirements` and
+      `cast-merge.ts`'s `performCastMerge`) now act on it, clearing the
+      matching `notLinkedTo` edge in the same write (or the same lock span,
+      for `cast-merge.ts`, which already holds it — rule 1 forbids a second
+      nested `withCastLock` for the same book).
+    - **`DELETE /reject-orphan-match`'s abandoned-half-write path** — the
+      route writes `notLinkedTo` first (unconditional, per its own module
+      doc) and `rejectedPairs` second; if the process dies or 500s between
+      the two and the user never retries, the `notLinkedTo` edge survives
+      with no pair, and the only removal path (`rejectedPairsGoverning`
+      returning a matching pair) can never find one. DELETE now also clears
+      the edge unconditionally, keyed on `orphanedId` directly, alongside the
+      pair-scoped removal (which stays keyed on each governing pair's own
+      `from`, for the `the_torment`/`The-Torment` normalised-collision
+      shape).
+    - **A dead `notLinkedTo` target on the read side** is a separate,
+      narrower case (finding B, same #2133 comment): `rejectedPairsGoverning`
+      rule 1 has no liveness check on `to`, so a chip can still name a
+      character no longer in the live cast (folded away by an unrelated
+      merge). The pair is already inert for resolution regardless — the chip
+      is cosmetic and its Undo button would 404 forever, so `src/views/
+      cast.tsx`'s `OrphanRejectedChips` hides it client-side rather than
+      changing `rejectedPairsGoverning`'s deliberately-raw rule-1 semantics
+      or loosening the DELETE route to accept a non-live `characterId`.
 
 ## Deviations from the spec
 

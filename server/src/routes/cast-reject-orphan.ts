@@ -502,6 +502,23 @@ castRejectOrphanRouter.delete(
       for (const pair of matchingPairs) {
         if (removeNotLinked(character, bookId, pair.from)) changed = true;
       }
+      /* #2133 fold finding A — the abandoned-half-write path: POST's
+         `appendNotLinked` can land (writing `{bookId, characterId:
+         orphanedId}` onto this character) and then `rejectOrphanedPair`
+         500s before the pair itself ever reaches `rejectedPairs`. If the
+         user never retries, `governingPairs`/`matchingPairs` above are
+         permanently empty for this `(orphanedId, characterId)` — there is
+         no pair to loop over, so the edge above never gets cleared, no chip
+         ever shows it, and there is no UI path left to remove it. Per the
+         same "a reject's two writes are created together and must be
+         destroyed together" invariant (`docs/features/
+         278-cast-character-identity.md`), clear this edge unconditionally,
+         by `orphanedId` directly rather than any pair's `from` — safe even
+         when `matchingPairs` already covered it (removeNotLinked is
+         idempotent, and a same-book `notLinkedTo` entry can only ever be
+         one this route itself wrote; cast-not-linked-to.ts's DELETE 400s on
+         a same-book pair, so it never writes this shape). */
+      if (removeNotLinked(character, bookId, orphanedId)) changed = true;
       if (changed) {
         await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
       }

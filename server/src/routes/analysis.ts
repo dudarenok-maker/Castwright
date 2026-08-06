@@ -204,9 +204,18 @@ export async function readPriorCastForMerge(
    definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
    where no roster is final yet, and say why at the call site — the parameter
    is deliberately required rather than optional so a new call site cannot
-   skip the filter by omission. */
-async function recordRetirements(
+   skip the filter by omission.
+
+   `bookId` (#2133) is threaded through purely so a retirement that drops a
+   self-loop `rejectedPairs` entry (`retireCharacterId`'s
+   `droppedSelfLoopRejections`) can locate and clear the matching one-sided
+   `notLinkedTo` edge on `cast.json` — that edge is keyed by `(bookId,
+   characterId)`, not `bookDir`. `null`/undefined is tolerated (mirrors
+   `bookDir`): the retirement itself still records, just without the
+   notLinkedTo cleanup, since there is no book to look one up on. */
+export async function recordRetirements(
   bookDir: string | null | undefined,
+  bookId: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
@@ -227,7 +236,56 @@ async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(bookDir, from, to);
+    if (result.droppedSelfLoopRejections.length && bookId) {
+      await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+    }
+  }
+}
+
+/* #2133 — a reject's two writes (the `rejectedPairs` entry on
+   cast-id-history.json and the one-sided `notLinkedTo` edge on cast.json)
+   are created together and must be destroyed together (see
+   `docs/features/278-cast-character-identity.md`'s invariant of the same
+   name). `retireCharacterId` reports a dropped self-loop pair
+   (`droppedSelfLoopRejections`) but never touches cast.json itself — this is
+   the caller-side half: a fresh read-through-write on cast.json, wrapped in
+   its OWN `withCastLock` (none of `recordRetirements`' callers in this file
+   hold one for this book already — the only `withCastLock` in this file
+   guards the unrelated "Start fresh" cast.json delete). Best-effort: a
+   failure here must not fail the retirement itself, mirroring every other
+   id-history write in this file — the side-table is never authoritative for
+   identity, and a surviving stale edge merely re-suppresses one future
+   §4.4 name-match rather than corrupting anything already on disk. */
+async function clearNotLinkedEdgesForDroppedRejections(
+  bookDir: string,
+  bookId: string,
+  dropped: ReadonlyArray<{ from: string; to: string }>,
+): Promise<void> {
+  const deadIds = new Set(dropped.map((p) => p.from));
+  try {
+    await withCastLock(bookDir, async () => {
+      const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) return;
+      let changed = false;
+      for (const character of cast.characters) {
+        const existing = character.notLinkedTo ?? [];
+        if (!existing.length) continue;
+        const next = existing.filter((p) => !(p.bookId === bookId && deadIds.has(p.characterId)));
+        if (next.length !== existing.length) {
+          character.notLinkedTo = next;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+      }
+    });
+  } catch (err) {
+    console.warn(
+      '[analysis] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
+      err,
+    );
   }
 }
 
@@ -2893,7 +2951,13 @@ export async function runMainAnalyzerJob(
          at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
          against the roster that actually got persisted. */
       try {
-        await recordRetirements(recordRef.bookDir, reconciled.retirements, null, log);
+        await recordRetirements(
+          recordRef.bookDir,
+          recordRef.bookId ?? bookIdFromTitle(recordRef.title),
+          reconciled.retirements,
+          null,
+          log,
+        );
       } catch (historyErr) {
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
@@ -4911,8 +4975,8 @@ export async function runMainAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, bookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, bookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -4922,7 +4986,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, bookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5435,7 +5499,13 @@ export async function runSubsetAnalyzerJob(
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
-      await recordRetirements(record.bookDir, dedupRetirements, null, log);
+      await recordRetirements(
+        record.bookDir,
+        record.bookId ?? bookIdFromTitle(record.title),
+        dedupRetirements,
+        null,
+        log,
+      );
     } catch (historyErr) {
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
@@ -6173,8 +6243,9 @@ export async function runSubsetAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            const subsetBookId = record.bookId ?? bookIdFromTitle(record.title);
+            await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -6184,7 +6255,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to

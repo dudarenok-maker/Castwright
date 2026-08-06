@@ -23,6 +23,7 @@ import {
   stage1ShrinkRefused,
   buildStage1ChapterInbox,
   readPriorCastForMerge,
+  recordRetirements,
   trackForReplay,
   replayCatchUp,
   castInFlightEntryToLiveChapter,
@@ -2133,6 +2134,96 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
     const dir = makeBookDir();
     try {
       expect(await readPriorCastForMerge(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)', () => {
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-record-retirements-selfloop-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+
+  /* A reject's two writes (the `rejectedPairs` entry on cast-id-history.json
+     and the one-sided `notLinkedTo` edge on cast.json) are created together
+     and must be destroyed together (#2133). This mirrors the exact
+     `retireCharacterId` self-loop shape `cast-id-history.test.ts`'s M2 test
+     already pins (`rejectOrphanedPair(dir, 'mayrin', 'mairin')` then
+     `retireCharacterId(dir, 'mairin', 'mayrin')` drops `{from: mayrin, to:
+     mayrin}`) — seeded here with the matching `notLinkedTo` edge ALSO present
+     on cast.json's `mayrin` row, the shape `seedReuseGuardsFromPriorCast`
+     (merge-analysis-cast.ts) produces when a fresh analysis remints an
+     orphaned, previously-rejected id as a live character (the module's own
+     "an orphaned id is very often the character's own name" case). */
+  it('removes the notLinkedTo edge naming the dropped pair\'s `from` id from cast.json', async () => {
+    const dir = makeBookDir();
+    const bookId = 'b_record_retirements_selfloop_test';
+    try {
+      writeFileSync(
+        join(dir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'mayrin',
+              name: 'Mayrin',
+              notLinkedTo: [{ bookId, characterId: 'mayrin' }],
+            },
+          ],
+        }),
+      );
+      const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+
+      const history = await loadCastIdHistory(dir);
+      expect(history.rejectedPairs ?? []).toEqual([]);
+
+      const cast = JSON.parse(
+        readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
+      ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> };
+      expect(cast.characters.find((c) => c.id === 'mayrin')!.notLinkedTo ?? []).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an UNRELATED notLinkedTo edge on the same character untouched', async () => {
+    // Same self-loop drop as above, but the row also carries an edge for a
+    // different orphaned id — proves the cleanup is scoped to the dropped
+    // pair's own `from`, not a blanket clear of the character's notLinkedTo.
+    const dir = makeBookDir();
+    const bookId = 'b_record_retirements_selfloop_unrelated_test';
+    try {
+      writeFileSync(
+        join(dir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            {
+              id: 'mayrin',
+              name: 'Mayrin',
+              notLinkedTo: [
+                { bookId, characterId: 'mayrin' },
+                { bookId, characterId: 'someone-else' },
+              ],
+            },
+          ],
+        }),
+      );
+      const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {});
+
+      const cast = JSON.parse(
+        readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
+      ) as { characters: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> };
+      expect(cast.characters.find((c) => c.id === 'mayrin')!.notLinkedTo).toEqual([
+        { bookId, characterId: 'someone-else' },
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
