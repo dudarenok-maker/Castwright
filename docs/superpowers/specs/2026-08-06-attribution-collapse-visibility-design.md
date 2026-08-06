@@ -9,13 +9,17 @@ Design work behind **#1984** — _"Attribution collapse is invisible: the
 dropped-quotes panel shows the last batch only, in a transient view, and never
 the effect."_
 
-> **Revision 2.** Revision 1 went through the mandatory adversarial review gate
-> and did not survive it. The gate found the headline fix was a **placebo**, the
-> metric's numerator matched **one of two** narrator ids and missed the orphan
-> class entirely, the threshold was **uncalibrated**, and the "shared module"
-> safeguard for the library badge **did not exist**. Every finding below was
-> re-verified against the tree before folding. §Review findings records the
-> round.
+> **Revision 3.** Revision 1 went through the mandatory adversarial review gate
+> and did not survive it: the headline fix was a **placebo**, the metric's
+> numerator matched **one of two** narrator ids and missed the orphan class
+> entirely, the threshold was **uncalibrated**, and the "shared module"
+> safeguard for the library badge **did not exist**. Revision 3 then folded a
+> finding from the repo owner that revision 2's own state model could not
+> express: a book with a **47-member cast and zero attributed sentences**
+> (_Ночной дозор_) rendered as perfectly healthy — the #1984 failure shape,
+> inside the feature built to close #1984. Every finding below was re-verified
+> against the tree or the live workspace before folding. §Review findings
+> records both rounds.
 
 ## Problem
 
@@ -69,6 +73,7 @@ they can act on.
 | D8 | **Ship in two waves: measure, then decide.** The threshold is set from the real library, not from a sweep whose method no longer exists. See R-C3. |
 | D9 | **"Narrator" means every id that renders in the narrator's voice** — both members of `NARRATOR_CHARACTER_IDS`, plus unresolvable ids. See R-C2. |
 | D10 | **The Cast-view re-run confirms first when rendered audio exists.** |
+| D11 | **"Cast built, nothing attributed" is its own alarm state**, not a quiet one. Added in revision 3 — see R-O1. |
 
 ---
 
@@ -78,6 +83,47 @@ Wave 1 ships **no threshold and no UI.** It ships the metric and a read-only
 script that prints the figure for every book in the real library, so the
 threshold in Wave 2 is set from data rather than from a sweep whose counting
 method is not in the tree.
+
+### Prerequisite: _Ночной дозор_ must be re-analysed before the threshold is set
+
+Wave 1's *implementation* is not blocked. The **threshold decision it exists to
+inform** is, and by one specific book.
+
+_Ночной дозор_ (Night Watch, ru, `mns_oyK7Po6BiT`) is the book plan 247 built
+the `the-coalfall-commission.ru-dash.md` fixture from, because it is
+**dash-delimited Russian** — i.e. the single strongest stressor of the
+`isSpokenLine` dash rule that R-C3 turns on. Measured in the live workspace on
+2026-08-06:
+
+| | |
+|---|---|
+| `state.json` chapters | 9 |
+| `cast.json` members | 47 |
+| Sentences in the analysis cache | **0** — `stage1` present, `chapters: {}`, 0.4 MB |
+| Cache `updatedAt` | 2026-07-17 |
+| dropped-quotes batches | 18 (**308** cumulative drops; **7** in the last) |
+
+Every other book's cache holds its sentences normally (13,582 / 12,835 / 11,428
+/ 10,849 / 10,475 / 10,198 in the six largest), so this is not a wrong
+assumption about where sentences live — it is this book. Phase 0 completed
+repeatedly; Phase 1 output is not persisted. The cause is not determinable from
+the files.
+
+**Consequence for Wave 1:** the book that most stresses the dash rule
+contributes a blank row, so a threshold set without re-analysing it is set from
+books that do not exercise the failure mode. Order of work: re-analyse →
+run the script → set the threshold.
+
+Its 47 cast members are the book's only surviving asset. Re-analysis goes
+through the cast merge rather than replacing the roster, but that roster is what
+is at risk; copy `cast.json` first.
+
+**Second consequence — a real-world confirmation of D6.** Night Watch's ledger
+holds 308 drops across 18 batches with 7 in the last. Today's panel would read
+_"dropped 7 quotes · latest batch."_ Summing the whole ledger yields **308
+across 18 passes**; the `runId` grouping revision 1 proposed would have shown
+**7**. A second book, at 20× Coalfall's scale, independently confirming both the
+bug and the fix.
 
 ## The metric
 
@@ -401,15 +447,36 @@ book is actually collapsed now.
 ## Failure modes
 
 The computation **fails open**, but failing open is how a book goes silent, so
-there are **three** states and the library shows all three:
+there are **four** states and the library shows all four:
 
-| State | Library | Cast view |
-|---|---|---|
-| `ok` | nothing | nothing |
-| `collapsed` | warning badge | full notice |
-| `unmeasurable` | neutral marker | _"Attribution health couldn't be measured for this book."_ |
+| State | Rule | Library | Cast view | Gates generation |
+|---|---|---|---|---|
+| `ok` | — | nothing | nothing | no |
+| `collapsed` | share ≥ threshold, book or chapter | warning badge | full notice | yes |
+| `missing` | `castCount > 0 && spokenTotal === 0` | warning badge | full notice | **yes** |
+| `unmeasurable` | cache absent or corrupt | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
-A book never analysed is `ok`, not `unmeasurable`.
+**`missing` is D11, and it is not a rounding case.** Revision 2 gave a book with
+a cast and no attributed sentences `share: null` → `ok`, so _Ночной дозор_ — 47
+cast members, nothing attributed to any of them — would have rendered as
+perfectly healthy in the library. That is the #1984 failure shape reproduced
+inside the feature written to close #1984. It is arguably worse than a 72%
+collapse: at 72% something is still attributed.
+
+Its copy cannot reuse the collapsed notice, which would read "0 of 0 quoted
+lines". It reads:
+
+> ⚠ This book has a cast but no dialogue attributed to it.
+> 47 cast members, and not one line assigned. Analysis built the cast but never
+> finished attributing the text.
+
+**`missing` is distinguished from legitimate pure narration by `castCount`, not
+by `spokenTotal`.** A non-fiction book or a pure-narration text has no
+non-narrator cast members, so `castCount === 0` and it stays `ok`. The alarm
+fires only on the contradiction: characters exist, and nothing is theirs.
+
+A book never analysed has neither cast nor sentences, so it is `ok` — not
+`missing`, not `unmeasurable`.
 
 `assertCacheChaptersShape` throws **inside `loadAnalysisCache`**
 (`analysis-cache.ts:124`), not at measure time, so the catch must wrap the
