@@ -64,6 +64,7 @@ import {
   CastVoiceConsentError,
   preserveClonedSlotsOnCastWrite,
   preserveDesignedVoicesOnCastWrite,
+  preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
 } from '../workspace/preserve-cast-voices.js';
 import {
@@ -141,7 +142,10 @@ async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<
      Runs BEFORE preserveDesignedVoicesOnCastWrite, whose slot-blind
      fill-the-gap pass only ever restores a wholly-absent map. */
   const restored = preserveClonedSlotsOnCastWrite(existingChars, cast.characters);
-  const characters = preserveDesignedVoicesOnCastWrite(existingChars, restored);
+  const characters = preserveNotLinkedToOnCastWrite(
+    existingChars,
+    preserveDesignedVoicesOnCastWrite(existingChars, restored),
+  );
   return { ...cast, characters };
 }
 
