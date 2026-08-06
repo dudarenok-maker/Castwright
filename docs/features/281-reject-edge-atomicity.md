@@ -115,7 +115,7 @@ rule heals strictly more and risks strictly no more.
 |---|---|---|
 | `server/src/routes/cast-reject-orphan.ts` | modify | POST write order + both halves fatal + two distinct 500 messages |
 | `server/src/routes/cast-reject-orphan-atomicity.test.ts` | **create** | Fault-injection + ordering pins. New file so its `vi.mock` cannot poison the existing suite's `Promise.all` dynamic import (`cast-reject-orphan.test.ts:106-109`) |
-| `server/src/routes/cast-reject-orphan.failure-modes.test.ts` | modify | **Three of its cases pin the old order and go red.** See Task 1 Step 4 — this file is the one the fix breaks |
+| `server/src/routes/cast-reject-orphan.failure-modes.test.ts` | modify | **Three of its cases pin the old order and go red.** See Task 1 Step 5 — **four** of its cases move; this file is the one the fix breaks |
 | `server/src/store/reject-edge-reconcile.ts` | **create** | Pure `(bookId, characters, history) → { adds, removes, next }`. No I/O, no locking |
 | `server/src/store/reject-edge-reconcile.test.ts` | **create** | Unit tests for every reconciliation rule |
 | `server/src/routes/analysis.ts` | modify | New best-effort `reconcileRejectEdges` helper + two call sites |
@@ -135,8 +135,9 @@ rule heals strictly more and risks strictly no more.
 - Modify: `server/src/routes/cast-reject-orphan.ts:339-402` (the write block) and `:97-110`
   (the module doc paragraph that states the superseded rule)
 - Test: `server/src/routes/cast-reject-orphan-atomicity.test.ts` (create)
-- Test: `server/src/routes/cast-reject-orphan.failure-modes.test.ts` (**modify — three cases at
-  `:205`, `:216`, `:340` pin the behaviour this task inverts**)
+- Test: `server/src/routes/cast-reject-orphan.failure-modes.test.ts` (**modify — four cases at
+  `:205`, `:216`, `:340`, `:384` pin, or silently stop exercising, the behaviour this task
+  inverts**)
 
 **Interfaces:**
 - Consumes: nothing from other tasks.
@@ -527,9 +528,9 @@ it with the spine rule and keep its I5 sentence, which is still true of DELETE:
    was changed".
 ```
 
-- [ ] **Step 5: Rewrite the three cases in `cast-reject-orphan.failure-modes.test.ts` that pin the OLD order**
+- [ ] **Step 5: Rewrite the four cases in `cast-reject-orphan.failure-modes.test.ts` that pin the OLD order**
 
-**Do this deliberately, in this task, with the reasoning in the commit body.** These three tests
+**Do this deliberately, in this task, with the reasoning in the commit body.** These four tests
 encode the pre-fix contract — one of them pins #2166's defect *as correct behaviour*. Leaving them
 to surface at Ship time reads as "the fix broke something" instead of "the fix changed a contract
 on purpose".
@@ -538,10 +539,24 @@ on purpose".
 |---|---|---|---|
 | `:205` | `'rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)'` | asserts `mairin?.notLinkedTo` equals `[{ bookId, characterId: 'mayrin' }]` after the pair write throws. **This is #2166, pinned as correct.** | **Invert it.** Retitle to `'rejectOrphanedPair failing leaves cast.json untouched — the edge is never written (#2166)'` and assert `expect(mairin?.notLinkedTo).toBeUndefined();` |
 | `:216` | `'a subsequent successful retry after a rejectOrphanedPair failure returns 200'` | final line `expect(second.body.alreadyPresent).toBe(true);` — post-reorder the first attempt writes no edge, so the retry's `appendNotLinked` returns `true` and `alreadyPresent` is `false` | Flip to `expect(second.body.alreadyPresent).toBe(false);` and replace the "already present from the first attempt" comment with: the first attempt wrote nothing, so the retry writes the edge for the first time |
-| `:340` | `"POST's notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge"` | it manufactures the stranded state **through the POST route**, which this task makes impossible | Keep the test — DELETE's unconditional clear (`:537-540`) is still worth pinning for legacy books. **Change only its setup:** seed the stranded edge directly via `writeBookOnDisk` with `notLinkedTo` pre-populated and no `cast-id-history.json`, instead of producing it with a failing POST. Add a comment that the POST can no longer create this state and the case now covers books stranded *before* this fix |
+| `:340` | `"POST's notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge"` | it manufactures the stranded state **through the POST route**, which this task makes impossible | Keep the test — DELETE's unconditional clear (`:537-540`) is still worth pinning for legacy books. Replace **only `:358-362`** (the `rejectOrphanedPairMock` throw, the POST, and its 500 assertion) with a `writeBookOnDisk([...])` seeding `mairin.notLinkedTo = [{ bookId, characterId: 'mayrin' }]`. Add a comment that POST can no longer create this state, so the case now covers books stranded *before* this fix |
+| `:384` | `'leaves an UNRELATED notLinkedTo edge on the same character untouched'` | **it stays green while testing nothing.** It builds its `mayrin` edge with the same failing POST (`:402-406`); post-reorder no such edge is written, so DELETE's unconditional clear (`:537`) returns false, `changed` stays false, the cast write at `:538-540` never runs, and `:412-414` passes because *nothing happened*. Its stated purpose (`:386-387` — "proves the unconditional clear is scoped to THIS orphanedId, not a blanket wipe") is no longer exercised at all | Same treatment: replace `:402-406` with a seeded roster. `writeBookOnDisk` at `:388-397` already seeds `someone-else`; add `{ bookId, characterId: 'mayrin' }` beside it so the clear has something in scope to remove. Keep `:398-401` and the final assertion |
+
+**Keep the fresh-history `writeFileSync` in both tests** (`:354-357` and `:398-401`). Its own
+comment at `:349-353` says why it is load-bearing: `beforeEach` (`:142-153`) resets `cast.json`
+only, and the earlier tests at `:216`/`:233`/`:272` let the real `rejectOrphanedPair` persist a
+`{from:'mayrin', to:'mairin'}` pair into the **same** `bookDir`. Delete it and that leftover pair
+makes `rejectedPairsGoverning` non-empty, so `:376`/`:377` (`wasRejected: false`,
+`removedFrom: []`) go red — and the tempting response to *that* is to weaken the assertion, which
+would erase the #2133 fold's own regression coverage.
 
 Verified unaffected, do not touch: `:175`, `:196` (its `/failed to durably record/i` still matches
-the new message), `:233`, `:258`, `:272`, `:290`, `:384`.
+the new message), `:233`, `:258`, `:272`, `:290`.
+
+**Before moving on, audit `cast-reject-orphan.test.ts` the same way.** Step 6 requires that file
+to stay green *untouched* — but "green" is not the bar; `:384` was green and proved nothing. Grep
+it for any case that manufactures state through a failing POST and re-derive what it still
+exercises post-reorder.
 
 - [ ] **Step 6: Run all three suites**
 
@@ -551,7 +566,7 @@ cd server && npx vitest run src/routes/cast-reject-orphan-atomicity.test.ts src/
 
 Expected: PASS, all three. `cast-reject-orphan.test.ts` must stay green **untouched** — if
 something in *that* file moved, fix the route, not the test. That instruction does **not** extend
-to `failure-modes.test.ts`, whose three cases Step 5 changed on purpose.
+to `failure-modes.test.ts`, whose four cases Step 5 changed on purpose.
 
 - [ ] **Step 7: Prove each new assertion can fail**
 
@@ -568,7 +583,7 @@ git add server/src/routes/cast-reject-orphan.ts \
 git commit -m "fix(server): write the reject's pair before its edge (#2166)"
 ```
 
-The commit body must name the three inverted cases and say why each moved — a reviewer seeing
+The commit body must name all four moved cases and say why each moved — a reviewer seeing
 `toEqual([...])` become `toBeUndefined()` in a failure-modes suite needs to know that was the
 point, not collateral.
 
@@ -1127,9 +1142,13 @@ describe('reconcileRejectEdgesOnDisk', () => {
        reconciliation is per-PERSIST and derived from state — so it must see
        that as consistent, not as "a pair whose edge is missing".
 
-       The book carries a LIVE pair+edge alongside the dropped one, so the
-       reconciliation has real work-shaped input rather than an empty file it
-       could ignore for any reason at all. */
+       DOCUMENTARY, not evidential — stated plainly rather than counted. The
+       fixture is a consistent book: `mairin` has a backed edge and `mara` has
+       neither pair nor edge (the post-#2133 state, where retireCharacterId
+       dropped the pair and its helper cleared the edge). Nothing here can
+       redden against any implementation that derives adds solely from
+       `rejectedPairs`, which is the only thing this one does. Its value is
+       that it writes the interaction down. See Step 7. */
     seed(
       {
         characters: [
@@ -1239,7 +1258,7 @@ export async function reconcileRejectEdgesOnDisk(
 currently imported. The group at `:119-124` is `retireCharacterId`,
 `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`,
 `refuseRetirementsOfLiveIds`. Everything else the helper needs is already present: `readJson` /
-`writeJsonAtomic` (`:107`), `withCastLock` (`:108`), `castJsonPath`, `CharacterOutput` (`:94`).
+`writeJsonAtomic` (`:107`), `withCastLock` (`:108`), `CharacterOutput` (`:94`) and `castJsonPath` (`:100`).
 
 - [ ] **Step 4: Add the two call sites**
 
@@ -1290,8 +1309,22 @@ it('[C7] is wired into BOTH authoritative persists', () => {
 });
 ```
 
-Its weakness is stated rather than hidden: it proves the *text* is present, not that it executes.
-That is strictly more than zero, and it is what is available here.
+Two weaknesses, stated rather than hidden:
+- It proves the *text* is present, not that it executes. That is strictly more than zero, and it
+  is what is available here.
+- It is an exact-string match against another file's source, so a rename of `retirementBookId` /
+  `subsetBookId`, or an added argument, reddens it with a failure message that does not explain
+  itself. **Give it a failure hint** using Vitest's second `expect` argument — note this is an
+  argument to `expect`, *not* to the matcher:
+
+  ```ts
+  expect(calls, 'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3').toHaveLength(2);
+  ```
+
+(`readFileSync` is already in Step 1's `node:fs` import; `import.meta.url` resolves to the real
+source path under Vitest here — `openapi-design-parity.test.ts:64` is an in-directory precedent.
+Prettier's `printWidth` is 100 and both call lines are ~84 chars at their indent, so neither wraps
+out from under the `toContain`.)
 
 - [ ] **Step 5: Run to verify it passes, and that the lock guard is still green**
 
@@ -1764,10 +1797,15 @@ Then replace `#NNNN` in Step 1 with the issue number, and add the same number to
   time it's analysed.
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Add this plan to `docs/features/INDEX.md`**
+
+Under its area, beside plan 280 (`INDEX.md:48`). Before-shipping step 4 wants a new plan indexed
+in the PR that ships it, not after the merge.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/features/278-cast-character-identity.md docs/release-notes-next.md RELEASE_NOTES.md docs/superpowers/specs/2026-08-06-reject-edge-atomicity-design.md
+git add docs/features/278-cast-character-identity.md docs/features/INDEX.md \n        docs/release-notes-next.md RELEASE_NOTES.md \n        docs/superpowers/specs/2026-08-06-reject-edge-atomicity-design.md
 git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
 ```
 
@@ -1777,11 +1815,9 @@ git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
 
 - [ ] `npm run verify:fast:branch` from the worktree root. Then `cd server && npm run test` in
       full — Tasks 1–5 touch four suites and a scoped run can hide a cross-suite break.
-- [ ] **Add this plan to `docs/features/INDEX.md`** under its area, in **this** PR (before-shipping
-      step 4). `280` is at `INDEX.md:48`; `281` currently has no entry.
 - [ ] Push; open the PR titled `fix(server): make the reject's two writes fail recoverably`,
       body linking this plan and `Closes #2166`, plus "Also filed, found in passing: #NNNN".
-      The body must also declare the three inverted `failure-modes.test.ts` cases (Task 1 Step 5)
+      The body must also declare the four moved `failure-modes.test.ts` cases (Task 1 Step 5)
       — an unannounced test inversion reads as scope creep to a reviewer.
 - [ ] **On-box acceptance: none owed.** Every behaviour is provable by fault injection in unit
       tests — no GPU, no sidecar, no analyzer, no real book. Stated explicitly rather than

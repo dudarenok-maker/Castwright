@@ -77,7 +77,7 @@ Revision 1 claimed a same-book edge "can only ever have come from the reject-orp
 three writers.
 
 1. **`cast-reject-orphan.ts:339`** — the route this issue is about. Same-book by definition.
-2. **`cast-not-linked-to.ts:109-110`** — cross-book only. `:58-63` rejects a same-book pair
+2. **`cast-not-linked-to.ts:110-111`** — cross-book only. `:58-63` rejects a same-book pair
    outright with a 400 ("not-linked-to is for CROSS-book pairs; use cast/merge for same-book
    duplicates"), so it can never produce the shape the reconciliation targets. This one was
    correctly excluded.
@@ -106,7 +106,7 @@ second durable rather than a coin-flip against the client.
 The new sequence inside the existing `withCastLock` span:
 
 1. read cast.json; 409 / 404 checks (unchanged)
-2. read history; compute `forgotSupersededTo` by a **pure read** (unchanged, `:355-360`)
+2. read history; compute `forgotSupersededTo` by a **pure read** (unchanged, `:355-359`)
 3. `rejectOrphanedPair(...)` — **fatal**, unchanged semantics, now the first write
 4. `appendNotLinked` + `writeJsonAtomic(castJsonPath(...))` — **now fatal, with a message**
 5. `forgetSupersededId(...)` — best-effort, unchanged, still last
