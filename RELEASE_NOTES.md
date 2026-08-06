@@ -85,6 +85,11 @@
 - **A damaged paired-device record can no longer take a *different* phone or browser down with it.** Castwright now checks every part of a paired device's record before trusting it, not just the expiry date above — a record that fails any check is dropped and logged rather than trusted, so it can no longer make a working device's own sign-in fail depending on where in your device list it happened to sit. One thing to know: a damaged device dropped this way disappears from your device list entirely, the same as one that's expired or been revoked, and needs to be paired again. This only ever matters if your device list was hand-edited or damaged outside Castwright.
 - **The release notes you're reading are now guaranteed to be the ones Castwright checked.** Castwright verifies its own release notes before publishing them — but it was checking one copy and publishing another, so a release cut by hand could have shipped notes nothing had looked at. It now publishes the copy it checks, and refuses to publish at all if the two ever disagree.
 - **Two more ways a release could quietly go wrong are now closed.** Cutting a release used to trust whatever git repository happened to be configured in the background — normally harmless, but capable of silently sending a release tag to the wrong place. It now always double-checks it's talking to the real one. And if the notes handed to the release tool don't match what Castwright is actually about to publish, cutting the release now stops and says so, instead of printing a warning that was easy to miss and shipping it anyway.
+- Telling Castwright "that's not the same character" is now all-or-nothing. If saving that
+  decision ever failed halfway, it used to leave an invisible mark that quietly stopped those two
+  names from ever being matched again — with no way to undo it. Now a failure leaves the decision
+  visible and undoable, and any book already carrying an invisible mark is cleaned up the next
+  time it's analysed.
 
 # Castwright 1.14.0
 
