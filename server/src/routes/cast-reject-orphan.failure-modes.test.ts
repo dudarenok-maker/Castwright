@@ -335,3 +335,82 @@ describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLink
     ]);
   });
 });
+
+describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLinkedTo edge with no matching pair', () => {
+  it('POST\'s notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge', async () => {
+    // Reproduces the route's own documented partial-failure window: POST
+    // writes notLinkedTo first (unconditional), THEN rejectOrphanedPair
+    // fails — if the user never retries, rejectedPairs never gets the pair,
+    // so `rejectedPairsGoverning` can never find one to attribute the chip
+    // (or this DELETE) to. Before the fix, DELETE's removal loop iterated
+    // `matchingPairs`, which is empty here, so it never ran — leaving a
+    // one-sided edge with no chip and no way to remove it.
+    //
+    // Explicit fresh history file: `beforeEach` only resets cast.json, not
+    // cast-id-history.json, and this file's earlier tests write real pairs
+    // to the SAME bookDir — without this, a leftover `rejectedPairs` entry
+    // from an earlier test would make the "no pair exists" precondition
+    // below false.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {} }),
+    );
+    rejectOrphanedPairMock.mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const posted = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(posted.status).toBe(500);
+
+    // Confirms the abandoned-half-write precondition: the edge landed, the
+    // pair did not.
+    const castBefore = readCast();
+    expect(castBefore.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([
+      { bookId, characterId: 'mayrin' },
+    ]);
+    expect(readHistory()?.rejectedPairs ?? []).toEqual([]);
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+    // No pair ever existed to undo — the id-history side has nothing to
+    // report, honestly.
+    expect(res.body.wasRejected).toBe(false);
+    expect(res.body.removedFrom).toEqual([]);
+
+    // The cast.json edge is cleared regardless — the whole point of the fix.
+    const castAfter = readCast();
+    expect(castAfter.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([]);
+  });
+
+  it('leaves an UNRELATED notLinkedTo edge on the same character untouched', async () => {
+    // Same abandoned-half-write shape, but the row also carries an edge for
+    // a different orphaned id recorded some other way — proves the
+    // unconditional clear is scoped to THIS orphanedId, not a blanket wipe.
+    writeBookOnDisk([
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [{ bookId, characterId: 'someone-else' }],
+      },
+    ]);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {} }),
+    );
+    rejectOrphanedPairMock.mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const posted = await callReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(posted.status).toBe(500);
+
+    const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(res.status).toBe(200);
+
+    const castAfter = readCast();
+    expect(castAfter.characters.find((c) => c.id === 'mairin')?.notLinkedTo).toEqual([
+      { bookId, characterId: 'someone-else' },
+    ]);
+  });
+});

@@ -46,4 +46,32 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     const k = getKnob('qa.asr.model')!;
     expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_MODEL', 'string', 'restart-sidecar', 'base']);
   });
+
+  it('adds ASR_COMPUTE_TYPE registry knob (enum, restart-sidecar, default sidecar-default) with a closed CTranslate2 option set plus the sidecar sentinel (#2014, PR #2176 review findings 1+2)', () => {
+    const k = getKnob('qa.asr.computeType')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_COMPUTE_TYPE', 'enum', 'restart-sidecar', 'sidecar-default']);
+    // 'sidecar-default' MUST be a valid option (it's also the default) — the
+    // sentinel meaning "let the sidecar resolve its own device-dependent
+    // fallback" (int8 on cpu / int8_float16 on cuda; main.py's
+    // _compute_type, #2014). It lives OUTSIDE CTranslate2's own vocabulary
+    // on purpose (PR #2176 review finding 1): 'auto' is CT2's own distinct
+    // member and must stay a real, pass-through option, not be shadowed by
+    // the sentinel.
+    //
+    // Assert the FULL ordered option set, not membership of a few members —
+    // a toContain-only assertion can't fail when six real CT2 values are
+    // dropped and a bogus one is added (PR #2176 review finding 2:
+    // closedness is the entire safety property, since resolver.ts rejects
+    // any value not in this list).
+    expect(k.options).toEqual([
+      'sidecar-default', 'auto', 'default', 'int8', 'int8_float32',
+      'int8_float16', 'int8_bfloat16', 'int16', 'float16', 'bfloat16', 'float32',
+    ]);
+  });
+
+  it('adds ASR_CONCURRENCY registry knob (integer, restart-sidecar, default 2) documented alongside ASR_MODEL (#2014)', () => {
+    const k = getKnob('qa.asr.concurrency')!;
+    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_CONCURRENCY', 'integer', 'restart-sidecar', 2]);
+    expect(k.min).toBe(1);
+  });
 });

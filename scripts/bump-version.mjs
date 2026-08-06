@@ -7,6 +7,7 @@
 // Usage:
 //   node scripts/bump-version.mjs --level patch|minor|major
 //                                  [--notes-file <path>]
+//                                  [--allow-notes-divergence]
 //                                  [--dry-run]
 //                                  [--force]
 //                                  [--skip-cross-os]
@@ -32,6 +33,10 @@ import {
   stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
+import { scrubGitEnv } from './git-env.mjs';
+// #2170 — same normaliser release.yml's publish step applies, imported
+// rather than copied so the two can't drift apart (see the refusal below).
+import { normalise } from './release-body.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -53,6 +58,7 @@ function parseArgs(argv) {
     force: false,
     skipCrossOs: false,
     allowPlaceholder: false,
+    allowNotesDivergence: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -62,6 +68,7 @@ function parseArgs(argv) {
     else if (a === '--force') out.force = true;
     else if (a === '--skip-cross-os') out.skipCrossOs = true;
     else if (a === '--allow-placeholder') out.allowPlaceholder = true;
+    else if (a === '--allow-notes-divergence') out.allowNotesDivergence = true;
     else if (a === '--help' || a === '-h') {
       printHelpAndExit(0);
     } else {
@@ -74,7 +81,12 @@ function parseArgs(argv) {
 function printHelpAndExit(code) {
   process.stdout.write(
     'Usage: node scripts/bump-version.mjs --level patch|minor|major ' +
-      '[--notes-file <path>] [--allow-placeholder] [--dry-run] [--force] [--skip-cross-os]\n',
+      '[--notes-file <path>] [--allow-placeholder] [--allow-notes-divergence] ' +
+      '[--dry-run] [--force] [--skip-cross-os]\n' +
+      '\n' +
+      `  --allow-notes-divergence  Cut anyway when --notes-file disagrees with ` +
+      `${DEFAULT_NOTES_FILE} — the publish job WILL FAIL unless you reconcile ` +
+      'the two before pushing the tag.\n',
   );
   process.exit(code);
 }
@@ -193,8 +205,24 @@ export function pickWorkflowRun(runs, { headSha, sinceMs, skewMs = 10000 }) {
   return matches.length > 0 ? matches[0].databaseId : null;
 }
 
+// #2169 — every git invocation in this script routes through here so the
+// env scrub (dropping an inherited GIT_DIR / GIT_WORK_TREE / etc. that would
+// otherwise silently override `cwd`) can't be forgotten by a call site that
+// builds its own execFileSync options. createAnnotatedTag below is the one
+// call site that needs different stdio/input, so it calls this directly
+// rather than growing a second copy of the scrub. `options?.env` is merged
+// INTO the scrub rather than replaced by it (PR #2175 review) — a caller
+// that needs to pass its own env (none does today) still gets the scrub
+// applied to what it passed, not silently overridden by an unrelated
+// `scrubGitEnv()` of `process.env`; that's what "a git call added later
+// inherits the fix" actually requires. Exported (like buildTagMessage /
+// createAnnotatedTag below) as a thin, directly-testable seam.
+export function execGit(args, options) {
+  return execFileSync('git', args, { ...options, env: scrubGitEnv(options?.env) });
+}
+
 function git(args, opts = {}) {
-  return execFileSync('git', args, {
+  return execGit(args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
@@ -228,16 +256,24 @@ function npm(args, opts = {}) {
 
 // `gh` wrapper. capture=true returns stdout; otherwise inherits stdio so
 // `gh run watch`'s live progress streams to the user.
+//
+// #2175 review, Finding 2 — `gh` resolves its target repository the same
+// GIT_DIR/GIT_WORK_TREE-first way git itself does (empirically: with GIT_DIR
+// pointed at a decoy, `gh repo view` reports "no git remotes found" instead
+// of the real repo's remotes). The scrub above was applied to every git()
+// call but not to gh — a workflow_dispatch could fire against a foreign
+// repository. Same fix, same shared scrub.
 function gh(args, opts = {}) {
   return execFileSync('gh', args, {
     cwd: repoRoot,
     stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
 }
 
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = spawnSync('gh', ['--version'], { stdio: 'ignore', env: scrubGitEnv() });
   return !r.error && r.status === 0;
 }
 
@@ -302,6 +338,7 @@ async function runCrossOsGate({ ref, headSha }) {
   const watch = spawnSync('gh', ['run', 'watch', String(runId), '--exit-status'], {
     cwd: repoRoot,
     stdio: 'inherit',
+    env: scrubGitEnv(),
   });
   if (watch.status !== 0) {
     die(
@@ -369,6 +406,34 @@ export function buildTagMessage(fileText) {
   return stripBOM(fileText);
 }
 
+/** Creates the annotated release tag from `notesFile`'s content (#2114). A
+ *  thin, directly-callable seam separated out from main() specifically so a
+ *  test can call it without going through the CLI's pre-flights: pre-flight
+ *  6c already refuses to reach this point with a BOM-prefixed --notes-file,
+ *  so an end-to-end run can never legitimately drive a BOM through this call
+ *  — calling it directly is what lets a test pin the belt-and-suspenders
+ *  guarantee below independent of that pre-flight.
+ *
+ *  Reads `notesFile` in Node and pipes the result of `buildTagMessage`
+ *  (which strips a defensive BOM) to `git tag -F -` (stdin) rather than
+ *  `-F <path>`, which would hand git the raw, unstripped bytes — so a future
+ *  change to (or bypass of) the pre-flight still can't let a BOM through
+ *  here. `--cleanup=verbatim` is separately load-bearing: git's default
+ *  cleanup mode for both `-m` and `-F` strips lines starting with `#` as
+ *  commentary, which would silently eat the `## Features` / `## Fixes` /
+ *  `## Engineering` section headers CONTRIBUTING.md "Release notes"
+ *  mandates — v1.4.0 shipped with stripped headers and had to be patched in
+ *  place; preserve them by default from here on. */
+export function createAnnotatedTag({ repoRoot, newTag, notesFile }) {
+  const tagMessage = buildTagMessage(readFileSync(resolve(notesFile), 'utf8'));
+  execGit(['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
+    cwd: repoRoot,
+    input: tagMessage,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    encoding: 'utf8',
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.level) {
@@ -380,6 +445,68 @@ async function main() {
   // Default to the canonical in-repo notes so a release can't ship a silent
   // placeholder body (the refusal is enforced after the cheap pre-flights).
   args.notesFile = resolveNotesFile(args.notesFile, existsSync);
+
+  // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
+  // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
+  // from DEFAULT_NOTES_FILE only — never from whatever --notes-file supplied
+  // the tag annotation. Before #2168 a non-default --notes-file published
+  // fine; now a genuine divergence guarantees resolveReleaseBody's Rule 4
+  // fails the tag at PUBLISH time — after verify, cross-os-verify, mobile-e2e
+  // and companion-apk-build have all run, and with the tag already pushed.
+  // Refuse here, before any of the expensive pre-flights below, comparing
+  // under the SAME normaliser release-body.mjs applies at publish time
+  // (imported, not copied — two normalisers that drift apart reintroduce
+  // exactly the failure this closes) so the refusal fires if and only if the
+  // publish job actually would fail. --allow-notes-divergence opts into the
+  // deliberate case. Fires only when there's an actual divergence hazard: an
+  // explicit, non-default notesFile AND a DEFAULT_NOTES_FILE that exists to
+  // disagree with it (resolveNotesFile only returns something other than
+  // DEFAULT_NOTES_FILE when an explicit path was given, or when the default
+  // is absent — the latter can't trip this, since the "exists" check below
+  // is then false).
+  // #2175 review, Finding 3 — DEFAULT_NOTES_FILE is a path WITHIN THE REPO
+  // (same as release-body.mjs's own `resolve(repoRoot, DEFAULT_NOTES_FILE)`
+  // at publish time), so both the existence check and the read below must
+  // resolve it against `repoRoot`, not the invocation `process.cwd()`. Run
+  // from a subdirectory (e.g. `cd server && node ../scripts/bump-version.mjs
+  // … --notes-file <path>`) and the bare-relative `existsSync(DEFAULT_NOTES_FILE)`
+  // would find nothing, silently skipping this whole guard rather than
+  // refusing — the exact outcome #2170 exists to prevent. `args.notesFile`
+  // itself is intentionally left resolved against the invocation cwd (see
+  // the `--notes-file does not exist` pre-flight above, which does the same)
+  // — an operator's notes file legitimately lives wherever they're standing.
+  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))) {
+    const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
+    const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
+    // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
+    // which strips a defensive BOM (see buildTagMessage's own doc comment);
+    // release-body.mjs's fileText is read raw. Comparing raw explicitText here
+    // would report a "divergence" for a BOM-only difference that publish would
+    // never have seen (pre-flight 6c below refuses a BOM'd --notes-file anyway,
+    // so this isn't exploitable — but this check runs FIRST, so an unfixed
+    // comparison hands the operator the misleading divergence message instead
+    // of the accurate BOM one). Comparing buildTagMessage(explicitText) makes
+    // this check agree with what publish actually compares.
+    if (normalise(buildTagMessage(explicitText)) !== normalise(defaultText)) {
+      const msg =
+        `--notes-file ${args.notesFile} and ${DEFAULT_NOTES_FILE} disagree after normalising ` +
+        `(CRLF -> LF, trailing whitespace stripped) — release.yml publishes the release body ` +
+        `from ${DEFAULT_NOTES_FILE} only, so this tag would fail the publish job after verify, ` +
+        `cross-os-verify, mobile-e2e, and companion-apk-build have all run, with the tag already ` +
+        `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
+        `publish job WILL FAIL unless you fix it before pushing the tag).`;
+      // Finding 4 — every other CONDITIONAL pre-flight in main() reports
+      // rather than dies under --dry-run (the four that die unconditionally
+      // each carry their own comment explaining why — no legitimate reason
+      // for a conflict marker or a BOM to ship, ever). A dry run creates no
+      // tag, so refusing here protects nothing while destroying the preview;
+      // it's also exactly when an operator wants to be TOLD the real run
+      // would refuse.
+      if (args.allowNotesDivergence) info(`[WARN] --allow-notes-divergence: ${msg}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] ${msg}`);
+      else die(msg);
+    }
+  }
 
   // Pre-flight 1: clean working tree (unless dry-run).
   const status = git(['status', '--porcelain'], { capture: true });
@@ -646,29 +773,11 @@ async function main() {
   git(['add', ...addPaths]);
   git(['commit', '-m', `chore: bump version to ${newVersion}`]);
 
-  // Annotated tag. `--cleanup=verbatim` is load-bearing: git's default
-  // cleanup mode for both `-m` and `-F` strips lines starting with `#`
-  // as commentary, which silently eats the `## Features` / `## Fixes` /
-  // `## Engineering` section headers CONTRIBUTING.md "Release notes"
-  // mandates. v1.4.0 shipped with stripped headers and had to be patched
-  // in place; preserve them by default from here on.
+  // Annotated tag — see createAnnotatedTag()'s doc comment for why
+  // `--cleanup=verbatim` and the BOM strip are both load-bearing.
   info('[STEP] git tag ...');
   if (args.notesFile) {
-    // #2114 — strip a leading BOM defensively before it becomes the tag
-    // message, even though pre-flight 6c above already refuses to reach here
-    // with one. This is belt-and-suspenders at the point of use: this
-    // content is what release.yml publishes verbatim as the GitHub release
-    // body, so a future change to (or bypass of) the pre-flight check still
-    // can't let a BOM through here. Reads the file in Node and pipes it to
-    // `git tag -F -` (stdin) rather than `-F <path>`, which would hand git
-    // the raw, unstripped bytes.
-    const tagMessage = buildTagMessage(readFileSync(resolve(args.notesFile), 'utf8'));
-    execFileSync('git', ['tag', '--cleanup=verbatim', '-a', newTag, '-F', '-'], {
-      cwd: repoRoot,
-      input: tagMessage,
-      stdio: ['pipe', 'inherit', 'inherit'],
-      encoding: 'utf8',
-    });
+    createAnnotatedTag({ repoRoot, newTag, notesFile: args.notesFile });
   } else {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }
@@ -682,7 +791,13 @@ async function main() {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);
     info(`       git tag -d ${newTag}`);
-    info(`       git tag -a ${newTag} -F <path-to-notes.md>`);
+    // --cleanup=verbatim mirrors the real call inside createAnnotatedTag()
+    // (load-bearing — see that function's doc comment). -F <path> hands git
+    // the file's raw bytes — no strip like the script's own buildTagMessage
+    // (#2114) runs — so the note below is the guard against re-introducing a
+    // BOM here.
+    info(`       git tag -a ${newTag} --cleanup=verbatim -F <path-to-notes.md>`);
+    info(`       (that file must not carry a UTF-8 BOM — git passes it through verbatim)`);
   }
   process.exit(0);
 }

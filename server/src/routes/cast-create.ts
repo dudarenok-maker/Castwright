@@ -124,7 +124,66 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        only `historyKeys`. */
     const history = await loadCastIdHistory(located.bookDir);
     const historyKeys = new Set(Object.keys(history.supersededBy));
-    const takenIds = new Set([...existingIds, ...historyKeys]);
+    /* C1 (fix round, #2163) — `displaced` keys are just as taken as
+       `supersededBy` keys. `dropSupersededTargetsNoLongerLive` deletes an
+       entry from `supersededBy` and files it under `displaced` the moment
+       its target stops being live — but a key that leaves `supersededBy`
+       is a key this route would otherwise happily re-mint, and that key is
+       exactly what every already-rendered segment covered by the pruned
+       alias still carries on disk. Without this, the prune doesn't close
+       the #2110 hazard, it just relocates it one write later: the id
+       becomes free again, a same-name re-create mints it bare, and
+       `buildCastResolver` resolves it via the `exact` tier — which
+       `segments-io.ts` treats as "rendered bytes are fine, nothing to
+       report" (#2107), so the hijack produces no orphan row, no chip, and
+       no `repair-cast-id-drift.mjs` listing at all.
+
+       F7 (fix round 2, #2163) — corrected: folding `displaced` into
+       `takenIds` is NOT a no-op for the sibling
+       `dropSupersededIdsReclaimedByLiveCast`, except at the instant of the
+       drop. That function only ever drops a key that was RECLAIMED as a
+       live cast id, so it IS already in `existingIds` at drop time — but
+       `existingIds` is a per-request snapshot of the CURRENT live roster,
+       re-read fresh on every call, while `displaced` is never pruned once
+       written. If that reclaiming character is later itself dropped (a
+       further re-analysis, or a merge), its id leaves `existingIds` on
+       every future request but stays in `displaced` forever — at which
+       point this fold is what keeps the key reserved, not a redundant
+       belt-and-suspenders check. Defensible on the merits (every segment
+       the ORIGINAL alias covered still carries this key on disk, same as
+       any other `displaced` entry), but it is a genuine widening beyond
+       C1's stated scope, not the no-op C1 originally described it as. */
+    const displacedKeys = new Set(Object.keys(history.displaced ?? {}));
+    /* F1 (fix round 2, #2163) — a `rejectedPairs[].from` id needs the same
+       reservation, for a THIRD path to the same #2110 end state that C1
+       (`displacedKeys`, above) closed for the drop path: the banner's "Not
+       the same character" button (`cast-reject-orphan.ts`'s POST) calls
+       `forgetSupersededId`, which unconditionally deletes
+       `supersededBy[from]` on every successful reject — so `from` leaves
+       `historyKeys` too, the same way a drop leaves it. After that, the
+       pair's `from` survives ONLY inside `rejectedPairs`, which this route
+       never read. Reachable by UI clicks alone, no analysis run: reject an
+       auto-reconciled orphan as "not the same", then create a new character
+       whose name mints that same id bare — `resolve()` lands `exact`, and
+       `segments-io.ts`'s `if (resolution?.via === 'exact') continue` makes
+       the hijacked segments invisible on every surface (banner, chips,
+       repair-pass listing).
+
+       Only `from` needs reserving here, not `to` or `forgotSupersededTo` —
+       the other two fields on a `RejectedPair` name where `from` resolves
+       (or used to resolve) TO, not an id any rendered segment carries as
+       ITS OWN character id. `to` is always a live character id at reject
+       time (`cast-reject-orphan.ts` 404s otherwise) and so is already in
+       `existingIds`; `forgotSupersededTo` was `supersededBy[from]`'s
+       target, i.e. also a `to`-shaped value, not a second orphaned key.
+       Reserving them too would protect ids nothing here needs protected. */
+    const rejectedPairFromKeys = new Set((history.rejectedPairs ?? []).map((p) => p.from));
+    const takenIds = new Set([
+      ...existingIds,
+      ...historyKeys,
+      ...displacedKeys,
+      ...rejectedPairFromKeys,
+    ]);
     const takenNorm = new Set([...takenIds].map(normaliseIdKey));
     const isTaken = (id: string) => takenIds.has(id) || takenNorm.has(normaliseIdKey(id));
 
@@ -159,13 +218,28 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
        every `unprotectedId !== newId`: a live id colliding on a RAW (not
        merely normalised) match is the ordinary, pre-#2085 "second/third
        character shares a name" path — already silently handled before this
-       fix existed, and not part of what it reports on. */
+       fix existed, and not part of what it reports on.
+
+       F6 (fix round 2, #2163) — widened again for the two buckets C1 and F1
+       folded into `takenIds` after this M4 paragraph was written:
+       `displacedKeys` and `rejectedPairFromKeys`. Each avoids a mint the
+       same way a history/live collision does, but neither `collidingHistoryKey`
+       nor `collidingLiveId` above ever matches one (a displaced key has
+       already left `historyKeys`, by definition; a rejected pair's `from`
+       was never in it to begin with) — measured before this fix: a
+       displaced-key-only avoidance logged only the minted id, with no
+       reason, exactly the silent gap this block's own comment says it
+       exists to close. */
     const unprotectedId = safeId(name, { taken: existingIds });
     const unprotectedNorm = normaliseIdKey(unprotectedId);
     const collidingHistoryKey = [...historyKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
     const collidingLiveId = !existingIds.has(unprotectedId)
       ? [...existingIds].find((id) => normaliseIdKey(id) === unprotectedNorm)
       : undefined;
+    const collidingDisplacedKey = [...displacedKeys].find((k) => normaliseIdKey(k) === unprotectedNorm);
+    const collidingRejectedPair = (history.rejectedPairs ?? []).find(
+      (p) => normaliseIdKey(p.from) === unprotectedNorm,
+    );
 
     if (unprotectedId !== newId && collidingHistoryKey) {
       /* Review round 2 (M3) — `history.supersededBy[collidingHistoryKey]` is
@@ -182,6 +256,22 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
       console.log(
         `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — normalises the same as ` +
           `live character id "${collidingLiveId}"; minted "${newId}" instead.`,
+      );
+    } else if (unprotectedId !== newId && collidingDisplacedKey) {
+      // F6 — same "recorded, not a guarantee" caveat as the history branch
+      // above: `history.displaced[collidingDisplacedKey]` is what the entry
+      // resolved to at the moment it was pruned out of `supersededBy`, not a
+      // claim about whether that target is still live.
+      console.log(
+        `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+          `displaced id "${collidingDisplacedKey}" (pruned from history, previously recorded as ` +
+          `retired in favour of "${history.displaced?.[collidingDisplacedKey]}"); minted "${newId}" instead.`,
+      );
+    } else if (unprotectedId !== newId && collidingRejectedPair) {
+      console.log(
+        `[cast-create] ${bookId} avoided re-minting "${unprotectedId}" — collides with ` +
+          `rejected-pair id "${collidingRejectedPair.from}" (rejected against ` +
+          `"${collidingRejectedPair.to}"); minted "${newId}" instead.`,
       );
     }
 

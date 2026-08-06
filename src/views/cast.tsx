@@ -116,6 +116,26 @@ const EMPTY_FALLBACK_MAP: Record<string, string> = {};
    reading values instead of just keys. */
 const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {};
 
+/* F5 (fix round 2, #2163) — an ALLOWLIST of the resolution tiers that mean
+   "the rendered bytes may be stale," per #2107's ruling (same register,
+   the A32 row) that only the `'exact'` tier means the audio is fine. The
+   render-time gate below used to be the denylist `resolution !==
+   'unresolved'` — a tautology against THIS map's own 3-value union (only
+   `'alias' | 'normalised' | 'unresolved'` ever reach it, so "not
+   unresolved" and "alias or normalised" coincide today), which is exactly
+   why measuring it against the real defect (widening the gate to a
+   catch-all, `{true && (`) left both the unit test and the 7-test
+   Playwright spec green — nothing in either asserted the note was ever
+   CONDITIONAL, only that it appeared for the two tiers that already do. An
+   allowlist keyed on the tiers that actually mean "may be stale" doesn't
+   silently inherit a future tier this map might carry that means "the
+   bytes are fine" (mirroring `'exact'` on the richer four-tier union
+   `segments-io.ts`/`cast-reject-orphan.ts` use) the way the denylist would. */
+const STALE_AUDIO_RESOLUTIONS: ReadonlySet<OrphanedCharacterFallback['resolution']> = new Set([
+  'alias',
+  'normalised',
+]);
+
 /* #2092/#2089 D4 — one "Not <Name> · Undo" chip per rejectedAgainst target,
    shared by BOTH banner sections (needs-decision and auto-reconciled): the
    field lives on the orphan-map entry, not the section, so one component
@@ -138,10 +158,18 @@ function OrphanRejectedChips({
   busyId: string | null;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
-  if (!targets?.length) return null;
+  /* Finding B (#2133 comment) — `rejectedPairsGoverning`'s rule 1 has no
+     liveness check on `to` (`cast-resolve.ts:282`), so a target can name an
+     id that's no longer in the live cast (e.g. folded into another
+     character since the reject). The pair is already inert for resolution
+     either way, and Undo for a dead target 404s forever (there's no live
+     character for the DELETE route to find) — hide the chip client-side
+     rather than render a permanently-broken button. */
+  const liveTargets = targets?.filter((targetId) => characters.some((c) => c.id === targetId));
+  if (!liveTargets?.length) return null;
   return (
     <>
-      {targets.map((targetId) => {
+      {liveTargets.map((targetId) => {
         const name = characters.find((c) => c.id === targetId)?.name ?? targetId;
         return (
           <span
@@ -1332,6 +1360,38 @@ export function CastView({
                           <span className="text-xs text-ink/60">
                             {info.segments} segment{info.segments === 1 ? '' : 's'}
                           </span>
+                          {/* #2129, widened by I2 (fix round, #2163) — any
+                              non-exact resolution answers "does this id
+                              resolve today?", not "was the rendered audio
+                              ever produced under the resolved voice?" —
+                              `scripts/repair-cast-id-drift.mjs` can (and
+                              does) list these same rows as damage needing a
+                              re-render (register row A32:
+                              `docs/testing/onbox-acceptance-register.md`
+                              — *Playing with Fire*'s `the-torment`, 67
+                              segments, resolves via the **normalised-id**
+                              tier, not history, and was still
+                              narrator-rendered). #2107's ruling (same
+                              register, ~line 1508) is that only the
+                              `'exact'` tier means the rendered bytes are
+                              fine — `'alias'` (the `'history'`/
+                              `'normalised-history'` tiers) AND `'normalised'`
+                              (the `'normalised-id'` tier) both need this
+                              note. Gated on the STALE_AUDIO_RESOLUTIONS
+                              allowlist (F5, #2163), not "not unresolved" —
+                              the two coincide today (this map's own union has
+                              no fourth value), which is exactly why the old
+                              denylist read as covering every row without
+                              actually pinning that the note is conditional
+                              at all. */}
+                          {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && (
+                            <span
+                              data-testid={`orphaned-alias-audio-note-${orphanedId}`}
+                              className="text-xs text-amber-700"
+                            >
+                              resolves now — existing audio may still need a re-render
+                            </span>
+                          )}
                           <button
                             type="button"
                             disabled={orphanRejectBusyId === orphanedId || !info.resolvedCharacterId}

@@ -166,7 +166,7 @@ setup rather than repeatedly loading and evicting models.
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
-| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 1 |
+| **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
@@ -2415,6 +2415,67 @@ to it.
 flaky test (naturally occurring, not manufactured) for the second.
 *Cost:* minutes for the first dispatch; opportunistic for the second — piggy-back
 on the next real quarantine event rather than manufacturing one.
+
+### G2 · The published release body now comes from the committed file, not the tag annotation ([#2137](https://github.com/dudarenok-maker/Castwright/issues/2137), PR #2168)
+
+`release.yml` validated `docs/release-notes-next.md` at the tag ref but published
+the tag's *annotation* — a different string, with nothing verifying the two
+agreed. This PR sources the body from the committed file, runs the same
+BOM / conflict-marker / mojibake checks against the annotation, and **fails the
+release closed** when file and annotation diverge.
+
+**Every part of that is unexercised until a real tag push.** `scripts/release-body.mjs`
+is covered standalone by `scripts/tests/release-body.test.mjs` (throwaway git repos,
+real annotations), but the live path — the workflow step actually invoking it on
+`ubuntu-latest`, the `actions/checkout` + "Restore annotated tag" dance leaving
+`%(contents)` readable, `docs/release-notes-next.md` actually being present in that
+checkout, and `gh release create --notes-file release/tag-notes.md` receiving the
+file this step wrote — is not.
+
+**This row carries more risk than most in this register: a false positive BLOCKS
+the release outright.** The divergence check is fail-closed by design, so a
+normalisation bug or a checkout that lacks the notes file does not degrade the
+body — it stops the cut. That is the correct posture, and it is precisely why the
+first live run needs watching rather than assuming.
+
+Pre-merge evidence, gathered rather than asserted — the **shipped**
+`resolveReleaseBody()` replayed against the last 12 real tags (not the test
+suite's own fixtures; the production function fed each tag's real annotation and
+real committed file):
+
+- `v1.14.0`, `v1.13.0`, `v1.12.3`, `v1.12.2`, `v1.12.1`, `v1.12.0`, `v1.11.0`,
+  `v1.10.0`, `v1.9.0` → **publish from FILE**. The normal path, 9 consecutive
+  recent releases.
+- `v1.8.0` → **BLOCKED**. Annotation is the bare placeholder `Castwright v1.8.0`
+  (18 B); file is 3,060 B of the *previous* cycle's notes, headed
+  `# Castwright v1.7.0`. Publishing the file would have shipped v1.7.0's notes.
+- `v1.7.0` → **BLOCKED**. File 3,060 B vs annotation 6,757 B — the same stale
+  file, against an annotation carrying the real notes.
+- `v1.6.0` → file absent at that ref → **publish from ANNOTATION** (rule 2).
+
+All four rules exercised against real history. Note that **two** historical
+releases genuinely diverged: at v1.7.0 and v1.8.0 the published body was not the
+file the gate had validated. This issue is not hypothetical, and the nine
+consecutive agreements since suggest the modern cut path is sound — so a spurious
+block on the next cut is unlikely, but not proven until observed.
+
+**What to observe, at the next real release cut:**
+
+1. The `publish` job's release-body step exits 0 and logs which source it chose —
+   expected: **the file**, not the annotation.
+2. The published GitHub release body is the full notes, not the one-line
+   `Castwright vX.Y.Z` placeholder and not empty. Compare it against
+   `git show <tag>:docs/release-notes-next.md`; they must match.
+3. The annotation checks ran and passed — visible in the step's output, not
+   silently skipped.
+4. If the step instead **fails**, that is a real signal, not noise: read the
+   message, which names both sources and their sizes, and decide whether the tag
+   or the file is wrong before overriding anything.
+
+*Needs:* nothing beyond a real `vX.Y.Z` tag push — i.e. the next release cut.
+*Cost:* zero extra; it is observed as part of a cut that was happening anyway.
+*Discharges when:* one real release publishes with a body sourced from the file
+and the observations above are recorded here.
 
 ---
 

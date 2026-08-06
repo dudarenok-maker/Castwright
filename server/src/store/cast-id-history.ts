@@ -15,12 +15,14 @@ import { withKeyLock } from '../workspace/file-lock.js';
 export interface CastIdHistory {
   schema: 1;
   supersededBy: Record<string, string>;
-  /** #2040 Task 14 review item 2b — ids `dropSupersededIdsReclaimedByLiveCast`
-   *  dropped from `supersededBy` because a fresh roster reclaimed the key as a
-   *  live cast id, keyed the same way `supersededBy` was before the drop
-   *  (id -> what it used to resolve to). This is the only surviving record of
-   *  that pair once the drop runs — losing it would mean every book that
-   *  re-analyses before Wave 3's banner ships loses the pair for good.
+  /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
+   *  fresh roster reclaimed the KEY as a live cast id
+   *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
+   *  quietly stopped being live (`dropSupersededTargetsNoLongerLive`, #2110)
+   *  — keyed the same way `supersededBy` was before the drop (id -> what it
+   *  used to resolve to). This is the only surviving record of that pair
+   *  once the drop runs — losing it would mean every book that re-analyses
+   *  before Wave 3's banner ships loses the pair for good.
    *  Additive and backwards-compatible: optional, never bumps `schema`. An
    *  old reader that doesn't know this key still works — it only ever reads
    *  `supersededBy`, which is unaffected. A file written before this change
@@ -250,12 +252,18 @@ function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: s
 
 /** #2092/#2089 M2 (review round 1) — self-loop `rejectedPairs` entries
  *  `repointRejectedPairs` had to drop during this call, if any (see its own
- *  doc comment). Every current caller ignores this (a purely additive
- *  return, replacing the prior `Promise<void>`) — none of them manage
- *  `cast.json`'s `notLinkedTo` edges, which is what a dropped pair's
- *  original reject also wrote and this module has no access to clean up
- *  itself. A future caller that DOES care can consume it; today this is
- *  reported, not acted on further. */
+ *  doc comment). #2133 — a reject's two writes (this `rejectedPairs` entry
+ *  and the one-sided `notLinkedTo` edge the original reject also wrote onto
+ *  `cast.json`) are created together and must be destroyed together (see
+ *  `docs/features/278-cast-character-identity.md`'s invariant of the same
+ *  name) — a dropped pair with its `notLinkedTo` edge left behind would
+ *  permanently suppress §4.4's name matcher for a pairing that no longer
+ *  exists, invisibly. BOTH production callers now act on this return:
+ *  `analysis.ts`'s `recordRetirements` and `cast-merge.ts`'s
+ *  `performCastMerge` each locate any surviving `notLinkedTo` entry naming a
+ *  dropped pair's `from` id and remove it in the same write. This module
+ *  never touches `cast.json` itself (no access to it), so it can only
+ *  report the drop — cleanup is necessarily the caller's job. */
 export interface RetireCharacterIdResult {
   droppedSelfLoopRejections: RejectedPair[];
 }
@@ -366,8 +374,10 @@ export function refuseRetirementsOfLiveIds<T extends { from: string; to: string 
 }
 
 /** A history entry dropped because a fresh roster reintroduced its key as a
- *  live cast id. `id` is the (formerly-superseded) history key; `supersededBy`
- *  is what it used to resolve to before the live row reclaimed it. */
+ *  live cast id (`dropSupersededIdsReclaimedByLiveCast`), OR because its
+ *  TARGET quietly stopped being live (`dropSupersededTargetsNoLongerLive`,
+ *  #2110). `id` is the history key; `supersededBy` is what it used to
+ *  resolve to before the drop. */
 export interface DisplacedHistoryEntry {
   id: string;
   supersededBy: string;
@@ -413,6 +423,96 @@ export async function dropSupersededIdsReclaimedByLiveCast(
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (live.has(key)) {
+        dropped.push({ id: key, supersededBy: target });
+        delete history.supersededBy[key];
+      }
+    }
+    if (dropped.length) {
+      const displaced = { ...(history.displaced ?? {}) };
+      for (const entry of dropped) {
+        displaced[entry.id] = entry.supersededBy;
+      }
+      history.displaced = displaced;
+    }
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return dropped;
+  });
+}
+
+/** A `supersededBy` entry whose TARGET (`to`, not `from`) is no longer a
+ *  live cast id — #2110, the mirror-image failure of
+ *  `dropSupersededIdsReclaimedByLiveCast` above (that one prunes an entry
+ *  whose KEY was reclaimed; this one prunes an entry whose TARGET died).
+ *
+ *  The real case: `supersededBy` holds `{anton: 'антон'}` — 'антон' is live
+ *  but unvoiced. A later re-analysis's carry-forward only re-adds
+ *  voiced/reused survivors (`isVoicedOrReused`,
+ *  `merge-analysis-cast.ts`), and the id-drift name-fallback only retires an
+ *  id when a same-name fresh row exists to retire it onto; with neither,
+ *  'антон' simply vanishes with NO `Retirement` ever recorded — nothing else
+ *  notices, and `buildCastResolver` already skips a history entry whose
+ *  target isn't live (`cast-resolve.ts:89-90`), so the dangling entry looks
+ *  perfectly inert. It is not: `POST /cast/create` only treats a
+ *  `supersededBy` KEY as taken, not a value (a live value is already in
+ *  `existingIds`, which holds only while the target stays live) — so once
+ *  'антон' dies, nothing stops a later mint from producing 'антон' again
+ *  (the id is usually the character's own display name, so this is the
+ *  expected case, not an edge one). The moment that happens, the dangling
+ *  entry's raw key ('anton') resolves via tier 2 straight onto the
+ *  brand-new, unrelated, empty row — SILENTLY, with no orphan report at
+ *  all, hijacking every segment the original alias covered. That is
+ *  strictly worse than those segments sitting orphaned-and-visible.
+ *
+ *  Dropping the entry out of `supersededBy` does not, by itself, close that
+ *  hazard — it relocates it one write later. The moment 'anton' leaves
+ *  `supersededBy`, it is free to re-mint again unless something else keeps
+ *  it reserved. That something is `displaced` (below): `POST /cast/create`
+ *  (`cast-create.ts`, C1 fix round, #2163) treats a `displaced` key as
+ *  taken exactly the same way it already treats a `supersededBy` key, so
+ *  the id stays reserved across the drop rather than reopening the hijack
+ *  window this function exists to close. This is why the drop is written
+ *  to move entries into `displaced` instead of discarding them outright —
+ *  losing the pair here would mean losing the last thing keeping the key
+ *  out of circulation.
+ *
+ *  MUST be called only against the full, final roster of an AUTHORITATIVE
+ *  write — never an interim one. The three mid-run "Cast so far" writes —
+ *  two inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
+ *  (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
+ *  those two functions — cited by symbol, not line: F2, #2163, a line
+ *  citation here was stale the moment it was written twice already) —
+ *  go through `overlayInterimCastForLiveView`, never this function,
+ *  precisely because `buildInterimCast` has
+ *  folded only the chapters analysed so far there: a character who simply
+ *  hasn't been reached yet is indistinguishable from one the analyzer
+ *  actually dropped, so pruning against an interim roster would destroy a
+ *  valid alias for a character who is merely not yet on stage (#2086's
+ *  exact hazard). Only the two end-of-run writes that call
+ *  `mergeAnalysisResultWithExistingCast` (analysis.ts's main and subset
+ *  persist blocks, both already the sole callers of
+ *  `dropSupersededIdsReclaimedByLiveCast`) call this too, with the same
+ *  `liveIds` binding (`mergedFinal.characters`, the exact roster the write
+ *  just persisted).
+ *
+ *  Dropped pairs move into `displaced`, the same bookkeeping
+ *  `dropSupersededIdsReclaimedByLiveCast` already established — once
+ *  dropped, `supersededBy` is the only place they lived. Deliberately does
+ *  NOT touch `rejectedPairs`' `forgotSupersededTo` (a stashed id on a
+ *  DIFFERENT record, restorable later via `restoreSupersededId`, which is
+ *  outside this function's write): a dangling `forgotSupersededTo` is a
+ *  separate, narrower hazard (only reachable if that specific pair's Undo
+ *  is later clicked) that needs its own call-site decision, not a
+ *  side-effect of pruning `supersededBy`. */
+export async function dropSupersededTargetsNoLongerLive(
+  bookDir: string,
+  liveIds: ReadonlyArray<string>,
+): Promise<DisplacedHistoryEntry[]> {
+  const live = new Set(liveIds);
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const history = await loadCastIdHistory(bookDir);
+    const dropped: DisplacedHistoryEntry[] = [];
+    for (const [key, target] of Object.entries(history.supersededBy)) {
+      if (!live.has(target)) {
         dropped.push({ id: key, supersededBy: target });
         delete history.supersededBy[key];
       }

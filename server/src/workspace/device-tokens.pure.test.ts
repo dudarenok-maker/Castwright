@@ -112,4 +112,49 @@ describe('device-tokens (pure)', () => {
     expect(findValidDevice([d], 'tok', Date.parse(future) + 1)).toBeNull();
     expect(findValidDevice([d], 'tok', Date.parse(future) - 1)).not.toBeNull();
   });
+
+  // #2149 — Buffer.from(tokenHash) throws a TypeError for every non-string
+  // primitive/object (verified: 123, null, undefined, {}, true all throw;
+  // only an array-of-strings survives). findValidDevice runs in the
+  // SYNCHRONOUS auth guard, so an unguarded throw here doesn't just fail to
+  // authenticate the bad record — it aborts the loop for every record AFTER
+  // it. That is a live availability defect, not only a hardening gap.
+  //
+  // This is the decisive regression test: the good record sits AFTER the
+  // malformed one. A "fix" that only skips a bad tokenHash when it happens
+  // to be the last entry would still pass a same-position test and still
+  // brick every later device — so it must not be trusted here.
+  it('findValidDevice skips a non-string tokenHash without throwing, and still matches a later good record', () => {
+    const bad = {
+      id: 'bad',
+      label: 'P',
+      tokenHash: 123 as unknown as string,
+      createdAt: future,
+      expiresAt: future,
+    };
+    const good = {
+      id: 'good',
+      label: 'P',
+      tokenHash: hashToken('tok-good'),
+      createdAt: future,
+      expiresAt: future,
+    };
+    expect(() => findValidDevice([bad, good], 'tok-good')).not.toThrow();
+    expect(findValidDevice([bad, good], 'tok-good')?.id).toBe('good');
+  });
+
+  it('findValidDevice skips other non-string tokenHash shapes without throwing (null, undefined, object, boolean)', () => {
+    const shapes: unknown[] = [null, undefined, { a: 1 }, true];
+    for (const shape of shapes) {
+      const bad = {
+        id: 'bad',
+        label: 'P',
+        tokenHash: shape as unknown as string,
+        createdAt: future,
+        expiresAt: future,
+      };
+      expect(() => findValidDevice([bad], 'anything')).not.toThrow();
+      expect(findValidDevice([bad], 'anything')).toBeNull();
+    }
+  });
 });

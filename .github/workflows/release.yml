@@ -355,15 +355,19 @@ jobs:
             > "castwright-${{ github.ref_name }}.zip.sha256"
           cat "castwright-${{ github.ref_name }}.zip.sha256"
 
-      - name: Read tag annotation for release body
-        # `--format='%(contents)'` returns the annotated tag message verbatim.
-        # If the bumper used the placeholder annotation (no --notes-file), the
-        # body will be brief — that's expected and the maintainer is reminded
-        # at bump time to use --notes-file for real releases.
-        run: |
-          git tag -l --format='%(contents)' "${{ github.ref_name }}" \
-            > release/tag-notes.md
-          cat release/tag-notes.md
+      - name: Resolve + guard release body (annotation vs. docs/release-notes-next.md)
+        # #2137 — the `verify` job's "Guard — committed release notes are
+        # real" step validates RELEASE_NOTES.md / docs/release-notes-next.md
+        # as committed at the tag ref, but the string actually published HERE
+        # used to be a separate, unchecked read of the tag annotation
+        # (`%(contents)`) — nothing checked the two agreed. scripts/release-
+        # body.mjs re-runs the BOM/conflict-marker/mojibake checks against the
+        # annotation itself, then: no docs/release-notes-next.md -> publish
+        # the annotation (placeholder-tag path, unchanged); present and
+        # normalised-equal -> publish the FILE (the guarded artifact, not an
+        # unchecked copy); present and differing -> fail closed rather than
+        # guess (see the v1.8.0 incident in that script's header comment).
+        run: node scripts/release-body.mjs "${{ github.ref_name }}" release/tag-notes.md
 
       - name: Create GitHub Release
         env:

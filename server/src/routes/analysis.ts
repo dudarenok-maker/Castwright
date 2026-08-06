@@ -124,6 +124,7 @@ import {
 import {
   retireCharacterId,
   dropSupersededIdsReclaimedByLiveCast,
+  dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
 } from '../store/cast-id-history.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -236,9 +237,18 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
    where no roster is final yet, and say why at the call site — the parameter
    is deliberately required rather than optional so a new call site cannot
-   skip the filter by omission. */
-async function recordRetirements(
+   skip the filter by omission.
+
+   `bookId` (#2133) is threaded through purely so a retirement that drops a
+   self-loop `rejectedPairs` entry (`retireCharacterId`'s
+   `droppedSelfLoopRejections`) can locate and clear the matching one-sided
+   `notLinkedTo` edge on `cast.json` — that edge is keyed by `(bookId,
+   characterId)`, not `bookDir`. `null`/undefined is tolerated (mirrors
+   `bookDir`): the retirement itself still records, just without the
+   notLinkedTo cleanup, since there is no book to look one up on. */
+export async function recordRetirements(
   bookDir: string | null | undefined,
+  bookId: string | null | undefined,
   retirements: ReadonlyArray<Retirement>,
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
@@ -259,7 +269,56 @@ async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(bookDir, from, to);
+    if (result.droppedSelfLoopRejections.length && bookId) {
+      await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+    }
+  }
+}
+
+/* #2133 — a reject's two writes (the `rejectedPairs` entry on
+   cast-id-history.json and the one-sided `notLinkedTo` edge on cast.json)
+   are created together and must be destroyed together (see
+   `docs/features/278-cast-character-identity.md`'s invariant of the same
+   name). `retireCharacterId` reports a dropped self-loop pair
+   (`droppedSelfLoopRejections`) but never touches cast.json itself — this is
+   the caller-side half: a fresh read-through-write on cast.json, wrapped in
+   its OWN `withCastLock` (none of `recordRetirements`' callers in this file
+   hold one for this book already — the only `withCastLock` in this file
+   guards the unrelated "Start fresh" cast.json delete). Best-effort: a
+   failure here must not fail the retirement itself, mirroring every other
+   id-history write in this file — the side-table is never authoritative for
+   identity, and a surviving stale edge merely re-suppresses one future
+   §4.4 name-match rather than corrupting anything already on disk. */
+async function clearNotLinkedEdgesForDroppedRejections(
+  bookDir: string,
+  bookId: string,
+  dropped: ReadonlyArray<{ from: string; to: string }>,
+): Promise<void> {
+  const deadIds = new Set(dropped.map((p) => p.from));
+  try {
+    await withCastLock(bookDir, async () => {
+      const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) return;
+      let changed = false;
+      for (const character of cast.characters) {
+        const existing = character.notLinkedTo ?? [];
+        if (!existing.length) continue;
+        const next = existing.filter((p) => !(p.bookId === bookId && deadIds.has(p.characterId)));
+        if (next.length !== existing.length) {
+          character.notLinkedTo = next;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+      }
+    });
+  } catch (err) {
+    console.warn(
+      '[analysis] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
+      err,
+    );
   }
 }
 
@@ -879,6 +938,39 @@ const PHASES = [
    of collapsing to the literal `book`. Only a fallback for `record.bookId`. */
 function bookIdFromTitle(title: string): string {
   return safeBookId(title);
+}
+
+/* M6 (fix round, #2163) — `recordRetirements`'s `bookId` parameter exists
+   for exactly one purpose: keying `clearNotLinkedEdgesForDroppedRejections`'s
+   lookup against `notLinkedTo` edges on `cast.json`, which are written with
+   the workspace `makeBookId` shape (`author__series__title`,
+   `workspace/paths.js`). `bookIdFromTitle` above — a 32-char kebab slug of
+   the title alone — produces a completely different shape, so using it as
+   a fallback here can never match a real edge; it only manufactures a value
+   that LOOKS like a book id without being the one anything else uses. Every
+   `recordRetirements` call site in this file used to fall back to it via
+   `record.bookId ?? bookIdFromTitle(record.title)`, which fails OPEN: the
+   call proceeds with a bookId that silently can never match, so any
+   self-loop-rejection cleanup that run needed simply never happens, with
+   nothing logged. Not reachable today — `loadManuscriptForBook` always sets
+   `record.bookId` — but a param that exists for one narrow purpose should
+   not accept a value that defeats that purpose without saying so.
+   `recordRetirements` already has the right fail-closed behaviour built in
+   (`if (result.droppedSelfLoopRejections.length && bookId)` skips the
+   cleanup when `bookId` is falsy) — this helper's job is only to stop
+   handing it a value that looks truthy but is wrong, and to say so when it
+   would have. Deliberately does NOT derive a new id shape of its own. */
+export function bookIdForRetirementCleanup(record: {
+  bookId?: string | null;
+  title: string;
+}): string | undefined {
+  if (record.bookId) return record.bookId;
+  console.warn(
+    `[analysis] record.bookId is absent for "${record.title}" — skipping notLinkedTo cleanup for any ` +
+      `character-id retirement this run records (a title-derived id would never match a real notLinkedTo ` +
+      `edge's book id, so silently using one would fail without saying so).`,
+  );
+  return undefined;
 }
 
 function durationPlaceholder(): string {
@@ -2971,7 +3063,13 @@ export async function runMainAnalyzerJob(
          at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
          against the roster that actually got persisted. */
       try {
-        await recordRetirements(recordRef.bookDir, reconciled.retirements, null, log);
+        await recordRetirements(
+          recordRef.bookDir,
+          bookIdForRetirementCleanup(recordRef),
+          reconciled.retirements,
+          null,
+          log,
+        );
       } catch (historyErr) {
         console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
       }
@@ -5003,8 +5101,9 @@ export async function runMainAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            const retirementBookId = bookIdForRetirementCleanup(record);
+            await recordRetirements(record.bookDir, retirementBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -5014,7 +5113,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, retirementBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -5040,6 +5139,25 @@ export async function runMainAnalyzerJob(
               log(
                 1,
                 `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+            /* #2110 — the mirror-image drop: an entry whose TARGET (not key)
+               has quietly stopped being live (this run's carry-forward
+               dropped an unvoiced character with no name-fallback match, and
+               nothing else ever recorded that as a retirement). Left alone
+               it's worse than inert — see the function's own doc comment —
+               so prune it against this exact just-persisted roster, same as
+               the reclaim drop above. */
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
                   .map((d) => `${d.id} -> ${d.supersededBy}`)
                   .join(', ')}) — affected segments need review.`,
               );
@@ -5548,7 +5666,13 @@ export async function runSubsetAnalyzerJob(
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
-      await recordRetirements(record.bookDir, dedupRetirements, null, log);
+      await recordRetirements(
+        record.bookDir,
+        bookIdForRetirementCleanup(record),
+        dedupRetirements,
+        null,
+        log,
+      );
     } catch (historyErr) {
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
@@ -6288,8 +6412,9 @@ export async function runSubsetAnalyzerJob(
                filter is defence in depth for a future producer that stops
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
-            await recordRetirements(record.bookDir, remapped.retirements, liveIds, log);
-            await recordRetirements(record.bookDir, mergedFinal.retirements, liveIds, log);
+            const subsetBookId = bookIdForRetirementCleanup(record);
+            await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -6299,7 +6424,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(record.bookDir, remapRetirements, liveIds, log);
+            await recordRetirements(record.bookDir, subsetBookId, remapRetirements, liveIds, log);
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
@@ -6316,6 +6441,21 @@ export async function runSubsetAnalyzerJob(
               log(
                 1,
                 `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                  .map((d) => `${d.id} -> ${d.supersededBy}`)
+                  .join(', ')}) — affected segments need review.`,
+              );
+            }
+            // #2110 — mirrors the main path's same-named block above: prune
+            // an entry whose TARGET quietly died, against this exact
+            // just-persisted roster.
+            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+              record.bookDir,
+              liveIds,
+            );
+            if (displacedByDeadTarget.length) {
+              log(
+                1,
+                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
                   .map((d) => `${d.id} -> ${d.supersededBy}`)
                   .join(', ')}) — affected segments need review.`,
               );

@@ -199,7 +199,7 @@
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>8</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
-      <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>1</td></tr>
+      <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
     </tbody>
   </table>
   </div>
@@ -975,7 +975,7 @@
   <!-- G -->
   <section class="group" id="gg">
     <header>
-      <h3 class="gtitle"><span class="gtag">G</span> GitHub Actions itself <span class="gcount">1 row</span></h3>
+      <h3 class="gtitle"><span class="gtag">G</span> GitHub Actions itself <span class="gcount">2 rows</span></h3>
       <p class="setup">
         Not physical hardware — the prerequisite is a real dispatch of a specific workflow on the real
         Actions runner, which local execution cannot substitute for (a fresh <code>ubuntu-latest</code>
@@ -990,6 +990,17 @@
         <p><b>2. Genuine <code>intermittent</code> classification is exercised only by unit tests over synthetic sequences.</b> No real cross-run nondeterminism has been forced through the classifier, and the empty register can't provide it — <b>the first dispatch alone won't discharge this half.</b> <b>Observe, next time a genuinely flaky test is quarantined:</b> its row lands in the <code>intermittent</code> bucket (a real mix of passed/failed across the 5 runs), not <code>always-passes</code> or <code>never-passes</code>.</p>
         <div class="flag"><b>Why this is here and not a plain test-gap issue.</b> <code>classifyEntry</code> is already fully unit- and mutation-tested against every synthetic sequence that matters. What's missing is a real occurrence of cross-run nondeterminism, which by construction can't be manufactured inside a unit test. One honest caveat: unlike the first debt, this half does <b>not</b> strictly need the Actions runner — a local run against a real flaky register row would discharge it equally. It stays grouped here for the shared dispatch-triggered framing.</div>
         <p class="src">Nothing beyond repo access for the first half; a naturally-occurring quarantined flaky test for the second · minutes for the dispatch, opportunistic for the rest — piggy-back on the next real quarantine event rather than manufacturing one · #1864, PR #1873</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">G2</span><span class="iname">Published release body now comes from the committed file, not the tag annotation</span><span class="risk hot">A false positive BLOCKS a release</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>release.yml</code> validated <code>docs/release-notes-next.md</code> at the tag ref but published the tag's <i>annotation</i> — a different string, with nothing verifying the two agreed. This PR sources the body from the committed file, runs the same BOM / conflict-marker / mojibake checks against the annotation, and <b>fails the release closed</b> when file and annotation diverge.</p>
+        <p><b>Every part of that is unexercised until a real tag push.</b> <code>scripts/release-body.mjs</code> is covered standalone by <code>scripts/tests/release-body.test.mjs</code> (throwaway git repos, real annotations), but the live path — the workflow step actually invoking it on <code>ubuntu-latest</code>, the checkout + “Restore annotated tag” dance leaving <code>%(contents)</code> readable, the notes file actually being present in that checkout, and <code>gh release create --notes-file</code> receiving the file this step wrote — is not.</p>
+        <div class="flag"><b>This row carries more risk than most: a false positive BLOCKS the release outright.</b> The divergence check is fail-closed by design, so a normalisation bug or a checkout missing the notes file does not degrade the body — it stops the cut. That's the correct posture, and exactly why the first live run needs watching rather than assuming.</div>
+        <p><b>Pre-merge evidence, gathered rather than asserted</b> — the shipped <code>resolveReleaseBody()</code> replayed against the last 12 real tags: <code>v1.14.0</code>…<code>v1.9.0</code> (9 releases) → publish from FILE; <code>v1.8.0</code> → BLOCKED (placeholder annotation, 18 B, vs. a stale 3,060 B file still headed <code>v1.7.0</code>); <code>v1.7.0</code> → BLOCKED (3,060 B file vs. 6,757 B annotation); <code>v1.6.0</code> → file absent at that ref → publish from ANNOTATION. <b>Two real historical releases genuinely diverged</b> — this is not hypothetical.</p>
+        <p><b>Observe, at the next real release cut:</b> the release-body step exits 0 and logs the FILE as its source; the published body matches <code>git show &lt;tag&gt;:docs/release-notes-next.md</code> exactly, not the one-line placeholder; the annotation checks visibly ran rather than being silently skipped. A failure here is a real signal — read what it names before overriding anything.</p>
+        <p class="src">Nothing beyond a real vX.Y.Z tag push — the next release cut · zero extra cost, observed as part of a cut that was happening anyway · <a href="https://github.com/dudarenok-maker/Castwright/issues/2137">#2137</a>, PR #2168</p>
       </div>
     </details>
   </section>
