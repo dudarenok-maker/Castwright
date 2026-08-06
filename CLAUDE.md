@@ -416,9 +416,14 @@ Design rationale:
   `server/src/gpu/` that needs a value from a route module goes through a
   stateless leaf gate the owning module registers an accessor into instead.
   Three exist: `gpu/active-generation-gate.ts`, `gpu/qwen-tier-reconcile-gate.ts`,
-  `gpu/sidecar-health-gate.ts` — each fails closed. Verify with
-  `npx madge --circular --extensions ts server/src`, which should stay at
-  its 15-cycle baseline.
+  `gpu/sidecar-health-gate.ts` — each fails closed. The import graph's
+  circular-dependency baseline is mechanically enforced (#2053) by
+  `npm run check:cycles` (`scripts/check-import-cycles.mjs`) against the
+  committed cycle LIST in `server/madge-cycles-allowlist.json` — not a
+  hand-typed count, which is blind to a swapped cycle. Runs as a `verify.yml`
+  leg scope-gated to `server/**` (see "Commands" and "Commit gate"); add a
+  new cycle to that file if it's new and intentional, otherwise break it
+  instead of allowlisting it.
 - **`cast.json` writes go through `withCastLock`/`withCastLocks`, never a
   bare `writeJsonAtomic`/`rm`** (`server/src/workspace/cast-lock.ts`). Four
   rules: (1) lock the innermost read-through-write, never the caller — one

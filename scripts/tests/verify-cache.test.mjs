@@ -809,6 +809,10 @@ test('acceptance #2120b: adding a server test makes check:budget-poll RUN', () =
 //     fast paths (docs/features/archive/45-vitest-pool-tuning.md).
 //   - test:scripts / test:pinokio — not in any of the three fast aliases
 //     today (`npm run test:all` / `verify` cover them instead).
+//   - check:cycles — madge's --circular pass over server/src is not free on
+//     this graph (#2053, repo-owner decision on the issue); it runs as a
+//     verify.yml leg scope-gated to server/**, and in full `npm run verify`,
+//     but is deliberately NOT one of the three local fast/pre-push CSVs.
 // Reading package.json's real scripts (rather than hardcoding the CSVs here)
 // means an edit to any of the three that drops a step name is what this test
 // actually watches for.
@@ -818,6 +822,7 @@ const CLOUD_OR_FULL_VERIFY_ONLY_STEPS = new Set([
   'test:server-slow',
   'test:scripts',
   'test:pinokio',
+  'check:cycles',
 ]);
 
 test('every STEPS[] entry is covered by a local --steps CSV or explicitly allowlisted as cloud/full-verify-only', () => {
