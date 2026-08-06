@@ -248,6 +248,15 @@ describe('createCastMergeBase — a not-checkable (UNREADABLE) read (#2185 revie
       const baselineBefore = base.value;
       expect(typeof baselineBefore).toBe('string');
 
+      /* Self-verification (#2186): land a foreign write here, before the
+         mocked failure is installed. If the vi.mock below ever silently
+         stopped applying, writeChecked's pre-write read would succeed for
+         real, observe THIS content, and find it mismatches `baselineBefore`
+         — firing onConflict and failing the assertion below, instead of the
+         mock's absence going unnoticed because a same-baseline real read
+         would have produced "no conflict" either way. */
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'foreign' }] }, null, 2));
+
       /* Simulates an AV scanner / OneDrive / the Windows indexer briefly
          locking cast.json mid-analysis — the exact shape #2185's review
          confirmed empirically. */
@@ -308,6 +317,12 @@ describe('createCastMergeBase — a not-checkable (UNREADABLE) read (#2185 revie
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
       const base = createCastMergeBase(dir, await captureOf(dir));
       const onConflict = vi.fn();
+
+      /* Self-verification (#2186): same reasoning as the test above — a
+         foreign write here means a silently-disarmed mock's real read at
+         site 1 would observe a mismatch and fire onConflict, failing the
+         assertion below rather than passing it for the wrong reason. */
+      writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'foreign' }] }, null, 2));
 
       // Site 1: the pre-write read fails with a transient, non-ENOENT error.
       const err = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
