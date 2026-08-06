@@ -682,7 +682,13 @@ async function main() {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);
     info(`       git tag -d ${newTag}`);
-    info(`       git tag -a ${newTag} -F <path-to-notes.md>`);
+    // Mirrors the real call at :666: --cleanup=verbatim (load-bearing, see
+    // :649) and a BOM-safe route via stdin — a bare `-F <path>` hands git the
+    // raw bytes and can re-introduce the #2114 BOM bug this script itself
+    // guards against.
+    info(
+      `       node -e "process.stdout.write(require('fs').readFileSync(process.argv[1],'utf8').replace(/^\\uFEFF/,''))" <path-to-notes.md> | git tag -a ${newTag} --cleanup=verbatim -F -`,
+    );
   }
   process.exit(0);
 }

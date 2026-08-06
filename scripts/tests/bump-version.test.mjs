@@ -173,6 +173,23 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
   }
 });
 
+/* Regression for #2140: the manual fallback recipe printed when there's no
+   notes file (placeholder-tag branch) omitted --cleanup=verbatim, silently
+   re-issuing the v1.4.0 header-stripping regression as advice. This pins
+   the printed hint, not just the real tag call the test above already
+   covers. */
+test('bump-version placeholder-tag fallback hint includes --cleanup=verbatim', () => {
+  const dir = setupRepo('1.2.3');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os', '--allow-placeholder']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[NOTE\] Tag annotation is a placeholder/);
+    assert.match(out.stdout, /git tag -a v1\.2\.4 --cleanup=verbatim -F -/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('bump-version --level minor zeros the patch field', () => {
   const dir = setupRepo('2.4.7');
   try {
