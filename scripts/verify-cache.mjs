@@ -749,6 +749,18 @@ export function branchDiffFiles(cwd) {
 // the test legs. When we detect a busy GPU we throttle test concurrency (soft —
 // warn + dial down, never block).
 
+// Utilisation-only, deliberately (#2164): VRAM occupancy does NOT count as
+// contention. The failure this guard prevents is fs/tmpdir and CPU
+// contention from *active* work (docs/features/archive/45-vitest-pool-tuning.md:
+// tmpdir contention, AV/OneDrive interleaving, pool pressure) — a model
+// parked in VRAM burns no CPU and touches no tmpdir. This box deliberately
+// keeps models resident (PRELOAD_KOKORO, the button-loaded Qwen Base), so a
+// residency trigger would pin LOW_CONCURRENCY=1 near-permanently while
+// preventing no crash. The #2164 incident's busy card was at 91% util —
+// squarely inside what max-across-GPUs already catches below. Host RAM
+// pressure (that incident also had Ollama holding ~14GB of system RAM) is
+// real contention neither utilisation nor VRAM occupancy measures — known
+// out of scope, not implemented.
 const GPU_BUSY_THRESHOLD = 40; // % utilization
 
 // Parse the first GPU's utilization (%) from nvidia-smi CSV output. Returns a
@@ -764,6 +776,39 @@ export function parseNvidiaSmiUtil(stdout) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Max utilization (%) across EVERY GPU line in nvidia-smi CSV output — unlike
+// parseNvidiaSmiUtil above, which deliberately stays a single-line parser (see
+// its own doc comment; #2036 chose not to widen it, since it has its own
+// callers with first-line semantics). On a multi-GPU box the busy card is not
+// always index 0 (#2164: this dev box is cuda:0 4070 8GB idle / cuda:1 5070 Ti
+// 16GB busy) — a first-line-only read misses exactly the contention this guard
+// exists to catch. Lives here (moved from a local copy in run-golden-audio.mjs,
+// #2036) so both callers share one implementation; run-golden-audio.mjs now
+// imports this rather than keeping its own. Returns the max over every
+// parseable line, or null when none parse.
+export function maxNvidiaSmiUtil(stdout) {
+  if (!stdout) return null;
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let max = null;
+  for (const line of lines) {
+    const util = parseNvidiaSmiUtil(line);
+    if (util !== null && (max === null || util > max)) max = util;
+  }
+  return max;
+}
+
+// Pure decision seam (#2164): given raw nvidia-smi stdout, decide contention.
+// Split out from detectGpuContention so the decision is unit-testable without
+// spawning a real nvidia-smi — mirrors how run-golden-audio.mjs already splits
+// gpuBusyWarningFor out of warnIfGpuBusyForBless.
+export function gpuContentionFor(stdout) {
+  const util = maxNvidiaSmiUtil(stdout);
+  return { busy: util !== null && util >= GPU_BUSY_THRESHOLD, util };
+}
+
 // Returns { busy, util }. nvidia-smi absent / errors → { busy:false, util:null }
 // (e.g. CI ubuntu runners, non-NVIDIA boxes). Cheap (~100ms).
 function detectGpuContention() {
@@ -773,8 +818,7 @@ function detectGpuContention() {
     { encoding: 'utf8', timeout: 5000 },
   );
   if (r.error || r.status !== 0) return { busy: false, util: null };
-  const util = parseNvidiaSmiUtil(r.stdout);
-  return { busy: util !== null && util >= GPU_BUSY_THRESHOLD, util };
+  return gpuContentionFor(r.stdout);
 }
 
 // Tool fingerprints — strings that change when the relevant tool's

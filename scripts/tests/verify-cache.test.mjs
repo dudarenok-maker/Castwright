@@ -31,6 +31,8 @@ import {
   stepTouchedByDiff,
   computeShared,
   parseNvidiaSmiUtil,
+  maxNvidiaSmiUtil,
+  gpuContentionFor,
   isVitestPoolCrash,
   branchDiffFiles,
   sidecarFingerprint,
@@ -885,6 +887,51 @@ test('parseNvidiaSmiUtil returns null on empty / unparseable output', () => {
   assert.equal(parseNvidiaSmiUtil(''), null);
   assert.equal(parseNvidiaSmiUtil('\n'), null);
   assert.equal(parseNvidiaSmiUtil('N/A\n'), null);
+});
+
+// #2164: the contention probe used to read only the FIRST GPU line
+// (parseNvidiaSmiUtil above), which on a dual-GPU box misses a busy SECOND
+// card entirely — this dev box is cuda:0 (4070 8GB) idle / cuda:1 (5070 Ti
+// 16GB) busy, and the busy card sits at index 1. maxNvidiaSmiUtil takes the
+// max across every parseable line instead.
+
+test('maxNvidiaSmiUtil takes the max across a two-GPU output, not just the first line', () => {
+  assert.equal(maxNvidiaSmiUtil('3\n97\n'), 97);
+  // Order shouldn't matter.
+  assert.equal(maxNvidiaSmiUtil('97\n3\n'), 97);
+});
+
+test('maxNvidiaSmiUtil returns null on empty / unparseable output', () => {
+  assert.equal(maxNvidiaSmiUtil(''), null);
+  assert.equal(maxNvidiaSmiUtil('\n'), null);
+  assert.equal(maxNvidiaSmiUtil('N/A\nN/A\n'), null);
+});
+
+test('maxNvidiaSmiUtil ignores unparseable lines but keeps the max of the rest', () => {
+  assert.equal(maxNvidiaSmiUtil('N/A\n85\n'), 85);
+});
+
+// The actual regression test (#2164): a two-GPU stdout whose SECOND card is
+// over threshold must be detected as contention. Before the fix,
+// detectGpuContention called parseNvidiaSmiUtil (first-line-only) here, read
+// cuda:0's idle 3%, and returned busy:false — missing the busy cuda:1 card
+// entirely. That is the exact bug that let six commits die to co-running
+// generations tonight.
+test('gpuContentionFor: busy SECOND GPU (not the first) is detected as contention', () => {
+  assert.deepEqual(gpuContentionFor('3\n97\n'), { busy: true, util: 97 });
+});
+
+test('gpuContentionFor: idle when every GPU is under threshold', () => {
+  assert.deepEqual(gpuContentionFor('3\n12\n'), { busy: false, util: 12 });
+});
+
+test('gpuContentionFor: falls back to busy:false, util:null on unparseable output', () => {
+  // Mirrors detectGpuContention's own fallback for an absent/errored nvidia-smi
+  // (e.g. CI ubuntu runners, non-NVIDIA boxes) — the spawn failure itself is
+  // handled in detectGpuContention, but an empty/garbage stdout reaching this
+  // pure function must resolve the same way.
+  assert.deepEqual(gpuContentionFor(''), { busy: false, util: null });
+  assert.deepEqual(gpuContentionFor('N/A\n'), { busy: false, util: null });
 });
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
