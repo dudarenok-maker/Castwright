@@ -40,20 +40,27 @@ export type CastFingerprint = string | typeof ABSENT | null;
     that test instead of silently reaching a log consumer un-rendered. */
 export const FINGERPRINT_SENTINELS = [ABSENT, UNREADABLE] as const;
 
-const SENTINEL_LOG_LABELS: Partial<Record<string, string>> = {
+const SENTINEL_LOG_LABELS: Record<(typeof FINGERPRINT_SENTINELS)[number], string> = {
   [ABSENT]: 'ABSENT',
   [UNREADABLE]: 'UNREADABLE',
 };
 
 /** Render a fingerprint value for a log line. Every member of
     `FINGERPRINT_SENTINELS` is mapped to safe literal text here so its raw
-    NUL-prefixed encoding never reaches a log consumer. Everything else is a
-    real sha256 hex digest; a 12-char prefix is enough to eyeball a match
-    without spamming the log line. Takes a plain `string` (not
+    NUL-prefixed encoding never reaches a log consumer — the table is typed
+    by the sentinel union itself, so a sentinel added to `FINGERPRINT_SENTINELS`
+    without a matching label here fails `npm run typecheck`, not just a test.
+    The lookup is guarded by `Object.hasOwn` so an arbitrary string (e.g.
+    `'constructor'`, `'toString'`, `'__proto__'`) can never resolve through
+    the object's prototype chain instead of its own properties. Everything
+    else is a real sha256 hex digest; a 12-char prefix is enough to eyeball a
+    match without spamming the log line. Takes a plain `string` (not
     `CastFingerprint`) because callers here already hold the
     `String(...)`-converted conflict fields, not the typed union. */
 export function describeFingerprintForLog(value: string): string {
-  return SENTINEL_LOG_LABELS[value] ?? value.slice(0, 12);
+  return Object.hasOwn(SENTINEL_LOG_LABELS, value)
+    ? SENTINEL_LOG_LABELS[value as (typeof FINGERPRINT_SENTINELS)[number]]
+    : value.slice(0, 12);
 }
 
 export function hashBytes(raw: string): string {
