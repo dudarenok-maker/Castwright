@@ -192,6 +192,23 @@ export const STEPS = [
         // schemas.ts is reached from diff-analysis-ab.mjs, which imports it
         // with a .js specifier per the TypeScript convention.
         'server/src/handoff/schemas.ts',
+        // #2012: knob-docs-sync.test.mjs reads BOTH of these as TEXT at
+        // RUNTIME (regex extraction, not a module-graph edge) to assert every
+        // registry.ts KNOBS[].label has a matching Advanced-Settings.md table
+        // row. Without them here, a diff to either file alone (exactly the
+        // shape that could drift the two apart) prints [cached] and the
+        // guard never re-runs — same #1847 runtime-read trap as fixtures/**
+        // above.
+        'server/src/config/registry.ts',
+        'docs/wiki/Advanced-Settings.md',
+        // #2053: the SAME trap one file over (PR #2159 review, finding 3).
+        // check-import-cycles.test.mjs asserts this allowlist's STRUCTURE and
+        // runs under test:hooks — but the file was an input to `check:cycles`
+        // only, which is cloud/full-verify-only. An allowlist-only commit
+        // therefore left test:hooks [cached] locally and skipped its CI leg,
+        // so the structural test never ran on the one diff shape it exists
+        // to catch.
+        'server/madge-cycles-allowlist.json',
       ],
       includeLockfiles: ['root'],
     },
@@ -288,6 +305,29 @@ export const STEPS = [
         'server/package.json',
       ],
       includeLockfiles: ['server'],
+    },
+  },
+  {
+    /* #2053: madge's --circular pass over server/src is not free on this
+       graph, so (per the repo-owner decision recorded on the issue) it's
+       cloud/full-`npm run verify`-only, same tier as test:e2e/test:server-
+       slow/test:scripts/test:pinokio below — NOT one of the three local
+       `--steps` CSVs in package.json. See verify-cache.test.mjs's
+       CLOUD_OR_FULL_VERIFY_ONLY_STEPS allowlist, which this name must also
+       be added to or that guard fails the build (#2120/#2154 shipped this
+       exact trap once already). */
+    name: 'check:cycles',
+    inputs: {
+      globs: ['server/src/**'],
+      extraFiles: [
+        'server/madge-cycles-allowlist.json',
+        // The madge VERSION is pinned inside this script's `npx --yes
+        // madge@8.0.0` spawn line rather than in server/package.json (see the
+        // script header for why it is not a devDependency), so this one file
+        // covers both "the guard logic changed" and "the tool version
+        // changed". No server manifest/lockfile input is needed here.
+        'scripts/check-import-cycles.mjs',
+      ],
     },
   },
   {

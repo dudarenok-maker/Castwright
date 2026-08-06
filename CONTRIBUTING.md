@@ -606,23 +606,25 @@ The compact version:
    inline test timeouts. (`scripts/check-no-budget-poll.mjs` is the automated
    gate; run it locally with `node scripts/check-no-budget-poll.mjs`.)
 
-**Mutation-verifying a server test against module-level state (#2028).**
-`server/vitest.config.ts` sets `retry: 1` for the whole server suite (pool
-contention mitigation — see the comment above `maxWorkers` there). For a test
-that asserts on module-level mutable state keyed by a fixed string (a
-`Map`/`Set`/counter at module scope, or a fixture keyed by a fixed path), that
-retry does **not** re-run a clean attempt: attempt 1 fails and leaks its
-mutation, attempt 2 reads state attempt 1 already touched, and can pass **for
-the wrong reason** — a genuine red-phase test reporting green. When
-mutation-verifying a red-phase test that touches shared module/fixture state,
-confirm it goes red with `npx vitest run --retry=0 <file>`, not the default
-`npx vitest run <file>` — the retry can silently absorb the exact failure
-you're trying to prove. `server/vitest.config.ts`'s `retryHazardReporter`
-prints a `[retry-hazard]` line for any test that needed a retry to pass, as a
-backstop for the case where this gets missed — treat that line as a prompt to
-re-run with `--retry=0` and judge whether it's a genuine transient (route
-through `quarantinedIt`, `docs/testing/flaky-register.md`) or a red-phase test
-the retry hid.
+**Mutation-verifying a server or frontend test against module-level state
+(#2028, #2063).** Both `server/vitest.config.ts` and the root
+`vitest.config.ts` set `retry: 1` for their whole suite (pool contention
+mitigation for the server suite — see the comment above `maxWorkers` there —
+and jsdom/timer flake absorption for the frontend suite, see
+`docs/features/archive/45-vitest-pool-tuning.md`). For a test that asserts on
+module-level mutable state keyed by a fixed string (a `Map`/`Set`/counter at
+module scope, or a fixture keyed by a fixed path), that retry does **not**
+re-run a clean attempt: attempt 1 fails and leaks its mutation, attempt 2 reads
+state attempt 1 already touched, and can pass **for the wrong reason** — a
+genuine red-phase test reporting green. When mutation-verifying a red-phase
+test that touches shared module/fixture state, confirm it goes red with
+`npx vitest run --retry=0 <file>`, not the default `npx vitest run <file>` —
+the retry can silently absorb the exact failure you're trying to prove. Both
+configs' `retryHazardReporter` prints a `[retry-hazard]` line for any test
+that needed a retry to pass, as a backstop for the case where this gets
+missed — treat that line as a prompt to re-run with `--retry=0` and judge
+whether it's a genuine transient (route through `quarantinedIt`,
+`docs/testing/flaky-register.md`) or a red-phase test the retry hid.
 
 ## Releasing
 
