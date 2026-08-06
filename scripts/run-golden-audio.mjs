@@ -62,7 +62,13 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { parseNvidiaSmiUtil } from './verify-cache.mjs';
+import { maxNvidiaSmiUtil, GPU_BUSY_THRESHOLD } from './verify-cache.mjs';
+
+// Re-exported for backward compatibility: scripts/tests/run-golden-audio.test.mjs
+// imports maxNvidiaSmiUtil from this module. The implementation itself moved to
+// verify-cache.mjs (#2164) so scripts/verify-cache.mjs's own detectGpuContention
+// can use it too — see that file for the real definition and its doc comment.
+export { maxNvidiaSmiUtil };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -96,27 +102,15 @@ if (assemblyOnly && sidecarOnly) {
 // would need a background timer/interval this deliberately one-shot script
 // doesn't otherwise carry, to catch a narrower case with no reported incident
 // behind it — file a follow-up if that changes.
-const GPU_BUSY_THRESHOLD = 40; // % utilization -- mirrors verify-cache.mjs's own threshold
+//
+// GPU_BUSY_THRESHOLD is imported from verify-cache.mjs (above), not
+// redeclared — #2164 review finding 4: two independent `= 40`s meant raising
+// one could silently leave the bless-time warning here firing at the old
+// value while a comment merely claimed they mirror.
 
-// #2036: `parseNvidiaSmiUtil` (verify-cache.mjs) only returns the FIRST GPU's
-// utilization line. On a multi-GPU box (this dev box is cuda:0 4070 8GB /
-// cuda:1 5070 Ti 16GB) a busy second card is invisible to a first-line read —
-// exactly the #1995 scenario the warning exists to catch. Take a local max()
-// over every parsed line here rather than widening the shared parser, which
-// has other callers with their own semantics (#2036).
-export function maxNvidiaSmiUtil(stdout) {
-  if (!stdout) return null;
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  let max = null;
-  for (const line of lines) {
-    const util = parseNvidiaSmiUtil(line);
-    if (util !== null && (max === null || util > max)) max = util;
-  }
-  return max;
-}
+// #2164: maxNvidiaSmiUtil moved to verify-cache.mjs (imported above) so
+// scripts/verify-cache.mjs's own GPU-contention probe can share it instead of
+// keeping a second copy — see that file for the implementation and comment.
 
 // #2036 review round 2: an absent/unparseable/failed probe used to return
 // `null` from `gpuBusyWarningFor` — indistinguishable at the console from "GPU
