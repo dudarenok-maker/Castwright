@@ -62,7 +62,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { parseNvidiaSmiUtil, maxNvidiaSmiUtil } from './verify-cache.mjs';
+import { maxNvidiaSmiUtil } from './verify-cache.mjs';
 
 // Re-exported for backward compatibility: scripts/tests/run-golden-audio.test.mjs
 // imports maxNvidiaSmiUtil from this module. The implementation itself moved to
