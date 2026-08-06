@@ -116,6 +116,26 @@ const EMPTY_FALLBACK_MAP: Record<string, string> = {};
    reading values instead of just keys. */
 const EMPTY_ORPHANED_FALLBACK_MAP: Record<string, OrphanedCharacterFallback> = {};
 
+/* F5 (fix round 2, #2163) — an ALLOWLIST of the resolution tiers that mean
+   "the rendered bytes may be stale," per #2107's ruling (same register,
+   the A32 row) that only the `'exact'` tier means the audio is fine. The
+   render-time gate below used to be the denylist `resolution !==
+   'unresolved'` — a tautology against THIS map's own 3-value union (only
+   `'alias' | 'normalised' | 'unresolved'` ever reach it, so "not
+   unresolved" and "alias or normalised" coincide today), which is exactly
+   why measuring it against the real defect (widening the gate to a
+   catch-all, `{true && (`) left both the unit test and the 7-test
+   Playwright spec green — nothing in either asserted the note was ever
+   CONDITIONAL, only that it appeared for the two tiers that already do. An
+   allowlist keyed on the tiers that actually mean "may be stale" doesn't
+   silently inherit a future tier this map might carry that means "the
+   bytes are fine" (mirroring `'exact'` on the richer four-tier union
+   `segments-io.ts`/`cast-reject-orphan.ts` use) the way the denylist would. */
+const STALE_AUDIO_RESOLUTIONS: ReadonlySet<OrphanedCharacterFallback['resolution']> = new Set([
+  'alias',
+  'normalised',
+]);
+
 /* #2092/#2089 D4 — one "Not <Name> · Undo" chip per rejectedAgainst target,
    shared by BOTH banner sections (needs-decision and auto-reconciled): the
    field lives on the orphan-map entry, not the section, so one component
@@ -1357,12 +1377,14 @@ export function CastView({
                               fine — `'alias'` (the `'history'`/
                               `'normalised-history'` tiers) AND `'normalised'`
                               (the `'normalised-id'` tier) both need this
-                              note; this section never contains an `'exact'`
-                              row to begin with (an exact match isn't an
-                              orphan), so gating on `resolution !==
-                              'unresolved'` covers every row actually
-                              rendered here. */}
-                          {info.resolution !== 'unresolved' && (
+                              note. Gated on the STALE_AUDIO_RESOLUTIONS
+                              allowlist (F5, #2163), not "not unresolved" —
+                              the two coincide today (this map's own union has
+                              no fourth value), which is exactly why the old
+                              denylist read as covering every row without
+                              actually pinning that the note is conditional
+                              at all. */}
+                          {STALE_AUDIO_RESOLUTIONS.has(info.resolution) && (
                             <span
                               data-testid={`orphaned-alias-audio-note-${orphanedId}`}
                               className="text-xs text-amber-700"

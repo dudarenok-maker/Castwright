@@ -844,6 +844,51 @@ describe('CastView Qwen status pill (plan 117)', () => {
       );
     });
 
+    it('F5 (#2163) — a resolution outside the stale-audio allowlist gets no note, even though it still counts as auto-reconciled', () => {
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          castDesign: castDesignSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+          },
+          cast: {
+            ...castSlice.getInitialState(),
+            characters: [narrator, marrow],
+            orphanedCharacterFallbacks: {
+              // Not a value the map's real union carries today ('alias' |
+              // 'normalised' | 'unresolved') — stands in for a FUTURE tier
+              // this map might grow that means "the bytes are fine"
+              // (mirroring 'exact' on the richer four-tier union
+              // segments-io.ts/cast-reject-orphan.ts use). Still not
+              // 'unresolved', so it still lands in the auto-reconciled
+              // section (row still shown, still counted) — only the note
+              // must not render for it. This is the exact mutation ("widen
+              // the gate back to a catch-all, `{true && (`") the fix
+              // guards: with the old denylist (`resolution !== 'unresolved'`)
+              // this row got the note too; with the STALE_AUDIO_RESOLUTIONS
+              // allowlist it must not.
+              mayrin: {
+                resolution: 'exact' as unknown as 'alias' | 'normalised' | 'unresolved',
+                resolvedCharacterId: 'marrow',
+                segments: 6,
+              },
+            },
+          },
+        },
+      });
+      renderSplitBanner(store);
+      fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+      const section = screen.getByTestId('orphaned-auto-reconciled');
+      expect(within(section).getByText(/mayrin/)).toBeInTheDocument();
+      expect(within(section).queryByTestId('orphaned-alias-audio-note-mayrin')).toBeNull();
+    });
+
     it('rejecting an auto-reconciled match calls the API with the resolved character, then moves the row to needs-your-decision', async () => {
       const store = makeSplitStore();
       renderSplitBanner(store);
