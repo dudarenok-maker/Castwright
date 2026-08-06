@@ -535,6 +535,18 @@ encode the pre-fix contract — one of them pins #2166's defect *as correct beha
 to surface at Ship time reads as "the fix broke something" instead of "the fix changed a contract
 on purpose".
 
+> **Read this table as a hypothesis to check, not a finished list.** It was derived by reading, not
+> by running, and two successive review rounds each found a case it had wrong — first the whole
+> file, then `:384`. So:
+>
+> 1. **Run the suite first:** `cd server && npx vitest run src/routes/cast-reject-orphan.failure-modes.test.ts`.
+>    Reconcile the actual red set against the table. A red case not listed here, or a listed case
+>    that is green, means the table is wrong — trust the run.
+> 2. **Green is not the bar.** `:384` stays *green* after the fix and stops testing anything, which
+>    is why it is in the table at all. For every case in this file that touches the POST route,
+>    re-derive by hand what it still exercises post-reorder. A test that passes because nothing
+>    happened is the failure mode this whole step exists to prevent.
+
 | Line | Case | Why it goes red | What to do |
 |---|---|---|---|
 | `:205` | `'rejectOrphanedPair failing still leaves the earlier notLinkedTo write in place (safe to retry)'` | asserts `mairin?.notLinkedTo` equals `[{ bookId, characterId: 'mayrin' }]` after the pair write throws. **This is #2166, pinned as correct.** | **Invert it.** Retitle to `'rejectOrphanedPair failing leaves cast.json untouched — the edge is never written (#2166)'` and assert `expect(mairin?.notLinkedTo).toBeUndefined();` |
