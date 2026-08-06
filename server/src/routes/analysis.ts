@@ -126,7 +126,9 @@ import {
   dropSupersededIdsReclaimedByLiveCast,
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
+  loadCastIdHistory,
 } from '../store/cast-id-history.js';
+import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
@@ -319,6 +321,64 @@ async function clearNotLinkedEdgesForDroppedRejections(
       '[analysis] failed to clear a dropped-rejection notLinkedTo edge (non-fatal)',
       err,
     );
+  }
+}
+
+/* #2166 — the per-persist half of the reject-edge invariant. Its sibling
+   above (`clearNotLinkedEdgesForDroppedRejections`, #2133) is PER-RETIREMENT
+   and driven by `droppedSelfLoopRejections`; this one is PER-PERSIST and
+   derived purely from state, which is what lets it heal a reject that failed
+   between its two writes — a state no retirement ever reports. The two are
+   compatible in either order: after the #2133 helper runs, pair and edge are
+   both gone, so this sees nothing to do.
+
+   Its OWN withCastLock, and the write is TEXTUALLY inside it, in this file.
+   That is not stylistic: `cast-lock.guard.test.ts` is syntactic and
+   call-graph-blind, and this file's allowlist entry is keyed on file AND
+   count, so a write that lived in reject-edge-reconcile.ts (however well
+   locked by its caller) would read as a sixth unlocked write here and redden
+   the build. reject-edge-reconcile.ts is therefore PURE and this function
+   owns the read, the lock and the write.
+
+   Best-effort, mirroring every other id-history write in this file: a failure
+   must not fail the analysis. A surviving stale edge merely re-suppresses one
+   future §4.4 name-match until the next persist tries again.
+
+   Exported only so analysis-reject-edge-reconcile.test.ts can drive it
+   without standing up a full analysis run. */
+export async function reconcileRejectEdgesOnDisk(
+  bookDir: string,
+  bookId: string | undefined,
+  log: (phaseId: number, message: string) => void,
+): Promise<void> {
+  /* No bookId means no way to tell this book's edges from a cross-book one —
+     see bookIdForRetirementCleanup, which already warns for this run. */
+  if (!bookId) return;
+  try {
+    await withCastLock(bookDir, async () => {
+      const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
+      if (!cast?.characters?.length) return;
+      const history = await loadCastIdHistory(bookDir);
+      const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
+      if (!adds.length && !removes.length) return;
+      await writeJsonAtomic(castJsonPath(bookDir), { characters: next });
+      if (removes.length) {
+        log(
+          1,
+          `Cleared ${removes.length} stranded "not the same character" link(s) with no recorded ` +
+            `rejection (${removes.map((e) => `${e.characterId} -/- ${e.orphanedId}`).join(', ')}).`,
+        );
+      }
+      if (adds.length) {
+        log(
+          1,
+          `Restored ${adds.length} "not the same character" link(s) from a recorded rejection ` +
+            `(${adds.map((e) => `${e.characterId} -/- ${e.orphanedId}`).join(', ')}).`,
+        );
+      }
+    });
+  } catch (err) {
+    console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
   }
 }
 
@@ -5162,6 +5222,10 @@ export async function runMainAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
+            /* #2166 — heal any reject whose two writes came apart, against
+               this exact just-persisted roster. Best-effort; see the
+               helper's own doc comment. */
+            await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log);
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
@@ -6460,6 +6524,8 @@ export async function runSubsetAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
+            // #2166 — mirrors the main path's same-named call above.
+            await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log);
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
           }
