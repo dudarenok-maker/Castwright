@@ -33,6 +33,7 @@ import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
+import { notificationsActions } from '../store/notifications-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -576,6 +577,15 @@ export function AnalysingView({
                immediately and survives reload. */
             dispatch(analysisActions.setSeriesPrior({ manuscriptId, count, names }));
           },
+          onWarning: ({ code, message }) => {
+            if (cancelled) return;
+            /* dedupeKey collapses a burst across the five merge-base write
+               sites into one toast. Wire kind is 'warning'; ToastKind is
+               'warn' — they are different vocabularies, not a typo. */
+            dispatch(
+              notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
+            );
+          },
         });
         if (cancelled || completedRef.current) return;
         completedRef.current = true;
@@ -872,6 +882,14 @@ export function AnalysingView({
             ...prev,
             [phaseId]: { until: Date.now() + waitMs, model: throttleModel, reason },
           }));
+        },
+        onWarning: ({ code, message }) => {
+          /* dedupeKey collapses a burst across the five merge-base write
+             sites into one toast. Wire kind is 'warning'; ToastKind is
+             'warn' — they are different vocabularies, not a typo. */
+          dispatch(
+            notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
+          );
         },
       })
       .then(() => {
