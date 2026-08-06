@@ -8,10 +8,10 @@
 //                                     (dry-run — prints what would link)
 //   node scripts/link-sub-issues.mjs --parent 1234 --children 111,222,333 --apply
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
+import { gh, ghSpawn } from './gh.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_OWNER = 'dudarenok-maker';
@@ -19,9 +19,8 @@ const REPO_NAME = 'Castwright';
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 function die(msg) { process.stderr.write(`[FAIL] ${msg}\n`); process.exit(1); }
-function gh(args) { return execFileSync('gh', args, { encoding: 'utf8' }); }
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 
