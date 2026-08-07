@@ -472,3 +472,115 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     );
   });
 });
+
+/* #2166 — the cast PUT is not a writer of notLinkedTo. persistence-middleware
+   fires this PUT on nine ordinary cast actions carrying the whole redux
+   roster, and cast-slice's `existing.notLinkedTo ?? inc.notLinkedTo` merge
+   makes redux's array win — so without the server-owned pass a stale client
+   re-PUTs edges the reconciliation just repaired. */
+describe('book-state PUT cast — notLinkedTo is server-owned', () => {
+  const seedCast = () =>
+    writeBook(bookDir, bookId, [
+      {
+        id: 'mairin',
+        name: 'Mairin',
+        role: 'character',
+        color: '#abc',
+        notLinkedTo: [{ bookId, characterId: 'm2' }],
+      },
+    ]);
+
+  beforeEach(() => seedCast());
+
+  it('[P7] ignores a client-mutated notLinkedTo and keeps the on-disk value', async () => {
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin',
+              role: 'character',
+              color: '#abc',
+              notLinkedTo: [{ bookId, characterId: 'HIJACK' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+  });
+
+  it('[P8] still persists every other field the same PUT carried', async () => {
+    /* The collateral-freeze check: a pass that froze the WHOLE character
+       would satisfy [P7] and be badly wrong. */
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin Renamed',
+              role: 'lead',
+              color: '#def',
+              notLinkedTo: [{ bookId, characterId: 'HIJACK' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.name).toBe('Mairin Renamed');
+    expect(mairin.role).toBe('lead');
+    expect(mairin.color).toBe('#def');
+    expect(mairin.notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+  });
+
+  it('[P9] a repaired edge survives the next unrelated cast PUT', async () => {
+    /* The oscillation the spec's review round found. Without Task 4, redux's
+       `existing.notLinkedTo ?? inc.notLinkedTo` merge means the next ordinary
+       cast edit re-PUTs the stale array and silently undoes the repair —
+       which would make Task 3's reconciliation a coin-flip against the
+       client rather than a fix. */
+    const { reconcileRejectEdgesOnDisk } = await import('./analysis.js');
+
+    // The stranded state: a same-book edge with NO rejectedPairs entry.
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([{ bookId, characterId: 'm2' }]);
+
+    await reconcileRejectEdgesOnDisk(bookDir, bookId, () => {});
+    expect(onDiskCast().characters[0].notLinkedTo).toEqual([]);
+
+    // What a client that hydrated BEFORE the repair would send next.
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'cast',
+        patch: {
+          characters: [
+            {
+              id: 'mairin',
+              name: 'Mairin Renamed',
+              role: 'character',
+              color: '#abc',
+              notLinkedTo: [{ bookId, characterId: 'm2' }],
+            },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.notLinkedTo).toEqual([]);
+    expect(mairin.name).toBe('Mairin Renamed');
+  });
+});

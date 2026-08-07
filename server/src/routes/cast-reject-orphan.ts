@@ -94,20 +94,28 @@
    has to exist for the chip, so Undo is a sibling button in the same pixel
    — strictly less new code than a modal, for strictly more value.
 
-   cast.json (the notLinkedTo edge) is written first, UNCONDITIONALLY, on
-   BOTH verbs — it's the authoritative record (spec §4.1) and the write
-   cast-merge.ts's own precedent orders first. It is OUTSIDE the
-   "transaction" the id-history reasoning below describes, and is never
-   rolled back on a later id-history failure: `appendNotLinked`/
-   `removeNotLinked` are each idempotent (a repeat write is a no-op), so
-   writing it first and leaving it written is safe on retry regardless of
-   what happens next — the worst case is a same-book id-history 500 AFTER
-   cast.json already changed, which a retry simply repeats as a no-op. This
-   is why every 500 message below says the character-link write already
-   landed (fix round 1, I5 — an earlier DELETE message claimed "nothing
-   else was changed", which was false: the notLinkedTo removal, being
-   unconditional and first, had already landed by the time any id-history
-   step could fail).
+   #2166 — the two writes are ordered by which half is RECOVERABLE, not by
+   which file is authoritative. The `rejectedPairs` entry drives
+   `rejectedAgainst` -> the chip -> Undo; the `notLinkedTo` edge is invisible
+   on its own, with no UI path to remove it. So: the pair is written FIRST and
+   removed LAST; the edge is created after it and destroyed before it. POST
+   therefore writes pair-then-edge, DELETE writes edge-then-pair, and BOTH
+   fail into the same visible state (pair present, edge absent) which the chip
+   exposes, a retry completes, and reject-edge-reconcile.ts heals at the next
+   authoritative persist. This REPLACES the earlier "cast.json first,
+   unconditionally, on BOTH verbs" rule: that symmetry is exactly what
+   produced the asymmetric outcome, because the two verbs move in opposite
+   directions. Do not re-symmetrise them.
+
+   Both of POST's writes are fatal. Their 500 messages differ deliberately: a
+   pair-write failure means NOTHING was written; a cast-write failure means the
+   rejection is durable and only the link is missing. Retry is safe after
+   either — `rejectOrphanedPair` returns early on an existing pair and
+   `appendNotLinked`/`removeNotLinked` are idempotent.
+
+   I5 (fix round 1) still applies to DELETE: its notLinkedTo removal is
+   unconditional and first, so its 500 messages must not claim "nothing else
+   was changed".
 
    POST's id-history writes (fix round 2 review; REORDERED again, fix
    round 1 I1): `rejectOrphanedPair` runs FIRST, `forgetSupersededId`
@@ -336,35 +344,16 @@ castRejectOrphanRouter.post(
         return res.status(404).json({ error: `Character "${characterId}" not found.` });
       }
 
-      const changed = appendNotLinked(character, bookId, orphanedId);
-      if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-      }
-
-      /* I1 (fix round 1) — REORDERED from the original forget-then-reject:
-         compute `forgotSupersededTo` by a pure READ first, write the FATAL
-         `rejectOrphanedPair` with the stash already baked in, and only THEN
-         attempt the non-fatal forget. See the module doc's I1 paragraph for
-         the full account of why the original order silently lost the stash
-         on a retry after a partial failure. Pair-scope guard (#2092/#2089
-         D1) unchanged: only treat `supersededBy[orphanedId]` as something to
-         forget when it targets THIS `characterId` — an entry pointing at
-         some OTHER, unrejected character is a live, still-valid alias (D1's
-         whole point is that a different target for the same `from` stays
-         resolvable), so stashing/forgetting it here would be wrong. */
+      /* #2166 — the pair is written FIRST and the edge second. Rationale in
+         the module doc; the short version is that the `rejectedPairs` entry
+         is what renders the chip and powers Undo, so a half-failure must
+         leave THAT half, never the invisible one. */
       const historyBeforeReject = await loadCastIdHistory(bookDir);
       const forgotSupersededTo =
         historyBeforeReject.supersededBy[orphanedId] === characterId
           ? historyBeforeReject.supersededBy[orphanedId]
           : undefined;
 
-      /* FATAL (fix round 2 review, upgraded from non-fatal; unchanged by the
-         pair-scope change): for the two normalised tiers — where all 188
-         currently-real orphaned segments live — `rejectedPairs` is the ONLY
-         mechanism that enforces this reject. A swallowed failure here would
-         report 200/success to the user while the reject stayed purely
-         cosmetic at render time. Runs BEFORE the forget below (I1) so the
-         stash can never be computed-then-lost on a retry. */
       try {
         await rejectOrphanedPair(bookDir, orphanedId, characterId, forgotSupersededTo);
       } catch (rejectErr) {
@@ -374,8 +363,30 @@ castRejectOrphanRouter.post(
         );
         return res.status(500).json({
           error:
-            'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
+            'Failed to durably record the rejection. Retry — nothing was written, so a retry starts clean.',
         });
+      }
+
+      /* #2166 — FATAL, where it used to be an unguarded throw into
+         errorHandler. The pair above has landed, so the rejection IS durably
+         recorded and the chip will render; only the name-match suppression is
+         missing, and the next analysis reconciles it (reject-edge-reconcile.ts).
+         Retry is safe: `appendNotLinked` is idempotent by construction and
+         `rejectOrphanedPair` returns early on an existing pair. */
+      const changed = appendNotLinked(character, bookId, orphanedId);
+      if (changed) {
+        try {
+          await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+        } catch (castErr) {
+          console.error(
+            '[cast-reject-orphan] failed to write the notLinkedTo edge to cast.json — surfacing as a failure',
+            castErr,
+          );
+          return res.status(500).json({
+            error:
+              'The rejection was recorded, but saving the character link failed. Retry — the rejection is already durable.',
+          });
+        }
       }
 
       /* Non-fatal, and now runs AFTER the durable write above (I1) — see the

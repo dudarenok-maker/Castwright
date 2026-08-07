@@ -89,6 +89,11 @@
 - **The release notes you're reading are now guaranteed to be the ones Castwright checked.** Castwright verifies its own release notes before publishing them — but it was checking one copy and publishing another, so a release cut by hand could have shipped notes nothing had looked at. It now publishes the copy it checks, and refuses to publish at all if the two ever disagree.
 - **Two more ways a release could quietly go wrong are now closed.** Cutting a release used to trust whatever git repository happened to be configured in the background — normally harmless, but capable of silently sending a release tag to the wrong place. It now always double-checks it's talking to the real one. And if the notes handed to the release tool don't match what Castwright is actually about to publish, cutting the release now stops and says so, instead of printing a warning that was easy to miss and shipping it anyway.
 - **Advanced Configuration on a brand-new install is no longer permanently locked.** If you installed Castwright through Pinokio — or by following the manual install steps and copying `.env.example` to `.env` — every setting in Advanced Configuration showed as "set in .env" and couldn't be changed without hand-editing a file, even though nothing had actually been set on purpose. On a new install those settings are genuine settings again: nothing is locked until you deliberately choose to lock one, the same as it's always worked for someone who set a value on purpose. **This reaches new installs only** — if Castwright is already running on your machine, your `.env` file is left exactly as it is, and Advanced Configuration will still show everything locked; fixing that for an install you already have is being tracked separately.
+- Telling Castwright "that's not the same character" is now all-or-nothing. If saving that
+  decision ever failed halfway, it used to leave an invisible mark that quietly stopped those two
+  names from ever being matched again — with no way to undo it. Now a failure leaves the decision
+  visible and undoable, and any book already carrying an invisible mark is cleaned up the next
+  time it's analysed.
 
 # Castwright 1.14.0
 
