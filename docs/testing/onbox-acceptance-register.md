@@ -111,14 +111,21 @@ comparison, see the edge list above). The merge step that closes this, run
    contiguously, often renumbering the survivors) always makes the
    still-live page look "ahead" of your working copy in this exact shape,
    and that is expected. **The command fetches `origin/main` itself, fresh,
-   every run — you do not need to `git fetch` by hand first.** It reads the
-   LOCAL `origin/main` ref only after that fetch succeeds, deliberately: a
-   ref that was never re-fetched can be stale, and a stale one can hide a
-   genuine competing-lane row behind the discharge exemption — this
-   sub-step exists so that can't happen silently. It follows that this step
-   needs network access to `origin`, with no offline fallback: you're about
-   to publish to a remote URL anyway, so an operator who can't reach the
-   network here can't complete step 4 either.
+   every run — you do not need to `git fetch` by hand first.** It then reads
+   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
+   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
+   updates `refs/remotes/origin/main` depends on this checkout's
+   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
+   narrowed refspec can skip while the fetch still exits 0, leaving
+   `origin/main` silently stale even though the fetch just "succeeded". If
+   you ever need to reproduce this baseline by hand for debugging, run
+   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
+   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
+   configured clone, entirely unresolvable) content even immediately after a
+   successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote
+   URL anyway, so an operator who can't reach the network here can't
+   complete step 4 either.
 3. **If it fails**, do NOT publish. There are two distinct failure shapes,
    named in the error text:
    - **A row/group named as already live and BEHIND** — your register is
@@ -128,16 +135,28 @@ comparison, see the edge list above). The merge step that closes this, run
      against the SAME saved copy from step 1 to confirm it now passes. It
      should — main pulling in the missing row is what resolves this, not
      another fetch of the live page.
-   - **"Cannot verify"** — the command's own `git fetch origin main` or the
-     `git show` that reads the freshly-fetched ref failed (network
-     unreachable, no credentials, `origin` misconfigured or unresolvable, a
-     timeout, or a malformed baseline), so it refuses to guess whether an
-     extra row is a discharge or a race and fails closed instead. This is
-     NOT the same as the register being behind: pulling `main` won't clear
-     it if the fetch itself can't reach `origin`. The error names which git
-     call failed (`fetch` or `show`) — run that command by hand
-     (`git fetch origin main`) to see the underlying error, fix whatever it
-     reports (network, auth, the remote), then re-run step 2.
+   - **"Cannot verify"** — the check refuses to guess whether an extra row
+     is a discharge or a race, and fails closed instead. This is NOT the
+     same as the register being behind: pulling `main` on your own machine
+     doesn't fix it, in either of the two shapes below.
+     - **A git call failed** — the command's own `git fetch origin main`, or
+       the `git show FETCH_HEAD:<path>` that reads what it just fetched,
+       failed (network unreachable, no credentials, `origin` misconfigured
+       or unresolvable, a timeout). The error names which one
+       (`fetch` or `show`) — run that command by hand to see the underlying
+       error, fix whatever it reports (network, auth, the remote), then
+       re-run step 2.
+     - **No git call failed, but the baseline is malformed** — `origin/main`'s
+       OWN copy of this register is internally inconsistent (a count
+       mismatch, a contiguity gap, a duplicate group letter, a sub-lettered
+       row heading, a glance-table row with no matching body section, ...),
+       so the fetch and the read both succeeded but the content they got
+       back can't be trusted. The error names no `fetch`/`show` failure in
+       this shape — that absence is itself the signal. Run
+       `npm run check:onbox-register` against a checkout of `main` (not your
+       branch) to see which specific check fails, then fix THAT on `main`
+       first (its own PR) before retrying step 2 here — this can't be fixed
+       from your branch, only from `main`.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a

@@ -879,12 +879,36 @@ function runGitCommand(args, cwd) {
 // unconditionally to the tip(s) it just fetched, so reading it instead of
 // the remote-tracking ref is correct independent of how this or any other
 // clone's refspec is configured.
+//
+// #2199 review round 5 (optional hardening, applied): resolves `FETCH_HEAD`
+// to a fixed SHA via `git rev-parse` immediately after the fetch, then reads
+// from that SHA — rather than letting `git show` resolve the symbolic name
+// `FETCH_HEAD` itself a moment later. This narrows (does not fully close — a
+// full close needs a lock this repo has no mechanism for) a residual race: a
+// concurrent PLAIN `git fetch` in the SAME worktree, landing between this
+// function's own fetch and its show, can leave `FETCH_HEAD` multi-line with
+// an unrelated branch on its first line — and `git show FETCH_HEAD:<path>`
+// resolves the symbolic name at THAT moment, so it could silently read the
+// unrelated branch's file instead. Freezing the SHA immediately after this
+// function's own fetch shrinks that window to the smallest it can be without
+// a lock. A `rev-parse` failure is folded into `failedStep: 'show'` — not a
+// third distinct step — deliberately: from the operator's side, "resolving
+// what the fetch just wrote" failed either way, and giving it its own label
+// would need the CLI's per-`failedStep` message to also stop claiming
+// specifically "`git show` failed" (see that message's own text), trading a
+// small amount of message precision for a third branch with no additional
+// operator action attached to it.
 export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCommand) {
   const fetchResult = gitRunner(['fetch', 'origin', 'main'], repoRoot);
   if (fetchResult.error || fetchResult.status !== 0) {
     return { text: null, failedStep: 'fetch' };
   }
-  const showResult = gitRunner(['show', `FETCH_HEAD:${registerPath}`], repoRoot);
+  const revParseResult = gitRunner(['rev-parse', 'FETCH_HEAD'], repoRoot);
+  if (revParseResult.error || revParseResult.status !== 0) {
+    return { text: null, failedStep: 'show' };
+  }
+  const fetchedSha = revParseResult.stdout.trim();
+  const showResult = gitRunner(['show', `${fetchedSha}:${registerPath}`], repoRoot);
   if (showResult.error || showResult.status !== 0) {
     return { text: null, failedStep: 'show' };
   }
@@ -1026,7 +1050,14 @@ if (invokedAsCli) {
           failedStep: null,
         };
       } catch {
-        baseline = { text: null, failedStep: 'show' };
+        // #2199 review round 5 (nit 1): its own distinct label, NOT 'show' —
+        // reusing 'show' here made the CLI claim "`git show FETCH_HEAD:...`
+        // failed even though the preceding `git fetch origin main` just
+        // succeeded" when in fact no git ran at all (this whole branch only
+        // runs when the TEST-ONLY override is set). Test-only path, but it's
+        // the first message a future agent debugging a red test would read,
+        // and it was actively wrong about what happened.
+        baseline = { text: null, failedStep: 'override' };
       }
     } else {
       baseline = resolveBaselineText(repoRoot, REGISTER);
@@ -1035,18 +1066,31 @@ if (invokedAsCli) {
       // Named explicitly, distinct from checkLiveView's generic "cannot
       // verify" error below (which fires too, since baseline.text is null) —
       // this line is what tells the operator WHICH git call to retry.
-      console.error(
-        baseline.failedStep === 'fetch'
-          ? '`git fetch origin main` failed — cannot verify --against-published without ' +
-              'a freshly-fetched baseline, and there is no offline fallback (a stale ' +
-              'baseline is exactly the hole this check exists to close). Check your ' +
-              'network connection and the `origin` remote, then try again — do not retry ' +
-              'the fetch again without addressing the underlying error first.'
-          : '`git show FETCH_HEAD:...` failed even though the preceding `git fetch origin ' +
-              'main` just succeeded — FETCH_HEAD may not have this file at this ref. ' +
-              'Check the file path, not the network or the fetch (which already worked), ' +
-              'then try again.',
-      );
+      let failureMessage;
+      if (baseline.failedStep === 'fetch') {
+        failureMessage =
+          '`git fetch origin main` failed — cannot verify --against-published without ' +
+          'a freshly-fetched baseline, and there is no offline fallback (a stale ' +
+          'baseline is exactly the hole this check exists to close). Check your ' +
+          'network connection and the `origin` remote, then try again — do not retry ' +
+          'the fetch again without addressing the underlying error first.';
+      } else if (baseline.failedStep === 'override') {
+        failureMessage =
+          `Could not read ONBOX_TEST_BASELINE_FILE=${baselineFileOverride} — this is the ` +
+          'TEST-ONLY baseline-injection seam, not git (no `git fetch` or `git show` ran). ' +
+          'Check the path exists and is readable, then try again.';
+      } else {
+        // Covers BOTH a `git rev-parse FETCH_HEAD` failure and a `git show
+        // <sha>:<path>` failure — resolveBaselineText folds them into one
+        // `failedStep` (see that function's own comment for why), so this
+        // message deliberately doesn't claim it was specifically `git show`.
+        failureMessage =
+          'Resolving what the fetch just wrote (`git rev-parse FETCH_HEAD` or `git show`) ' +
+          'failed even though the preceding `git fetch origin main` just succeeded — the ' +
+          'fetched content may not have this file at this ref. Check the file path, not ' +
+          'the network or the fetch (which already worked), then try again.';
+      }
+      console.error(failureMessage);
     }
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
@@ -1069,21 +1113,24 @@ if (invokedAsCli) {
             `register is BEHIND what is already live`,
       publishedErrors,
     );
-    if (publishedFailed && cannotVerify) {
-      console.error('Do not publish until this passes.');
-    } else if (publishedFailed) {
+    if (publishedFailed && !cannotVerify) {
       console.error(
         'Do not publish. Merge the rows named above — already live, not yet in this ' +
           'register — then re-run this command against a fresh copy of the (still-current) ' +
           'published page before publishing, per the "Live view" section of the register.',
       );
-    } else {
+    } else if (!publishedFailed) {
       // A prior version of this mode was silent on success — indistinguishable
       // at the console (and to a test asserting only on the exit code) from
       // the CLI block never having run at all. Echo explicitly, mirroring
       // release-notes-gate.mjs's own `[…] OK — …` convention.
       console.log(`check:onbox-register: OK — ${REGISTER} is not behind ${publishedPath}.`);
     }
+    // The remaining case — publishedFailed && cannotVerify — prints nothing
+    // extra here: the CANNOT_VERIFY_BASELINE_ERROR text `report()` already
+    // printed above ends with "Do not publish until this passes." on its
+    // own (#2199 review round 5, nit 2: this line used to print that exact
+    // sentence a second time).
     process.exit(publishedFailed ? 1 : 0);
   }
 

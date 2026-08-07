@@ -1491,11 +1491,14 @@ test("#2199: passing baselineText has no effect on the default direction:'both' 
 // real (but deliberately unreachable) `git fetch`.
 // ---------------------------------------------------------------------------
 
-test('resolveBaselineText: fetch then show, in that order, on success', () => {
+test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in that order, on success', () => {
   const calls = [];
   const fakeRunner = (args, cwd) => {
     calls.push({ args, cwd });
     if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '', error: undefined };
+    if (args[0] === 'rev-parse') {
+      return { status: 0, stdout: 'deadbeefcafe\n', stderr: '', error: undefined };
+    }
     if (args[0] === 'show') {
       return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
     }
@@ -1508,14 +1511,39 @@ test('resolveBaselineText: fetch then show, in that order, on success', () => {
   );
   assert.deepEqual(
     calls.map((c) => c.args[0]),
-    ['fetch', 'show'],
-    'expected fetch to run before show',
+    ['fetch', 'rev-parse', 'show'],
+    'expected fetch, then rev-parse, then show, in that order',
   );
   assert.deepEqual(calls[0].args, ['fetch', 'origin', 'main']);
-  assert.deepEqual(calls[1].args, ['show', 'FETCH_HEAD:docs/testing/onbox-acceptance-register.md']);
+  assert.deepEqual(calls[1].args, ['rev-parse', 'FETCH_HEAD']);
+  // #2199 review round 5 (optional hardening): reads the SHA `rev-parse`
+  // resolved, not the symbolic name `FETCH_HEAD` — freezing it immediately
+  // after the fetch narrows the window for a concurrent same-worktree fetch
+  // to move FETCH_HEAD out from under this read.
+  assert.deepEqual(calls[2].args, [
+    'show',
+    'deadbeefcafe:docs/testing/onbox-acceptance-register.md',
+  ]);
   assert.equal(calls[0].cwd, '/fake/repo');
   assert.equal(calls[1].cwd, '/fake/repo');
+  assert.equal(calls[2].cwd, '/fake/repo');
   assert.deepEqual(result, { text: 'FAKE REGISTER TEXT', failedStep: null });
+});
+
+test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimmed before the show', () => {
+  // Real `git rev-parse` output ends with a trailing newline — asserting
+  // this explicitly pins that the SHA is trimmed, not concatenated as-is
+  // (which would produce an invalid `<sha>\n:<path>` show argument).
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: '  abc123  \n', stderr: '' };
+    if (args[0] === 'show') return { status: 0, stdout: 'TEXT', stderr: '' };
+    throw new Error(`unexpected git subcommand in test: ${args[0]}`);
+  };
+  resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(calls[2], ['show', 'abc123:reg.md']);
 });
 
 // #2199 review round 3 (A1): `git fetch origin main` only GUARANTEES it
@@ -1528,20 +1556,24 @@ test('resolveBaselineText: fetch then show, in that order, on success', () => {
 // asserting on the LITERAL show args — a regression back to `origin/main:`
 // would pass every other test in this file (they never touch the real,
 // possibly-narrowly-configured origin) but must fail this one.
-test("resolveBaselineText: reads FETCH_HEAD, never origin/main directly, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
+test("resolveBaselineText: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args);
     if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'cafef00d\n', stderr: '' };
     if (args[0] === 'show') return { status: 0, stdout: 'FRESH', stderr: '' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
   const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(calls[1], ['show', 'FETCH_HEAD:reg.md']);
-  assert.ok(
-    !calls[1].some((arg) => typeof arg === 'string' && arg.includes('origin/main')),
-    `the show call must never reference origin/main directly, got: ${JSON.stringify(calls[1])}`,
-  );
+  assert.deepEqual(calls[1], ['rev-parse', 'FETCH_HEAD']);
+  assert.deepEqual(calls[2], ['show', 'cafef00d:reg.md']);
+  for (const call of calls) {
+    assert.ok(
+      !call.some((arg) => typeof arg === 'string' && arg.includes('origin/main')),
+      `no git call may ever reference origin/main directly, got: ${JSON.stringify(call)}`,
+    );
+  }
   assert.equal(result.text, 'FRESH');
 });
 
@@ -1575,17 +1607,42 @@ test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeou
   assert.deepEqual(calls, ['fetch']);
 });
 
-test('resolveBaselineText: a failing show (after a successful fetch) is reported as a show failure, not a fetch failure', () => {
+test('resolveBaselineText: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args[0]);
     if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'cafef00d\n', stderr: '' };
     if (args[0] === 'show') return { status: 128, stdout: '', stderr: 'fake show failure' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
   const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
   assert.deepEqual(result, { text: null, failedStep: 'show' });
-  assert.deepEqual(calls, ['fetch', 'show'], 'show must still run after a successful fetch');
+  assert.deepEqual(
+    calls,
+    ['fetch', 'rev-parse', 'show'],
+    'show must still run after a successful fetch + rev-parse',
+  );
+});
+
+test('resolveBaselineText: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
+  // #2199 review round 5 (optional hardening): rev-parse and show are folded
+  // into the same failedStep, deliberately — see resolveBaselineText's own
+  // comment for why. This pins that folding, and that a rev-parse failure
+  // still short-circuits before an invalid `undefined:<path>` show is ever
+  // attempted.
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') {
+      return { status: 128, stdout: '', stderr: 'fake rev-parse failure' };
+    }
+    return { status: 0, stdout: 'should never be reached', stderr: '' };
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(result, { text: null, failedStep: 'show' });
+  assert.deepEqual(calls, ['fetch', 'rev-parse'], 'show must not run after a failed rev-parse');
 });
 
 // #2199 review round 3 (B3): on a `failedStep === 'show'` failure, the CLI
@@ -1855,6 +1912,40 @@ test('--against-published prints an unmistakable WARNING when ONBOX_TEST_BASELIN
   });
 });
 
+// #2199 review round 5 (nit 1): an unreadable ONBOX_TEST_BASELINE_FILE used
+// to set `failedStep: 'show'`, so the CLI claimed "`git show FETCH_HEAD:...`
+// failed even though the preceding `git fetch origin main` just succeeded"
+// when NO git ran at all — this is the TEST-ONLY seam, unset means real git
+// never gets invoked. Pins the fix: its own honest label, naming the
+// override path and explicitly saying no git call ran.
+test('--against-published gives an unreadable ONBOX_TEST_BASELINE_FILE its own honest failure message, not a fabricated git-show failure', () => {
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const missingBaselinePath = filePath + '.does-not-exist-as-a-baseline';
+    const r = runCli(['--against-published', filePath], {
+      ONBOX_TEST_BASELINE_FILE: missingBaselinePath,
+    });
+    assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+    // The WARNING still fires (the override IS set, even though unreadable).
+    assert.match(r.stderr, /WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE=/);
+    assert.ok(
+      r.stderr.includes(`Could not read ONBOX_TEST_BASELINE_FILE=${missingBaselinePath}`),
+      `expected an honest "could not read" message naming the override path, got stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /no `git fetch` or `git show` ran/,
+      `expected the message to say no git ran, got stderr: ${r.stderr}`,
+    );
+    // The fabricated-failure shape this replaces: claiming `git show`
+    // failed when git was never invoked at all.
+    assert.doesNotMatch(
+      r.stderr,
+      /`git show FETCH_HEAD:/,
+      'must not claim git show failed when the override path was simply unreadable',
+    );
+  });
+});
+
 test('--against-published does NOT print the ONBOX_TEST_BASELINE_FILE warning on a normal run (override unset)', () => {
   // Reuses the real-fetch-failure fixture below rather than a fresh one: it
   // already exercises the baseline-resolution code path (with the override
@@ -1870,6 +1961,18 @@ test('--against-published does NOT print the ONBOX_TEST_BASELINE_FILE warning on
       r.stderr,
       /ONBOX_TEST_BASELINE_FILE/,
       `the warning must never appear when the override is unset, got stderr: ${r.stderr}`,
+    );
+    // #2199 review round 5 (nit 4): the comment above CLAIMS this run reaches
+    // the baseline-resolution block via a real, failing fetch — but nothing
+    // asserted that. Without this, the test would pass vacuously if a future
+    // change made the CLI exit BEFORE that block for any reason (a changed
+    // arg-parsing order, an early return, ...), since an absent warning is
+    // indistinguishable from "never got far enough to print it".
+    assert.match(
+      r.stderr,
+      /`git fetch origin main` failed/,
+      `expected proof this run actually reached the baseline-resolution block (a real, ` +
+        `failing fetch), not just that the warning happens to be absent — got stderr: ${r.stderr}`,
     );
   });
 });
@@ -2022,6 +2125,17 @@ test('--against-published fails closed with a NON-ZERO exit when `git fetch orig
       `expected the cannot-verify-specific label, got stderr: ${r.stderr}`,
     );
     assert.match(r.stderr, /Do not publish until this passes\./);
+    // #2199 review round 5 (nit 2): this sentence used to print TWICE on the
+    // cannot-verify path — once as part of the CANNOT_VERIFY_BASELINE_ERROR
+    // text `report()` prints, once more as a redundant follow-up line.
+    // `.match(...g)` with a global regex returns every match, so its length
+    // is the occurrence count.
+    const occurrences = (r.stderr.match(/Do not publish until this passes\./g) ?? []).length;
+    assert.equal(
+      occurrences,
+      1,
+      `expected "Do not publish until this passes." exactly once, got ${occurrences} in: ${r.stderr}`,
+    );
     assert.doesNotMatch(
       r.stderr,
       /Merge the rows named above/,
