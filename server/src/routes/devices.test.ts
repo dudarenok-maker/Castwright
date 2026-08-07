@@ -137,6 +137,56 @@ describe('devices route (srv-33)', () => {
     expect((await request(app).delete('/api/devices/nope')).status).toBe(404);
   });
 
+  // #2204 review (F2/F7) — a degraded store must answer 503 with an
+  // actionable message, not the shape of a genuine result: a 404 "Unknown
+  // device." claims the credential never existed when the truth is "can't
+  // currently read the store; that device may still be valid and
+  // authenticating." Corrupting the file directly (rather than mocking the
+  // module) exercises the real route -> device-tokens.js -> loadSync path.
+  it('DELETE answers 503 (not 404) when the device store is degraded', async () => {
+    await writeFile(join(workspaceRoot, 'device-tokens.json'), '{ this is not json', 'utf8');
+    deviceTokens._resetDeviceTokenCacheForTests();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).delete('/api/devices/any-id');
+    warn.mockRestore();
+
+    expect(res.status).toBe(503);
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error.length).toBeGreaterThan(0);
+  });
+
+  // #2204 review (F2/F7) — a degraded store must not present as an
+  // authoritative, genuinely-empty roster (200 {devices: []}).
+  it('GET answers 503 (not 200 with an empty list) when the device store is degraded', async () => {
+    await writeFile(join(workspaceRoot, 'device-tokens.json'), '{ this is not json', 'utf8');
+    deviceTokens._resetDeviceTokenCacheForTests();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).get('/api/devices');
+    warn.mockRestore();
+
+    expect(res.status).toBe(503);
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error.length).toBeGreaterThan(0);
+  });
+
+  // #2204 review (F2/F7) — the mint route's degraded-store failure used to
+  // reach the generic errorHandler and come back as an opaque 500 with no
+  // usable message; it now answers 503 with the same actionable message.
+  it('POST answers 503 (not an opaque 500) when the device store is degraded', async () => {
+    await writeFile(join(workspaceRoot, 'device-tokens.json'), '{ this is not json', 'utf8');
+    deviceTokens._resetDeviceTokenCacheForTests();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).post('/api/devices').send({ label: 'Phone' });
+    warn.mockRestore();
+
+    expect(res.status).toBe(503);
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error.length).toBeGreaterThan(0);
+  });
+
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
     const { token } = await deviceTokens.createDevice('Phone', 30);
     let passed = false;

@@ -22,17 +22,30 @@ vi.mock('node:fs/promises', async () => {
 /* One-shot override for node:fs's readFileSync — lets the transient-read-
    failure test simulate a single momentary EBUSY/EPERM without touching the
    real filesystem, then falls back to the real implementation for every
-   other call (including the ones this test file itself makes). */
+   other call (including the ones this test file itself makes).
+
+   readFileSyncPersistentThrow is the same idea but does NOT self-clear —
+   for the #2204 F1 negative-cache tests, which need the fault to keep
+   failing across several loadSync attempts until the test itself clears it.
+   readFileSyncCallCount counts every invocation (real or faulted) so those
+   tests can assert on how many times the file was ACTUALLY touched, not
+   just on the return value. */
 let readFileSyncOverride: (() => never) | null = null;
+let readFileSyncPersistentThrow: (() => never) | null = null;
+let readFileSyncCallCount = 0;
 vi.mock('node:fs', async (orig) => {
   const real = await orig<typeof import('node:fs')>();
   return {
     ...real,
     readFileSync: (...args: Parameters<typeof real.readFileSync>) => {
+      readFileSyncCallCount++;
       if (readFileSyncOverride) {
         const fn = readFileSyncOverride;
         readFileSyncOverride = null; // one-shot
         return fn();
+      }
+      if (readFileSyncPersistentThrow) {
+        return readFileSyncPersistentThrow();
       }
       return real.readFileSync(...args);
     },
@@ -51,6 +64,9 @@ beforeEach(async () => {
 afterEach(async () => {
   writeFileImpl = null;
   readFileSyncOverride = null;
+  readFileSyncPersistentThrow = null;
+  readFileSyncCallCount = 0;
+  vi.useRealTimers(); // safety net in case a fake-timer test threw before restoring
   delete process.env.WORKSPACE_DIR;
   // Flush any fire-and-forget touchLastSeen write isValidDeviceToken kicked
   // off before wiping the workspace — otherwise the in-flight write can race
@@ -253,26 +269,155 @@ it('a wholly malformed store does not throw, does not prevent startup, and authe
 });
 
 // #2181 review — a corrupt/unparseable store or a store whose "devices"
-// field isn't an array was silently swallowed (0 warnings). Fail-closed
-// behaviour (cache = []) is unchanged and NOT under test here — only that
-// the operator now gets a log line naming what went wrong.
-it('warns when device-tokens.json is corrupt (unparseable JSON), and still fails closed', () => {
+// field isn't an array was silently swallowed (0 warnings). The underlying
+// auth path (isValidDeviceToken) still fails closed — untouched here, see
+// the F1 tests below — but #2204 review (F2/F7) changed listDevices itself:
+// it now THROWS rather than silently presenting a degraded store as
+// "genuinely zero devices" (200 {devices: []}). See devices.test.ts for the
+// route-level 503 this becomes.
+it('throws DeviceStoreDegradedError when device-tokens.json is corrupt (unparseable JSON), and warns', () => {
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect(() => dt.listDevices()).not.toThrow();
-  expect(dt.listDevices()).toEqual([]);
+  expect(() => dt.listDevices()).toThrow(dt.DeviceStoreDegradedError);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('[device-tokens]'));
   warn.mockRestore();
 });
 
-it('warns when device-tokens.json\'s "devices" field is not an array, and still fails closed', () => {
+it('throws DeviceStoreDegradedError when device-tokens.json\'s "devices" field is not an array, and warns', () => {
   writeFileSync(join(dir, 'device-tokens.json'), JSON.stringify({ schema: 2, devices: 'oops' }), 'utf8');
 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect(() => dt.listDevices()).not.toThrow();
-  expect(dt.listDevices()).toEqual([]);
+  expect(() => dt.listDevices()).toThrow(dt.DeviceStoreDegradedError);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('[device-tokens]'));
+  warn.mockRestore();
+});
+
+// #2204 review (F2/F7) — the sync auth path must NOT throw: isValidDeviceToken
+// still fails closed silently on a degraded store, same as before. Only the
+// admin-facing reads (listDevices/revokeDevice) and the write (createDevice)
+// changed to surface the degraded state as an error.
+it('isValidDeviceToken still fails closed (returns false, does not throw) on a degraded store', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(() => dt.isValidDeviceToken('anything')).not.toThrow();
+  expect(dt.isValidDeviceToken('anything')).toBe(false);
+  warn.mockRestore();
+});
+
+// #2204 review (F2/F7) — revokeDevice used to loadSync() -> [] while
+// degraded, so findIndex always returned -1 and it resolved `false` BEFORE
+// ever reaching persist's own refusal; the route layer turned that into a
+// 404 "Unknown device.", claiming the credential never existed when the
+// truth is "can't currently read the store; that device may still be
+// valid." It now throws instead of resolving false.
+it('revokeDevice throws DeviceStoreDegradedError (not a false "not found") while the store is degraded', async () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await expect(dt.revokeDevice('any-id')).rejects.toThrow(dt.DeviceStoreDegradedError);
+  warn.mockRestore();
+});
+
+// #2204 review (F2/F7) — createDevice's degraded-store throw (via persist)
+// was already an Error; it's now the same typed DeviceStoreDegradedError as
+// revokeDevice/listDevices, so the route layer can catch all three the same
+// way instead of pattern-matching on message text.
+it('createDevice throws DeviceStoreDegradedError (typed, not a generic Error) while the store is degraded', async () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await expect(dt.createDevice('Phone', 30)).rejects.toThrow(dt.DeviceStoreDegradedError);
+  warn.mockRestore();
+});
+
+// #2204 review F1 — while degraded, `cache` is deliberately never populated
+// (so a transient fault doesn't get remembered forever), which used to mean
+// EVERY call on the hot sync auth path re-ran existsSync -> readFileSync ->
+// JSON.parse. isValidDeviceToken sits directly under the LAN guard
+// (requireLanToken), which fires on every /api and /workspace request — a
+// phone streaming chapter audio issues hundreds of these. This proves the
+// negative-cache actually blocks the amplification, not just that a retry
+// eventually succeeds (a naive always-retry implementation would also
+// eventually recover, so that alone wouldn't catch a regression here).
+it('retries a persisting store fault at most once per DEGRADED_RETRY_MS on the hot auth path, then retries again once the window elapses (#2204 F1)', () => {
+  const good = goodRecord('g1', dt.hashToken('t1'));
+  writeRawStore(dir, [good]);
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
+  readFileSyncPersistentThrow = () => {
+    throw new Error('EBUSY: resource busy or locked (simulated)');
+  };
+  readFileSyncCallCount = 0;
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  // 5 calls at the same instant: exactly one real disk read reaches the fault.
+  for (let i = 0; i < 5; i++) expect(dt.isValidDeviceToken('t1')).toBe(false);
+  expect(readFileSyncCallCount).toBe(1);
+
+  // Still inside the TTL window (500ms later, TTL is 1000ms): still no
+  // second disk read, even though nothing else has changed.
+  vi.setSystemTime(start + 500);
+  expect(dt.isValidDeviceToken('t1')).toBe(false);
+  expect(readFileSyncCallCount).toBe(1);
+
+  // Past the TTL: retries for real. Clear the fault first so the retry can
+  // actually succeed, proving self-healing rather than merely a second
+  // failed attempt.
+  readFileSyncPersistentThrow = null;
+  vi.setSystemTime(start + 1001);
+  expect(dt.isValidDeviceToken('t1')).toBe(true);
+  expect(readFileSyncCallCount).toBe(2);
+
+  warn.mockRestore();
+});
+
+// #2204 review F1 — "warn once per distinct error rather than per call".
+// Spans the TTL window with fake timers so each of the three calls actually
+// reaches the failing read (proving the suppression is about repeating the
+// SAME error, not just the negative-cache skipping IO within one window).
+it('warns once for a persisting store fault across several real retries, not once per retry (#2204 F1)', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{}', 'utf8');
+  readFileSyncPersistentThrow = () => {
+    throw new Error('EACCES: permission denied (simulated)');
+  };
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
+  dt.isValidDeviceToken('x');
+  vi.setSystemTime(start + 1001);
+  dt.isValidDeviceToken('x');
+  vi.setSystemTime(start + 2002);
+  dt.isValidDeviceToken('x');
+
+  const storeFaultWarnings = warn.mock.calls.filter((c) =>
+    String(c[0]).includes('failed to read/parse'),
+  );
+  expect(storeFaultWarnings).toHaveLength(1);
+
+  // A successful load in between resets the "last warned" note — so the
+  // SAME error recurring after a genuine recovery warns again, rather than
+  // being silenced forever by one early failure.
+  readFileSyncPersistentThrow = null;
+  const good = goodRecord('g1', dt.hashToken('t1'));
+  writeRawStore(dir, [good]);
+  dt._resetDeviceTokenCacheForTests();
+  vi.setSystemTime(start + 3003);
+  expect(dt.isValidDeviceToken('t1')).toBe(true); // real success, resets lastWarnedError
+
+  readFileSyncPersistentThrow = () => {
+    throw new Error('EACCES: permission denied (simulated)');
+  };
+  dt._resetDeviceTokenCacheForTests();
+  vi.setSystemTime(start + 4004);
+  dt.isValidDeviceToken('x');
+  const storeFaultWarningsAfter = warn.mock.calls.filter((c) =>
+    String(c[0]).includes('failed to read/parse'),
+  );
+  expect(storeFaultWarningsAfter).toHaveLength(2);
+
   warn.mockRestore();
 });
 
@@ -391,19 +536,29 @@ it('quarantines a malformed record: survives authenticate + touchLastSeen + pers
 // call it happened on, not poison the in-memory cache for the rest of the
 // process. Must fail before the fix: pre-#2182 `catch { cache = []; }` plus
 // `if (cache) return cache` meant a single transient EBUSY permanently
-// emptied the roster until the process restarted.
-it('a transient read failure does not persist past the next loadSync (#2182b)', () => {
+// emptied the roster until the process restarted. Uses fake timers to clear
+// the #2204 F1 negative-cache TTL between the two calls — otherwise the
+// second call would be blocked by the negative cache regardless of whether
+// the underlying fault had cleared, which is exactly what the F1 tests
+// above pin down separately.
+it('a transient read failure does not persist past the next loadSync once the negative-cache TTL elapses (#2182b)', () => {
   const good = goodRecord('g1', dt.hashToken('t1'));
   writeRawStore(dir, [good]);
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
 
   readFileSyncOverride = () => {
     throw new Error('EBUSY: resource busy or locked, open ' + join(dir, 'device-tokens.json'));
   };
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect(dt.listDevices()).toEqual([]); // degraded: this ONE call sees nothing
+  expect(() => dt.listDevices()).toThrow(dt.DeviceStoreDegradedError); // degraded: this ONE call sees nothing
   warn.mockRestore();
 
-  // The override was one-shot; the NEXT loadSync retries and succeeds.
+  // The override was one-shot; once the negative-cache TTL elapses, the
+  // NEXT loadSync retries the file for real and succeeds.
+  vi.setSystemTime(start + 1001);
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
 });
 
@@ -418,7 +573,7 @@ it('refuses to write while the last load was degraded (corrupt store); the corru
   writeFileSync(join(dir, 'device-tokens.json'), corrupt, 'utf8');
 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  await expect(dt.createDevice('Phone', 30)).rejects.toThrow(/refusing to write/);
+  await expect(dt.createDevice('Phone', 30)).rejects.toThrow(dt.DeviceStoreDegradedError);
   warn.mockRestore();
 
   const onDisk = readFileSync(join(dir, 'device-tokens.json'), 'utf8');
@@ -466,7 +621,7 @@ it('_resetDeviceTokenCacheForTests resets cache, quarantine, and loadDegraded �
   dt._resetDeviceTokenCacheForTests();
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn2 = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect(dt.listDevices()).toEqual([]); // degraded
+  expect(() => dt.listDevices()).toThrow(dt.DeviceStoreDegradedError); // degraded
   warn2.mockRestore();
 
   // The hook under test.
