@@ -3,9 +3,9 @@
    lacked: without it, a detector that fires unconditionally passes every
    other test in this file. */
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, renameSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { castJsonPath } from './paths.js';
 
 /* Mock fs/promises so a single test can inject a non-ENOENT read failure at
@@ -52,7 +52,7 @@ describe('createCastMergeBase — the negative control (design §3a)', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       const onConflict = vi.fn();
 
       /* Six writes: two per-chapter interim writes repeated, then stage1,
@@ -78,7 +78,7 @@ describe('createCastMergeBase — the negative control (design §3a)', () => {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'prior' }] }, null, 2));
       /* Capture happens BEFORE the fresh block's rm, deliberately — the rows
          must survive the delete (analysis.ts:2846-2847). */
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
 
       await rm(castJsonPath(dir), { force: true });
       base.markDeleted();
@@ -97,7 +97,7 @@ describe('createCastMergeBase — the negative control (design §3a)', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'prior' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       await rm(castJsonPath(dir), { force: true });
       base.markDeleted();
 
@@ -124,7 +124,7 @@ describe('createCastMergeBase — the negative control (design §3a)', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'prior' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       await rm(castJsonPath(dir), { force: true });
       // markDeleted() deliberately NOT called.
 
@@ -142,7 +142,7 @@ describe('createCastMergeBase — the positive control', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       const onConflict = vi.fn();
 
       await base.writeChecked({ characters: [{ id: 'a' }] }, onConflict);
@@ -164,7 +164,7 @@ describe('createCastMergeBase — the positive control', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       const onConflict = vi.fn();
 
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'foreign' }] }, null, 2));
@@ -182,7 +182,7 @@ describe('createCastMergeBase — the positive control', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'foreign' }] }, null, 2));
 
       await base.writeChecked({ characters: [{ id: 'ours' }] }, vi.fn());
@@ -201,7 +201,7 @@ describe('createCastMergeBase — detection disabled (fingerprint: null)', () =>
   it('a carryover-sourced run never reports a conflict, even against a foreign write', async () => {
     const dir = makeBookDir();
     try {
-      const base = createCastMergeBase(dir, null);
+      const base = createCastMergeBase(() => dir, null);
       expect(base.enabled).toBe(false);
       const onConflict = vi.fn();
 
@@ -218,7 +218,7 @@ describe('createCastMergeBase — detection disabled (fingerprint: null)', () =>
   it('markDeleted does NOT promote a disabled baseline to ABSENT', async () => {
     const dir = makeBookDir();
     try {
-      const base = createCastMergeBase(dir, null);
+      const base = createCastMergeBase(() => dir, null);
       base.markDeleted();
       expect(base.value).toBeNull();
       expect(base.enabled).toBe(false);
@@ -230,7 +230,7 @@ describe('createCastMergeBase — detection disabled (fingerprint: null)', () =>
   it('the write still lands with detection disabled', async () => {
     const dir = makeBookDir();
     try {
-      const base = createCastMergeBase(dir, null);
+      const base = createCastMergeBase(() => dir, null);
       await base.writeChecked({ characters: [{ id: 'ours' }] }, vi.fn());
       expect(existsSync(castJsonPath(dir))).toBe(true);
     } finally {
@@ -244,7 +244,7 @@ describe('createCastMergeBase — a not-checkable (UNREADABLE) read (#2185 revie
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       const baselineBefore = base.value;
       expect(typeof baselineBefore).toBe('string');
 
@@ -315,7 +315,7 @@ describe('createCastMergeBase — a not-checkable (UNREADABLE) read (#2185 revie
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const base = createCastMergeBase(dir, await captureOf(dir));
+      const base = createCastMergeBase(() => dir, await captureOf(dir));
       const onConflict = vi.fn();
 
       /* Self-verification (#2186): same reasoning as the test above — a
@@ -348,8 +348,8 @@ describe('createCastMergeBase — serialisation', () => {
     const dir = makeBookDir();
     try {
       writeFileSync(castJsonPath(dir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
-      const a = createCastMergeBase(dir, await captureOf(dir));
-      const b = createCastMergeBase(dir, await captureOf(dir));
+      const a = createCastMergeBase(() => dir, await captureOf(dir));
+      const b = createCastMergeBase(() => dir, await captureOf(dir));
 
       /* Both runs start from the same baseline. Serialised, exactly ONE of
          them observes the other's write and reports. If the hold did not
@@ -365,6 +365,42 @@ describe('createCastMergeBase — serialisation', () => {
       expect(conflicts).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createCastMergeBase — the directory is resolved at WRITE time (#2165)', () => {
+  it('a rename between two writes lands cast.json in the NEW directory and does not recreate the old one', async () => {
+    const oldDir = makeBookDir();
+    const newDir = join(dirname(oldDir), `${basename(oldDir)}-renamed`);
+    let current = oldDir;
+    try {
+      writeFileSync(castJsonPath(oldDir), JSON.stringify({ characters: [{ id: 'a' }] }, null, 2));
+      const base = createCastMergeBase(() => current, await captureOf(oldDir));
+      const onConflict = vi.fn();
+
+      await base.writeChecked({ characters: [{ id: 'a' }, { id: 'b' }] }, onConflict);
+
+      /* Exactly what book-state.ts does on a rename: move the folder, then
+         point the record at the new path. */
+      renameSync(oldDir, newDir);
+      current = newDir;
+
+      await base.writeChecked(
+        { characters: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] },
+        onConflict,
+      );
+
+      expect(existsSync(castJsonPath(newDir))).toBe(true);
+      expect(JSON.parse(readFileSync(castJsonPath(newDir), 'utf8')).characters).toHaveLength(3);
+      /* The resurrection assertion — the whole of #2165 in one line. */
+      expect(existsSync(oldDir)).toBe(false);
+      /* And no phantom conflict: the fingerprint is over bytes, not a path,
+         so the move carries the baseline across intact (design correction 1). */
+      expect(onConflict).not.toHaveBeenCalled();
+    } finally {
+      rmSync(oldDir, { recursive: true, force: true });
+      rmSync(newDir, { recursive: true, force: true });
     }
   });
 });
