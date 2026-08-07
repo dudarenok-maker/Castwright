@@ -839,11 +839,11 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
         if (newDir !== bookDir) {
           /* #2165 — refuse while an analysis is registered for this book. A
-             running analysis pins this directory in four places (the cast
-             merge-base writer, analysis-state.json's throttled snapshot
-             writes, its end-of-run delete, and this very busy key); moving the
-             folder out from under it recreates the pre-rename directory and
-             splits the book's state across two folders.
+             running analysis writes follow a rename (layer 2), but the busy
+             key stays pinned by design. Moving the folder out from under a
+             running job would recreate the pre-rename directory and split the
+             book's state across two folders. The rename guard here keeps the
+             two layers synchronized.
 
              A pure predicate over a ref-counted in-memory Map — NO lock is
              taken here, so it cannot interact with the global
@@ -885,9 +885,13 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
 
              ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
              itself, it does NOT close it. Check-then-rename is still two
-             operations. Closing it properly needs a primitive that spans the
-             analysis registration and the rename (a per-book lock, or keying
-             busy state on book id rather than path) — out of scope for #2165,
+             operations. Additionally, a writeChecked that resolved the old
+             directory before the rename would still write there afterwards,
+             recreating the pre-rename folder — the original #2165 symptom, at
+             much lower probability since layer 2 now follows the rename.
+             Closing it fully needs a primitive that spans the analysis
+             registration and the rename (a per-book lock, or keying busy state
+             on book id rather than path) — out of scope for #2165,
              deliberately, not by oversight. */
           if (isAnalysisBusy(bookDir)) {
             return res.status(409).json({

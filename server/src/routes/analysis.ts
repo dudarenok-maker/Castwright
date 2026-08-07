@@ -2518,10 +2518,10 @@ const ANALYSIS_STATE_WRITE_THROTTLE_MS = 5_000;
    pre-rename directory and lands the file where nothing reads it. Re-read
    the record instead.
 
-   Falls back to the pinned copy when the record has been dropped from the
-   store (`removeManuscript`, e.g. a reparse mid-run): a possibly-stale
-   directory is still strictly better than skipping the write, and it is
-   exactly today's behaviour.
+   Falls back to the pinned copy if the record is absent for any reason:
+   belt-and-braces when the store has no record. The case that genuinely
+   motivates re-reading is a record being replaced (reparse via
+   `putManuscript` — a captured reference would miss the fresh path).
 
    NOT for markAnalysisBusy/clearAnalysisBusy. Those are a matched pair over
    a ref-counted Map; clearing under a different key than the one marked
@@ -3175,9 +3175,8 @@ export async function runMainAnalyzerJob(
        every merge-base write and reset by the Start-fresh delete below. */
     const castBase: CastMergeBase | null = recordRef.bookDir
       ? createCastMergeBase(
-          /* #2165 — live, not pinned. The `!` is sound: the ternary already
-             proved bookDir non-null, and bookDir only ever goes non-null →
-             non-null (issue #2165's "Why it wasn't caught"). */
+          /* #2165 — live, not pinned. The fallback and the `!` are belt-and-
+             braces that TypeScript cannot prove unreachable. */
           () => liveBookDir(job) ?? recordRef.bookDir!,
           priorSnapshot.fingerprint,
         )
@@ -5801,7 +5800,7 @@ export async function runSubsetAnalyzerJob(
      every merge-base write. */
   const castBase: CastMergeBase | null = record.bookDir
     ? createCastMergeBase(
-        () => liveBookDir(job) ?? record.bookDir!, // #2165 — live, not pinned
+        () => liveBookDir(job) ?? record.bookDir!, // #2165 — fallback + ! are belt-and-braces
         priorSnapshot.fingerprint,
       )
     : null;

@@ -347,7 +347,22 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       }
 
       expect(existsSync(analysisStateJsonPath(seed.newDir))).toBe(true);
+      /* POSITIVE CONTROL, and it has to be the STATE, not mere existence.
+         `persistRunningSnapshot` fires unthrottled on the first markPhase
+         (lastDiskWriteAt starts at 0), so a running snapshot lands at oldDir
+         BEFORE the rename and renameWithRetry carries it across — existence
+         at newDir is therefore satisfied even with persistTerminalSnapshot
+         deleted outright. The running snapshot writes state:'running'; only
+         the TERMINAL one writes 'halted' (this run ends on a Phase-1 error,
+         not an abort, so it halts rather than pausing). Asserting 'halted' is
+         what separates "the terminal snapshot followed the rename" from "some
+         earlier file rode along with it". */
+      const after = readFileSync(analysisStateJsonPath(seed.newDir), 'utf8');
+      expect(JSON.parse(after).state).toBe('halted');
+
+      /* Per-mechanism assertion — the write did NOT also go to the old path. */
       expect(existsSync(analysisStateJsonPath(seed.oldDir))).toBe(false);
+      /* Whole-outcome assertion: NOTHING recreated the pre-rename folder. */
       expect(existsSync(seed.oldDir)).toBe(false);
     },
     30_000,
