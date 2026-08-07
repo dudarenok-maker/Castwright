@@ -5,7 +5,7 @@
 
 import express from 'express';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, posix as posixPath, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mountFrontendStatic } from './frontend-static.js';
 import { manuscriptsRouter } from './routes/manuscripts.js';
@@ -123,6 +123,71 @@ app.use(['/api', '/workspace'], requireLanToken);
 /* CSRF guard — only triggers on cookie-bearing state-changing requests (Task 6).
    Mounted after the LAN token guard so it only applies to authenticated sessions. */
 app.use(['/api', '/workspace'], requireSameOrigin);
+/* #2223 — two rules, both registered BEFORE express.static so `fallthrough`
+   can't matter, both 404 (indistinguishable from a path that was never on
+   disk, same as everything else this mount 404s on a miss):
+
+   RULE 1 — internals are not served; content is. Any path whose FIRST
+   segment (immediately under /workspace) is dot-prefixed is workspace-
+   internal state, never something a client fetches: `.upgrade-backups`
+   (independent review of this PR found it holds a plaintext copy of
+   `user-settings.json` — including `geminiApiKey` — taken on every version
+   bump; see `upgrade-coordinator.ts`'s `backupSeamFiles`), `.backups`,
+   `.telemetry`, `.queue.json`, and whatever the next one turns out to be.
+   The legitimate content this mount exists for — `books/`, `voices.json`,
+   `voices/`, `voice-library/` — has no dot-prefixed top segment, so this
+   rule can't reach it. A RULE catches the next internal file too; the
+   original cut of this fix was a filename list, which only ever catches
+   what someone remembered to add.
+
+   RULE 2 — device-tokens.json specifically (and any name that starts with
+   it — a rotate backup like `device-tokens.json.bak.1`, and, on Windows, an
+   alternate-data-stream form like `device-tokens.json::$DATA` or a
+   trailing-dot form like `device-tokens.json.`, EMPIRICALLY CONFIRMED to
+   otherwise reach `express.static` and return 200 with the full file body
+   on this platform). Kept as its own rule because the file itself is NOT
+   dot-prefixed, so rule 1 doesn't reach it — it lives at the workspace
+   root alongside legitimate content like `voices.json`. Matched by
+   basename, not just the top segment, so a nested collision (however
+   unlikely, since this file only ever lives at the workspace root today)
+   is covered too. `startsWith('device-tokens.json')` WITHOUT a trailing
+   dot, deliberately: an ADS/trailing-dot suffix addresses the SAME
+   underlying file's bytes but does not start with a `.`-suffixed prefix,
+   and reasoning from memory about which suffix forms `send` would resolve
+   is exactly what burned the first cut of rule 2 — dropping the trailing
+   dot subsumes the exact match and every suffix form in one check, so the
+   answer is never needed again. The only thing this could ever over-match
+   is a hypothetical real file literally named `device-tokens.jsonsomething`,
+   which doesn't exist and wouldn't be a legitimate asset to serve.
+
+   Both rules match against the DECODED, NORMALISED path, not the raw
+   request path — percent-encoding (`%2E`, `%2F`, ...) and `.`/`..`
+   traversal segments collapse to whatever segment they'd actually resolve
+   to on disk BEFORE either rule inspects it, so `/books/../.upgrade-backups/x`
+   is caught the same as `/.upgrade-backups/x` directly, and a legitimate
+   `books/<id>/…` path with a dot INSIDE a filename (not as a segment's
+   first character) is untouched. `path.posix.normalize` specifically
+   (not the OS-default `normalize`, which on Windows would flip the
+   forward slashes this URL path uses into backslashes and break the
+   subsequent split). Malformed percent-encoding falls through to the raw
+   path rather than throwing, so a garbled request still gets SOME check
+   rather than none. */
+app.use('/workspace', (req, res, next) => {
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(req.path);
+  } catch {
+    decodedPath = req.path; // malformed percent-encoding — still checked, just undecoded
+  }
+  const normalised = posixPath.normalize(decodedPath);
+  const firstSegment = normalised.split('/').find((s) => s.length > 0 && s !== '.');
+  const base = basename(normalised);
+  if ((firstSegment !== undefined && firstSegment.startsWith('.')) || base.startsWith('device-tokens.json')) {
+    res.status(404).end();
+    return;
+  }
+  next();
+});
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {
