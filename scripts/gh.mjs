@@ -33,9 +33,12 @@
 //     watch` whose failure is a normal, expected outcome the caller
 //     branches on) — with or without `stdio: 'inherit'` to stream progress.
 //
-// Both apply scrubGitEnv() unconditionally — merging any caller-supplied
-// `env` into the scrub (never discarding it), the same contract execGit
-// documents at bump-version.mjs:213-217 — and default `cwd` to `repoRoot`,
+// Both apply scrubGitEnv() unconditionally to whatever `env` the caller
+// passes — replacing `process.env` outright with that object and THEN
+// stripping the GIT_*-family keys from it, not merging the two on top of
+// `process.env`; an omitted `env` scrubs `process.env` itself (same
+// replace-then-scrub contract execGit documents at
+// bump-version.mjs:213-217) — and default `cwd` to `repoRoot`,
 // so a caller that forgets `cwd` (five of the eleven scripts migrated onto
 // this wrapper did) still resolves `gh` against THIS repository rather than
 // wherever the process happened to be invoked from. A caller may still pass
@@ -51,16 +54,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = resolve(__dirname, '..');
 
 /** Captured `gh` invocation — execFileSync, `cwd` defaults to `repoRoot`,
- *  `encoding: 'utf8'`, env unconditionally scrubbed (merging any `opts.env`
- *  rather than discarding it). Throws on a non-zero exit, same as a bare
- *  execFileSync call. Pass `{ stdio: 'inherit' }` to stream output live
- *  instead of capturing it (still throws on failure — use ghSpawn if the
- *  caller needs to inspect the result instead). */
+ *  `encoding: 'utf8'`, `stdio: ['ignore', 'pipe', 'pipe']` by default (stderr
+ *  captured, not printed — execFileSync inherits the parent's stderr when
+ *  `stdio` is left unspecified, which would otherwise leak `gh`'s stderr to
+ *  the console on every failure, including from inside a retry loop that
+ *  deliberately swallows the error — #2203 review Finding F6). Pass
+ *  `{ stdio: 'inherit' }` to stream output live instead of capturing it
+ *  (still throws on failure — use ghSpawn if the caller needs to inspect the
+ *  result instead). `env` unconditionally scrubbed: an `opts.env` REPLACES
+ *  `process.env` and is then scrubbed, it is not merged onto it; omit
+ *  `opts.env` to scrub `process.env` itself. Throws on a non-zero exit, same
+ *  as a bare execFileSync call. */
 export function gh(args, opts = {}) {
   const { env, ...rest } = opts;
   return execFileSync('gh', args, {
     cwd: repoRoot,
     encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     ...rest,
     env: scrubGitEnv(env),
   });

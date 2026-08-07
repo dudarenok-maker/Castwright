@@ -13,19 +13,27 @@
 // names — it protected exactly those three call sites and nothing else, so
 // it couldn't have caught the other 11 that turned out to exist (the whole
 // premise of #2184's decision comment: "the issue's list ... is incomplete").
-// This test asserts the STRONGER, structural invariant instead: no script
-// anywhere under scripts/ may invoke the `gh` binary directly, except
-// scripts/gh.mjs itself. A call site nobody has thought of yet fails this by
-// default, which is the entire point.
+// This test asserts the STRONGER, structural invariant instead: no
+// JS/TS script anywhere under scripts/ may invoke the `gh` binary directly,
+// except scripts/gh.mjs itself. A call site nobody has thought of yet fails
+// this by default, which is the entire point. (PowerShell/Python scripts
+// under scripts/ are NOT scanned — see KNOWN BLIND SPOTS below; "no script"
+// in this file's test name/assertions means the JS/TS family specifically.)
 //
-// Detection strategy: read every scripts/**/*.mjs file as source text (no
-// real `gh` process is ever spawned — see bump-version.test.mjs's sibling
-// comment on why that's impractical cross-platform) and pattern-match two
-// shapes:
-//   1. ANY call expression whose first argument is the literal string 'gh',
-//      "gh", or `gh`, immediately followed by a comma — matched on the
-//      ARGUMENT, not the callee's name. This is what catches a custom local
-//      wrapper (`run('gh', …)` — the actual shape
+// Detection strategy: read every scripts/**/*.{mjs,cjs,js,mts,cts,ts} file
+// as source text (no real `gh` process is ever spawned — see
+// bump-version.test.mjs's sibling comment on why that's impractical
+// cross-platform) and pattern-match two shapes:
+//   1. ANY call expression whose first OR second argument is the literal
+//      string 'gh', "gh", or `gh`, immediately followed by a comma —
+//      matched on the ARGUMENT, not the callee's name. The second-argument
+//      case exists for `runCommand(label, 'gh', args)` — runCommand's real
+//      signature (scripts/lib/run-command.mjs) puts the binary name second,
+//      behind a label — and is recognized only when the leading (label)
+//      argument is a simple token: a bare identifier, a number, or a
+//      quoted string (see KNOWN BLIND SPOTS for what that excludes). This
+//      is what catches a custom local wrapper (`run('gh', …)` — the actual
+//      shape
 //      generate-release-notes-wiki.mjs shipped with until this same round: a
 //      real chokepoint bypass this guard originally MISSED, because the
 //      first version only recognized execFileSync/spawnSync and their
@@ -63,6 +71,18 @@
 // it no longer restricts by callee name at all, so an aliased import is
 // already covered by "any callee" without special-casing it.
 //
+// Inline pragma: a line whose text contains the literal `gh-chokepoint-allow`
+// is excluded from both shapes entirely (#2203 review Finding F5). The scan
+// is raw text with no comment- or string-stripping, so it has no way to tell
+// a real call apart from a comment merely documenting one (e.g.
+// `// don't write execFileSync('gh', […]) here`) or a test assertion whose
+// shape coincides (`assert.equal('gh', recorded[0])` reads as a call to
+// `equal` with 'gh' as its first argument). The pragma is the escape hatch
+// for exactly that: put it on the offending line and the scanner skips it.
+// It suppresses ONE line, not a file or a block — there is no
+// pragma-disable/pragma-enable pairing, deliberately, so a stray pragma
+// can't silently blind the scanner to everything after it.
+//
 // KNOWN BLIND SPOTS (a source-text scan can't see everything):
 //   - The binary held in a variable (`const bin = 'gh'; execFileSync(bin, …)`
 //     or `run(bin, …)`) is NOT caught — this scanner only recognizes a
@@ -87,6 +107,33 @@
 //     `gh` invocation also passes an args array and/or an options object),
 //     so this is a live, deliberate trade-off, not an accident — flagged
 //     here so it stays a documented one.
+//   - Shape 1's second-argument case (`runCommand(label, 'gh', args)`) only
+//     recognizes a SIMPLE leading token — a bare identifier, a number, or a
+//     quoted string — immediately before the 'gh' argument. A leading
+//     argument that is itself a call, a template literal with
+//     interpolation, a computed/member expression, or any other non-trivial
+//     expression is NOT recognized, because the scanner does not parse
+//     balanced parens/brackets in that position — e.g.
+//     `runCommand(buildLabel(x), 'gh', args)` is NOT caught. No real call
+//     site in this repo passes anything but a plain string literal as
+//     runCommand's `label`, so this is latent, not live.
+//   - A binary-name variant — `execFileSync('gh.exe', …)`,
+//     `execFileSync('/usr/bin/gh', …)`, or any other path/extension form
+//     that isn't the exact 4-character token `gh` — is NOT caught; this
+//     scanner matches the literal string 'gh' only.
+//   - The obfuscation class — computed member access
+//     (`cp['exec' + 'FileSync']('gh', …)`), `.call`/`.apply`, a
+//     comma-expression, an optional call (`fn?.('gh', …)`), or an inline
+//     comment wedged between the 'gh' literal and its comma — is
+//     structurally out of reach for a source-text regex scan; a real parser
+//     (or an ESLint AST rule) would be needed to close that class, and this
+//     file does not attempt to.
+//   - Non-JS/TS scripts under scripts/ (11 `.ps1`, 3 `.psm1`, 4 `.py`) are
+//     entirely OUT OF SCOPE — `listScriptFiles()` below only walks the
+//     JS/TS family. No `gh` invocation exists in any of them today (a
+//     PowerShell `gh …` or Python `subprocess.run(['gh', …])` call would
+//     need its own, differently-shaped pattern), so this is a documented
+//     gap, not a silent one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -145,19 +192,30 @@ function collectShellAliases(source) {
   return shell;
 }
 
-// Shape 1: any call expression whose first argument is the literal string
-// 'gh', "gh", or `gh` — the callee can be ANY identifier (or property-access
-// name), not just execFileSync/spawnSync or a tracked alias of them. This is
-// what catches a custom local wrapper (`run('gh', …)`) as readily as a
-// direct call. The closing quote must be followed by a comma (optionally
-// preceded by whitespace) — every real `gh`-spawning call passes at least
-// one more argument after the binary name, so this is never a real call
-// site's own coverage cost; it's what lets backtick stay in the quote class
-// without reopening the bump-version.mjs prose false positive (see header
-// comment). This also means nothing but a matching close-quote may follow
-// "gh" itself (so this never matches a longer string that merely STARTS
-// with "gh", e.g. 'ghost' or 'gh-labels').
-const DIRECT_CALL_RE = /\b([A-Za-z_$][\w$]*)\s*\(\s*(['"`])gh\2\s*,/g;
+// Shape 1: any call expression whose first OR SECOND argument is the
+// literal string 'gh', "gh", or `gh` — the callee can be ANY identifier (or
+// property-access name), not just execFileSync/spawnSync or a tracked alias
+// of them. This is what catches a custom local wrapper (`run('gh', …)`) as
+// readily as a direct call — AND `runCommand(label, 'gh', args)`'s
+// signature, where the binary name sits second, behind a label (#2203
+// review Finding F2: `DIRECT_CALL_RE` used to require 'gh' to be the FIRST
+// argument, so `runCommand('probe', 'gh', […])` was invisible to it — the
+// most realistic evasion of the ones reviewed, since sync-wiki.mjs already
+// imports runCommand directly and the bypass this branch just fixed
+// (generate-release-notes-wiki.mjs) was a two-line alias over exactly this
+// function). The optional leading token before 'gh' is matched only when
+// it's a SIMPLE one — a bare identifier, a number, or a quoted string — not
+// an arbitrary expression (see KNOWN BLIND SPOTS). The closing quote around
+// 'gh' itself must be followed by a comma (optionally preceded by
+// whitespace) — every real `gh`-spawning call passes at least one more
+// argument after the binary name, so this is never a real call site's own
+// coverage cost; it's what lets backtick stay in the quote class without
+// reopening the bump-version.mjs prose false positive (see header comment).
+// This also means nothing but a matching close-quote may follow "gh" itself
+// (so this never matches a longer string that merely STARTS with "gh",
+// e.g. 'ghost' or 'gh-labels').
+const DIRECT_CALL_RE =
+  /\b([A-Za-z_$][\w$]*)\s*\(\s*(?:(?:[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|['"`][^'"`]*['"`])\s*,\s*)?(['"`])gh\2\s*,/g;
 
 // Shape 2: execSync('gh …') / exec('gh …') — or a local alias of either —
 // a single shell-command string whose first token is "gh" (followed by
@@ -167,12 +225,30 @@ function buildShellCallRe(names) {
   return new RegExp(`\\b(${[...names].join('|')})\\s*\\(\\s*(${Q})\\s*gh(?=[\\s'"\`])`, 'g');
 }
 
+// #2203 review Finding F5 — a single-line suppression pragma. The scan is
+// raw text with no comment- or string-stripping, so a comment documenting
+// the rule, or a test assertion whose argument shape coincides
+// (`assert.equal('gh', recorded[0])`), reads as a violation with no way for
+// the scanner to tell it apart from a real call. Put this literal string
+// anywhere on the offending line to suppress it — see header comment for
+// the "why" and the deliberate no-block-form design.
+const PRAGMA = 'gh-chokepoint-allow';
+
+/** The full text of the line containing `index`, for pragma-checking a
+ *  match without re-splitting the whole source per call. */
+function lineTextAt(source, index) {
+  const start = source.lastIndexOf('\n', index) + 1;
+  const end = source.indexOf('\n', index);
+  return source.slice(start, end === -1 ? source.length : end);
+}
+
 /** Scans one file's source text for a raw `gh` invocation via either shape,
  *  including through any local alias its own `node:child_process` import
  *  declares for execSync/exec (shape 2 only — shape 1 needs no alias
- *  tracking, it matches any callee). Returns an array of { kind, line,
- *  snippet }. Pure — exported so the per-shape mutation tests below can
- *  exercise it directly against synthetic fixtures, not just real repo
+ *  tracking, it matches any callee). A match on a line carrying the
+ *  `gh-chokepoint-allow` pragma is skipped. Returns an array of { kind,
+ *  line, snippet }. Pure — exported so the per-shape mutation tests below
+ *  can exercise it directly against synthetic fixtures, not just real repo
  *  files. */
 export function findRawGhCalls(source) {
   const shell = collectShellAliases(source);
@@ -181,6 +257,7 @@ export function findRawGhCalls(source) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(source))) {
+      if (lineTextAt(source, m.index).includes(PRAGMA)) continue;
       const line = source.slice(0, m.index).split('\n').length;
       violations.push({ kind: m[1], line, snippet: m[0] });
     }
@@ -188,13 +265,20 @@ export function findRawGhCalls(source) {
   return violations;
 }
 
+// #2203 review Finding F3 — the JS/TS family, not just `.mjs`. Before this,
+// a `gh` call in e.g. `preflight-ffmpeg.cjs` or `audit-stage2-coverage.mts`
+// was caught verbatim if renamed to `.mjs` — the escape was purely the
+// extension filter. `.ps1`/`.psm1`/`.py` scripts under scripts/ are
+// deliberately NOT included; see KNOWN BLIND SPOTS above.
+const SCANNED_EXTENSIONS = ['.mjs', '.cjs', '.js', '.mts', '.cts', '.ts'];
+
 function listScriptFiles() {
   return readdirSync(scriptsDir, { recursive: true })
-    .filter((f) => f.endsWith('.mjs'))
+    .filter((f) => SCANNED_EXTENSIONS.some((ext) => f.endsWith(ext)))
     .map((f) => resolve(scriptsDir, f));
 }
 
-test('no script under scripts/ invokes the `gh` binary directly except scripts/gh.mjs (#2184)', () => {
+test('no JS/TS script under scripts/ invokes the `gh` binary directly except scripts/gh.mjs (#2184)', () => {
   const violations = [];
   for (const file of listScriptFiles()) {
     if (file === ghWrapperPath || file === selfPath) continue;
@@ -312,4 +396,133 @@ test('scripts/gh.mjs itself is excluded from the repo-wide scan (it IS the choke
   // violation.
   const source = readFileSync(ghWrapperPath, 'utf8');
   assert.ok(findRawGhCalls(source).length >= 2, 'gh.mjs is expected to contain the two real gh()/ghSpawn() invocations');
+});
+
+// --- Per-function scrub assertions (#2203 review Finding F1) -------------
+// This guard (above) proves ROUTING — that every gh-calling script goes
+// through gh.mjs — but until now nothing asserted that gh.mjs's own
+// gh()/ghSpawn() actually scrub the env they hand to execFileSync/
+// spawnSync. Deleting `env: scrubGitEnv(env)` from EITHER function left
+// `npm run test:hooks` fully green (1187 pass, 0 fail) and `npx eslint
+// scripts/gh.mjs` only warning (unused vars, exit 0) — a silent regression
+// from the bump-version.test.mjs-era test this file replaced, which did
+// assert the scrub at each of its three named call sites. These two tests
+// close that hole, one function at a time — a single file-wide regex would
+// stay green if only one of the two lost its scrub (see the neutralisation
+// proof in the PR description / fix report).
+
+/** Extracts the full source text of `export function <name>(...) { ... }`
+ *  from gh.mjs's own source, by brace-counting from the function's opening
+ *  `{` to its matching close (the object literal inside means a naive
+ *  "up to the next blank line" slice isn't safe). */
+function extractFunctionSource(source, name) {
+  const header = new RegExp(`export function ${name}\\s*\\([^)]*\\)\\s*\\{`).exec(source);
+  assert.ok(header, `function ${name} not found in gh.mjs`);
+  let depth = 0;
+  let i = header.index + header[0].length - 1; // position of the opening '{'
+  const start = i;
+  do {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') depth--;
+    i++;
+  } while (depth > 0 && i < source.length);
+  return source.slice(start, i);
+}
+
+test('gh() applies scrubGitEnv to the env it passes to execFileSync (#2203 review Finding F1)', () => {
+  const source = readFileSync(ghWrapperPath, 'utf8');
+  const ghSource = extractFunctionSource(source, 'gh');
+  assert.match(
+    ghSource,
+    /env:\s*scrubGitEnv\(/,
+    'gh() must scrub its env before handing it to execFileSync — see scripts/gh.mjs header',
+  );
+});
+
+test('ghSpawn() applies scrubGitEnv to the env it passes to spawnSync (#2203 review Finding F1)', () => {
+  const source = readFileSync(ghWrapperPath, 'utf8');
+  const ghSpawnSource = extractFunctionSource(source, 'ghSpawn');
+  assert.match(
+    ghSpawnSource,
+    /env:\s*scrubGitEnv\(/,
+    'ghSpawn() must scrub its env before handing it to spawnSync — see scripts/gh.mjs header',
+  );
+});
+
+// --- Second-argument coverage (#2203 review Finding F2) -------------------
+// `DIRECT_CALL_RE` used to require 'gh' to be the call's FIRST argument, so
+// `runCommand(label, 'gh', args)` — runCommand's real signature puts the
+// binary name second, behind a label — was invisible to it. Verified by the
+// reviewer: appending `runCommand('probe', 'gh', ['issue','list'])` to a
+// script left the guard green before this fix.
+
+test('findRawGhCalls catches "gh" as a SECOND argument — runCommand(label, \'gh\', args) shape (#2203 review Finding F2)', () => {
+  const violations = findRawGhCalls("runCommand('probe', 'gh', ['issue', 'list']);");
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].kind, 'runCommand');
+});
+
+test('findRawGhCalls still catches "gh" as a first argument after the second-argument fix', () => {
+  const violations = findRawGhCalls("execFileSync('gh', ['issue', 'list'], { encoding: 'utf8' });");
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].kind, 'execFileSync');
+});
+
+test('findRawGhCalls does not false-positive on runCommand\'s real, non-gh call site shape (sync-wiki.mjs:88)', () => {
+  const violations = findRawGhCalls("return runCommand('sync-wiki', cmd, args, { cwd });");
+  assert.deepEqual(violations, []);
+});
+
+test('KNOWN BLIND SPOT: a non-trivial leading argument before a second-position "gh" is not detected', () => {
+  const violations = findRawGhCalls("runCommand(buildLabel(x), 'gh', args);");
+  assert.deepEqual(violations, []);
+});
+
+// --- Extension coverage (#2203 review Finding F3) --------------------------
+// Before this, the scan filtered to `f.endsWith('.mjs')` only, so a `gh`
+// call in e.g. a `.cjs` or `.mts` script under scripts/ was invisible to
+// the guard purely because of its extension — the KNOWN BLIND SPOTS list
+// didn't say so, which understated the gap.
+
+test('listScriptFiles scans the JS/TS family, not just .mjs (#2203 review Finding F3)', () => {
+  const relPaths = listScriptFiles().map((f) => relative(repoRoot, f));
+  assert.ok(relPaths.some((f) => f.endsWith('.cjs')), 'expected at least one .cjs file (preflight-ffmpeg.cjs)');
+  assert.ok(relPaths.some((f) => f.endsWith('.mts')), 'expected at least one .mts file (audit-stage2-coverage.mts)');
+});
+
+// --- Pragma suppression (#2203 review Finding F5) --------------------------
+// The scan is raw text with no comment- or string-stripping, so (a) a
+// comment documenting the rule and (b) a test assertion whose shape
+// coincides (`assert.equal('gh', recorded[0])`) both read as violations.
+// `gh-chokepoint-allow` on the offending line suppresses just that line.
+
+test('findRawGhCalls suppresses a match on a line carrying the gh-chokepoint-allow pragma', () => {
+  const src = "execFileSync('gh', ['issue', 'list'], { encoding: 'utf8' }); // gh-chokepoint-allow";
+  assert.deepEqual(findRawGhCalls(src), []);
+});
+
+test('findRawGhCalls does not suppress a violation on an unrelated line just because another line carries the pragma', () => {
+  const src = [
+    "// documenting the rule — gh-chokepoint-allow",
+    "execFileSync('gh', ['issue', 'list'], { encoding: 'utf8' });",
+  ].join('\n');
+  const violations = findRawGhCalls(src);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+});
+
+test('KNOWN FALSE POSITIVE (documented) suppressed by pragma: a comment demonstrating the call shape', () => {
+  const withoutPragma = "// Never write execFileSync('gh', [...]) here";
+  assert.equal(findRawGhCalls(withoutPragma).length, 1, 'sanity: the bare comment trips the scanner without the pragma');
+  const withPragma = withoutPragma + ' — gh-chokepoint-allow';
+  assert.deepEqual(findRawGhCalls(withPragma), []);
+});
+
+test('KNOWN FALSE POSITIVE (documented) suppressed by pragma: a test-style assertion whose shape coincides with shape 1', () => {
+  const withoutPragma = "assert.equal('gh', recorded[0]);";
+  const violations = findRawGhCalls(withoutPragma);
+  assert.equal(violations.length, 1, 'sanity: the bare assertion trips the scanner without the pragma');
+  assert.equal(violations[0].kind, 'equal');
+  const withPragma = withoutPragma + ' // gh-chokepoint-allow';
+  assert.deepEqual(findRawGhCalls(withPragma), []);
 });
