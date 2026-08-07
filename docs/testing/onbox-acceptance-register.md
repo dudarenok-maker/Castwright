@@ -160,7 +160,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
@@ -170,7 +170,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**57 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**58 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2001,6 +2001,54 @@ on-box-measured constants.
 comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
+
+### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+
+`.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
+/ `SIDECAR_VRAM_RESTART_MB=0` as literal, active env assignments — and each of the
+three threshold functions in `main.py` treats a **present** `0` (or any parseable
+value) as an explicit override, not as "unset." Since #2179 comments the generated
+`.env.example` block out instead of emitting it active, a fresh install now leaves
+all three **absent**, so the sidecar self-computes 70% of total physical RAM (hard
+restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the
+card's total VRAM (hard restart) — three lifecycle behaviours that were silently
+disabled on every install that copied `.env.example` verbatim (Pinokio, and the
+documented manual/`INSTALL.md` path) until this fix, and are now live. None of this
+is exercised by any pytest/vitest suite — the three threshold functions are unit-
+tested for their env-present/absent MATH, not for whether a real sidecar process
+ever crosses a live threshold and actually exits/recycles.
+
+- Confirm a fresh install (a `server/.env` written from the current
+  `.env.example` — i.e. all three of `SIDECAR_RESTART_MB` /
+  `SIDECAR_VRAM_RECYCLE_SOFT_MB` / `SIDECAR_VRAM_RESTART_MB` absent from the
+  environment) computes and uses the auto thresholds at sidecar startup (70%
+  of total RAM; 90%/98% of the resident card's total VRAM) rather than
+  treating them as disabled.
+- Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run,
+  or a synthetic host-memory hog alongside the sidecar) and confirm the
+  sidecar self-exits with code 43 for the supervisor to respawn, rather than
+  never recycling.
+- Drive reserved VRAM up toward the 90% soft threshold and confirm `/health`
+  sets `recycle_pending` and a clean chapter-boundary recycle fires (not a
+  mid-chapter hard exit); then, on a card where the soft recycle didn't
+  already relieve the pressure, continue up toward the 98% hard threshold
+  and confirm the hard self-exit fires instead of an uncontrolled OOM.
+- Watch for thrash: across an ordinary render, the auto thresholds must not
+  fire routinely — a card sitting in the high-80s/90s% reserved as a normal
+  batch peak (see the `_TORCH_ACTIVE_RESERVED_MB` torch-managed-card
+  carve-out in `main.py`) should not trip a recycle storm now that the
+  ceiling is live where it was previously inert.
+
+*Needs:* a fresh install (or a `server/.env` with the three vars removed) so
+the auto path is actually reached; the single 8 GB card is enough; a way to
+push committed RAM/reserved VRAM toward the thresholds (a long render, or a
+synthetic memory/VRAM hog run alongside it). *Criteria:*
+`_mem_restart_threshold_mb` / `_vram_recycle_soft_threshold_mb` /
+`_vram_restart_threshold_mb` in `server/tts-sidecar/main.py` (`:8265-8284`,
+`:8154-8185`); the #2210 PR body and `0b0e7694`'s commit message record the
+before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
+way to actually saturate the card, which may need a synthetic hog rather
+than a real render.
 
 ---
 
