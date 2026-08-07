@@ -210,6 +210,110 @@ describe('PUT /api/config — qa.asr.device / qa.asr.computeType cross-field val
   });
 });
 
+/* Independent review of PR #2205, finding F1 — POST /api/config/reset never
+   consulted PAIR_RULES, so a per-key Revert (every Advanced Settings row's
+   Revert button posts `{ keys: [key] }` here) could clear one half of a
+   validated qa.asr.device/qa.asr.computeType pair while leaving the other
+   half's override in place, reproducing the exact save-time hazard #2180
+   closed for PUT — just through the reset path PUT's own fix never touched.
+   Mirrors the PUT describe block above: validate against the RESULTING
+   EFFECTIVE config a requested clear would produce, reject (don't cascade),
+   and clear nothing at all when a rule fails. */
+describe('POST /api/config/reset — qa.asr.device / qa.asr.computeType cross-field validation (#2205 review F1)', () => {
+  it('rejects a per-key revert of qa.asr.device that would leave computeType a cuda-only override on the (reverted) cpu default', async () => {
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app).post('/api/config/reset').send({ keys: ['qa.asr.device'] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/qa\.asr\.device/);
+    expect(res.body.error).toMatch(/qa\.asr\.computeType/);
+
+    // Nothing was cleared — computeType is still overridden, not cascaded.
+    const after = await request(app).get('/api/config');
+    expect(after.body.values['qa.asr.device'].overridden).toBe(true);
+    expect(after.body.values['qa.asr.device'].effective).toBe('cuda');
+    expect(after.body.values['qa.asr.computeType'].overridden).toBe(true);
+    expect(after.body.values['qa.asr.computeType'].effective).toBe('float16');
+  });
+
+  /* qa.asr.computeType's own default is the sentinel 'sidecar-default',
+     which PAIR_RULES accepts on every device — so reverting computeType
+     alone can never itself produce an invalid pair, only reverting device
+     (whose default 'cpu' is NOT a sentinel) can. This test locks that
+     asymmetry down and, more importantly, proves an offending key isn't
+     immune just because it rides alongside an unrelated, otherwise-clearable
+     key in the same request: the whole reset is rejected and NEITHER key is
+     cleared, not just the bad one. */
+  it('a mixed-keys reset that includes the offending device key is rejected wholesale — the benign key is not cleared either', async () => {
+    await request(app).put('/api/config').send({ 'analyzer.stage2.minCoverage': 0.5 });
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'int8_bfloat16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app)
+      .post('/api/config/reset')
+      .send({ keys: ['analyzer.stage2.minCoverage', 'qa.asr.device'] });
+    expect(res.status).toBe(400);
+
+    const after = await request(app).get('/api/config');
+    expect(after.body.values['qa.asr.device'].overridden).toBe(true);
+    expect(after.body.values['analyzer.stage2.minCoverage'].overridden).toBe(true);
+  });
+
+  it('a group reset of qa-gates still succeeds (both pair keys clear together, so the result is valid)', async () => {
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app).post('/api/config/reset').send({ group: 'qa-gates' });
+    expect(res.status).toBe(200);
+
+    const after = await request(app).get('/api/config');
+    expect(after.body.values['qa.asr.device'].overridden).toBe(false);
+    expect(after.body.values['qa.asr.computeType'].overridden).toBe(false);
+    expect(after.body.values['qa.asr.device'].effective).toBe('cpu');
+  });
+
+  it('an "all" reset still succeeds', async () => {
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app).post('/api/config/reset').send({ all: true });
+    expect(res.status).toBe(200);
+
+    const after = await request(app).get('/api/config');
+    expect(after.body.values['qa.asr.device'].overridden).toBe(false);
+    expect(after.body.values['qa.asr.computeType'].overridden).toBe(false);
+  });
+
+  it('a per-key revert that leaves a valid pair still succeeds', async () => {
+    // Both fields overridden to a valid cuda pair; revert computeType only —
+    // device stays cuda (still overridden), computeType falls back to its
+    // sidecar-default sentinel, which is accepted on every device, so the
+    // resulting pair is still valid.
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'int8_bfloat16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app).post('/api/config/reset').send({ keys: ['qa.asr.computeType'] });
+    expect(res.status).toBe(200);
+
+    const after = await request(app).get('/api/config');
+    expect(after.body.values['qa.asr.device'].overridden).toBe(true);
+    expect(after.body.values['qa.asr.device'].effective).toBe('cuda');
+    expect(after.body.values['qa.asr.computeType'].overridden).toBe(false);
+    expect(after.body.values['qa.asr.computeType'].effective).toBe('sidecar-default');
+  });
+});
+
 describe('POST /api/config/reset', () => {
   it('reset by key clears the override', async () => {
     await request(app).put('/api/config').send({ 'analyzer.stage2.minCoverage': 0.5 });

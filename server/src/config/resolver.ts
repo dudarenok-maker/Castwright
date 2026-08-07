@@ -91,6 +91,25 @@ export function resolveKnobForSidecarEnv(knob: ConfigKnob): KnobValueState {
   return resolveKnobInner(knob, false);
 }
 
+/** Effective value a knob WOULD resolve to if its persisted override were
+    cleared: env (if set and valid) else the shipped default — the override
+    step is skipped entirely, without needing a real override read. Used by
+    POST /api/config/reset to validate the RESULTING EFFECTIVE config a
+    requested clear would produce against PAIR_RULES, before committing
+    anything (independent review of PR #2205, finding F1) — mirroring
+    resolveKnobInner's env-then-default fallback the same way PUT's pass 2
+    mirrors its override-then-env-then-default one. */
+export function resolveKnobIgnoringOverride(knob: ConfigKnob): number | boolean | string {
+  if (knob.env) {
+    const raw = process.env[knob.env];
+    if (raw != null && raw.trim() !== '') {
+      const v = parseEnv(knob, raw);
+      if (v != null) return v;
+    }
+  }
+  return knob.default;
+}
+
 export function resolveAll(): Record<string, KnobValueState> {
   const out: Record<string, KnobValueState> = {};
   for (const k of allKnobs()) {
@@ -133,8 +152,16 @@ export function coerceAndValidate(knob: ConfigKnob, raw: unknown): CoerceResult 
     }
     case 'string':
     default: {
-      const s = String(raw);
-      if (knob.pattern && !knob.pattern.test(s.trim())) {
+      /* A pattern is always matched against the TRIMMED form (an anchored
+         ^...$ regex has no whitespace tolerance of its own) — so the value
+         persisted on a match must be that same trimmed form, not the raw
+         input. Untrimmed would round-trip '  CUDA:1  ' verbatim into the
+         override store and the sidecar's spawn env (independent review of
+         PR #2205, finding F4). A pattern-less string knob (e.g.
+         qa.asr.model) keeps its historical no-trim behaviour. */
+      const raw_s = String(raw);
+      const s = knob.pattern ? raw_s.trim() : raw_s;
+      if (knob.pattern && !knob.pattern.test(s)) {
         return { ok: false, error: `does not match the required shape (${knob.pattern.source})` };
       }
       return { ok: true, value: s };

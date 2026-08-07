@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
+import { coerceAndValidate } from './resolver.js';
 
 describe('config registry', () => {
   it('declares the twelve groups', () => {
@@ -166,6 +167,35 @@ describe('config registry', () => {
     }
     for (const env of retiredEnvs) {
       expect(knobByEnv(env), `${env} should have been removed from the registry`).toBeUndefined();
+    }
+  });
+
+  /* Independent review of PR #2205, finding F6: coerceAndValidate's switch
+     returns early for 'boolean' | 'integer' | 'number' | 'enum' — a knob of
+     one of those types that also declared `pattern` would have it silently
+     ignored (never reached, never enforced) rather than rejected as a
+     registry-authoring mistake. `pattern` is only ever consulted in the
+     'string'/'device' default case. */
+  it('pattern is only declared on string/device knobs — coerceAndValidate never checks it for any other type', () => {
+    for (const k of allKnobs()) {
+      if (!k.pattern) continue;
+      expect(
+        ['string', 'device'],
+        `knob ${k.key} declares a pattern but has type "${k.type}" — coerceAndValidate's ` +
+          `${k.type} case returns before ever consulting knob.pattern, so it silently does nothing`,
+      ).toContain(k.type);
+    }
+  });
+
+  /* Same finding (F6) — a knob's own shipped `default` must itself satisfy
+     the knob's own validation (pattern/options/min/max), or GET /api/config's
+     resolveAll() would serve an "effective" value that PUT would refuse to
+     accept back. */
+  it("every knob's own default satisfies its own pattern/options/min/max", () => {
+    for (const k of allKnobs()) {
+      if (k.isPrompt) continue;
+      const r = coerceAndValidate(k, k.default);
+      expect(r.ok, `knob ${k.key}'s default ${JSON.stringify(k.default)} fails its own validation: ${r.error}`).toBe(true);
     }
   });
 

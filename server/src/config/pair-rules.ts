@@ -13,6 +13,8 @@
    Built for exactly one rule; a second cross-field rule joins this same
    array rather than growing a general constraint engine. */
 
+import { getKnob } from './registry.js';
+
 export interface PairRule {
   /** The knob keys this rule reads. The route only runs a rule when the
       patch touches at least one of them. */
@@ -74,3 +76,28 @@ const ASR_DEVICE_COMPUTE_TYPE_RULE: PairRule = {
 };
 
 export const PAIR_RULES: PairRule[] = [ASR_DEVICE_COMPUTE_TYPE_RULE];
+
+/* Independent review of PR #2205, finding F7: `PUT`'s pass 2 (and now
+   `POST /reset`'s mirror of it) silently skips a rule key when `getKnob(k)`
+   returns undefined, leaving that key unset in `values` — `check()` then
+   stringifies the missing entry to the literal string `"undefined"`, and
+   `asrDeviceFamily("undefined")` resolves that to `'cpu'`, so the rule
+   quietly validates against the WRONG family instead of failing. That shape
+   is not hypothetical: #2177 deleted a `qa.asr.*` key in this very PR. A rule
+   referencing a knob key the registry no longer has is a stale table, not a
+   user-input problem, so it fails at IMPORT time instead of waiting to
+   mis-validate the next request. Exported (not a bare top-level statement)
+   so it's independently unit-testable against a deliberately-broken table,
+   not just observed to not-throw for the real one. */
+export function assertPairRulesResolvable(rules: PairRule[] = PAIR_RULES): void {
+  for (const rule of rules) {
+    for (const key of rule.keys) {
+      if (!getKnob(key)) {
+        throw new Error(
+          `[pair-rules] PairRule references "${key}", which has no matching knob in the registry — the rule went stale.`,
+        );
+      }
+    }
+  }
+}
+assertPairRulesResolvable();

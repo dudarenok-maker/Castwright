@@ -91,6 +91,24 @@ describe('resolver precedence', () => {
     expect(coerceAndValidate(knob, 'cuda1').ok).toBe(false); // the typo shape named in the decision comment
     expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
   });
+
+  /* Independent review of PR #2205, finding F4 — coerceAndValidate matched
+     the pattern against s.trim() but returned the UNTRIMMED raw string, so
+     '  CUDA:1  ' passed validation (the trimmed form matches the pattern)
+     yet persisted — and reached the sidecar's spawn env — with its
+     whitespace intact. The persisted/returned value must be the same
+     trimmed form the pattern was actually checked against. */
+  it('trims a pattern-matched string knob value before returning it (persisted value has no stray whitespace)', () => {
+    const knob = getKnob('qa.asr.device')!;
+    expect(coerceAndValidate(knob, '  cuda:1  ')).toEqual({ ok: true, value: 'cuda:1' });
+    expect(coerceAndValidate(knob, '  CUDA:1  ')).toEqual({ ok: true, value: 'CUDA:1' }); // trims, keeps case
+    expect(coerceAndValidate(knob, '\tcpu\n')).toEqual({ ok: true, value: 'cpu' });
+  });
+
+  it('a pattern-less string knob keeps its historical no-trim behaviour', () => {
+    const knob = getKnob('qa.asr.model')!; // free-form string, no pattern
+    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: '  base  ' });
+  });
 });
 
 describe('resolveKnob — device UUID reconcile (Plan 2 §2.1)', () => {
