@@ -367,6 +367,18 @@ asserts which voice reached the provider.
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
 device to `cpu` while `ASR_COMPUTE_TYPE=int8_float16` remains pinned makes every
 `/transcribe` 500. `_compute_type()` is correct; nothing enforces the pairing.
+**Fixed for the Advanced Configuration path by [#2180](https://github.com/dudarenok-maker/Castwright/issues/2180):**
+`PUT /api/config` rejects a `qa.asr.device` / `qa.asr.computeType` save that
+would leave this pair mismatched, checked against the resulting effective
+config (not just the incoming patch); `POST /api/config/reset` (every
+Advanced Settings row's per-key Revert, plus a group/`qa-gates` or `all`
+reset) checks the same resulting-effective-config rule before clearing
+anything, so a Revert click can't reopen the pair either (independent review
+of PR #2205, finding F1 — the reset path was still an open bypass when #2180
+first shipped). So the UI can no longer produce this state. A hand-edited
+`server/.env` still bypasses save-time validation by design and can still
+reach this combination — that residue is explicitly out of scope for #2180
+(belongs with #2131's sidecar-side surfacing work instead).
 (2) `npm start` appears to launch two sidecars but does not — the venv
 `python.exe` is a launcher that re-execs the base interpreter as a child. Only
 one holds :9000. Separately, `npm run stop` repeatedly reported
