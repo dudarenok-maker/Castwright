@@ -37,8 +37,8 @@ frontend, `openapi-typescript` for the generated client types.
 **Issue:** `Closes #2165`
 **Design source:** issue #2165's body plus its design-investigation comment
 (the comment corrects the body twice and is the authoritative version).
-**Status:** implemented — all 5 tasks complete on
-`fix/server-2165-rename-midrun-pinning` (2026-08-07); PR not yet opened.
+**Status:** shipped — merged 2026-08-07 as PR #2229 (merge commit `f430b3be`),
+closing #2165. See Ship notes.
 
 ---
 
