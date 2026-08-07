@@ -2341,10 +2341,23 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
-  if (!res.ok)
-    throw new Error(
-      `Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) {
+    /* #2165 — every deliberate refusal this route sends (an analysis is
+       running, an Author/Series/Title collision, a cloned-voice consent
+       refusal) is a 409 carrying `{ error: '…' }`, and that sentence reaches
+       the user verbatim through BooksRoute's showError. Surface the sentence,
+       not the envelope. Non-JSON bodies (a proxy's 502 page, an empty 500)
+       fall through to the raw text exactly as before. */
+    const body = await res.text();
+    let detail = body || res.statusText;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
+    } catch {
+      /* not JSON — keep the raw body */
+    }
+    throw new Error(`Book state PUT failed (${res.status}): ${detail}`);
+  }
 }
 
 /* Plan 47 — per-book resume bookmark.

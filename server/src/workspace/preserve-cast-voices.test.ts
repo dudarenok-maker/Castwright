@@ -17,6 +17,7 @@ import {
   CastVoiceConsentError,
   preserveClonedSlotsOnCastWrite,
   preserveDesignedVoicesOnCastWrite,
+  preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
 } from './preserve-cast-voices.js';
 
@@ -290,5 +291,71 @@ describe('preserveClonedSlotsOnCastWrite', () => {
   it('[C-B1] leaves a character that has no on-disk record untouched', () => {
     const incoming = [{ id: 'brand-new', overrideTtsVoices: { coqui: { name: 'Ana Florence' } } }];
     expect(() => preserveClonedSlotsOnCastWrite(storedCloned, incoming)).not.toThrow();
+  });
+});
+
+/* #2166 — `notLinkedTo` is identity state written only by the dedicated
+   reject / not-linked-to routes. The whole-roster cast PUT has no business
+   carrying it: redux's merge prefers its own array over the server's, so a
+   stale client would otherwise re-PUT edges the reconciliation just repaired. */
+describe('preserveNotLinkedToOnCastWrite', () => {
+  it('[P1] takes notLinkedTo from disk, discarding what the client sent', () => {
+    const existing = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] }];
+    const incoming = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'STALE' }] }];
+
+    expect(preserveNotLinkedToOnCastWrite(existing, incoming)[0].notLinkedTo).toEqual([
+      { bookId: 'b1', characterId: 'x' },
+    ]);
+  });
+
+  it('[P2] restores notLinkedTo the client dropped entirely', () => {
+    const existing = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] }];
+    const incoming: Array<{ id: string; notLinkedTo?: Array<{ bookId: string; characterId: string }> }> = [
+      { id: 'a' },
+    ];
+
+    expect(preserveNotLinkedToOnCastWrite(existing, incoming)[0].notLinkedTo).toEqual([
+      { bookId: 'b1', characterId: 'x' },
+    ]);
+  });
+
+  it('[P3] clears a client-invented notLinkedTo when disk has none', () => {
+    const existing = [{ id: 'a' }];
+    const incoming = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'invented' }] }];
+
+    /* Absent on disk means absent after the write — otherwise the PUT is
+       still a writer of this field, just a quieter one. */
+    const out = preserveNotLinkedToOnCastWrite(existing, incoming);
+    expect(out[0].notLinkedTo).toBeUndefined();
+    /* Not merely undefined — the key must be GONE. `toBeUndefined()` alone
+       passes for `{ notLinkedTo: undefined }`, and JSON.stringify drops both
+       shapes identically, so no round-trip assertion can tell them apart
+       either. This is the only place the distinction is observable. */
+    expect(Object.prototype.hasOwnProperty.call(out[0], 'notLinkedTo')).toBe(false);
+  });
+
+  it('[P4] leaves a brand-new character alone', () => {
+    const existing = [{ id: 'a' }];
+    const incoming = [{ id: 'a' }, { id: 'b', notLinkedTo: [{ bookId: 'b1', characterId: 'y' }] }];
+
+    /* No on-disk row to be authoritative, so nothing to restore or clear —
+       same scope every sibling pass in this module uses. */
+    expect(preserveNotLinkedToOnCastWrite(existing, incoming)[1].notLinkedTo).toEqual([
+      { bookId: 'b1', characterId: 'y' },
+    ]);
+  });
+
+  it('[P5] touches no other field', () => {
+    const existing = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] }];
+    const incoming = [{ id: 'a', name: 'Renamed', ttsEngine: 'qwen' }];
+    const out = preserveNotLinkedToOnCastWrite(existing, incoming);
+
+    expect(out[0].name).toBe('Renamed');
+    expect(out[0].ttsEngine).toBe('qwen');
+  });
+
+  it('[P6] returns incoming untouched when there is no existing cast', () => {
+    const incoming = [{ id: 'a', notLinkedTo: [{ bookId: 'b1', characterId: 'y' }] }];
+    expect(preserveNotLinkedToOnCastWrite([], incoming)).toEqual(incoming);
   });
 });
