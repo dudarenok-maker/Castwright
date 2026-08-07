@@ -292,7 +292,7 @@ function KnobControl({
     // row was showing an error about is no longer current. #2209 req 4:
     // a stale error next to a control that now works is its own defect.
     onSaveErrorChange(null);
-  }, [value.effective, onSaveErrorChange]);
+  }, [value.effective, onSaveErrorChange, generationRef]);
 
   // Discard whatever's in the field without saving it — used when blur was
   // triggered by beginConfigAction() (a Revert/Reset click) rather than the
