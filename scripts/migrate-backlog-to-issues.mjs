@@ -26,10 +26,10 @@
 // real run. The tidy pass (drop/merge/archive stale items) is human judgement,
 // never scripted.
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { gh, ghSpawn } from './gh.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -172,15 +172,8 @@ function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
   process.exit(1);
 }
-function gh(args, opts = {}) {
-  return execFileSync('gh', args, {
-    cwd: repoRoot,
-    stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
-    encoding: 'utf8',
-  });
-}
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 function sleep(ms) {
@@ -205,10 +198,7 @@ function parseArgs(argv) {
 
 // Existing issues → { "<prefix>-<n>": number } so re-runs skip already-filed items.
 function listExistingById() {
-  const json = gh(
-    ['issue', 'list', '--state', 'all', '--limit', '500', '--json', 'number,title'],
-    { capture: true },
-  );
+  const json = gh(['issue', 'list', '--state', 'all', '--limit', '500', '--json', 'number,title']);
   const byId = new Map();
   const titles = [];
   for (const issue of JSON.parse(json)) {
@@ -230,13 +220,13 @@ async function createIssue({ title, body, labels }) {
   const args = ['issue', 'create', '--title', title, '--body', body];
   for (const l of labels) args.push('--label', l);
   try {
-    return issueNumberFromUrl(gh(args, { capture: true }));
+    return issueNumberFromUrl(gh(args));
   } catch (err) {
     const text = `${err?.stdout ?? ''}${err?.stderr ?? ''}${err?.message ?? ''}`;
     if (/rate limit|secondary|\b403\b/i.test(text)) {
       info(`[RATE] hit a rate limit creating "${title}". Backing off ${RATE_LIMIT_BACKOFF_MS / 1000}s, then one retry…`);
       await sleep(RATE_LIMIT_BACKOFF_MS);
-      return issueNumberFromUrl(gh(args, { capture: true }));
+      return issueNumberFromUrl(gh(args));
     }
     throw err;
   }

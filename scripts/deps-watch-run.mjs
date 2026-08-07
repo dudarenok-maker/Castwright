@@ -6,7 +6,7 @@
 // refresh the sticky comment, set exit code.
 // Exercised by the workflow_dispatch acceptance run, not by node --test.
 import { readFileSync, appendFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { gh } from './gh.mjs';
 import {
   KGP_PLUGINS,
   parseOutdated,
@@ -37,7 +37,13 @@ const outdatedPath = process.argv[2] || 'outdated.json';
 // real newlines / backticks / `|` transmit fine and gh JSON-encodes them. `-F`
 // would re-escape and would interpret the transition body's leading `@mention`
 // as a file (gh community #148257). Do not "fix" this to `-F`.
-const gh = (args) => execFileSync('gh', args, { encoding: 'utf8' });
+//
+// gh() (scripts/gh.mjs, #2184) now also defaults `cwd` to repoRoot — this
+// script is invoked by .github/workflows/app-deps-watch.yml with
+// `working-directory: apps/android` and previously passed no `cwd` at all, so
+// its `gh api` calls resolved the target repository from that subdirectory
+// rather than the repo root. Intended fix, called out explicitly per the
+// #2184 brief — flagged for a second look, not silently absorbed.
 
 try {
   if (!repo) throw new Error('GITHUB_REPOSITORY is required');

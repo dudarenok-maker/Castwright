@@ -7,7 +7,7 @@
 // parser/regex backlog-sync.mjs uses at generation time, so "parses here"
 // == "will render correctly there."
 
-import { execFileSync } from 'node:child_process';
+import { gh } from './gh.mjs';
 import { parseWhatBenefit } from './backlog-sync.mjs';
 
 // Mirrors backlog-sync.mjs's private LEADING_ID/idAndTitleFromTitle — kept
@@ -18,7 +18,7 @@ const LEADING_ID = /^(fe|srv|side|ops|fs|app)-(\d+)\s*—\s*(.*)$/;
 function info(msg) { process.stdout.write(`${msg}\n`); }
 
 function listOpenFeatureIssues() {
-  const raw = execFileSync('gh', ['issue', 'list', '--state', 'open', '--label', 'type:feature', '--limit', '500', '--json', 'number,title,body,labels'], { encoding: 'utf8' });
+  const raw = gh(['issue', 'list', '--state', 'open', '--label', 'type:feature', '--limit', '500', '--json', 'number,title,body,labels']);
   return JSON.parse(raw);
 }
 
