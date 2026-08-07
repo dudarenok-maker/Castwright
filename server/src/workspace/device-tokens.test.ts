@@ -1,21 +1,35 @@
 import { it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /* Mock fs/promises so the flush-contract test can delay writeFile and prove
    _flushPendingWritesForTests() genuinely awaits the in-flight write —
-   mirrors the intercept pattern in state-io.test.ts. */
+   mirrors the intercept pattern in state-io.test.ts.
+
+   writeFilePersistentThrow (#2208 independent review, F3/round 2) mirrors
+   readFileSyncPersistentThrow's shape below but for the WRITE half of
+   persist — the EBUSY/EPERM OneDrive/AV case this module's own docs cite as
+   the motivating scenario typically fails the WRITE, not the read.
+   writeFileCallCount counts every invocation (real or faulted) the same way
+   readFileSyncCallCount does. */
 let writeFileImpl:
   | ((path: string, data: string, encoding: BufferEncoding) => Promise<void>)
   | null = null;
+let writeFilePersistentThrow: (() => never) | null = null;
+let writeFileCallCount = 0;
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
     ...actual,
-    writeFile: (path: string, data: string, encoding: BufferEncoding): Promise<void> =>
-      (writeFileImpl ?? actual.writeFile)(path, data, encoding),
+    writeFile: (path: string, data: string, encoding: BufferEncoding): Promise<void> => {
+      writeFileCallCount++;
+      if (writeFilePersistentThrow) {
+        writeFilePersistentThrow(); // throws — synchronous, but caught by the awaiting async caller
+      }
+      return (writeFileImpl ?? actual.writeFile)(path, data, encoding);
+    },
   };
 });
 
@@ -63,6 +77,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   writeFileImpl = null;
+  writeFilePersistentThrow = null;
+  writeFileCallCount = 0;
   readFileSyncOverride = null;
   readFileSyncPersistentThrow = null;
   readFileSyncCallCount = 0;
@@ -638,4 +654,331 @@ it('_resetDeviceTokenCacheForTests resets cache, quarantine, and loadDegraded �
     devices: Record<string, unknown>[];
   };
   expect(onDisk.devices.map((d) => d.id)).not.toContain('stale-bad');
+});
+
+/* #2208 — recompute the quarantined set from disk inside `persist`, instead
+   of trusting the snapshot captured at the last real `loadSync`. Decision
+   comment on #2208: an operator who hand-repairs device-tokens.json (e.g.
+   deleting a quarantined record) gets their edit picked up on the very next
+   write, with no restart, no reload endpoint, and no fs.watch — the re-read
+   only happens on the already-throttled write path (mint / revoke / the
+   hourly `touchLastSeen`), never on the hot synchronous auth guard. */
+
+// Test 1 — the resurrection scenario this issue is about. MUST fail on
+// unmodified main: verified by running it against main before this fix
+// existed (see the PR / task report for the exact failure output) — pre-fix,
+// `persist` round-trips the `quarantine` snapshot captured at the ORIGINAL
+// load, so the operator's hand-deletion of bad1 is silently undone by the
+// very next write.
+it('an operator hand-repair (deleting a quarantined record from disk) survives the next write, with no restart (#2208)', async () => {
+  const badRaw = { ...goodRecord('bad1', 'irrelevant'), tokenHash: 123 };
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [badRaw, good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // real load; seeds quarantine = [badRaw], populates cache
+  warn.mockRestore();
+
+  // Operator hand-repairs the file while the server keeps running: rewrite
+  // it with the malformed record gone. Deliberately does NOT call
+  // _resetDeviceTokenCacheForTests — a real operator can't do that either.
+  writeRawStore(dir, [good]);
+
+  // Trigger a write via the normal write path (mirrors the throttled
+  // touchLastSeen the LAN guard fires).
+  await dt.touchLastSeen('g1', Date.now());
+
+  const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
+    devices: unknown[];
+  };
+  expect(onDisk.devices).not.toContainEqual(badRaw);
+  expect(onDisk.devices.map((d: any) => d.id)).toEqual(['g1']);
+});
+
+// Test 2 — the inverse, and the one that matters: without it, simply
+// deleting the quarantine round-trip entirely (instead of recomputing it)
+// would also pass test 1. If the malformed record is STILL on disk at write
+// time (no hand-edit happened), it must survive verbatim, same as #2182(a)
+// already pins elsewhere — asserted again here, freshly, as this fix's own
+// positive control.
+it('a quarantined record still present on disk at write time survives the write verbatim (#2208 positive control)', async () => {
+  const badRaw = { ...goodRecord('bad1', 'irrelevant'), tokenHash: 123 };
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [badRaw, good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
+  warn.mockRestore();
+
+  // No external edit this time — bad1 is still on disk when the write fires.
+  await dt.touchLastSeen('g1', Date.now());
+
+  const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
+    devices: unknown[];
+  };
+  expect(onDisk.devices).toContainEqual(badRaw);
+});
+
+// Test 3 — constraint 4 of the #2208 brief: `persist` already refuses to
+// write while the ORIGINAL load was degraded; a failed FRESH re-read (the
+// new one this fix adds) must refuse the write the same way, not silently
+// fall back to a stale in-memory quarantine that might not reflect disk
+// anymore. Targets specifically the re-read inside persist (not the load):
+// cache is already populated by a prior real load, so loadSync() short-
+// circuits and issues no readFileSync call of its own — the one-shot
+// override lands exactly on persist's fresh re-read.
+it('persist refuses to write (does not drop quarantine) when its fresh re-read fails, and the file is left untouched (#2208)', async () => {
+  const badRaw = { ...goodRecord('bad1', 'irrelevant'), tokenHash: 123 };
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [badRaw, good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // populates cache — loadSync short-circuits from here on
+  warn.mockRestore();
+
+  const before = readFileSync(join(dir, 'device-tokens.json'), 'utf8');
+
+  readFileSyncOverride = () => {
+    throw new Error('EBUSY: resource busy or locked (simulated)');
+  };
+
+  await expect(dt.touchLastSeen('g1', Date.now())).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  const after = readFileSync(join(dir, 'device-tokens.json'), 'utf8');
+  expect(after).toBe(before); // untouched: no write happened, nothing was dropped
+});
+
+// #2208 independent review, F1 — THE regression: the first cut of this fix
+// only carried forward records that were STILL malformed on the fresh
+// re-read. The likelier operator action, given the log line names the exact
+// bad field, is to fix that field in place rather than delete the record.
+// A repaired record is no longer malformed, so it was excluded from the
+// malformed-only re-read — and since a quarantined id is never in `cache`,
+// it was ALSO absent from `devices`. It landed in neither array and the
+// write erased it, permanently, worse than doing nothing (main leaves the
+// operator's repair sitting there un-erased, just un-applied). This test
+// must fail on the committed 15f823a8 state and pass on unmodified `main`
+// (see the task report for both outputs) — the fix broadens the rule to
+// "carry forward anything on disk the live roster doesn't claim", which
+// covers repair the same way it already covered deletion, with no
+// special-casing.
+it('an operator hand-REPAIR (fixing the bad field in place, not deleting the record) survives the next write (#2208 independent review, F1)', async () => {
+  const badRaw = { ...goodRecord('bad1', 'irrelevant'), tokenHash: 123 };
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [badRaw, good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // real load; bad1 quarantined, never enters cache
+  warn.mockRestore();
+
+  // Operator repairs bad1 IN PLACE on disk — same id, now a fully valid
+  // record — instead of deleting it. No restart, no cache reset.
+  const repairedBad1 = goodRecord('bad1', dt.hashToken('repaired-token'));
+  writeRawStore(dir, [repairedBad1, good]);
+
+  await dt.touchLastSeen('g1', Date.now());
+
+  const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
+    devices: Record<string, unknown>[];
+  };
+  // Weak assertion first, matching the reviewer's own proof shape (presence,
+  // not content) — this is the one that would ALSO pass on unmodified main,
+  // since main just keeps writing back whatever stale quarantine it captured
+  // at load time (still containing an entry for bad1, just the OLD bytes).
+  expect(onDisk.devices.map((d) => d.id)).toContain('bad1');
+  // Strong assertion, specific to this fix: it's the REPAIRED record that
+  // survived, not the stale malformed one main would have kept re-writing.
+  expect(onDisk.devices).toContainEqual(repairedBad1);
+  expect(onDisk.devices).not.toContainEqual(badRaw);
+});
+
+// Test 2 remains the positive control for the general "still-malformed and
+// unclaimed survives verbatim" case (delete-repair's sibling, not touched by
+// the F1 rework above since bad1 here is never touched externally).
+
+// #2208 independent review, F2 — the "bounded by write frequency, not
+// request frequency" claim only holds while persist SUCCEEDS: a failed
+// persist never advances lastSeenAt, so `shouldTouchLastSeen` stays true and
+// the NEXT guarded request re-fires touchLastSeen -> persist immediately.
+// Without a negative-cache TTL on the fresh re-read (mirroring `loadSync`'s
+// own `DEGRADED_RETRY_MS`/`degradedAt`, #2204 review F1), a persistent fault
+// turns every request against a phone streaming chapter audio through
+// `/workspace` into a fresh blocking disk read. Proves the negative cache
+// actually blocks the amplification (not just that a retry eventually
+// recovers, which a naive always-retry version would also do).
+it('a persisting fresh-read fault costs at most one disk read per DEGRADED_RETRY_MS, not one per guarded request (#2208 independent review, F2)', async () => {
+  const { token, device } = await dt.createDevice('Phone', 30); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
+  void device;
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
+
+  readFileSyncPersistentThrow = () => {
+    throw new Error('EBUSY: resource busy or locked (simulated)');
+  };
+  readFileSyncCallCount = 0;
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  // 5 guarded requests at effectively the same instant. Each fires a
+  // fire-and-forget touchLastSeen (loadSync short-circuits on the populated
+  // cache — no read there); only persist's fresh re-read touches disk.
+  for (let i = 0; i < 5; i++) {
+    expect(dt.isValidDeviceToken(token)).toBe(true); // auth itself is unaffected — best-effort touch only
+  }
+  await dt._flushPendingWritesForTests();
+  warn.mockRestore();
+
+  expect(readFileSyncCallCount).toBe(1); // exactly ONE real disk read reached the fault, not 5
+});
+
+// #2208 independent review, ROUND 2 — the F2 fix above only bounded a
+// FAILING RE-READ. The scenario this module's own docs cite as the
+// motivating case for the guard (EBUSY/EPERM — a OneDrive/AV lock) usually
+// fails the WRITE, not the read: readUnclaimedRecordsFromDisk succeeds (the
+// READ half is fine), `persistDegradedAt` (renamed from
+// `freshReadDegradedAt`) resets to 0 right after that success — BEFORE the
+// write is even attempted — and only then does writeJsonAtomic fail.
+// Because `cache` never advances past a failed persist, shouldTouchLastSeen
+// never clears, and — pre-round-2 — every guarded request re-ran the FULL
+// read (bounded by nothing, since the read itself always succeeds) before
+// hitting the SAME unbounded write fault. Measured independently: 20
+// requests -> 20 real reads on the pre-round-2 branch, 0 extra reads on
+// `main` (whose `persist` has no fresh-read step at all, so a write-only
+// fault there costs 0 reads, not 20 — see the task report for the exact
+// branch-vs-main probe). This test pins BOTH halves: the read count (the
+// specific metric the independent review measured) and the write count
+// (the fault this scenario is actually about).
+it('a persisting WRITE fault costs at most one READ and one WRITE attempt per DEGRADED_RETRY_MS, not one per guarded request (#2208 independent review, round 2)', async () => {
+  const { token } = await dt.createDevice('Phone', 30); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
+
+  writeFilePersistentThrow = () => {
+    throw new Error('EBUSY: resource busy or locked (simulated write fault)');
+  };
+  writeFileCallCount = 0;
+  readFileSyncCallCount = 0; // the read succeeds every time it's attempted — this counts HOW OFTEN it's attempted
+
+  // 20 guarded requests at effectively the same instant — matches the scale
+  // measured in the independent review.
+  for (let i = 0; i < 20; i++) {
+    expect(dt.isValidDeviceToken(token)).toBe(true); // auth itself is unaffected — best-effort touch only
+  }
+  await dt._flushPendingWritesForTests();
+
+  expect(readFileSyncCallCount).toBe(1); // exactly ONE real read attempt, not 20 — this is what the independent review measured
+  expect(writeFileCallCount).toBe(1); // exactly ONE real write attempt reached the fault, not 20
+});
+
+// #2208 independent review, F3 — `rotate` is dropped from this file's
+// `writeJsonAtomic` call (see `persist`'s own comment for the full
+// rationale: a writer with no reader net-increases the chance of losing
+// every pairing). This pins the negative: no `.bak.1` is ever produced.
+it('does not opt device-tokens.json into writeJsonAtomic\'s rotate (#2208 independent review, F3 — rotate dropped, not fixed, for this file)', async () => {
+  const { device } = await dt.createDevice('Phone', 30);
+  await dt.touchLastSeen(device.id, Date.now());
+  expect(existsSync(join(dir, 'device-tokens.json.bak.1'))).toBe(false);
+});
+
+// #2208 independent review, F5 — the non-array-"devices" refusal branch
+// inside persist's fresh re-read was untested; only the readFileSync-throw
+// branch was covered. Drives the OTHER branch: the file parses fine but its
+// shape is wrong, discovered only on persist's independent re-read (cache is
+// already populated, so loadSync's OWN non-array handling is not what's
+// under test here).
+it('a fresh re-read that finds a non-array "devices" refuses the write the same way a read throw does (#2208 independent review, F5)', async () => {
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // populates cache
+  warn.mockRestore();
+
+  // External fault: the file parses, but its shape breaks, while cache stays
+  // populated (no restart) — hits persist's re-read, not loadSync's.
+  const broken = JSON.stringify({ schema: 2, devices: 'oops' });
+  writeFileSync(join(dir, 'device-tokens.json'), broken, 'utf8');
+
+  await expect(dt.touchLastSeen('g1', Date.now())).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  const after = readFileSync(join(dir, 'device-tokens.json'), 'utf8');
+  expect(after).toBe(broken); // untouched — no write happened
+});
+
+// #2208 independent review, F4 — the collision guard drops a malformed disk
+// record that collides with a live id, so the stale in-memory copy silently
+// overwrites the operator's hand-edit. The precedence is correct (a live
+// device must never lose to disk); the silence wasn't. Now warns, naming the
+// id, exactly when that collision is against a MALFORMED disk record.
+it('a live device corrupted on disk under the same id is written exactly once, the live copy wins, AND the operator is warned by name (#2208 independent review, F4)', async () => {
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [good]);
+
+  const warn0 = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // real load; populates cache with the valid g1
+  warn0.mockRestore();
+
+  // Externally corrupt g1 on disk — SAME id, a different required field
+  // broken — without clearing the in-memory cache (no restart).
+  const corruptedG1 = { ...goodRecord('g1', 'irrelevant'), tokenHash: 123 };
+  writeRawStore(dir, [corruptedG1]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await dt.touchLastSeen('g1', Date.now());
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('g1'));
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('tokenHash'));
+  warn.mockRestore();
+
+  const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
+    devices: Record<string, unknown>[];
+  };
+  const matches = onDisk.devices.filter((d) => d.id === 'g1');
+  expect(matches).toHaveLength(1); // not written twice
+  expect(matches[0].tokenHash).toBe(good.tokenHash); // the live, valid copy — not the corrupted twin
+});
+
+// Positive control for the collision guard: an orphaned record (its id
+// matches no live device) must still round-trip verbatim, whether it's
+// malformed or — per the F1 rework — freshly valid, proving the collision
+// filter narrows nothing about #2182(a)'s guarantee and can't degenerate
+// into "drop all quarantine". Without this, a filter that always returns
+// nothing would also make the F4 test above pass.
+it('a quarantined record whose id matches no live device still round-trips verbatim (#2208 collision guard positive control)', async () => {
+  const orphanRaw = { ...goodRecord('orphan1', 'irrelevant'), tokenHash: 123 };
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [orphanRaw, good]);
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
+  warn.mockRestore();
+
+  await dt.touchLastSeen('g1', Date.now());
+
+  const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
+    devices: unknown[];
+  };
+  expect(onDisk.devices).toContainEqual(orphanRaw);
+});
+
+// Hunted per the independent-review's requirement 3 (look for one more
+// mutation no test catches): the F4 warning is gated on `invalidDeviceField`
+// so it fires ONLY on a genuine malformed-disk-vs-live collision, not on the
+// ordinary steady state where a live device's own unmodified, still-valid
+// record is simply also present on disk under the same id (true on every
+// single write for every device that hasn't been hand-edited). Dropping
+// that gate — always warning on any id collision — was NOT caught by any
+// existing assertion: nothing previously asserted the ABSENCE of a warning
+// on an ordinary write. This locks it down.
+it('an ordinary write with no hand-edit does not warn (#2208, hunted per independent-review requirement 3)', async () => {
+  const good = goodRecord('g1', dt.hashToken('good-token'));
+  writeRawStore(dir, [good]);
+  expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']); // populates cache; nothing malformed, no warnings expected
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await dt.touchLastSeen('g1', Date.now()); // ordinary write — g1's disk copy is untouched and still valid
+  expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
 });

@@ -96,13 +96,24 @@ let cache: DeviceTokenRecord[] | null = null;
  *  untouched on every subsequent persist, so an operator can always recover
  *  it, and it never enters `cache`, so it can never authenticate.
  *
- *  Known gap, not fixed (#2204 review F4): `quarantine` is only recomputed
- *  on a real disk read, and `loadSync` short-circuits on a populated
- *  `cache` — so an operator who hand-repairs a quarantined record on disk
- *  won't see it resurrect until something clears `cache` (a restart, or
- *  the test-only `_resetDeviceTokenCacheForTests`). Not fixed here; it's
- *  the same "load once, cache until something invalidates it" design the
- *  rest of this module already relies on, not a new decision to make. */
+ *  Was a known gap, now closed by #2208, and hardened by that PR's own
+ *  independent review: `loadSync` still only recomputes this variable on a
+ *  real disk read and still short-circuits on a populated `cache` — but
+ *  `persist` no longer trusts this possibly-stale snapshot for what to write
+ *  back. It re-derives, immediately before every write, the full set of
+ *  on-disk records the live roster does NOT claim (`readUnclaimedRecordsFromDisk`,
+ *  below) — not just the still-malformed ones — and reassigns this variable
+ *  from that fresh result. That single rule is what makes a hand-DELETE of a
+ *  quarantined record, a hand-REPAIR of one (fixing the bad field in place
+ *  rather than removing the record), and a restore from a hand-copied backup
+ *  all survive the next write the same way, with no special-casing: a
+ *  narrower first cut that only re-derived the still-malformed subset made
+ *  the repair case WORSE than doing nothing — it erased the operator's fix
+ *  outright, because a now-valid record is absent from both the stale
+ *  `cache` and the malformed-only re-read. The extra read is bounded by
+ *  write frequency — mint, revoke, and the hourly-throttled touch — never by
+ *  request frequency (see `persistDegradedAt` below); the synchronous auth
+ *  guard (`isValidDeviceToken`) never calls `persist` and is unaffected. */
 let quarantine: unknown[] = [];
 
 /** True when the most recent `loadSync` hit a whole-store fault (corrupt
@@ -278,6 +289,117 @@ export class DeviceStoreDegradedError extends Error {
   }
 }
 
+/** Sentinel returned by `readUnclaimedRecordsFromDisk` on a whole-store
+ *  fault (missing/corrupt JSON, or a non-array "devices"), distinct from a
+ *  legitimate empty array (nothing unclaimed on disk right now, or no file
+ *  yet). Kept as its own symbol rather than `null` so a future refactor
+ *  can't accidentally coerce it into an empty-array quarantine. */
+const QUARANTINE_READ_DEGRADED = Symbol('quarantine-read-degraded');
+
+/** Extract a raw record's `id` IF it's a genuine, non-empty string — the one
+ *  thing safe to trust about an `unknown` record without running it through
+ *  `invalidDeviceField` first. Returns `null` for anything else (missing,
+ *  non-string, or a non-object record), which callers must treat as "can
+ *  never collide with a live id". */
+function rawRecordId(d: unknown): string | null {
+  return d !== null && typeof d === 'object' && typeof (d as Record<string, unknown>).id === 'string'
+    ? ((d as Record<string, unknown>).id as string)
+    : null;
+}
+
+/** Re-read `device-tokens.json` fresh off disk and return every raw record
+ *  currently there whose `id` the live roster (`liveDevices`, i.e. `devices`
+ *  as `persist` is about to write it) does NOT claim — without going
+ *  through `loadSync`'s `cache` short-circuit and without touching `cache`,
+ *  `loadDegraded`, or `quarantine` itself (that's the caller's job — see
+ *  `persist`, #2208).
+ *
+ *  #2208 independent review, F1 (the fix that actually matters here): the
+ *  first cut of this function only carried forward records that were STILL
+ *  malformed, mirroring what `loadSync` itself would quarantine. That is
+ *  wrong for the operator action the log line most directly invites: fixing
+ *  the bad field IN PLACE rather than deleting the record. A repaired
+ *  record is no longer malformed, so the malformed-only filter dropped it —
+ *  and because a quarantined id is never in `cache`, it was ALSO absent from
+ *  `devices`, so it landed in neither array and the write erased it. Worse
+ *  than doing nothing at all: the operator's fix was destroyed instead of
+ *  merely not yet honoured. The SAME hole erased a restore from a
+ *  hand-copied `.bak.N` file. The correct invariant is broader and needs no
+ *  per-scenario special-casing: a write must never drop a record that is on
+ *  disk and that the live roster does not claim — full stop, whether that
+ *  record is malformed, freshly repaired, or anything else. So this
+ *  function no longer calls `invalidDeviceField` to decide what to keep; it
+ *  keeps everything not claimed by `liveDevices`.
+ *
+ *  The collision case (an id IS claimed by `liveDevices`) still needs a
+ *  decision, for the reason the original cut of this fix introduced: a
+ *  record that was valid at the last `loadSync` and has since been
+ *  corrupted on disk under the SAME id would otherwise be written twice —
+ *  once as the live survivor in `devices`, once as a raw disk record here.
+ *  The live, in-memory value wins (never the inverse — a live device is
+ *  never dropped in favour of what's on disk), matching the precedence
+ *  `loadSync`'s own label coercion already gives the in-memory value over
+ *  malformed disk bytes (`:241-246`). #2208 independent review, F4: that
+ *  precedence used to be silent. It now warns, naming the id and the field
+ *  — but ONLY when the colliding disk record is actually malformed
+ *  (`invalidDeviceField` is used here, purely to decide whether to warn, not
+ *  whether to keep): the ordinary steady state is a live device whose
+ *  unmodified, still-valid record is simply also present on disk under the
+ *  same id — that's not a loss (`devices` already carries it and is about to
+ *  rewrite it), and warning on it would fire on every single write. */
+function readUnclaimedRecordsFromDisk(
+  liveDevices: readonly DeviceTokenRecord[],
+): unknown[] | typeof QUARANTINE_READ_DEGRADED {
+  const path = deviceTokensJsonPath();
+  if (!existsSync(path)) return [];
+  try {
+    const f = JSON.parse(readFileSync(path, 'utf8')) as { devices?: unknown };
+    if (!Array.isArray(f.devices)) return QUARANTINE_READ_DEGRADED;
+    const liveIds = new Set(liveDevices.map((d) => d.id));
+    const unclaimed: unknown[] = [];
+    for (const d of f.devices) {
+      const rawId = rawRecordId(d);
+      if (rawId !== null && liveIds.has(rawId)) {
+        const field = invalidDeviceField(d);
+        if (field !== null) {
+          console.warn(
+            `[device-tokens] disk record "${rawId}" is malformed (invalid ${field}) but that id is still live in memory — keeping the live copy, the disk edit was NOT written`,
+          );
+        }
+        continue; // claimed by a live device — never carried forward, live wins either way
+      }
+      unclaimed.push(d); // not claimed by anything live: could be still-malformed, freshly repaired, or orphaned — kept verbatim regardless
+    }
+    return unclaimed;
+  } catch {
+    return QUARANTINE_READ_DEGRADED;
+  }
+}
+
+/** Wall-clock time (ms) of the most recent FAILED `persist` attempt — either
+ *  half of it: the fresh re-read, OR the actual `writeJsonAtomic` write; 0
+ *  when the last attempt succeeded (or none has run yet). Backs the
+ *  negative-cache TTL `persist` applies to itself — see there. #2208
+ *  independent review, F2: mirrors `degradedAt`'s shape exactly (same
+ *  `DEGRADED_RETRY_MS` window, same "0 means not degraded" convention)
+ *  rather than inventing a second mechanism.
+ *
+ *  Second independent-review pass: originally named `freshReadDegradedAt`
+ *  and set ONLY on a failed re-read. That missed the exact scenario this
+ *  module's own docs cite as the motivating case for the guard —
+ *  EBUSY/EPERM from a OneDrive/AV lock — because that fault typically hits
+ *  the WRITE, not the read: `readUnclaimedRecordsFromDisk` succeeds, this
+ *  variable resets to 0, and only THEN does `writeJsonAtomic` fail. `cache`
+ *  never advances past a failed persist (see this function's final two
+ *  lines), so `shouldTouchLastSeen` stays permanently true and every
+ *  guarded request re-fires `touchLastSeen` -> `persist`, each one
+ *  repeating the FULL read again (bounded fine) but then hitting the SAME
+ *  unbounded write fault on every single request — measured 20 requests ->
+ *  20 real `writeJsonAtomic` attempts against unmodified persist, 0 against
+ *  `main` (which has no fresh-read/write step in `persist` at all). Renamed
+ *  and now set on EITHER failure so one guard bounds both. */
+let persistDegradedAt = 0;
+
 async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // #2182(b) — refuse to write while the last load was degraded: the
   // alternative is minting/revoking/touching a device into a file that now
@@ -285,10 +407,79 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   if (loadDegraded) {
     throw new DeviceStoreDegradedError();
   }
-  // #2182(a) — round-trip the quarantined records untouched alongside the
-  // (possibly mutated) survivors, so a malformed record is never erased by
-  // an ordinary write.
-  await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+  // #2208 independent review — the "bounded by write frequency, not request
+  // frequency" claim only holds while persist SUCCEEDS: a successful
+  // persist is what advances `cache`'s lastSeenAt and so is what stops
+  // `shouldTouchLastSeen` firing again. A persist that throws — for EITHER
+  // reason `persistDegradedAt` covers, see its own doc comment — leaves
+  // `lastSeenAt` exactly where it was, so the NEXT guarded request re-fires
+  // `touchLastSeen` -> `enqueueWrite` -> `persist` immediately — and without
+  // this check, each of those would re-attempt whichever real disk
+  // operation just failed, turning a persistent fault (EBUSY/EPERM — the
+  // OneDrive/AV case `state-io.ts` documents) into one blocking disk
+  // operation per request for as long as the fault lasts. That is the exact
+  // per-request amplification #2204's review (F1) closed for `loadSync`,
+  // reopened one level down — same fix, same shape: retry the real
+  // operation at most once per `DEGRADED_RETRY_MS`, refuse immediately on
+  // every attempt inside the window.
+  if (persistDegradedAt !== 0 && Date.now() - persistDegradedAt < DEGRADED_RETRY_MS) {
+    throw new DeviceStoreDegradedError();
+  }
+  // #2208 — recompute the on-disk-but-unclaimed set RIGHT NOW rather than
+  // reusing the (possibly stale) `quarantine` snapshot from the last real
+  // `loadSync`, so an operator's hand-edit is picked up on the very next
+  // write instead of being silently undone by it (see
+  // `readUnclaimedRecordsFromDisk`'s own header for the full rule and why
+  // it must not special-case delete vs. repair vs. restore). A failed
+  // re-read must not become a write that drops records the last successful
+  // load knew about — refuse exactly like the `loadDegraded` check above
+  // rather than falling back to the stale in-memory value, which would
+  // either resurrect nothing (if it was empty) or write back records that
+  // may no longer reflect what's actually on disk.
+  const unclaimed = readUnclaimedRecordsFromDisk(devices);
+  if (unclaimed === QUARANTINE_READ_DEGRADED) {
+    persistDegradedAt = Date.now();
+    throw new DeviceStoreDegradedError();
+  }
+  quarantine = unclaimed;
+  // #2182(a) / #2208 — round-trip every on-disk record the live roster
+  // doesn't claim, verbatim, alongside the (possibly mutated) survivors, so
+  // none of them is ever erased by an ordinary write.
+  //
+  // #2208 independent review, F3 — `rotate` was considered for this write
+  // and DROPPED. `writeJsonAtomic`'s rotate option (see `state-io.ts`)
+  // finishes its pre-write step by renaming the live file to `.bak.1` —
+  // there is a real window, between that rename and the new file landing,
+  // where `device-tokens.json` does not exist at all. `state.json` pairs
+  // that same option with a reader, `readJsonWithRecovery`, which falls
+  // back to `.bak.N` on a corrupt read; this file has no such reader. So a
+  // write that failed after the rotate step (ENOSPC, EACCES, a process
+  // death) would leave NO live file — `loadSync` would then see a missing
+  // file and report `cache = []` with no warning, an authoritative-looking
+  // "zero paired devices" — strictly worse than `main`'s behaviour with no
+  // rotate at all (a failed write there leaves the previous file untouched).
+  // A safe version of this — rotating by copy instead of rename so the live
+  // file is never absent, or giving `loadSync` its own synchronous `.bak.N`
+  // fallback — is a real decision with its own design and test surface, not
+  // a same-diff addition; left for a follow-up rather than shipped as a
+  // writer with no reader.
+  //
+  // #2208 independent review, second pass — the write itself is wrapped so a
+  // WRITE fault (not just the fresh-read fault above) also sets
+  // `persistDegradedAt`, closing the amplification described in that
+  // variable's doc comment. The original error is rethrown UNCHANGED (not
+  // wrapped in `DeviceStoreDegradedError`) — callers already handle whatever
+  // `writeJsonAtomic` throws today, and reclassifying a write-specific
+  // failure as the read-oriented `DeviceStoreDegradedError` message ("could
+  // not be read...") would be actively misleading; only the RETRY RATE
+  // needed fixing here, not the error's shape.
+  try {
+    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+  } catch (err) {
+    persistDegradedAt = Date.now();
+    throw err;
+  }
+  persistDegradedAt = 0; // only after a FULLY successful persist — read AND write both landed
   cache = devices; // only after the write durably succeeds
 }
 
@@ -437,6 +628,11 @@ export function listDevices(): PublicDevice[] {
  *  isolation should not depend on that invariant holding in every future
  *  edit to stay correct.
  *
+ *  Also resets `persistDegradedAt` (#2208 independent review): a process
+ *  restart clears that negative-cache timer along with everything else in
+ *  this module, and a mid-test "restart" via this hook should mean the
+ *  same thing.
+ *
  *  Deliberately does NOT reset `writeChain`/`pendingWrites` (#2204 review
  *  F8, correcting an earlier version of this comment that overclaimed
  *  "resets ALL module state this file owns"): those are WRITE-path state
@@ -461,6 +657,7 @@ export function _resetDeviceTokenCacheForTests(): void {
   loadDegraded = false;
   degradedAt = 0;
   lastWarnedError = null;
+  persistDegradedAt = 0;
 }
 
 /** Test hook — await every fire-and-forget `touchLastSeen` write kicked off
