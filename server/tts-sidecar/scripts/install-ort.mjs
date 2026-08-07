@@ -91,6 +91,36 @@ export function findPlainOrtDistInfos(sitePackages) {
   return ortDistInfoDirs(sitePackages).filter((d) => !isOurMarker(d));
 }
 
+/** Who owns site-packages/onnxruntime/ — decided from FILES the wheel ships.
+ *  'swap'  → a swap distribution (onnxruntime-gpu / -directml)
+ *  'plain' → the CPU build
+ *  'none'  → absent or gutted (nothing importable)
+ *  NEVER uses import/get_available_providers(): __version__ is identical across
+ *  builds, and a GPU install with unloadable CUDA DLLs reports CPU providers. */
+export function detectOrtOwner(sitePackages) {
+  const capi = join(sitePackages, 'onnxruntime', 'capi');
+  if (!existsSync(capi)) return 'none';
+  let entries;
+  try {
+    entries = readdirSync(capi);
+  } catch {
+    return 'none';
+  }
+  if (entries.length === 0) return 'none';
+
+  const infoPath = join(capi, 'build_and_package_info.py');
+  if (existsSync(infoPath)) {
+    try {
+      const m = readFileSync(infoPath, 'utf8').match(/package_name\s*=\s*['"]([^'"]+)['"]/);
+      if (m) return SWAP_ORT_PACKAGES.includes(m[1]) ? 'swap' : 'plain';
+    } catch {
+      /* fall through to the DLL signal */
+    }
+  }
+  if (entries.some((e) => /^onnxruntime_providers_(cuda|rocm)\./.test(e))) return 'swap';
+  return 'plain';
+}
+
 /** Write (or overwrite) the marker. Removes any stale marker first so the
  *  version can never lag the installed runtime. */
 export function writeOrtMarker(sitePackages, version) {
