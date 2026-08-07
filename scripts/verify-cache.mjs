@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lowConcurrency } from './test-concurrency.mjs';
 import { resolveVenvPython } from './run-sidecar-tests.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -79,8 +80,31 @@ export const STEPS = [
          intended way to add a drift case) would skip the very test it adds.
          Same #1847 trap test:pinokio's comment below documents. */
       globs: [
-        'scripts/**/*.{mjs,cjs}',
+        /* #2216 review round 3 — widened from *.{mjs,cjs} to match the
+           SCANNED_EXTENSIONS both scripts/tests/gh-chokepoint.test.mjs and
+           scripts/tests/git-scrub.test.mjs actually scan (.mjs/.cjs/.js/
+           .mts/.cts/.ts). This was a real, not just theoretical, gap: four
+           .mts files already exist under scripts/ today (audit-audio-asr-
+           drift.mts, audit-missing-speakers.mts, audit-stage2-coverage.mts,
+           repair-missing-speakers.mts — none currently spawns git/gh, so no
+           live miss yet, but a future one would print test:hooks [cached]
+           on exactly the diff that introduced it). .js/.ts currently match
+           no file under scripts/, so this costs nothing today. */
+        'scripts/**/*.{mjs,cjs,js,mts,cts,ts}',
         'scripts/tests/fixtures/**',
+        /* pinokio-scripts/** is an input because scripts/tests/git-scrub.test.mjs
+           (#2216) scans that whole directory for unscrubbed `git` spawns — the
+           first hooks test whose scan surface reaches outside scripts/** at
+           all. Without this glob, a pinokio-scripts-only diff (e.g. deleting
+           `env: scrubGitEnv()` from resolve-release.js's `git checkout` — the
+           highest-risk site the guard covers, since it runs on an end user's
+           machine with no `cwd` at all) prints test:hooks [cached] locally and
+           schedules only test:pinokio in cloud CI (ci-scope.mjs derives both
+           from this same STEPS[] entry) — neither of which runs
+           git-scrub.test.mjs. Same #1847 trap the entries above already
+           document, just for a directory the guard reads rather than a single
+           runtime-read file. */
+        'pinokio-scripts/**',
         /* .github/workflows/** is an input because this step's own tests
            (verify-cache.test.mjs) assert stepTouchedByDiff against real
            workflow paths, so a workflow-only diff must stay in scope for the
@@ -677,10 +701,14 @@ export function stepTouchedByDiff(step, diffFiles) {
 
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
 // disables the scope filter and runs everything; never skip on uncertainty).
-function stagedDiffFiles(cwd) {
+// Exported (#2216) so its scrub (repo-location vars only — see gitEnv() below)
+// can be unit-tested directly, including that it deliberately does NOT touch
+// GIT_INDEX_FILE — see scripts/tests/verify-cache.test.mjs.
+export function stagedDiffFiles(cwd) {
   const r = spawnSync('git', ['diff', '--cached', '--name-only'], {
     cwd,
     encoding: 'utf8',
+    env: gitEnv(),
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout
@@ -699,25 +727,35 @@ function stagedDiffFiles(cwd) {
 // files (branch fully merged into main, running directly on main, or a
 // commit-less branch) legitimately returns an empty array — the scope
 // filter correctly skips every step for that, which is fine given
-// verify.yml is now the required backstop. Exported (unlike
-// stagedDiffFiles) so it can be unit-tested directly.
+// verify.yml is now the required backstop. Exported so it can be unit-tested
+// directly (as of #2216, stagedDiffFiles above is too, for the same reason).
 //
-// Strips ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX before
-// spawning: this function is invoked with an explicit `cwd` and must resolve
-// git state strictly relative to it. Without stripping, a caller running
-// inside an enclosing git process that already has these set (e.g. this
-// very function running inside the pre-push hook it's part of) would have
-// git resolve against the ENCLOSING process's repo instead of `cwd` — harmless
-// when `cwd` happens to be that same repo (the real pre-push path), but wrong
-// whenever `cwd` points elsewhere (exactly what this file's own unit tests do).
+// Strips the ambient GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_DIRECTORY/GIT_COMMON_DIR
+// repo-LOCATION vars (scrubGitEnv, scripts/git-env.mjs) plus GIT_PREFIX before
+// spawning: every function in this file that calls git is invoked with an
+// explicit `cwd` and must resolve git state strictly relative to it. Without
+// stripping, a caller running inside an enclosing process that already has
+// one of these set (an operator's shell export, or a script invoked from
+// inside another repo's tooling — NOT an ordinary git hook, which doesn't
+// export GIT_DIR/GIT_WORK_TREE) would have git resolve against the ENCLOSING
+// process's repo instead of `cwd` — harmless when `cwd` happens to be that
+// same repo, but wrong whenever `cwd` points elsewhere (exactly what this
+// file's own unit tests do). GIT_PREFIX is not one of scrubGitEnv's
+// repo-location keys (it affects relative-path interpretation within an
+// already-resolved repo, not which repo is resolved) but is stripped here
+// too for the same cwd-pinning reason.
+//
+// Deliberately does NOT strip GIT_INDEX_FILE (#2216 correction — see
+// git-env.mjs's header for the full account). stagedDiffFiles() above reads
+// the index the in-flight commit is about; a hook stages `git commit -a` and
+// `git commit -- <path>` through a TEMPORARY index and hands this function
+// exactly that path via GIT_INDEX_FILE. Scrubbing it would make
+// stagedDiffFiles() read `.git/index` instead of the real temp index — the
+// wrong staged set, or an empty one, which (being a successful `[]`, not a
+// `null`) would NOT trip verify-cache's "diff failed, run everything" safety
+// branch. See scripts/tests/verify-cache.test.mjs for the behavioural proof.
 function gitEnv() {
-  const {
-    GIT_DIR: _GIT_DIR,
-    GIT_WORK_TREE: _GIT_WORK_TREE,
-    GIT_INDEX_FILE: _GIT_INDEX_FILE,
-    GIT_PREFIX: _GIT_PREFIX,
-    ...cleanEnv
-  } = process.env;
+  const { GIT_PREFIX: _GIT_PREFIX, ...cleanEnv } = scrubGitEnv();
   return cleanEnv;
 }
 
@@ -885,10 +923,22 @@ export function sidecarFingerprint(
   return `${mtime}:${ver}`;
 }
 
+// Full tracked-plus-untracked-non-ignored file list, used to hash every
+// step's input files below. `--cached` reads the same index stagedDiffFiles()
+// does, so it inherits the same #2216 property: gitEnv() does not scrub
+// GIT_INDEX_FILE, so during an in-flight `git commit -a` this reads the
+// hook's TEMPORARY index (e.g. `.git/index.lock`), not `.git/index` — an
+// unstated side effect of composing scrubGitEnv() uniformly across every
+// function in this file, not something this function was written for on
+// purpose. It fails safe either way: if that temp index isn't readable at
+// the moment this runs, `r.status !== 0` and this returns `null`, and the
+// caller below (`if (!fileList)`) falls back to running every step uncached
+// rather than hashing against a wrong or incomplete file list.
 function gitFileList(cwd) {
   const r = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
     cwd,
     encoding: 'utf8',
+    env: gitEnv(),
   });
   if (r.error || r.status !== 0) return null;
   return r.stdout

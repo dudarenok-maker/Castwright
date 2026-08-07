@@ -48,6 +48,17 @@ module.exports = { latestReleaseTag, highestSemverTag };
 // ---- CLI (acceptance-tested, not unit-tested) ----
 const { execFileSync } = require('node:child_process');
 const { existsSync } = require('node:fs');
+const path = require('node:path');
+// #2216 — scripts/git-env.mjs is ESM; this file is CommonJS
+// ("type": "commonjs" in pinokio-scripts/package.json). `require()` of an
+// ESM module is supported unflagged since Node 22.12 (this repo's engines
+// floor is >=22.22.0, and Pinokio's installer conda-installs nodejs=24), so
+// this requires the ESM file directly rather than duplicating
+// GIT_ENV_SCRUB_KEYS into a second, CommonJS-only copy that could drift from
+// the original. This file always runs from inside a full checkout of this
+// repo (resolveTag()/main() below assume `scripts/` and other repo files
+// exist relative to cwd), so the relative path is safe.
+const { scrubGitEnv } = require(path.join(__dirname, '..', '..', 'scripts', 'git-env.mjs'));
 
 /** Resolve the tag to check out: API → published tag, 404 → exit, error → local fallback. */
 async function resolveTag() {
@@ -70,8 +81,10 @@ async function resolveTag() {
     process.exit(2);
   }
   // fallback: highest local git tag
-  const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8' })
-    .split('\n').map((t) => t.trim()).filter(Boolean);
+  const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8', env: scrubGitEnv() })
+    .split('\n')
+    .map((t) => t.trim())
+    .filter(Boolean);
   const best = highestSemverTag(tags);
   if (!best) {
     process.stderr.write('GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n');
@@ -82,10 +95,10 @@ async function resolveTag() {
 }
 
 async function main() {
-  execFileSync('git', ['fetch', '--tags', '--force'], { stdio: 'inherit' });
+  execFileSync('git', ['fetch', '--tags', '--force'], { stdio: 'inherit', env: scrubGitEnv() });
   const tag = await resolveTag();
   process.stderr.write(`[resolve-release] checking out ${tag}\n`);
-  execFileSync('git', ['checkout', tag], { stdio: 'inherit' });
+  execFileSync('git', ['checkout', tag], { stdio: 'inherit', env: scrubGitEnv() });
   // Guard against a release that predates Pinokio support: git checkout to such a
   // tag would DELETE pinokio-scripts/ from the tree, breaking Start/Stop/Update.
   if (!existsSync('pinokio-scripts/start.js')) {

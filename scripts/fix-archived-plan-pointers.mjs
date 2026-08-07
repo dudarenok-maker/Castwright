@@ -30,6 +30,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { scrubGitEnv } from './git-env.mjs';
 
 const REPO_ROOT = process.env.REPO_ROOT ? process.env.REPO_ROOT : process.cwd();
 const APPLY = process.argv.includes('--apply');
@@ -76,6 +77,7 @@ function tracked(spec) {
     const out = execFileSync('git', ['ls-files', '--', spec], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      env: scrubGitEnv(),
     });
     return out.split('\n').filter(Boolean);
   } catch {
