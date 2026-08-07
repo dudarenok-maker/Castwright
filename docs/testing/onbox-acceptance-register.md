@@ -97,19 +97,74 @@ comparison, see the edge list above). The merge step that closes this, run
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
-2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
-   Unlike `check:onbox-register`'s no-flag run, this comparison is
-   deliberately ONE-DIRECTIONAL: your register having rows the live page
-   doesn't have yet is the normal reason you're publishing, not a defect, so
-   it is never reported here. It fails ONLY when the live page has a row (or
-   group) your register does not — the signature of another lane having
-   already published ahead of you.
-3. **If it fails**, do NOT publish — your register is BEHIND what is already
-   live. Pull the latest `main` (the row that's already live should already
-   be merged there via its own PR), confirm `npm run check:onbox-register`
-   (no flag) is green, and re-run step 2 against the SAME saved copy from
-   step 1 to confirm it now passes. It should — main pulling in the missing
-   row is what resolves this, not another fetch of the live page.
+2. Run
+   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
+   `check:onbox-register`'s no-flag run, this comparison is deliberately
+   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
+   is the normal reason you're publishing, not a defect, so it is never
+   reported here. A row (or group) the live page has that your register
+   lacks is reported ONLY when `origin/main`'s own copy of this register
+   still has it too — the signature of another lane having already
+   published ahead of you. When `origin/main` also lacks it, the row was a
+   deliberate discharge (by this change or an already-merged one), not a
+   race, and is not reported: discharging a row (and, since rows renumber
+   contiguously, often renumbering the survivors) always makes the
+   still-live page look "ahead" of your working copy in this exact shape,
+   and that is expected. **The command fetches `origin/main` itself, fresh,
+   every run — you do not need to `git fetch` by hand first.** It then reads
+   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
+   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
+   updates `refs/remotes/origin/main` depends on this checkout's
+   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
+   narrowed refspec can skip while the fetch still exits 0, leaving
+   `origin/main` silently stale even though the fetch just "succeeded". If
+   you ever need to reproduce this baseline by hand for debugging, run
+   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
+   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
+   configured clone, entirely unresolvable) content even immediately after a
+   successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote
+   URL anyway, so an operator who can't reach the network here can't
+   complete step 4 either.
+3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+   named in the error text:
+   - **A row/group named as already live and BEHIND** — your register is
+     genuinely behind. Pull the latest `main` (the row that's already live
+     should already be merged there via its own PR), confirm
+     `npm run check:onbox-register` (no flag) is green, and re-run step 2
+     against the SAME saved copy from step 1 to confirm it now passes. It
+     should — main pulling in the missing row is what resolves this, not
+     another fetch of the live page.
+   - **"Cannot verify"** — the check refuses to guess whether an extra row
+     is a discharge or a race, and fails closed instead. This is NOT the
+     same as the register being behind: pulling `main` on your own machine
+     doesn't fix it, in either of the two shapes below.
+     - **A git call failed** — the command's own `git fetch origin main`, or
+       the `git show FETCH_HEAD:<path>` that reads what it just fetched,
+       failed (network unreachable, no credentials, `origin` misconfigured
+       or unresolvable, a timeout). The error names which one
+       (`fetch` or `show`) — run that command by hand to see the underlying
+       error, fix whatever it reports (network, auth, the remote), then
+       re-run step 2.
+     - **No git call failed, but the baseline is malformed** — `origin/main`'s
+       OWN copy of this register is internally inconsistent (a count
+       mismatch, a contiguity gap, a duplicate group letter, a sub-lettered
+       row heading, a glance-table row with no matching body section, ...),
+       so the fetch and the read both succeeded but the content they got
+       back can't be trusted. The error names no `fetch`/`show` failure in
+       this shape — that absence is itself the signal. Run
+       `npm run check:onbox-register` against a checkout of `main` (not your
+       branch) to see which specific check fails, then fix THAT on `main`
+       first (its own PR) before retrying step 2 here — this can't be fixed
+       from your branch, only from `main`.
+
+   **Known limitation:** a row that's live and still genuinely owed but was
+   never actually merged into `main` at all (e.g. published straight from a
+   branch that never merged, or from a PR later reverted) is not
+   distinguishable from a deliberate discharge — it silently reads as
+   discharged rather than being flagged. Accepted trade-off, not an
+   oversight; see `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 
@@ -122,8 +177,21 @@ eyeballed diff — it does not, and cannot, make the four steps happen on
 their own. An early version of this check compared both directions
 symmetrically, which inverted the diagnosis (failed on every ordinary
 publish and told the operator to delete the rows they were about to ship) —
-fixed before this landed; see the `checkLiveView` function's own header
-comment in `scripts/check-onbox-register.mjs` for the reasoning.
+fixed before this landed. A later version still fired on every legitimate
+row discharge, because removing a row is invisible in that same direction
+too: the still-live page always looks "ahead" of a register that just
+discharged a row from it. It now disambiguates the two by checking whether
+`origin/main`'s own copy of the register also lacks the row before reporting
+it (#2199); see the `checkLiveView` function's own header comment in
+`scripts/check-onbox-register.mjs` for the reasoning. The `origin/main` copy
+that comparison reads is fetched fresh by the command itself immediately
+before reading it, not taken from whatever the local `origin/main` ref
+already happened to point at — an operator whose local ref predated a merge
+would otherwise see that merge's row as absent from both their own register
+and their stale baseline, which reads identically to a deliberate discharge
+and would have let the exact #1931 race straight back through. See
+`resolveBaselineText`'s own header comment in
+`scripts/check-onbox-register.mjs` for that half of the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -162,7 +230,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 1 |
+| **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -170,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**56 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2110,7 +2178,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**One row left.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2124,6 +2192,12 @@ mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) beca
 chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
 flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
 flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+Since then the #2187 aligner fix has landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's flagged-count target end to end. Alignment
+itself is already proven and is **not** what that row asks for. (The ID is
+reused: the C2 discharged above was the srv-59 attribution row. Row IDs are
+positional and renumber on discharge.)
 
 The cloud row remains (renumbered **C1** now that the other two are discharged;
 it was C3 before 2026-08-06 and is referenced under that ID in
@@ -2163,6 +2237,35 @@ is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), s
 re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
+
+### C2 · srv-59 flagged-count target, end to end after the #2187 aligner fix ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan [247](../features/247-dialogue-structure-attribution.md))
+
+**What is already proven, and does NOT need re-running:** alignment. The #2187 fix
+was measured offline against this exact corpus — the 15,069 cached stage-2
+sentences replayed through the production EPUB parser and the production aligner
+— taking chapters 5–8 from 3.7/1.7/66.4/73.5% to 94.6/92.7/92.0/95.7%, book-level
+67.7% → 96.0%, with the pre-fix column reproducing the on-box report to within
+rounding. Every chapter now clears the 80% floor. The aligner is pure, so no
+hardware was needed and none is needed again.
+
+**What is still owed:** plan 247's **target 1 — flagged ≤ ~500 per chapter**. That
+is a property of the cross-examiner running over a *real* stage-2 model output,
+not of alignment alone, so it cannot be replayed from cache. Observe, per chapter,
+the `[analysis:structure]` line's `flagged` count and confirm it lands near
+chapter 9's already-measured 488 rather than the 1,200–1,700 the below-floor
+chapters produced. Also confirm `escalation` actually runs now (it was skipped
+chapter-wide before) and record the escalated/accepted counts, plus wall-clock —
+target 5 (+2–5 h at `'local'`) was never measurable while escalation was being
+skipped.
+
+Same setup as the 2026-08-06 pass: local Ollama, `qwen36-cw-iq4-32k`, structure
+engine on, `analyzer.structure.escalation = 'local'`, no TTS. Force `fresh: true`
+— a resumed run serves cached chapters and measures nothing (see the Group C
+history above, and the chapters 1–4 caveat in plan 247).
+
+**Run it against a throwaway re-import, not the library book** — same reason as
+C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
+entry would overwrite the qwen36 cast the owner is keeping.
 
 ---
 

@@ -135,14 +135,67 @@ export function castIdHistoryPath(bookDir: string): string {
  *  `buildCastResolver` at render time, srv-86) silently loses history-based
  *  protection when this happens, which must not read as "no protection
  *  needed". That case logs one `console.warn` naming the path and cause, so
- *  the degraded-protection state is operator-visible instead of silent. */
+ *  the degraded-protection state is operator-visible instead of silent.
+ *
+ *  This function deliberately COLLAPSES "absent" and "degraded" onto the same
+ *  empty value, which is correct for every caller whose worst case is losing
+ *  protection for one run. A caller that would DESTROY data on an empty
+ *  history must use `loadCastIdHistoryWithStatus` below and refuse to act on
+ *  `degraded` — see its doc comment (#2166 final review, Critical). */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
+  return (await loadCastIdHistoryWithStatus(bookDir)).history;
+}
+
+/** How a `loadCastIdHistoryWithStatus` read went (#2166 final review, Critical).
+ *
+ *  - `ok` — the file was read and passed the shape check. `history` is it.
+ *  - `absent` — no file on disk. `history` is the empty default, and that
+ *    emptiness is EVIDENCE: nothing has ever been retired for this book.
+ *  - `degraded` — the file exists but could not be read or did not pass the
+ *    shape check. `history` is the same empty default, but it is NOT evidence
+ *    of anything: it is "could not be determined". */
+export type CastIdHistoryStatus = 'ok' | 'absent' | 'degraded';
+
+export interface CastIdHistoryReadResult {
+  status: CastIdHistoryStatus;
+  history: CastIdHistory;
+}
+
+/** The discriminated sibling of `loadCastIdHistory` — same read, same
+ *  warnings, same returned history, but it also says WHICH of the three
+ *  states produced that history (#2166 final review, Critical).
+ *
+ *  `loadCastIdHistory` collapses `absent` and `degraded` onto the identical
+ *  `{ schema: 1, supersededBy: {} }` value, which is exactly right for every
+ *  consumer whose worst case is "loses history-based protection this run"
+ *  (`buildCastResolver`, `clearNotLinkedEdgesForDroppedRejections`): a
+ *  degraded read costs them protection, never data.
+ *
+ *  `reconcileRejectEdgesOnDisk` is the first consumer for which that collapse
+ *  is destructive rather than merely unprotective. It treats an empty history
+ *  as proof that every same-book `notLinkedTo` edge is stranded, and DELETES
+ *  them — so a transient EPERM/EBUSY from an AV scanner, a cloud-sync client
+ *  or the OS indexer (readJson has no retry, so it propagates straight
+ *  through) would wipe every reject the user ever made on that book, and log
+ *  that it had cleared stranded links while doing it. Recovery on a later good
+ *  run is only partial: the add pass rebuilds solely from `rejectedPairs`, so
+ *  an edge backed only by the LEGACY id-wide `rejected` list never comes back.
+ *
+ *  Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel (#2185): a
+ *  transient read blip must never be mistaken for evidence.
+ *
+ *  Never throws, exactly like `loadCastIdHistory` — a lookup side-table must
+ *  not be able to break a book's render. See `loadCastIdHistory`'s own doc
+ *  comment above for the field-by-field validation rationale. */
+export async function loadCastIdHistoryWithStatus(
+  bookDir: string,
+): Promise<CastIdHistoryReadResult> {
   const path = castIdHistoryPath(bookDir);
   try {
     const raw = await readJson<CastIdHistory>(path);
     if (raw === null) {
       // No file on disk — nothing has ever been retired for this book.
-      return { schema: 1, supersededBy: {} };
+      return { status: 'absent', history: { schema: 1, supersededBy: {} } };
     }
     if (
       typeof raw === 'object' &&
@@ -158,7 +211,7 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       (raw.rejected === undefined || Array.isArray(raw.rejected)) &&
       (raw.rejectedPairs === undefined || Array.isArray(raw.rejectedPairs))
     ) {
-      return raw;
+      return { status: 'ok', history: raw };
     }
     console.warn(
       `[cast-id-history] ${path} exists but has an unexpected shape — id-history protection disabled until it is fixed or removed.`,
@@ -168,7 +221,7 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — id-history protection disabled until it is fixed or removed.`,
     );
   }
-  return { schema: 1, supersededBy: {} };
+  return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
 }
 
 /** Record that characterId `from` has been retired and replaced by `to`.
