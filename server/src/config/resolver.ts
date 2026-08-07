@@ -57,6 +57,19 @@ function resolveKnobInner(knob: ConfigKnob, reconcileDeviceUuid: boolean): KnobV
   return { key: knob.key, effective: knob.default, source: 'default', locked: false, overridden: false };
 }
 
+/** True when `knob.env` is set in the ambient environment but fails
+    `coerceAndValidate` — i.e. `resolveKnobInner` fell through to override/default
+    despite an env var being present (and already logged the one-shot warning).
+    Lets a consumer (`buildSidecarEnv`, #2207) act on a rejection the resolver
+    already computes internally, without re-running validation itself and
+    without widening `KnobValueState` with a field only one caller needs. */
+export function isEnvValueRejected(knob: ConfigKnob): boolean {
+  if (!knob.env) return false;
+  const raw = process.env[knob.env];
+  if (raw == null || raw.trim() === '') return false;
+  return parseEnv(knob, raw) == null;
+}
+
 /** Effective value for a READ SITE or the Advanced UI. Reconciles a stored
     'cuda-uuid:<uuid>' override against the last-known device list, so the UI can
     show a concrete card and flag a vanished one as staleReason:'uuid_unresolved'. */

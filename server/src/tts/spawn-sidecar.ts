@@ -27,7 +27,7 @@ import { qwenVoicesDir, xttsVoicesDir } from '../workspace/paths.js';
 import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
-import { resolveKnob, resolveKnobForSidecarEnv } from '../config/resolver.js';
+import { resolveKnob, resolveKnobForSidecarEnv, isEnvValueRejected } from '../config/resolver.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -483,6 +483,17 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
       process.env.PYTORCH_CUDA_ALLOC_CONF ??
       'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
   };
+
+  /* Layer 1.5: an ambient env var that FAILED the resolver's validation (e.g.
+     ASR_DEVICE=cuda1 against qa.asr.device's pattern) survives the
+     `...process.env` spread above verbatim even though the server itself
+     resolved something else (an override, or the registry default) — the
+     #2207 divergence. Delete it here, before the layer-2 loop runs, so a
+     resolved override for the same knob still wins (layer 2 sets it back). */
+  for (const knob of allKnobs()) {
+    if (knob.apply !== 'restart-sidecar' || !knob.env) continue;
+    if (isEnvValueRejected(knob)) delete env[knob.env];
+  }
 
   /* Layer 2: inject any restart-sidecar knob whose value is NOT the registry
      default (source==='env' or source==='override'). Knobs still at their
