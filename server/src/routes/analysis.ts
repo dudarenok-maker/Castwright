@@ -127,6 +127,7 @@ import {
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
+  CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
@@ -371,6 +372,18 @@ async function clearNotLinkedEdgesForDroppedRejections(
 
    Exported only so analysis-reject-edge-reconcile.test.ts can drive it
    without standing up a full analysis run. */
+
+/* #2214/#2201 — shared user-facing wording for "cast-id-history.json could
+   not be read, nothing changed" so it reads identically no matter which of
+   the three call sites emits it: this function's own degraded-read branch
+   below, and the two persist blocks' `catch (historyErr)` handlers, which
+   need the same line because a degraded read now makes
+   `dropSupersededIdsReclaimedByLiveCast` throw before this function is ever
+   reached (see those handlers' own comments). */
+export const DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE =
+  `Skipped "not the same character" link check — cast-id-history.json for this book could not ` +
+  `be read. No links were changed; the file needs attention (see the server log for the cause).`;
+
 export async function reconcileRejectEdgesOnDisk(
   bookDir: string,
   bookId: string | undefined,
@@ -410,6 +423,13 @@ export async function reconcileRejectEdgesOnDisk(
             `stranded "not the same character" link cannot be told from one whose recorded rejection ` +
             `is merely unreadable right now. No links were changed; the next persist will try again.`,
         );
+        /* #2201 — the console.warn above is operator-visible only; a user
+           watching the in-app run log saw nothing and read a clean run as
+           proof the book was healthy. Distinguishable from the `Cleared N
+           stranded …` / `Restored N …` lines below (those fire only when a
+           write actually happened): this one fires only when nothing changed
+           because the file could not be trusted. */
+        log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
         return;
       }
       const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
@@ -5299,6 +5319,16 @@ export async function runMainAnalyzerJob(
             await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+            /* #2214/#2201 — a degraded cast-id-history.json now makes the
+               unconditional `dropSupersededIdsReclaimedByLiveCast` call above
+               throw before `reconcileRejectEdgesOnDisk` is ever reached, so
+               its own degraded-read log line never fires on this path. Emit
+               the same user-facing wording here so a run against a damaged
+               file still shows something in the in-app log instead of
+               reading as clean. */
+            if (historyErr instanceof CastIdHistoryUnreadableError) {
+              log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -6608,6 +6638,10 @@ export async function runSubsetAnalyzerJob(
             await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
+            // #2214/#2201 — mirrors the main path's same-named handler above.
+            if (historyErr instanceof CastIdHistoryUnreadableError) {
+              log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
+            }
           }
           await logCarriedForwardCharacters(
             record.bookDir,
