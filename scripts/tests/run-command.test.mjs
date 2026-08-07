@@ -24,3 +24,19 @@ test('runCommand surfaces the real spawn error instead of swallowing it as undef
     /test: this-binary-does-not-exist-anywhere.*failed to spawn:/,
   );
 });
+
+// #2184 Finding 2 — runCommand's callers (sync-wiki.mjs's six git commands,
+// including `git push`) pin an explicit `cwd` but never scrubbed env, so an
+// inherited GIT_DIR — which overrides git's cwd-based repo discovery
+// outright — could silently redirect them at the wrong repository. Asserts
+// the scrub actually reaches the spawned child, not just that scrubGitEnv()
+// is imported.
+test('runCommand scrubs an inherited GIT_DIR from the spawned child env', () => {
+  const out = runCommand(
+    'test',
+    process.execPath,
+    ['-e', 'process.stdout.write(String(process.env.GIT_DIR))'],
+    { env: { ...process.env, GIT_DIR: '/decoy/.git' } },
+  );
+  assert.equal(out, 'undefined');
+});

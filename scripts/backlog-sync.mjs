@@ -200,12 +200,13 @@ export function renderBacklogMd({ groups, wontIssues }) {
 // node:test — see the plan's Task 3 dry-run walkthrough.
 // ---------------------------------------------------------------------------
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
+import { gh, ghSpawn } from './gh.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -223,7 +224,7 @@ function die(msg) {
   process.exit(1);
 }
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 
@@ -281,7 +282,7 @@ async function fetchFeatureIssues(config) {
       '-F', `number=${config.projectNumber}`,
     ];
     if (after) args.push('-f', `after=${after}`);
-    const raw = execFileSync('gh', args, { cwd: repoRoot, encoding: 'utf8' });
+    const raw = gh(args);
     const data = JSON.parse(raw).data.user.projectV2.items;
     results.push(...data.nodes);
     if (!data.pageInfo.hasNextPage) break;

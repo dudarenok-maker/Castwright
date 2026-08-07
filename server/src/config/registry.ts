@@ -371,6 +371,13 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Content-QA (Whisper) device',
     help: '"cpu" (default) uses zero VRAM. "cuda" runs Whisper on the GPU; pin a card with "cuda:1". Changing the device restarts the sidecar.',
     type: 'string',
+    // #2180 correction 1 — this was free-form `type: 'string'` with no
+    // closed option set, so "cuda", "cuda:1", and a typo like "cuda1" were
+    // all equally "valid" at the coercion layer. An enum doesn't fit (the
+    // card index in "cuda:<n>" is unbounded), so a validated pattern
+    // constrains it instead — see the new `pattern` capability in
+    // resolver.ts's coerceAndValidate.
+    pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar', risk: 'medium',
   },
@@ -411,25 +418,6 @@ export const KNOBS: ConfigKnob[] = [
                                  // default" (#2014). "auto" is CT2's OWN member —
                                  // outside this sentinel — and passes through
                                  // (PR #2176 review finding 1).
-    apply: 'restart-sidecar', risk: 'medium',
-  },
-  {
-    key: 'qa.asr.concurrency',
-    env: 'ASR_CONCURRENCY',
-    group: 'qa-gates',
-    label: 'Content-QA (Whisper) transcribe concurrency',
-    help: 'Documented sidecar transcribe thread-pool width. NOTE (#2014): repo-wide '
-        + 'search found NO code anywhere — sidecar or server — that reads '
-        + 'ASR_CONCURRENCY; it has been .env.example-only documentation since it '
-        + 'was first written, so changing it currently has no observable effect. '
-        + 'Registered per the ticket owner\'s explicit call (an already-documented '
-        + 'operator-facing var falls under CLAUDE.md\'s "new env var MUST be a '
-        + 'knob" rule) so it is at least reachable/consistent with .env.example, '
-        + 'not to imply it is wired up. See #2177 for whether it gets wired up '
-        + 'or deleted. Changing this restarts the sidecar.',
-    type: 'integer', min: 1,
-    default: 2, // ← .env.example's own documented default; there is no sidecar
-                // code fallback to match — none exists (see help above, #2014)
     apply: 'restart-sidecar', risk: 'medium',
   },
   {

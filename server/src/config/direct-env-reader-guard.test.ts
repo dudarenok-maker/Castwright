@@ -373,9 +373,6 @@ const ALLOWLISTED_SITES: Record<string, number> = {
   // so an active 'auto' and an absent env fall through to the same
   // wizard/detected branch — behaviourally identical.
   'server/src/tts/spawn-sidecar.ts': 1,
-  // ASR_DEVICE ?? 'cpu' — matches the registry default. (Being touched
-  // separately under #2178 — audited as-is on this branch.)
-  'server/src/tts/transcribe-client.ts': 1,
   // ACCELERATOR ?? null — same reasoning as spawn-sidecar.ts above.
   'server/src/upgrade/apply.ts': 1,
   // OLLAMA_URL falls through to DEFAULT_USER_SETTINGS.ollamaUrl
@@ -421,7 +418,6 @@ const EXPECTED_FALLBACKS: Array<{ file: string; name: string; fallback: string }
   { file: 'server/src/routes/chapter-qa-repair.ts', name: 'SEG_QA_MAX_RERECORDS', fallback: ': 2;' },
   { file: 'server/src/tts/embed-client.ts', name: 'SPK_DEVICE', fallback: "'cpu'" },
   { file: 'server/src/tts/spawn-sidecar.ts', name: 'ACCELERATOR', fallback: 'null' },
-  { file: 'server/src/tts/transcribe-client.ts', name: 'ASR_DEVICE', fallback: "'cpu'" },
   { file: 'server/src/upgrade/apply.ts', name: 'ACCELERATOR', fallback: 'null' },
   {
     file: 'server/src/workspace/user-settings.ts',
