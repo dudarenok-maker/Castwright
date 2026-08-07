@@ -950,7 +950,14 @@ describe('cast id history', () => {
       expect(existsSync(castIdHistoryPath(dir))).toBe(false);
     });
 
-    it('a batch that changes nothing leaves an EXISTING file byte-identical (no rewrite, not even a reformat)', async () => {
+    /* NOTE (PR #2236 review, M1): this case does NOT prove "no write happened".
+       `writeJsonAtomic` reproduces byte-identical output for an unmutated
+       object, so it stays green even with the `if (changed)` guard forced to
+       always-write — verified. What actually pins the guard is its sibling
+       above, which asserts an ABSENT file is not created. Kept because
+       byte-identity on an existing file is still worth asserting; the title no
+       longer claims it detects a redundant rewrite. */
+    it('a batch that changes nothing leaves an EXISTING file byte-identical', async () => {
       await rejectOrphanedPair(dir, 'unrelated-from', 'unrelated-to');
       const before = readFileSync(castIdHistoryPath(dir), 'utf8');
       // Neither pair below matches anything present, and neither carries a

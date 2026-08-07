@@ -733,6 +733,14 @@ export async function forgetSupersededId(
  *  DELETE after a prior successful restore), no write happens and
  *  `restored: true` is still returned — the desired end state already
  *  holds. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
 export async function restoreSupersededId(
   bookDir: string,
   id: string,
@@ -854,6 +862,14 @@ export async function rejectOrphanedPair(
  *  No-op (and no write) when the pair isn't present, mirroring this module's
  *  idempotent-write discipline — a repeat undo of an already-undone pair is
  *  safe. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
 export async function unrejectOrphanedPair(
   bookDir: string,
   from: string,
