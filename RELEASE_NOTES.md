@@ -95,6 +95,7 @@
   names from ever being matched again — with no way to undo it. Now a failure leaves the decision
   visible and undoable, and any book already carrying an invisible mark is cleaned up the next
   time it's analysed.
+- **Renaming a book while Castwright is still reading it now waits its turn.** Change a book's author, series or title mid-analysis and Castwright used to move the folder out from under the run — which could quietly leave your cast in the old folder and everything else in the new one, so the app read a book with nobody in it. Castwright now asks you to wait until the analysis finishes, and says so plainly. Everything else about a book stays editable while it's being analysed.
 
 # Castwright 1.14.0
 
