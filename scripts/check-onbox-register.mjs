@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { scrubGitEnv } from './git-env.mjs';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -826,9 +827,15 @@ export function checkLiveView(
 // when its `timeout` option fires) — the caller already treats any truthy
 // `result.error` as a failure, so a timeout needs no special-casing to fail
 // closed like any other git failure.
+//
+// #2216 — scrubs the ambient GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_DIRECTORY/
+// GIT_COMMON_DIR repo-location vars before spawning: this runs against an
+// explicit `cwd` (repoRoot), and an inherited GIT_DIR would silently
+// redirect `git fetch`/`rev-parse`/`show` at a different repository instead
+// of erroring. See scripts/git-env.mjs's header for the full account.
 const GIT_TIMEOUT_MS = 15_000;
 function runGitCommand(args, cwd) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, env: scrubGitEnv() });
 }
 
 // #2199 review round 2: fetches `origin/main` FRESH before reading it,

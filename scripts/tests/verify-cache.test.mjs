@@ -1085,19 +1085,40 @@ test('stagedDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
   // (repository redirection); it does not depend on an ordinary git hook
   // exporting GIT_DIR (it doesn't — see git-env.mjs's header) to be a real
   // risk, since an operator's shell or another script's tooling can.
+  //
+  // Also isolates ambient GIT_INDEX_FILE around this call (save/clear/
+  // restore), which this test is NOT exercising — found live while landing
+  // #2216: running this suite from inside a REAL pre-commit hook in a git
+  // WORKTREE (as CLAUDE.md's branching workflow mandates for every non-
+  // trivial change — i.e. every real run of this hook), GIT_INDEX_FILE is
+  // an ABSOLUTE path into `.git/worktrees/<name>/index` — not the relative
+  // `.git/index` a primary checkout gets — and stagedDiffFiles deliberately
+  // does NOT scrub it (see git-env.mjs's header). Left uncontrolled, that
+  // real, unrelated index leaks into this test's throwaway `repoDir` spawn:
+  // `git diff --cached` resolves the repository correctly via `cwd` (GIT_DIR
+  // is scrubbed) but reads the WRONG index — the real worktree's, referencing
+  // blobs this fixture's object store has never heard of — and fails with
+  // `fatal: unable to read <sha>`, not a clean mismatch. That failure is
+  // real and correctly demonstrates why GIT_INDEX_FILE isolation belongs to
+  // the caller when the property under test is GIT_DIR specifically, the
+  // same way `gitAt()`'s own fixture-setup helper above already isolates it.
   const repoDir = makeGitFixture();
   writeFileSync(join(repoDir, 'staged.txt'), 'staged', 'utf8');
   gitAt(repoDir, ['add', 'staged.txt']);
 
   const bogusGitDir = join(mkTmp(), 'unrelated-repo', '.git');
   const prevGitDir = process.env.GIT_DIR;
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
   process.env.GIT_DIR = bogusGitDir;
+  delete process.env.GIT_INDEX_FILE;
   try {
     const files = stagedDiffFiles(repoDir);
     assert.deepEqual(files, ['staged.txt']);
   } finally {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
   }
 });
 
