@@ -9678,9 +9678,20 @@ export async function mockPutConfig(
   const applied: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (key in MOCK_CONFIG_VALUES) {
+      // #2209 review — mirrors resolver.ts's coerceAndValidate: a
+      // pattern-validated knob persists the TRIMMED form, not the raw
+      // input (a match is checked against `s.trim()` above, but this
+      // loop used to write back the untrimmed `value` regardless, so a
+      // padded '  cuda:1  ' would validate and then round-trip its
+      // whitespace into the mock store — a real divergence from the real
+      // server, which explicitly avoids exactly that, per its own
+      // comment citing independent-review finding F4 on PR #2205).
+      // qa.asr.device is the only mock knob with a pattern; every other
+      // key is persisted byte-for-byte as sent, same as before.
+      const persisted = key === 'qa.asr.device' && typeof value === 'string' ? value.trim() : value;
       MOCK_CONFIG_VALUES[key] = {
         ...MOCK_CONFIG_VALUES[key],
-        effective: value,
+        effective: persisted,
         source: 'override',
         overridden: true,
       };

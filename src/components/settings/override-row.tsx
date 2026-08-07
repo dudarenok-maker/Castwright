@@ -265,6 +265,25 @@ function KnobControl({
   // itself actually changes (a real Revert/Reset, or another tab's edit).
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  // #2209 review "report-only item 1", now hardened rather than left as a
+  // documented risk: the effect below calls onSaveErrorChange, and
+  // generationRef is now the ONE shared staleness clock for both the
+  // save path (this component) AND Revert (OverrideRow's
+  // handleRevertClick) — so if a future edit to OverrideRow ever passed
+  // an inline arrow instead of the current bare `setSaveError` reference,
+  // onSaveErrorChange's identity would change every render, the effect
+  // below would re-fire every render (it's in the effect's own
+  // dependency array), and EVERY in-flight guard on the row — save AND
+  // Revert alike — would be silently, permanently invalidated with no
+  // crash and no visible symptom beyond "errors just never show up
+  // anymore." Reading the LATEST callback through a ref instead removes
+  // onSaveErrorChange from the dependency array entirely, so the effect's
+  // re-run trigger is `value.effective` alone regardless of whether the
+  // caller's callback reference happens to be stable. Do not "fix" this
+  // back to calling `onSaveErrorChange` directly in the effect — that
+  // reintroduces the exact fragility this comment exists to close.
+  const onSaveErrorChangeRef = useRef(onSaveErrorChange);
+  onSaveErrorChangeRef.current = onSaveErrorChange;
   // Bumped whenever this field's ground truth could have moved on without
   // this specific commit's involvement: either a newer local commit (via
   // commitEdit, below) or value.effective itself changing for ANY other
@@ -291,8 +310,18 @@ function KnobControl({
     // save, a Revert/Reset, or another tab's edit) — means whatever this
     // row was showing an error about is no longer current. #2209 req 4:
     // a stale error next to a control that now works is its own defect.
-    onSaveErrorChange(null);
-  }, [value.effective, onSaveErrorChange, generationRef]);
+    // Read via the ref (see onSaveErrorChangeRef's own comment above) so
+    // this effect's only re-run trigger is value.effective itself.
+    onSaveErrorChangeRef.current(null);
+    // generationRef is a MutableRefObject — stable for the component's
+    // lifetime by React's own useRef contract, exactly like a same-
+    // component useRef the lint rule already exempts — so it's
+    // deliberately left out; only value.effective should ever re-trigger
+    // this effect. The lint rule can't infer that stability for a REF
+    // PASSED AS A PROP the way it can for a local useRef() call, hence
+    // the explicit disable rather than a false "missing dependency".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.effective]);
 
   // Discard whatever's in the field without saving it — used when blur was
   // triggered by beginConfigAction() (a Revert/Reset click) rather than the

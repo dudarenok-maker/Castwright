@@ -99,6 +99,21 @@ describe('mockPutConfig — qa.asr.device pattern validation (#2209)', () => {
       expect(result.values['qa.asr.device'].effective).toBe(good);
     },
   );
+
+  /* #2209 review — the pattern is checked against the TRIMMED value, but
+     mockPutConfig used to persist the untrimmed original regardless, so a
+     padded '  cuda:1  ' would validate and then round-trip its whitespace
+     into the mock store. The real path (resolver.ts's coerceAndValidate)
+     explicitly avoids this: `const s = knob.pattern ? raw_s.trim() : raw_s`
+     persists the trimmed form. Same fidelity here now. */
+  it('persists the TRIMMED form of a padded value, matching the real path', async () => {
+    const result = await mockPutConfig({ 'qa.asr.device': '  cuda:1  ' });
+    expect(result.ok).toBe(true);
+    expect(result.values['qa.asr.device'].effective).toBe('cuda:1');
+
+    const { values } = await mockGetConfig();
+    expect(values['qa.asr.device'].effective).toBe('cuda:1');
+  });
 });
 
 /* #2209 review B4 — mockAsrPairError (api.ts) mirrors the real
