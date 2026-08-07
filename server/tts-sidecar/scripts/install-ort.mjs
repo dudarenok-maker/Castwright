@@ -24,7 +24,42 @@
 
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { installRecipe } from './accelerator-profile.mjs';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { installRecipe, PROFILES } from './accelerator-profile.mjs';
+
+/** Distribution names that OWN the onnxruntime namespace on some profile.
+ *  DERIVED from installRecipe, never hand-typed — a hand-typed list is a second
+ *  source of truth for a set installRecipe already determines, and would miss a
+ *  future onnxruntime-directml re-enable. */
+export const SWAP_ORT_PACKAGES = [
+  ...new Set(
+    PROFILES.flatMap((p) =>
+      ['win32', 'linux', 'darwin'].map((plat) => installRecipe(p, plat).ortPackage),
+    ).filter((pkg) => pkg !== 'onnxruntime'),
+  ),
+];
+
+/** PEP 427 escaping: pip writes `onnxruntime-gpu` to disk as `onnxruntime_gpu`.
+ *  Globbing the UNESCAPED name matches zero directories — which, combined with
+ *  the fail-loudly rule, would break every NVIDIA bootstrap. */
+export function escapeDistName(name) {
+  return name.replace(/[-_.]+/g, '_');
+}
+
+/** Resolve site-packages inside a venv dir. Pure fs — no interpreter spawn.
+ *  Returns null when absent or ambiguous; callers treat null as "do nothing". */
+export function sitePackagesDir(venvDir) {
+  const win = join(venvDir, 'Lib', 'site-packages');
+  if (existsSync(win)) return win;
+  const libDir = join(venvDir, 'lib');
+  if (!existsSync(libDir)) return null;
+  const hits = readdirSync(libDir)
+    .filter((d) => d.startsWith('python'))
+    .map((d) => join(libDir, d, 'site-packages'))
+    .filter((p) => existsSync(p));
+  return hits.length === 1 ? hits[0] : null;
+}
 
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
