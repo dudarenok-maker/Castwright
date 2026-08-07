@@ -325,7 +325,61 @@ sweep, and a `tsx watch` restart), so they contributed nothing to the aggregate:
 weighted average. Deliberately not re-run — the diagnostic is conclusive without the missing four,
 and #2187 is the deliverable either way.
 
-This discharged register row **C2**.
+This discharged register row **C2 _as numbered before 2026-08-06_**. Note that "C2" was reused: a
+*different* row now carries that ID (the flagged-count re-run described below). Register row IDs are
+positional and contiguous, so they renumber as rows are discharged — the register's own sync log
+records that reuse.
+
+### #2187 RESOLVED — alignment fixed, every chapter now clears the floor
+
+The aligner bottleneck above is fixed (anchor-first, two-pass, interval-bounded location in
+`dialogue-structure/aligner.ts`). The mechanism was not a missed match but a **wrong** one: a miss
+never moved the cursor, but `findMatch`'s unbounded `indexOf` fallback let a short, ultra-common
+line bind thousands of characters downstream and drag the cursor with it, stranding the rest of the
+chapter. Short needles are now resolved against the body *sliced* to the interval between their
+bounding anchors, so they structurally cannot match outside it.
+
+Re-measured **without a GPU** — the aligner is pure, so the 15,069 cached stage-2 sentences from
+the 2026-08-06 run were replayed through the production EPUB parser and the production aligner:
+
+| Chapter | aligned before | aligned after |
+|---|---|---|
+| 4 | 63.9% | 99.7% |
+| 5 | 3.7% | **94.6%** |
+| 6 | 1.7% | **92.7%** |
+| 7 | 66.4% | **92.0%** |
+| 8 | 73.5% | **95.7%** |
+| 9 | 95.0% | 96.7% |
+| **book (all 9 chapters)** | **67.7%** | **96.0%** |
+
+The before-column reproduces the on-box report (4/2/66/73/95) to within rounding, which is what
+makes the after-column trustworthy. **Every chapter now clears the 80% floor**, so the §5.2
+chapter-wide flag-only fallback no longer fires and the engine's corrections actually apply.
+
+Chapter 4 is new information: it was never in the provenance report (it came from the resume cache,
+per the caveat above) and was also below the floor at 63.9%.
+
+**Two denominators — do not compare these figures directly.** The `book` row above is a
+sentence-weighted mean over **all 9 chapters**, because the replay had every chapter's cached
+sentences available. The on-box `alignedPct` of **47.4%** recorded earlier in this document is a
+mean over **chapters 5–9 only**, since chapters 1–4 never reached the provenance report. Chapters
+1–3 aligned well both before and after (98.0/97.8/99.1% → 98.0/97.8/99.1%), which is why the
+all-chapter pre-fix mean (67.7%) sits well above the ch5–9 one (47.4%). Neither number is wrong;
+they answer different questions.
+
+**Reproducing this measurement.** The probe is not committed (it is a throwaway, in the spirit of
+the §5.4 appendix): parse `…/Ночной дозор/manuscript.epub` with the production `parseManuscript`,
+read the cached stage-2 sentences from `server/handoff/cache/mns_oyK7Po6BiT.json` (`chapters` keyed
+`"1"`–`"9"`, each an array of `{text, characterId, …}`), and for each chapter call
+`parseChapterStructure(body, buildNameIndex(roster, conventionsFor('ru')))` then
+`alignSentences(sentences, paras, body)` and read `alignedPct`. Run it once on the branch and once
+with `aligner.ts` reverted to `main` to get both columns.
+
+**Target 1 (flagged ≤ ~500/chapter) is not yet re-measured end to end** — that needs a real
+re-analysis, because `flagged` is an output of the cross-examiner running over the *model's* stage-2
+output, not of alignment alone. What is now established is that the precondition it was blocked on
+is satisfied on every chapter. Chapter 9 already showed the engine hits the target once alignment is
+good (488 ≤ ~500).
 
 ## Appendix — §5.4 probe methodology (reproduce for acceptance re-runs)
 
@@ -385,8 +439,12 @@ measurement caveat are in "Acceptance RESULT — run 2026-08-06" above. Headline
 engine is validated (chapter 9, aligned 95%, landed flagged **488** against the ≤~500 target), but
 book-level flagged is **6,568** because chapters 5–8 fell below the 80% alignment floor and degraded
 to flag-only. Follow-up filed as
-[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187); this plan stays `active` until
-that lands, since the shipped engine does not yet deliver its intended benefit on Russian dash
-dialogue.
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187).
+
+**#2187 landed** — see "#2187 RESOLVED" above. Alignment on the same corpus goes 67.7% → 96.0%
+book-level, and every chapter clears the 80% floor, so the flag-only fallback no longer fires.
+The plan stays `active` for one more step: target 1 (flagged ≤ ~500/chapter) is a property of the
+cross-examiner over a real stage-2 run, so it needs one re-analysis to confirm end to end. That is
+tracked as an on-box register row rather than holding this plan open indefinitely.
 
 (Still to fill when status flips to `stable` — commit SHA and any behaviour delta vs. this plan.)

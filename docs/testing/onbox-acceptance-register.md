@@ -162,7 +162,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 1 |
+| **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -170,7 +170,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**56 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2110,7 +2110,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**One row left.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2124,6 +2124,12 @@ mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) beca
 chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
 flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
 flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+Since then the #2187 aligner fix has landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's flagged-count target end to end. Alignment
+itself is already proven and is **not** what that row asks for. (The ID is
+reused: the C2 discharged above was the srv-59 attribution row. Row IDs are
+positional and renumber on discharge.)
 
 The cloud row remains (renumbered **C1** now that the other two are discharged;
 it was C3 before 2026-08-06 and is referenced under that ID in
@@ -2163,6 +2169,35 @@ is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), s
 re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
+
+### C2 · srv-59 flagged-count target, end to end after the #2187 aligner fix ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan [247](../features/247-dialogue-structure-attribution.md))
+
+**What is already proven, and does NOT need re-running:** alignment. The #2187 fix
+was measured offline against this exact corpus — the 15,069 cached stage-2
+sentences replayed through the production EPUB parser and the production aligner
+— taking chapters 5–8 from 3.7/1.7/66.4/73.5% to 94.6/92.7/92.0/95.7%, book-level
+67.7% → 96.0%, with the pre-fix column reproducing the on-box report to within
+rounding. Every chapter now clears the 80% floor. The aligner is pure, so no
+hardware was needed and none is needed again.
+
+**What is still owed:** plan 247's **target 1 — flagged ≤ ~500 per chapter**. That
+is a property of the cross-examiner running over a *real* stage-2 model output,
+not of alignment alone, so it cannot be replayed from cache. Observe, per chapter,
+the `[analysis:structure]` line's `flagged` count and confirm it lands near
+chapter 9's already-measured 488 rather than the 1,200–1,700 the below-floor
+chapters produced. Also confirm `escalation` actually runs now (it was skipped
+chapter-wide before) and record the escalated/accepted counts, plus wall-clock —
+target 5 (+2–5 h at `'local'`) was never measurable while escalation was being
+skipped.
+
+Same setup as the 2026-08-06 pass: local Ollama, `qwen36-cw-iq4-32k`, structure
+engine on, `analyzer.structure.escalation = 'local'`, no TTS. Force `fresh: true`
+— a resumed run serves cached chapters and measures nothing (see the Group C
+history above, and the chapters 1–4 caveat in plan 247).
+
+**Run it against a throwaway re-import, not the library book** — same reason as
+C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
+entry would overwrite the qwen36 cast the owner is keeping.
 
 ---
 
