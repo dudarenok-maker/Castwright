@@ -147,6 +147,25 @@ export function deleteOrtMarkerIfOurs(sitePackages) {
   return removed;
 }
 
+/** Version of the installed swap distribution, read from its dist-info METADATA.
+ *  null when absent OR ambiguous — the caller treats null as fatal for a swap
+ *  (better a loud install failure than a marker whose version is a guess). */
+export function readInstalledOrtVersion(sitePackages, ortPackage) {
+  if (!existsSync(sitePackages)) return null;
+  const prefix = `${escapeDistName(ortPackage)}-`;
+  const hits = readdirSync(sitePackages).filter(
+    (d) => d.startsWith(prefix) && d.endsWith('.dist-info'),
+  );
+  if (hits.length !== 1) return null;
+  try {
+    const meta = readFileSync(join(sitePackages, hits[0], 'METADATA'), 'utf8');
+    const m = meta.match(/^Version:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
 // install date — this dev box validated 1.27.0, a fresh install today lands
@@ -189,16 +208,21 @@ function constrainForInstall(ortPackage) {
  * python. `ortPackage` on the swap variant lets the CLI report which package it
  * actually put in place without re-deriving it (#1844) — a second source of
  * truth there is exactly how the CLI drifted into naming the wrong package.
- * @returns {{action:'skip', reason:string} | {action:'swap', steps:string[][], ortPackage:string}}
+ * @returns {{action:'skip', reason:string, marker:{action:string}} | {action:'swap', steps:string[][], ortPackage:string, marker:{action:string}}}
  */
 export function planOrtSwap(profile, platform) {
   const { ortPackage } = installRecipe(profile, platform);
   if (ortPackage === 'onnxruntime') {
-    return { action: 'skip', reason: 'plain onnxruntime from the overlay is correct; no swap' };
+    return {
+      action: 'skip',
+      reason: 'plain onnxruntime from the overlay is correct; no swap',
+      marker: { action: 'delete' },
+    };
   }
   return {
     action: 'swap',
     ortPackage,
+    marker: { action: 'write' },
     steps: [
       // Uninstall BOTH the plain `onnxruntime` the overlay landed AND any cached
       // `ortPackage` first, so the shared `onnxruntime/` namespace directory is
