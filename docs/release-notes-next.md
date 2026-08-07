@@ -142,6 +142,15 @@ A character's `id` is free text the analyzer mints, and it is the join key acros
   Undo works. A new reconciliation heals books already stranded by the old order at the next
   analysis, and `notLinkedTo` became server-owned on the cast PUT so a stale client cannot undo
   the repair. (PR #2202)
+- **The #2166 reconciliation above now heals every rejected pair independently, instead of one
+  relocated edge silently blocking the rest of that book's healing** (#2200). Its add pass used to
+  skip every pending pair for a given rejected id the moment ANY edge for that id existed anywhere
+  in the book — including a copy `merge-analysis-cast.ts` had relocated onto an unrelated row by
+  name — so a book with one relocated edge and one genuinely missing edge for the same id never
+  healed the second, no matter how many times it re-analysed. Addition is now strictly per-pair on
+  each pair's own target row, gated only by the existing duplicate check; a relocated edge is left
+  in place either way, unchanged from before. Purely a healing-completeness fix — nothing about
+  which edges are legitimate, or how they're removed, changed.
 
 ### 🧠 GPU memory and the sidecar now look after themselves
 

@@ -229,6 +229,15 @@ owner: null
     PUT so a stale client cannot undo that. Shipped by #2166 / plan 281.
     **Open residual:** a multi-pair DELETE can half-complete and become
     unretryable — see #2198.
+    - **#2200 fix (2026-08-07):** plan 281's add rule additionally suppressed
+      every add for a `from` whenever a RELOCATED edge existed for it (an edge
+      `merge-analysis-cast.ts` copied by name onto a row that is not any
+      pair's `to`) — reachable with no failure required, and it under-healed
+      a second, genuinely edgeless pair for that same `from` alongside the
+      relocated one. `reject-edge-reconcile.ts` now adds strictly per-pair on
+      `p.to`, unconditional on relocation; the relocated edge itself is left
+      in place either way (removal is untouched) and stays this invariant's
+      pre-existing residual, not a new one.
     - **`retireCharacterId` dropping a self-loop `rejectedPairs` entry**
       (`RetireCharacterIdResult.droppedSelfLoopRejections`,
       `cast-id-history.ts`) — when the id a pair was rejected `to` retires
