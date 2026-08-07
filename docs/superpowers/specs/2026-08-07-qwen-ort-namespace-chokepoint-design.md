@@ -7,7 +7,7 @@ date: 2026-08-07
 
 Closes the design work behind **#2192**.
 
-> **Revision 5.** Four Premium adversarial rounds. Revisions 1–2 defended the symptom at
+> **Revision 6.** Five Premium adversarial rounds. Revisions 1–2 defended the symptom at
 > seven pip call sites and failed twice, with round 2 finding that round 1's fixes had
 > broken each other; revision 3 pivoted to attacking the root condition. **Round 3 cleared
 > the mechanism** — no runtime code reads onnxruntime distribution metadata, and no pip
@@ -163,27 +163,44 @@ this design. Deleting first costs nothing and removes the state entirely.
 
 ### Changed files
 
-**There are TWO call sites per consumer, not one.** A single `applyOrtMarker` call cannot
-express the ordering above; the verb is deliberately split so an implementer cannot collapse
-it back.
+**There are THREE call sites per consumer.** A single `applyOrtMarker` call cannot express
+the ordering; the verb is split so an implementer cannot collapse it back. The third is the
+failure path — the delete before re-throwing on a failed swap step, which in `apply.ts`
+needs a `try`/`catch` around the swap loop that does not exist today.
+
+**`writeOrtMarker` no-ops unless `plan.marker.action === 'write'`.** This is load-bearing
+and was missing: `planOrtSwap`'s skip variant returns **no `ortPackage`**
+(`install-ort.mjs:75-77`), so an ungated write on cpu/apple either (a) globs from
+`undefined`, resolves nothing, hits the fail-loudly rule and **breaks every CPU bootstrap**,
+or (b) writes a marker whose directory name is byte-identical to the *real* plain
+distribution and — per "overwrite a stale marker rather than skip it" — replaces that
+distribution's `RECORD` with an empty file and its `INSTALLER` with ours, making the real
+onnxruntime un-uninstallable and permanently "satisfied." The skip variant gains `marker`
+but still no `ortPackage`.
+
+**Anchors are expressed as positions relative to named code, not line numbers.** Line
+numbers in this spec have now drifted twice across review rounds — they are a second source
+of truth for something the code already defines, and the review that caught the second drift
+noted it was the same defect class as the first.
 
 | File | Change | Exact anchor |
 |---|---|---|
 | `install-ort.mjs` | `planOrtSwap` returns `marker`; add `SWAP_ORT_PACKAGES`, `readInstalledOrtVersion`, `writeOrtMarker`, `deleteOrtMarkerIfOurs`, `ensureOrtMarker` | — |
 | `install-ort.mjs` CLI block | Apply the same two calls, so the hand-run invocation #2192's workaround publishes also produces a marker | `:98-121` |
-| `bootstrap-venv.mjs` | `deleteOrtMarkerIfOurs` at `installForProfile`'s **function entry** — before the AMD torch pre-install *and* both overlay installs | before `:160` |
-| `bootstrap-venv.mjs` | `writeOrtMarker` after the swap steps succeed | after `:220` |
-| `upgrade/apply.ts` | `deleteOrtMarkerIfOurs` as `pipInstall`'s **first statement**, before the torch step | before `:257` |
-| `upgrade/apply.ts` | `writeOrtMarker` after the swap loop | after `:271` |
+| `bootstrap-venv.mjs` | `deleteOrtMarkerIfOurs` at `installForProfile`'s **function entry** — before the AMD torch pre-install, the AMD→CPU fallback, the nvidia torch pre-install, *and* both overlay installs | first statement of `installForProfile` |
+| `bootstrap-venv.mjs` | `writeOrtMarker` (gated) as the **last statement inside** the `if (ort.action === 'swap')` block, after the step loop | end of the swap block |
+| `upgrade/apply.ts` | `deleteOrtMarkerIfOurs` in `pipInstall`, **after** `profile`/`sidecar` are computed and **before** the torch pre-install | before the first `run(...)` in `pipInstall` |
+| `upgrade/apply.ts` | `writeOrtMarker` (gated) as the **last statement of `pipInstall`'s body** — *not* after the closing brace, which is `readReqHash` | end of `pipInstall` |
+| both consumers | `deleteOrtMarkerIfOurs` on the swap-failure path, before re-throwing | `catch` around the swap loop |
 | `upgrade/apply.ts` | **Add an injection seam to `createApplySteps`** — see §Testing; without it the apply half ships untested |
 | `index.ts` | `ensureOrtMarker` — the self-heal, below | in `main()`, before `app.listen` |
 | `install-whisper.mjs` | Drop `-U`, add `-c`; extract an exported arg builder | `:95-96`, header `:12-13` |
 | `spawn-windows-hide.test.ts` | Widen the guard, below | `:54-62` |
 
-`installForProfile` (`:148-154`) takes **positional** params and its `venvDir` defaults to
-`null` — four of its six existing call sites pass `null`. The marker path must therefore be
-derived from the venv python it already holds, not from `venvDir`, or the delete silently
-no-ops on those paths.
+`installForProfile` takes **positional** params and its `venvDir` defaults to `null`. Its
+one production caller (`runInstall`) does pass a real dir, so the null case is test-only —
+but the marker path is still derived from the venv python the function already holds rather
+than from `venvDir`, so a null can never make the delete silently no-op.
 
 ### The three venv states, and why dist-info presence cannot tell them apart
 
@@ -192,7 +209,9 @@ did: the already-clobbered box.
 
 | State | `onnxruntime_gpu-*.dist-info` | plain `onnxruntime-*.dist-info` | Files in the namespace |
 |---|---|---|---|
-| Healthy nvidia | present | absent | GPU |
+| Healthy nvidia (today) | present | absent | GPU |
+| Healthy nvidia (**after this ships**) | present | present (**ours**) | GPU |
+| **Interrupted swap** | absent | present (**ours**) | **none** |
 | Healthy cpu/amd/apple | absent | present (**real**) | CPU |
 | **Clobbered** | **present** | **present (real)** | **CPU** |
 
@@ -201,26 +220,57 @@ two collided (`install-ort.mjs:92-93` exists precisely because of this). **So di
 presence proves nothing about who owns the namespace**, and two predicates must be stated
 separately or an implementer will conflate them:
 
-- **Ownership** — decided from the namespace *contents*, not metadata: ask the venv
-  interpreter for `onnxruntime.__version__` and `get_available_providers()`. That
-  interpreter is already being spawned to resolve the posix `site-packages` layout, so this
-  costs nothing extra. `CUDAExecutionProvider` present ⟹ the GPU build owns it.
+- **Ownership** — read from a file the wheel ships:
+  `site-packages/onnxruntime/capi/build_and_package_info.py`, whose first line is
+  `package_name = 'onnxruntime-gpu'` (verified in the live venv). Plain text, no interpreter,
+  no DLL load, no CUDA. Fallback signal: `capi/onnxruntime_providers_cuda.dll`, present in
+  the GPU wheel and absent from the CPU one. **Absent or unreadable ⟹ not a swap build.**
+
+  **Do NOT probe via `import onnxruntime` + `get_available_providers()`.** `__version__` is
+  identical across builds, and a GPU install whose CUDA/cuDNN DLLs fail to load reports
+  `['AzureExecutionProvider','CPUExecutionProvider']` — so a provider probe reads a
+  correctly-installed GPU box as a CPU box and would delete a *correct* marker on every
+  boot, re-opening #2192 permanently. It would also memory-map
+  `onnxruntime_providers_shared.dll` — the exact file in #2192's `WinError 5` — on the
+  blocking path before `app.listen`.
 - **Marker identity** — a directory is ours **only** if its `INSTALLER` reads
   `castwright-ort-marker` **and** its `RECORD` is empty. Never by name: on cpu/amd/apple the
-  *real* plain distribution has a byte-identical directory name.
+  *real* plain distribution has a byte-identical directory name. **Every** glob match is
+  identity-tested, not the first: ours and a real plain distribution can coexist (Spike 2
+  proves pip leaves ours behind), and answering from the first match can report "no real
+  distribution" and then overwrite one.
 
 **`ensureOrtMarker` refuses to write when a real plain `onnxruntime-*.dist-info` exists.**
 That is the clobbered box, and writing a marker over it would stamp version 1.27.0 (read
 from the GPU dist) onto installed CPU 1.28.0 files, make `pip check` report clean, convince
 every future pip call the requirement is satisfied, and leave GPU Kokoro dead **with no path
 in this design that ever repairs it** — the delete branch is nvidia-excluded and the
-self-heal is write-only. That converts a loud, self-repairing bug into a permanent, silent
-one: exactly the failure class this design exists to close. A clobbered box takes the loud
-path instead — log what was found and name the command that fixes it.
+self-heal refuses. That converts a loud, self-repairing bug into a permanent, silent one:
+exactly the failure class this design exists to close. A clobbered box takes the loud path
+instead, and **the log must name the exact remedy**, not gesture at one — the only repair
+this design ships for that population is the hand-run CLI:
 
-**`ensureOrtMarker` may also delete**, but only a directory that passes the marker-identity
-test above, and only when ownership says plain CPU `onnxruntime` holds the namespace — i.e.
-the marker is provably lying. This closes the one hole in the `delete` branch's coverage: a
+```
+CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>
+```
+
+Leaving that string unwritten would ship the entire remedy for the largest affected
+population as a TODO.
+
+**The interrupted-swap row has no other reaper.** The swap uninstalls both runtimes before
+reinstalling (`install-ort.mjs:92-93`), so a kill or power loss between the steps leaves a
+marker asserting a runtime that is not there. The in-consumer delete-before-rethrow cannot
+cover it — the process died — and `reqHash` is unchanged, so
+`bootstrap-venv.mjs:240-243` / `apply.ts:134` no-op forever. Without an explicit rule that
+lying marker is **permanent**: `pip check` green, `import onnxruntime` dead.
+
+**So the delete rule is stated by exclusion, not by naming CPU:** `ensureOrtMarker` deletes
+a *verified* marker whenever ownership is **not** a swap distribution — CPU files, no files
+at all, or an unreadable namespace. "Do nothing" is reserved for a genuinely inconclusive
+read, never for "nothing is installed."
+
+**`ensureOrtMarker` may therefore delete**, but only a directory that passes the
+marker-identity test above. This closes the one hole in the `delete` branch's coverage: a
 `noop` box (unchanged `reqHash`) runs neither `installForProfile` nor `pipInstall`
 (`bootstrap-venv.mjs:240-243`, `apply.ts:134`), so nothing else would ever reap a stale
 marker. It remains non-destructive by construction — it can only remove a file we wrote.
@@ -243,10 +293,19 @@ The rule is: `plan.ortPackage.replace(/[-_.]+/g, '_')`, then glob `<escaped>-*.d
 A unit assertion builds the glob from the literal `'onnxruntime-gpu'` and resolves a fixture
 directory, mutation-checked by removing the escape.
 
-**One list of swap distributions.** `ensureOrtMarker` takes no plan and no profile — it reads
-what is installed — so it cannot derive the swap-package set the way `readInstalledOrtVersion`
-does. `install-ort.mjs` exports `SWAP_ORT_PACKAGES` and both read it, so the
-`onnxruntime-directml` re-enable (`install-ort.mjs:9,21-23`) needs one edit, not two.
+**One list of swap distributions, derived not hand-maintained.** `ensureOrtMarker` takes no
+plan and no profile — it reads what is installed — so it needs the set of package names that
+count as "a swap distribution." That set is **derived** by mapping `installRecipe` over the
+four profiles and keeping every `ortPackage !== 'onnxruntime'`, exported from
+`install-ort.mjs` as `SWAP_ORT_PACKAGES`. A hand-typed constant would be a second source of
+truth for something `installRecipe` already determines — the exact drift
+`install-ort.mjs:66-70` warns about — and would silently miss the `onnxruntime-directml`
+re-enable.
+
+Note `readInstalledOrtVersion` globs from `plan.ortPackage` and does not need the list; the
+ownership check in §The three venv states does. State multiple-match behaviour explicitly:
+if more than one `<escaped>-*.dist-info` exists (a stale `onnxruntime_gpu-1.26.0` beside
+1.27.0), the read is **inconclusive** — fail the swap loudly rather than picking one.
 
 **On `null`, fail the swap loudly.** If the version cannot be read, the swap fails —
 `bootstrap-venv.mjs:217` already treats a swap failure as fatal ("better to fail the
@@ -288,12 +347,11 @@ venv states: write when a swap distribution owns the namespace and no plain
 CPU `onnxruntime` owns the namespace; **refuse and log loudly** when a real plain
 distribution is present alongside a swap one (the clobbered box). Otherwise do nothing.
 
-**Placement:** in `main()`, **before `app.listen`** — not at `index.ts:309`, which is inside
-the `app.listen` callback (opens at `:207`) and downstream of `enforceSingleSidecarOwner`
-(`:292`), which can `process.exit` first. It must also never run before it can succeed: on a
-box with no venv, or a half-built one, it is a no-op — it must never create a `site-packages`
-tree, and the interpreter probe it uses for ownership must be a `windowsHide: true` spawn
-that no-ops on failure rather than throwing inside server startup.
+**Placement:** in `main()`, **before `app.listen`** — not inside the `app.listen` callback,
+which is downstream of an `enforceSingleSidecarOwner` that can `process.exit` first. On a box
+with no venv, or a half-built one, it is a no-op: it must never create a `site-packages`
+tree, and every read is wrapped so an unreadable venv logs and continues rather than throwing
+inside server startup.
 
 **This is safe in a way the repair killed in rounds 1–2 was not.** It uninstalls nothing,
 downloads nothing, needs no network, touches no locked DLL, and needs no accelerator
@@ -302,8 +360,10 @@ profile — it reads what is *installed*, not what *should* be. Every Critical f
 directory with three small files.
 
 It is no longer strictly "write-only" — it may delete a directory it can prove it wrote —
-but it still never uninstalls a package, never downloads, and never touches a locked DLL,
-which is where every Critical in rounds 1–2 lived.
+but it still never uninstalls a package, never downloads, and (with the file-based ownership
+oracle, not a provider probe) never imports onnxruntime or touches a locked DLL. That is
+where every Critical in rounds 1–2 lived. It is also pure fs, so it adds no subprocess to
+server startup.
 
 It runs at server boot rather than per-spawn, so it is unaffected by the adopt/unfit-replace
 branching that round 2 showed makes `spawnSidecar` placement treacherous.
@@ -526,3 +586,18 @@ written"** — three Criticals in the fixes themselves, plus five Majors. All fo
 **A stale marker on a `noop` box** (unchanged `reqHash`, so neither consumer runs) had no
 reaper — the `delete` branch's coverage hole. Closed by letting `ensureOrtMarker` delete a
 *verified* marker when ownership proves it is lying.
+
+Round 5 was scoped to round 4's three Criticals only. It returned **Critical 3 RESOLVED**,
+Criticals 1 and 2 **not**:
+
+| Finding | Disposition |
+|---|---|
+| `get_available_providers()` cannot distinguish a GPU build from a CPU one — `__version__` is identical, and a GPU install with unloadable CUDA DLLs reports CPU providers. The probe would delete a *correct* marker on every boot | Ownership moved to `capi/build_and_package_info.py`'s `package_name` (verified live), pure fs — which also removes the interpreter spawn and the locked-DLL import from server startup |
+| A **fifth** state: marker present, **no onnxruntime files at all** (interrupted swap). No consumer runs, `reqHash` unchanged, and the delete rule named CPU specifically — so the lying marker was permanent | Delete rule restated by exclusion: delete a verified marker whenever ownership is **not** a swap distribution |
+| `writeOrtMarker` was never gated on `plan.marker.action`, and the skip variant carries no `ortPackage` — so cpu/apple either fail every bootstrap or overwrite the **real** plain distribution's `RECORD`/`INSTALLER` | Write is gated; skip variant carries `marker` but not `ortPackage` |
+| `apply.ts`'s write anchor was off by two and landed inside `readReqHash` | **All line-number anchors replaced with positions relative to named code** — they had now drifted twice |
+| The failure-path delete contradicted "TWO call sites per consumer" | Three call sites, with the `apply.ts` `try`/`catch` named |
+| Identity answered from the first glob match could miss a real distribution | Every match is identity-tested |
+| `SWAP_ORT_PACKAGES` would be a hand-maintained second source of truth | Derived from `installRecipe` across the four profiles |
+| "Name the command that fixes it" never named it | Exact command string written out |
+| The `installForProfile` null-`venvDir` rationale was false (its one production caller passes a real dir) | Corrected; the prescription stands on its own grounds |
