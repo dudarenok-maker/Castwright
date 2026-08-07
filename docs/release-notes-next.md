@@ -141,7 +141,7 @@ A character's `id` is free text the analyzer mints, and it is the join key acros
   edge and both halves are fatal, so a half-failure leaves the visible half — the chip renders and
   Undo works. A new reconciliation heals books already stranded by the old order at the next
   analysis, and `notLinkedTo` became server-owned on the cast PUT so a stale client cannot undo
-  the repair. (PR #NNNN)
+  the repair. (PR #2202)
 
 ### 🧠 GPU memory and the sidecar now look after themselves
 

@@ -127,6 +127,7 @@ import {
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
+  type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -352,12 +353,29 @@ async function clearNotLinkedEdgesForDroppedRejections(
    reads the history through `loadCastIdHistoryWithStatus` and refuses to act
    at all on `degraded`. See the comment at that call below.
 
+   `statusBeforePersist` exists because that local read is NOT sufficient on
+   its own at the two persist call sites (PR #2202 gate review, Critical). The
+   steps that run earlier in the same try block — `recordRetirements`,
+   `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`
+   — all read through the COLLAPSING `loadCastIdHistory` and write back
+   unconditionally, so a cast-id-history.json that was degraded when the
+   persist began has already been REPLACED with a valid, empty file by the time
+   this function reads it. The local read then says `ok`, the guard never
+   fires, and every same-book reject edge is deleted — both records of a real
+   user decision gone, deterministically, on the next analysis. So the callers
+   inside the persist decide the verdict BEFORE the first rewriting step and
+   hand it in here; a `degraded` verdict wins over whatever the file says by
+   now. Direct callers that pass nothing keep the local read as their only
+   check, which is correct for them — nothing has laundered the file underneath
+   them.
+
    Exported only so analysis-reject-edge-reconcile.test.ts can drive it
    without standing up a full analysis run. */
 export async function reconcileRejectEdgesOnDisk(
   bookDir: string,
   bookId: string | undefined,
   log: (phaseId: number, message: string) => void,
+  statusBeforePersist?: CastIdHistoryStatus,
 ): Promise<void> {
   /* No bookId means no way to tell this book's edges from a cross-book one —
      see bookIdForRetirementCleanup, which already warns for this run. */
@@ -378,7 +396,13 @@ export async function reconcileRejectEdgesOnDisk(
          `rejectedPairs`), so skipping it costs nothing and skipping outright
          is one branch instead of two. `absent` keeps its current meaning —
          that IS the genuine pre-#2166 stranded-edge shape. */
-      const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+      const { status: statusNow, history } = await loadCastIdHistoryWithStatus(bookDir);
+      /* Belt AND braces (PR #2202 gate review, Critical). `statusNow` alone is
+         blind at the persist call sites, where an earlier always-writing step
+         has already laundered a degraded file into a valid empty one — see the
+         `statusBeforePersist` paragraph in this function's doc comment. A
+         degraded verdict from EITHER read refuses. */
+      const status = statusBeforePersist === 'degraded' ? 'degraded' : statusNow;
       if (status === 'degraded') {
         console.warn(
           `[analysis] reject-edge reconciliation skipped for book ${bookId} — its cast-id-history.json ` +
@@ -5191,6 +5215,21 @@ export async function runMainAnalyzerJob(
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
             const retirementBookId = bookIdForRetirementCleanup(record);
+            /* #2166 / PR #2202 gate review (Critical) — decide whether
+               cast-id-history.json is READABLE before anything below rewrites
+               it. Every history step in this block (`recordRetirements`, both
+               `dropSuperseded*` helpers) reads through the collapsing
+               `loadCastIdHistory` and writes back unconditionally, so a
+               degraded file is REPLACED by a valid, empty one within a few
+               lines of here. Taking the verdict after that laundering would
+               read `ok` on a file whose real content was lost, and the
+               reconciliation below would then delete every same-book reject
+               edge — destroying the surviving half of a decision whose durable
+               half is already unreadable. The verdict must be captured here,
+               first, and carried down. */
+            const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
+              record.bookDir,
+            );
             await recordRetirements(record.bookDir, retirementBookId, remapped.retirements, liveIds, log);
             await recordRetirements(record.bookDir, retirementBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
@@ -5253,8 +5292,11 @@ export async function runMainAnalyzerJob(
             }
             /* #2166 — heal any reject whose two writes came apart, against
                this exact just-persisted roster. Best-effort; see the
-               helper's own doc comment. */
-            await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log);
+               helper's own doc comment. `historyStatusBeforePersist` is the
+               pre-rewrite verdict captured at the top of this block — without
+               it the helper's own read sees the file the steps above just
+               rewrote, not the one the persist started with. */
+            await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
           }
@@ -6506,6 +6548,14 @@ export async function runSubsetAnalyzerJob(
                guaranteeing that, not a fix for a reachable case today. */
             const liveIds = mergedFinal.characters.map((c) => c.id);
             const subsetBookId = bookIdForRetirementCleanup(record);
+            /* #2166 / PR #2202 gate review (Critical) — mirrors the main
+               path's same-named capture: the id-history verdict is decided
+               BEFORE any step below rewrites cast-id-history.json, because
+               those steps launder a degraded file into a valid empty one and
+               a verdict taken after them reads `ok` on lost content. */
+            const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
+              record.bookDir,
+            );
             await recordRetirements(record.bookDir, subsetBookId, remapped.retirements, liveIds, log);
             await recordRetirements(record.bookDir, subsetBookId, mergedFinal.retirements, liveIds, log);
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
@@ -6553,8 +6603,9 @@ export async function runSubsetAnalyzerJob(
                   .join(', ')}) — affected segments need review.`,
               );
             }
-            // #2166 — mirrors the main path's same-named call above.
-            await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log);
+            // #2166 — mirrors the main path's same-named call above, including
+            // the pre-rewrite verdict captured at the top of this block.
+            await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist);
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
           }

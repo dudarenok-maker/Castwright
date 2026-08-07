@@ -9,6 +9,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { reconcileRejectEdgesOnDisk } from './analysis.js';
+import {
+  loadCastIdHistoryWithStatus,
+  dropSupersededIdsReclaimedByLiveCast,
+} from '../store/cast-id-history.js';
 
 const BOOK_ID = 'book-hollow-tide';
 let root: string;
@@ -184,6 +188,65 @@ describe('reconcileRejectEdgesOnDisk', () => {
     }
   });
 
+  /* PR #2202 gate review (Critical). The `degraded` guard above is defeated by
+     the production ORDERING: `recordRetirements` and both `dropSuperseded*`
+     helpers run earlier in the same persist block, read through the collapsing
+     `loadCastIdHistory`, and write back UNCONDITIONALLY — so by the time the
+     reconciliation reads, the damaged file has been replaced by a valid, empty
+     one and its own read says `ok`. Both records of a real user decision then
+     go: the `rejectedPairs` half was already unreadable, and the removal pass
+     deletes the `notLinkedTo` half that was still enforcing it.
+
+     Driven here as the two real functions in the real order against one book
+     dir, rather than through the persist block itself — no unit test stands
+     that block up (which is exactly why [C7] below is a source scan), and this
+     interleaving IS the defeat. [C7] pins that analysis.ts orders it this way;
+     this pins that ordering it this way actually saves the edge. */
+  it('[C10] an always-writing history step cannot launder a degraded read into a deletion', async () => {
+    /* A genuine reject: the edge on cast.json, its `rejectedPairs` backing in
+       a history file that has been truncated mid-write. No `rejectedPairs`
+       survives the damage — the exact shape [C1] deletes. */
+    seedRawHistory(
+      { characters: [{ id: 'mairin', notLinkedTo: [{ bookId: BOOK_ID, characterId: 'm2' }] }] },
+      '{"schema":1,"supersededBy":{},"rejectedPairs":[{"from":"m2","to":"mai',
+    );
+    const { lines, log } = collectLog();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      // 1. The persist block's FIRST act: take the verdict, before any rewrite.
+      const { status } = await loadCastIdHistoryWithStatus(bookDir);
+      expect(status).toBe('degraded');
+
+      // 2. An always-writing step runs, exactly as the persist block runs it.
+      await dropSupersededIdsReclaimedByLiveCast(bookDir, ['mairin']);
+
+      /* 3. The damage is now UNOBSERVABLE from disk — the file is valid and
+            empty. This is the assertion that makes the rest meaningful: the
+            reconciliation's own read can no longer defend the edge, so only
+            the verdict carried from step 1 can. */
+      expect((await loadCastIdHistoryWithStatus(bookDir)).status).toBe('ok');
+
+      // 4. The reconciliation, handed the pre-rewrite verdict.
+      await reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log, status);
+
+      // The user's decision survives — the whole point.
+      expect(readCast().characters[0].notLinkedTo).toEqual([
+        { bookId: BOOK_ID, characterId: 'm2' },
+      ]);
+      // And nothing claims to have cleared a stranded link.
+      expect(lines).toEqual([]);
+
+      const skip = warnSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes('reject-edge reconciliation skipped'));
+      expect(skip).toHaveLength(1);
+      expect(skip[0]).toContain(BOOK_ID);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('[C7] is wired into BOTH authoritative persists', () => {
     /* A source scan, not a behavioural test — deliberately. The two call sites
        live inside the analysis persist path, which no unit test stands up, so
@@ -196,7 +259,52 @@ describe('reconcileRejectEdgesOnDisk', () => {
       calls,
       'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3',
     ).toHaveLength(2);
-    expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log)');
-    expect(src).toContain('await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log)');
+    expect(src).toContain(
+      'await reconcileRejectEdgesOnDisk(record.bookDir, retirementBookId, log, historyStatusBeforePersist)',
+    );
+    expect(src).toContain(
+      'await reconcileRejectEdgesOnDisk(record.bookDir, subsetBookId, log, historyStatusBeforePersist)',
+    );
+  });
+
+  /* PR #2202 gate review (Critical) — [C10] proves that taking the verdict
+     BEFORE the rewriting steps saves the edge. This pins that analysis.ts
+     actually takes it there. Source scan for the same reason as [C7]: the
+     persist blocks are not standable-up in a unit test, and the ordering is
+     the whole fix — a capture that drifted below the first `recordRetirements`
+     would leave every behavioural test green while the file was laundered
+     again in production. */
+  it('[C11] captures the id-history verdict BEFORE the persist rewrites it, on both paths', () => {
+    const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
+
+    for (const bookIdBinding of ['retirementBookId', 'subsetBookId'] as const) {
+      /* `retirementBookId` appears only in the main persist block and
+         `subsetBookId` only in the subset one, so each anchor scopes the
+         search to its own block without needing to parse. */
+      const blockStart = src.indexOf(`const ${bookIdBinding} = bookIdForRetirementCleanup(record)`);
+      expect(blockStart, `${bookIdBinding} block not found`).toBeGreaterThan(-1);
+
+      const captureIdx = src.indexOf(
+        'const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(',
+        blockStart,
+      );
+      const firstRewriteIdx = src.indexOf(
+        `await recordRetirements(record.bookDir, ${bookIdBinding},`,
+        blockStart,
+      );
+      const reconcileIdx = src.indexOf(
+        `await reconcileRejectEdgesOnDisk(record.bookDir, ${bookIdBinding}, log, historyStatusBeforePersist)`,
+        blockStart,
+      );
+
+      expect(captureIdx, `no pre-persist id-history read in the ${bookIdBinding} block`).toBeGreaterThan(-1);
+      expect(firstRewriteIdx, `no recordRetirements in the ${bookIdBinding} block`).toBeGreaterThan(-1);
+      expect(reconcileIdx, `no reconcile call in the ${bookIdBinding} block`).toBeGreaterThan(-1);
+      expect(
+        captureIdx,
+        `the ${bookIdBinding} block reads cast-id-history.json AFTER a step that rewrites it — the degraded guard is defeated (PR #2202 gate review, Critical)`,
+      ).toBeLessThan(firstRewriteIdx);
+      expect(captureIdx).toBeLessThan(reconcileIdx);
+    }
   });
 });

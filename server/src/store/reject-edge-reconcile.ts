@@ -25,6 +25,14 @@
    and skips the call entirely on `degraded`. Do not add a second caller that
    passes a collapsed `loadCastIdHistory` result.
 
+   That read alone is not enough from inside the analysis persist, because
+   several steps there rewrite cast-id-history.json unconditionally and so
+   replace a degraded file with a valid, empty one before the read happens (PR
+   #2202 gate review, Critical). Those callers decide the verdict BEFORE the
+   first rewriting step and hand it to `reconcileRejectEdgesOnDisk` as
+   `statusBeforePersist`. A future caller that sits downstream of any
+   always-writing history step owes the same.
+
    BACKING. An edge is legitimate when the decision it encodes is recorded
    durably somewhere. Two places count:
      - a `rejectedPairs` entry with `from === edge.characterId`;

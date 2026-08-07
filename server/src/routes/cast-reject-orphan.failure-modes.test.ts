@@ -338,14 +338,22 @@ describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLink
 });
 
 describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLinkedTo edge with no matching pair', () => {
-  it('POST\'s notLinkedTo write landing, then rejectOrphanedPair 500ing and never being retried, still leaves DELETE able to clear the edge', async () => {
-    // Reproduces the route's own documented partial-failure window: POST
-    // writes notLinkedTo first (unconditional), THEN rejectOrphanedPair
-    // fails — if the user never retries, rejectedPairs never gets the pair,
-    // so `rejectedPairsGoverning` can never find one to attribute the chip
-    // (or this DELETE) to. Before the fix, DELETE's removal loop iterated
-    // `matchingPairs`, which is empty here, so it never ran — leaving a
-    // one-sided edge with no chip and no way to remove it.
+  it('DELETE still clears a one-sided edge on a book stranded by the PRE-#2166 write order, where no matching pair exists', async () => {
+    // Pins the #2133 fix against a state POST can no longer produce. Under
+    // the OLD order, POST wrote notLinkedTo first (unconditional) and only
+    // then called rejectOrphanedPair; if that 500'd and the user never
+    // retried, the edge landed with no `rejectedPairs` entry behind it, so
+    // `rejectedPairsGoverning` had no pair to attribute the chip (or this
+    // DELETE) to. Before #2133, DELETE's removal loop iterated
+    // `matchingPairs` — empty here — so it never ran, leaving a one-sided
+    // edge with no chip and no way to remove it.
+    //
+    // #2166 closed that window at the source by reordering POST's two
+    // writes, so the state below is now reached only by a book stranded
+    // BEFORE this fix shipped. Those books still exist on disk, and DELETE
+    // is still their way out — hence the state is seeded directly rather
+    // than driven through POST, and this test now reads as pre-fix cleanup
+    // rather than as a live partial-failure window.
     //
     // Explicit fresh history file: `beforeEach` only resets cast.json, not
     // cast-id-history.json, and this file's earlier tests write real pairs
@@ -356,11 +364,8 @@ describe('#2133 fold finding A — DELETE clears an abandoned-half-write notLink
       join(bookDir, '.audiobook', 'cast-id-history.json'),
       JSON.stringify({ schema: 1, supersededBy: {} }),
     );
-    // #2166 — POST can no longer create this abandoned-half-write state: the
-    // edge is now written AFTER the fatal pair write, never before it. Seed
-    // it directly instead, as if left behind by a book rejected under the
-    // OLD write order before this fix shipped — this case now covers books
-    // stranded pre-fix, not a state POST can produce today.
+    // The stranded state, seeded directly (see above — POST cannot produce it
+    // any more): the edge on cast.json, nothing behind it in history.
     writeBookOnDisk([
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
