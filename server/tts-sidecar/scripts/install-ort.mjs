@@ -25,7 +25,7 @@
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { existsSync, readdirSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { installRecipe, PROFILES } from './accelerator-profile.mjs';
 
 /** Distribution names that OWN the onnxruntime namespace on some profile.
@@ -311,16 +311,22 @@ function ortMarkerVersion(sitePackages) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
-  const plan = planOrtSwap(profile, process.platform);
-  if (plan.action === 'skip') {
-    process.stdout.write(`[install-ort] skip — ${plan.reason}.\n`);
-    process.exit(0);
-  }
+  // Read + validate the venv python path FIRST — both the skip and the swap
+  // branch below need venvDir (derived from it) to maintain the #2192 marker,
+  // so it can no longer wait until after the skip branch has already exited.
   const python = process.argv[2]; // venv python path
   if (!python) {
     process.stderr.write('[install-ort] FAIL: pass the venv python path as the first arg.\n');
     process.exit(1);
+  }
+  const venvDir = join(dirname(python), '..');
+
+  const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
+  const plan = planOrtSwap(profile, process.platform);
+  if (plan.action === 'skip') {
+    process.stdout.write(`[install-ort] skip — ${plan.reason}.\n`);
+    applyOrtMarkerDelete(venvDir, plan);
+    process.exit(0);
   }
   for (const step of plan.steps) {
     process.stdout.write(`[install-ort] pip ${step.join(' ')}\n`);
@@ -331,6 +337,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exit(code);
     }
   }
+  applyOrtMarkerWrite(venvDir, plan);
   process.stdout.write(`[install-ort] ${plan.ortPackage} in place.\n`);
   process.exit(0);
 }
