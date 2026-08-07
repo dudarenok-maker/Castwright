@@ -56,9 +56,20 @@
    `pair.to` itself needs healing, and suppressing every add for `from` on its
    account left a second, edgeless pair unhealed forever whenever a relocated
    edge for the same `from` also existed. The `existing.some(...)` dedupe
-   below is the only anti-duplication mechanism now, and it is sufficient: it
-   refuses only a duplicate on the row that would actually receive the write,
-   which is the one place a duplicate could ever land. */
+   below is the only anti-duplication mechanism now. Be precise about what it
+   does and does not buy: it refuses a duplicate on the row that would receive
+   the write — ROW-scoped — and that is sufficient here, NOT because a
+   book-scoped duplicate is impossible, but because it is not a harm. It is in
+   fact now the expected steady state: a relocated copy on one row plus the
+   healed edge on `p.to` means two rows carry the same `{bookId, from}` pair,
+   which is exactly what [R7] asserts. Plan 281 framed duplication book-scoped
+   and treated avoiding it as a fail-safe precaution; it never named a harm for
+   it, and every consumer reads a same-book edge as "this pair was rejected",
+   which is true on both rows. The named harm was only ever for row-scoped
+   REMOVAL — see the MATCHING paragraph above, which is untouched. Do not
+   "restore" a book-scoped duplicate check on the strength of this dedupe's
+   existence. Full reasoning:
+   docs/superpowers/specs/2026-08-07-reject-edge-per-pair-heal-design.md. */
 
 import type { CastIdHistory } from './cast-id-history.js';
 

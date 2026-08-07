@@ -194,7 +194,7 @@ describe('reconcileRejectEdges', () => {
 
   it('[R13b] heals the surviving edgeless pair when the other pair already has its own edge, alongside a relocated copy', () => {
     /* THE discriminating case (#2200) — the production shape from routes
-       (i)/(ii) of the design doc's §1.2: a relocated copy sits on a renamed
+       (i)/(ii) of docs/superpowers/specs/2026-08-07-reject-edge-per-pair-heal-design.md §1.2: a relocated copy sits on a renamed
        row, `mairin` ALSO carries its own direct edge, and `mara` has none.
        The old relocation guard suppressed every add for `mairin_2` because a
        relocated edge existed — so `mara` never healed. Only `mara` should
