@@ -107,6 +107,15 @@ on a row that is some pair's own `to`. If a relocated edge for `from` exists, ev
 for that `from` already sits on a `to` of that `from`, so a per-pair add can never duplicate. The
 rule heals strictly more and risks strictly no more.
 
+> **Superseded by #2200 (2026-08-07).** The "if a relocated edge for `from` exists, skip every add
+> for that `from`" clause above was itself found to under-heal: a book can carry a relocated edge
+> for `from` *and* a second, genuinely edgeless pair for that same `from` at once (reachable without
+> any failure — see `docs/features/278-cast-character-identity.md` invariant 10 and the #2200 design
+> notes), and the clause silently suppressed the second pair's add forever. The relocation guard was
+> removed from the add pass entirely; addition is now purely per-pair on `p.to`, gated only by the
+> `existing.some(...)` dedupe. Removal (the other half of this section) is unchanged. See
+> `server/src/store/reject-edge-reconcile.ts`'s module doc for the current rule.
+
 ---
 
 ## File Structure

@@ -47,13 +47,18 @@
    fresh row matched by NAME, so a legitimate edge can legitimately sit on a
    row whose id is not the pair's `to`. Row-scoped removal would delete it.
 
-   ADDITION is per-pair on `pair.to`, because D1 pair scope lets one `from` be
-   rejected against two different live characters and the original POSTs wrote
-   an edge on each — a blanket "no edge anywhere for this `from`" rule heals
-   only the first. The relocation case above is protected explicitly instead:
-   an edge for `from` sitting on a row that is NOT `to` for any pair with that
-   `from` is RELOCATED, and its presence suppresses every add for that `from`
-   so nothing is ever duplicated. */
+   ADDITION is per-pair on `pair.to`, unconditionally — because D1 pair scope
+   lets one `from` be rejected against two different live characters and the
+   original POSTs wrote an edge on each, a blanket "no edge anywhere for this
+   `from`" rule heals only the first (#2200). A RELOCATED edge — one sitting
+   on a row that is NOT `to` for any pair with that `from`, per the MATCHING
+   paragraph above — is no longer consulted here: it is orthogonal to whether
+   `pair.to` itself needs healing, and suppressing every add for `from` on its
+   account left a second, edgeless pair unhealed forever whenever a relocated
+   edge for the same `from` also existed. The `existing.some(...)` dedupe
+   below is the only anti-duplication mechanism now, and it is sufficient: it
+   refuses only a duplicate on the row that would actually receive the write,
+   which is the one place a duplicate could ever land. */
 
 import type { CastIdHistory } from './cast-id-history.js';
 
@@ -85,14 +90,6 @@ export function reconcileRejectEdges<T extends CastRow>(
   const legacyRejected = new Set(history.rejected ?? []);
   const backedFroms = new Set(pairs.map((p) => p.from));
 
-  /* `to`s per `from`, for the relocation test below. */
-  const targetsByFrom = new Map<string, Set<string>>();
-  for (const p of pairs) {
-    const set = targetsByFrom.get(p.from) ?? new Set<string>();
-    set.add(p.to);
-    targetsByFrom.set(p.from, set);
-  }
-
   const adds: RejectEdge[] = [];
   const removes: RejectEdge[] = [];
 
@@ -109,28 +106,9 @@ export function reconcileRejectEdges<T extends CastRow>(
     return kept.length === existing.length ? c : ({ ...c, notLinkedTo: kept } as T);
   });
 
-  /* Which `from`s have a RELOCATED edge — one sitting on a row that is not a
-     `to` for that `from` (merge-analysis-cast.ts moved it onto a name match).
-     Its presence suppresses every add for that `from`, so a relocated edge is
-     never duplicated onto `p.to`.
-
-     Read from `next` only because that is the array in hand; the set is the
-     same either way. An edge pass 1 removed can never reach this branch — the
-     `targetsByFrom.get(...)` guard is true only for a `from` that has a pair,
-     which is exactly what put it in `backedFroms` and made pass 1 keep it. */
-  const relocated = new Set<string>();
-  for (const c of next) {
-    for (const e of c.notLinkedTo ?? []) {
-      if (e.bookId !== bookId) continue;
-      const targets = targetsByFrom.get(e.characterId);
-      if (targets && !targets.has(c.id)) relocated.add(e.characterId);
-    }
-  }
-
   /* Pass 2 — write back a pair whose edge is missing. */
   const byId = new Map(next.map((c, i) => [c.id, i]));
   for (const p of pairs) {
-    if (relocated.has(p.from)) continue;
     const idx = byId.get(p.to);
     if (idx === undefined) continue; // `to` is not a live row — nothing to carry the edge
     const row = next[idx];
