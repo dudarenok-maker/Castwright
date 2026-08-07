@@ -3,7 +3,7 @@
    and NO write at all when the book is already consistent. The rules
    themselves are unit-tested in store/reject-edge-reconcile.test.ts. */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,14 @@ function seed(cast: object, history: object | null) {
   } else {
     rmSync(join(bookDir, '.audiobook', 'cast-id-history.json'), { force: true });
   }
+}
+
+/* Seed a cast.json plus a cast-id-history.json whose RAW BYTES are given —
+   the two degraded shapes `seed()` cannot express, because it stringifies. */
+function seedRawHistory(cast: object, historyText: string) {
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+  writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), historyText);
 }
 
 function readCast() {
@@ -127,6 +135,53 @@ describe('reconcileRejectEdgesOnDisk', () => {
     expect(readCast().characters[1].notLinkedTo).toBeUndefined();
     expect(readCast().characters[0].notLinkedTo).toEqual([{ bookId: BOOK_ID, characterId: 'm2' }]);
     expect(lines).toEqual([]);
+  });
+
+  /* Final-review Critical (#2166). `loadCastIdHistory` collapses absent,
+     unreadable and malformed onto the same empty history. Pass 1 reads an
+     empty history as PROOF that every same-book edge is stranded, so a
+     degraded read used to delete every reject in the book and log that it had
+     cleared stranded links — and only a `rejectedPairs`-backed edge could ever
+     come back. Both fixtures below carry a same-book edge and NO
+     `rejectedPairs`: the exact shape [C1] deletes when the history is
+     genuinely absent, so nothing but the degraded check can keep them green. */
+  describe('a degraded cast-id-history.json removes NOTHING', () => {
+    for (const [id, label, historyText] of [
+      ['C8', 'unparseable', '{invalid json'],
+      ['C9', 'wrong shape', JSON.stringify({ schema: 2, supersededBy: {} })],
+    ] as const) {
+      it(`[${id}] keeps every edge when the history file is present but ${label}`, async () => {
+        seedRawHistory(
+          { characters: [{ id: 'mairin', notLinkedTo: [{ bookId: BOOK_ID, characterId: 'm2' }] }] },
+          historyText,
+        );
+        const before = statSync(join(bookDir, '.audiobook', 'cast.json')).mtimeMs;
+        const { lines, log } = collectLog();
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        try {
+          await reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log);
+
+          // The edge survives — the whole point.
+          expect(readCast().characters[0].notLinkedTo).toEqual([
+            { bookId: BOOK_ID, characterId: 'm2' },
+          ]);
+          // No write at all.
+          expect(statSync(join(bookDir, '.audiobook', 'cast.json')).mtimeMs).toBe(before);
+          // And nothing claims otherwise in the run log.
+          expect(lines).toEqual([]);
+
+          // Operator-visible: one warning naming the book and the skip.
+          const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+          const skip = warnings.filter((m) => m.includes('reject-edge reconciliation skipped'));
+          expect(skip).toHaveLength(1);
+          expect(skip[0]).toContain(BOOK_ID);
+          expect(skip[0]).not.toMatch(/Cleared/);
+        } finally {
+          warnSpy.mockRestore();
+        }
+      });
+    }
   });
 
   it('[C7] is wired into BOTH authoritative persists', () => {

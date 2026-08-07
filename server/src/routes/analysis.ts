@@ -126,7 +126,7 @@ import {
   dropSupersededIdsReclaimedByLiveCast,
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
-  loadCastIdHistory,
+  loadCastIdHistoryWithStatus,
 } from '../store/cast-id-history.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -344,6 +344,14 @@ async function clearNotLinkedEdgesForDroppedRejections(
    must not fail the analysis. A surviving stale edge merely re-suppresses one
    future §4.4 name-match until the next persist tries again.
 
+   Fails SAFE on either read (final-review Critical, #2166). An unreadable
+   cast.json already did — the roster is empty, so nothing is reconciled. An
+   unreadable cast-id-history.json used to fail DESTRUCTIVE, because the empty
+   history it degrades to is indistinguishable from "nothing was ever
+   rejected", which is exactly the evidence the removal pass acts on. It now
+   reads the history through `loadCastIdHistoryWithStatus` and refuses to act
+   at all on `degraded`. See the comment at that call below.
+
    Exported only so analysis-reject-edge-reconcile.test.ts can drive it
    without standing up a full analysis run. */
 export async function reconcileRejectEdgesOnDisk(
@@ -358,7 +366,28 @@ export async function reconcileRejectEdgesOnDisk(
     await withCastLock(bookDir, async () => {
       const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
       if (!cast?.characters?.length) return;
-      const history = await loadCastIdHistory(bookDir);
+      /* #2166 final review (Critical) — the removal pass treats an empty
+         history as PROOF that every same-book edge is stranded. A `degraded`
+         read (the file exists but is unreadable or the wrong shape) produces
+         the same empty history as `absent` does, but proves nothing: a
+         transient EPERM/EBUSY from an AV scanner or a cloud-sync client would
+         otherwise delete every reject the user ever made on this book — and
+         only a `rejectedPairs`-backed one could ever come back. So skip the
+         whole reconciliation, not just the removals: the add pass has nothing
+         to add from an empty history anyway (it is driven entirely by
+         `rejectedPairs`), so skipping it costs nothing and skipping outright
+         is one branch instead of two. `absent` keeps its current meaning —
+         that IS the genuine pre-#2166 stranded-edge shape. */
+      const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+      if (status === 'degraded') {
+        console.warn(
+          `[analysis] reject-edge reconciliation skipped for book ${bookId} — its cast-id-history.json ` +
+            `could not be read (see the [cast-id-history] warning just above for the cause), so a ` +
+            `stranded "not the same character" link cannot be told from one whose recorded rejection ` +
+            `is merely unreadable right now. No links were changed; the next persist will try again.`,
+        );
+        return;
+      }
       const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
       if (!adds.length && !removes.length) return;
       await writeJsonAtomic(castJsonPath(bookDir), { characters: next });

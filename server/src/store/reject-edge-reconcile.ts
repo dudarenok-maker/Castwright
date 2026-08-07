@@ -16,6 +16,15 @@
    THIS module would read as an unlocked write no matter how its caller is
    wrapped, and analysis.ts's allowlist entry is keyed on file AND count.
 
+   PRECONDITION on `history` (final-review Critical, #2166): it must be a
+   history that was actually READ, not one that degraded to empty because the
+   file was unreadable or malformed. This function cannot tell the two apart —
+   an empty history makes pass 1 classify every same-book edge as unbacked and
+   delete it — and, being pure, it has no way to find out. The caller enforces
+   this: `reconcileRejectEdgesOnDisk` reads via `loadCastIdHistoryWithStatus`
+   and skips the call entirely on `degraded`. Do not add a second caller that
+   passes a collapsed `loadCastIdHistory` result.
+
    BACKING. An edge is legitimate when the decision it encodes is recorded
    durably somewhere. Two places count:
      - a `rejectedPairs` entry with `from === edge.characterId`;
