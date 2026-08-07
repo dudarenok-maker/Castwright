@@ -7,15 +7,18 @@ date: 2026-08-07
 
 Closes the design work behind **#2192**.
 
-> **Revision 4.** Three Premium adversarial rounds. Revisions 1–2 defended the symptom at
+> **Revision 5.** Four Premium adversarial rounds. Revisions 1–2 defended the symptom at
 > seven pip call sites and failed twice, with round 2 finding that round 1's fixes had
 > broken each other; revision 3 pivoted to attacking the root condition. **Round 3 cleared
 > the mechanism** — no runtime code reads onnxruntime distribution metadata, and no pip
 > mode in this repo defeats a marker — but found the *wiring* wrong in two Critical ways:
 > `install-ort.mjs` is never executed as a CLI in production, so the marker would have
 > fired on zero paths; and the claim that existing boxes self-heal via upgrade was false.
-> This revision fixes the wiring and restores the write-only self-heal. §Review findings
-> records all three rounds.
+> Revision 4 fixed the wiring and restored the self-heal; **round 4 then returned "not safe
+> to implement from"** — three Criticals in those fixes, including a venv state no revision
+> had ever named (the already-clobbered box, which #2192 says is the largest population) and
+> a version glob that would have failed every NVIDIA bootstrap. **Revision 5** folds all of
+> them. §Review findings records all four rounds.
 
 ## Problem
 
@@ -59,7 +62,7 @@ Doors onto this bug — a door is a pip call whose target depends on `onnxruntim
 | `install-qwen3.mjs:399` | `pip install qwen-tts` | Yes |
 | `install-whisper.mjs:96` | `pip install -U faster-whisper` | Yes |
 | `upgrade/apply.ts:254-269` | overlay install **plus** `pip uninstall -y onnxruntime onnxruntime-gpu` | Yes |
-| `routes/venv-bootstrap.ts:38-41` → `bootstrap-venv.mjs` | overlay install + swap | Yes |
+| `routes/venv-bootstrap.ts:38-41` → `tts/venv-bootstrap.ts:183-195` → `bootstrap-venv.mjs` | overlay install + swap | Yes |
 | `pinokio-scripts/install.js:80`, `update.js:73` | `bootstrap-venv.mjs` | **No** |
 
 The last two run with no server process at all, so no server-side chokepoint, quiesce, or
@@ -160,14 +163,67 @@ this design. Deleting first costs nothing and removes the state entirely.
 
 ### Changed files
 
-| File | Change |
-|---|---|
-| `install-ort.mjs` | `planOrtSwap` returns `marker`; add `applyOrtMarker`, `readInstalledOrtVersion`, `writeOrtMarker`, `deleteOrtMarker` |
-| `bootstrap-venv.mjs` | Call `applyOrtMarker` after the swap block, outside the gate. Needs its own injectable seam — `installForProfile` already injects `runPip` (`:151`), and an un-injected fs write there is untestable at that layer |
-| `upgrade/apply.ts` | Same call in `pipInstall`, outside the gate |
-| `index.ts` (server boot) | `ensureOrtMarker` — the write-only self-heal, below |
-| `install-whisper.mjs` | Drop `-U`, add `-c`; extract an exported arg builder |
-| `spawn-windows-hide.test.ts` | Widen the guard, below |
+**There are TWO call sites per consumer, not one.** A single `applyOrtMarker` call cannot
+express the ordering above; the verb is deliberately split so an implementer cannot collapse
+it back.
+
+| File | Change | Exact anchor |
+|---|---|---|
+| `install-ort.mjs` | `planOrtSwap` returns `marker`; add `SWAP_ORT_PACKAGES`, `readInstalledOrtVersion`, `writeOrtMarker`, `deleteOrtMarkerIfOurs`, `ensureOrtMarker` | — |
+| `install-ort.mjs` CLI block | Apply the same two calls, so the hand-run invocation #2192's workaround publishes also produces a marker | `:98-121` |
+| `bootstrap-venv.mjs` | `deleteOrtMarkerIfOurs` at `installForProfile`'s **function entry** — before the AMD torch pre-install *and* both overlay installs | before `:160` |
+| `bootstrap-venv.mjs` | `writeOrtMarker` after the swap steps succeed | after `:220` |
+| `upgrade/apply.ts` | `deleteOrtMarkerIfOurs` as `pipInstall`'s **first statement**, before the torch step | before `:257` |
+| `upgrade/apply.ts` | `writeOrtMarker` after the swap loop | after `:271` |
+| `upgrade/apply.ts` | **Add an injection seam to `createApplySteps`** — see §Testing; without it the apply half ships untested |
+| `index.ts` | `ensureOrtMarker` — the self-heal, below | in `main()`, before `app.listen` |
+| `install-whisper.mjs` | Drop `-U`, add `-c`; extract an exported arg builder | `:95-96`, header `:12-13` |
+| `spawn-windows-hide.test.ts` | Widen the guard, below | `:54-62` |
+
+`installForProfile` (`:148-154`) takes **positional** params and its `venvDir` defaults to
+`null` — four of its six existing call sites pass `null`. The marker path must therefore be
+derived from the venv python it already holds, not from `venvDir`, or the delete silently
+no-ops on those paths.
+
+### The three venv states, and why dist-info presence cannot tell them apart
+
+The design must name the state the issue says is **most common**, which revisions 3–4 never
+did: the already-clobbered box.
+
+| State | `onnxruntime_gpu-*.dist-info` | plain `onnxruntime-*.dist-info` | Files in the namespace |
+|---|---|---|---|
+| Healthy nvidia | present | absent | GPU |
+| Healthy cpu/amd/apple | absent | present (**real**) | CPU |
+| **Clobbered** | **present** | **present (real)** | **CPU** |
+
+The GPU dist-info survives a clobber because pip uninstalls by *name* and never knew the
+two collided (`install-ort.mjs:92-93` exists precisely because of this). **So dist-info
+presence proves nothing about who owns the namespace**, and two predicates must be stated
+separately or an implementer will conflate them:
+
+- **Ownership** — decided from the namespace *contents*, not metadata: ask the venv
+  interpreter for `onnxruntime.__version__` and `get_available_providers()`. That
+  interpreter is already being spawned to resolve the posix `site-packages` layout, so this
+  costs nothing extra. `CUDAExecutionProvider` present ⟹ the GPU build owns it.
+- **Marker identity** — a directory is ours **only** if its `INSTALLER` reads
+  `castwright-ort-marker` **and** its `RECORD` is empty. Never by name: on cpu/amd/apple the
+  *real* plain distribution has a byte-identical directory name.
+
+**`ensureOrtMarker` refuses to write when a real plain `onnxruntime-*.dist-info` exists.**
+That is the clobbered box, and writing a marker over it would stamp version 1.27.0 (read
+from the GPU dist) onto installed CPU 1.28.0 files, make `pip check` report clean, convince
+every future pip call the requirement is satisfied, and leave GPU Kokoro dead **with no path
+in this design that ever repairs it** — the delete branch is nvidia-excluded and the
+self-heal is write-only. That converts a loud, self-repairing bug into a permanent, silent
+one: exactly the failure class this design exists to close. A clobbered box takes the loud
+path instead — log what was found and name the command that fixes it.
+
+**`ensureOrtMarker` may also delete**, but only a directory that passes the marker-identity
+test above, and only when ownership says plain CPU `onnxruntime` holds the namespace — i.e.
+the marker is provably lying. This closes the one hole in the `delete` branch's coverage: a
+`noop` box (unchanged `reqHash`) runs neither `installForProfile` nor `pipInstall`
+(`bootstrap-venv.mjs:240-243`, `apply.ts:134`), so nothing else would ever reap a stale
+marker. It remains non-destructive by construction — it can only remove a file we wrote.
 
 **Version derivation.** Read from the dist-info the swap just installed, globbed from
 `plan.ortPackage` — **not** hardcoded, and **not** hardcoded to `onnxruntime_gpu-*` either:
@@ -176,6 +232,21 @@ this design. Deleting first costs nothing and removes the state entirely.
 `onnxruntime_gpu-*` dist. A hardcoded version silently starts lying the first time the pin
 is bumped, and `faster-whisper`'s `onnxruntime<2,>=1.14` bound means a sufficiently wrong
 version makes pip resolve *against* us.
+
+**The glob must escape the package name, or every NVIDIA bootstrap fails.** `plan.ortPackage`
+is the literal string `onnxruntime-gpu`; pip escapes distribution names per PEP 427
+(`re.sub(r"[-_.]+", "_", name)`), so the directory on disk is
+`onnxruntime_gpu-1.27.0.dist-info` — verified in the live venv. A naive
+`` `${plan.ortPackage}-*.dist-info` `` matches **zero** directories, returns `null`, and the
+fail-loudly rule below then escalates that into a failed bootstrap **on every NVIDIA box**.
+The rule is: `plan.ortPackage.replace(/[-_.]+/g, '_')`, then glob `<escaped>-*.dist-info`.
+A unit assertion builds the glob from the literal `'onnxruntime-gpu'` and resolves a fixture
+directory, mutation-checked by removing the escape.
+
+**One list of swap distributions.** `ensureOrtMarker` takes no plan and no profile — it reads
+what is installed — so it cannot derive the swap-package set the way `readInstalledOrtVersion`
+does. `install-ort.mjs` exports `SWAP_ORT_PACKAGES` and both read it, so the
+`onnxruntime-directml` re-enable (`install-ort.mjs:9,21-23`) needs one edit, not two.
 
 **On `null`, fail the swap loudly.** If the version cannot be read, the swap fails —
 `bootstrap-venv.mjs:217` already treats a swap failure as fatal ("better to fail the
@@ -211,15 +282,28 @@ required.reqHash`) gate on the requirements hash, and **this change touches no
 `requirements/*.txt`** — so nothing re-runs the swap and no existing box would ever get a
 marker.
 
-`ensureOrtMarker(venvDir)` runs once at server boot, before the supervisor starts
-(`index.ts:309`): if the namespace is owned by a swap distribution and no marker is
-present, write one. Otherwise do nothing.
+`ensureOrtMarker(venvDir)` runs once at server boot, using the two predicates in §The three
+venv states: write when a swap distribution owns the namespace and no plain
+`onnxruntime-*.dist-info` exists at all; delete when a *verified* marker is present but plain
+CPU `onnxruntime` owns the namespace; **refuse and log loudly** when a real plain
+distribution is present alongside a swap one (the clobbered box). Otherwise do nothing.
+
+**Placement:** in `main()`, **before `app.listen`** — not at `index.ts:309`, which is inside
+the `app.listen` callback (opens at `:207`) and downstream of `enforceSingleSidecarOwner`
+(`:292`), which can `process.exit` first. It must also never run before it can succeed: on a
+box with no venv, or a half-built one, it is a no-op — it must never create a `site-packages`
+tree, and the interpreter probe it uses for ownership must be a `windowsHide: true` spawn
+that no-ops on failure rather than throwing inside server startup.
 
 **This is safe in a way the repair killed in rounds 1–2 was not.** It uninstalls nothing,
 downloads nothing, needs no network, touches no locked DLL, and needs no accelerator
 profile — it reads what is *installed*, not what *should* be. Every Critical from rounds
 1–2 lived in a destructive repair whose mechanism no longer exists here. Worst case is a
 directory with three small files.
+
+It is no longer strictly "write-only" — it may delete a directory it can prove it wrote —
+but it still never uninstalls a package, never downloads, and never touches a locked DLL,
+which is where every Critical in rounds 1–2 lived.
 
 It runs at server boot rather than per-spawn, so it is unaffected by the adopt/unfit-replace
 branching that round 2 showed makes `spawnSidecar` placement treacherous.
@@ -248,18 +332,52 @@ Its `EXTERNAL_FILES` array (`:54-62`) enforces `windowsHide` on prod-reachable p
 outside `server/src` via a **hardcoded list** that names three installers. It omits
 `install-ort.mjs` (`:113`), `bootstrap-venv.mjs` (`:104`), and `install-torch.mjs` (`:59`,
 prod-reachable on the AMD path via `installForProfile`). Adding names keeps the list and the
-stated rule out of step. **Replace the enumeration with a glob** over
-`server/tts-sidecar/scripts/*.mjs` + `scripts/*.mjs`, selecting files that spawn pip.
+stated rule out of step.
+
+**Keep `EXTERNAL_FILES` as a floor and ADD a glob on top — do not replace it.** Replacing it
+loses coverage and lands red at the same time:
+
+- `launch.mjs` sits at the **repo root**, matching neither glob, and contains **zero**
+  occurrences of `pip` (verified) — as do all four current entries. A "spawns pip" filter
+  drops every one of them, including the versioned-dir launcher the test's own header
+  (`:22-24`) names as its motivating case.
+- `scripts/run-sidecar-tests.mjs` contains the string `pip` in help text and has **two
+  `spawnSync` calls with no `windowsHide`** (`:54`, `:70`). A naive
+  `readFileSync(f).includes('pip')` selector picks it up and the guard fails on landing.
+
+So: floor + glob over `server/tts-sidecar/scripts/*.mjs` and `scripts/*.mjs`, with the
+selector defined as *matches `-m['"]?\s*,?\s*['"]pip` in the source **after** the file's own
+`blankCommentsAndStrings` pass* — the helper the test already has. `ensure-python312.mjs`
+carries three unguarded spawns (`:49`, `:65`, `:86`) and no `pip` string: decide it
+explicitly in the PR — fix it or exclude it with a stated reason — rather than letting the
+selector decide by accident.
 
 ## Testing
 
 ### The test that would have caught round 3's Critical
 
-At the seam where the marker is actually applied — `installForProfile` and `pipInstall` —
-with the fs writer injected alongside the existing `runPip`: assert the marker action is
-**emitted** for nvidia and the delete for cpu/amd/apple. Revision 3's plan tested only
-isolated planners and writers, so it would have been fully green while the shipped change
-did nothing.
+At the seam where the marker is actually applied, asserting the action is **emitted** — and
+in the right order. Revision 3's plan tested only isolated planners and writers, so it would
+have been fully green while the shipped change did nothing.
+
+**The two consumers are not symmetric, and only one has a seam today.**
+
+- `installForProfile` (`bootstrap-venv.mjs:148-154`) already injects `runPip`, and
+  `bootstrap-venv-helpers.test.ts:44` drives it. Add the fs writer the same way.
+- `pipInstall` has **no seam**. It is a member of the injected `ApplySteps` interface
+  (`apply.ts:49`), and `apply.test.ts:29` replaces it wholesale with
+  `vi.fn(async () => {})`; the real body lives in `createApplySteps` (`:254-272`), calls a
+  module-private `run()` around real `spawn`, and has **zero** test coverage today. A test
+  written at the `applyUpgrade` level would be green while the real `pipInstall` did
+  nothing — round 3's Critical, recurring.
+
+  **So `createApplySteps` gains a `run`/`writeMarker` injection point**, listed in §Changed
+  files. If that is rejected as too invasive, the spec must instead say plainly that the
+  apply half is covered only by on-box acceptance — but it may not claim a seam test that
+  cannot be written.
+
+Ordering is asserted, not just presence: a test that only checks "delete was called" passes
+under the broken after-the-swap-block ordering.
 
 ### Regression (fail before, pass after)
 
@@ -276,7 +394,19 @@ did nothing.
   test that `null` **aborts the swap** rather than skipping the write.
 - `writeOrtMarker` overwrites a stale marker rather than skipping it — Spike 2 proved pip
   leaves stale markers behind, so create-if-missing would preserve a lie.
-- `deleteOrtMarker` is a no-op when absent and removes only the marker directory.
+- `deleteOrtMarkerIfOurs` is a no-op when absent, and **refuses to delete a directory whose
+  `INSTALLER` is not `castwright-ort-marker` or whose `RECORD` is non-empty** —
+  mutation-checked against a fixture of the *real* plain distribution, which a name-only
+  matcher would delete. That failure is concrete: cpu profile, `pip-in-place` re-run, box
+  offline → delete-at-entry removes the real `onnxruntime-1.28.0.dist-info`, then the
+  overlay install fails and throws (`bootstrap-venv.mjs:206`), leaving working files with
+  destroyed metadata from a run that today changes nothing.
+- **Swap-failure path:** the marker is deleted before re-throwing on any failed swap step,
+  in both consumers. Without it: marker present → the overlay install skips plain
+  `onnxruntime` (Spike 1) → swap step 1 uninstalls the real GPU build → step 2 fails → the
+  venv has *no* onnxruntime, a marker asserting it does, `pip check` green, and the
+  sidecar's `import onnxruntime` dead. Today that same failure self-repairs on the next pip
+  call. Asserted as "delete emitted on the throw path."
 - **Ordering**: on a non-swapping profile the delete is emitted **before** the overlay
   install, not after — asserted at the seam, with the AMD→CPU fallback as the case. A test
   that only checks "delete was called" passes under the broken ordering.
@@ -305,8 +435,13 @@ Every assertion is mutation-checked on its own line.
    round 3 proved nothing else covers.
 4. **Pinokio update path** — `pinokio-scripts/update.js` on a real Pinokio install, the
    deployment shape that reported the bug.
-5. **AMD box** — no marker is written, and one left over from a prior nvidia profile is
-   deleted.
+5. **AMD box** — no marker is written. (A leftover from a *prior nvidia profile* is not
+   reachable: a profile change returns `rebuild` → `needs-reinstall`, which exits without
+   touching the venv. The live case is the AMD→ROCm-failure→CPU fallback inside a single
+   `installForProfile` call, which is what the delete-at-entry ordering exists for.)
+6. **Clobbered box** — a venv with both dist-infos and CPU files in the namespace takes the
+   loud path on boot: no marker written, the condition logged, the fix named. This is the
+   population #2192 says is largest, and the state a wrong predicate would entomb.
 
 Register row, run sheet, and live view all move in the shipping PR per checklist step 3.
 
@@ -369,3 +504,25 @@ no pip mode defeats a marker; the `install-whisper` fix is safe) and found the w
 | Widened `windowsHide` rule still omits `install-torch.mjs` | Minor | Glob instead of enumeration |
 | `install-coqui.mjs` rows were padding — none of those packages needs `onnxruntime` | Minor | Removed from the doors table |
 | The "actionable message" half of the acceptance criterion is not delivered | Minor | Stated explicitly in §What this does not deliver |
+
+Round 4 attacked revision 4's wiring and returned **"not safe to implement from as
+written"** — three Criticals in the fixes themselves, plus five Majors. All folded here:
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| The already-clobbered state (both dist-infos, CPU files) was never named; one reading of `ensureOrtMarker` writes a marker over the real CPU dist and entombs the bug permanently | Critical | §The three venv states added; ownership and marker-identity predicates specified separately; refuse-and-log on a clobbered box |
+| §Changed files said "after the swap block" while the prose two paragraphs above called that fatal | Critical | Table replaced with two named entry points and exact anchors |
+| The version glob uses `plan.ortPackage` verbatim; pip escapes to `onnxruntime_gpu-*`, so it resolves to nothing → `null` → fail-loudly → **every NVIDIA bootstrap fails** | Critical | PEP-427 escaping stated in §Version derivation, with a mutation-checked assertion |
+| Swap-failure path leaves a marker asserting a runtime that was just uninstalled | Major | Delete before re-throwing, in both consumers |
+| `createApplySteps` has no injection point; the apply half would ship untested | Major | Injection point added to §Changed files |
+| `deleteOrtMarker` could not tell the marker from the real plain distribution | Major | Identity check on `INSTALLER` + empty `RECORD`, mutation-checked against a real-dist fixture |
+| The widened `windowsHide` glob drops `launch.mjs` and lands red on `run-sidecar-tests.mjs` | Major | Floor + glob; selector defined against blanked source; `ensure-python312.mjs` decided explicitly |
+| `ensureOrtMarker` had no way to derive the swap-package set | Major | `SWAP_ORT_PACKAGES` exported from `install-ort.mjs` |
+| `index.ts:309` is inside the `app.listen` callback, downstream of a `process.exit` | Minor | Moved into `main()` before `app.listen`; no-venv behaviour specified |
+| The hand-run CLI (#2192's published workaround) produced no marker | Minor | CLI block wired |
+| Acceptance criterion 5 was unreachable | Minor | Rewritten; clobbered-box row added |
+| `venv-bootstrap` citation drift | Minor | Corrected |
+
+**A stale marker on a `noop` box** (unchanged `reqHash`, so neither consumer runs) had no
+reaper — the `delete` branch's coverage hole. Closed by letting `ensureOrtMarker` delete a
+*verified* marker when ownership proves it is lying.
