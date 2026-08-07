@@ -173,6 +173,21 @@
 //   - `scrubGitEnv`/`runCommand` imported under an ALIAS (`as`-renamed) are
 //     not recognized as the terminal names — only the canonical names are
 //     checked for.
+//   - `fileImportsFrom` checks a path-SUFFIX match, not a resolved canonical
+//     path: `import { scrubGitEnv } from '../../evil/git-env.mjs'` passes,
+//     because the specifier text ends in `git-env.mjs`. Adversarial-only —
+//     no accidental typo produces this shape, only a deliberately-planted
+//     decoy file — and closing it needs real relative-path resolution
+//     against the scanned file's own directory (does `../../evil/
+//     git-env.mjs`, resolved from THIS file, actually point at
+//     scripts/git-env.mjs?), which is out of scope for a source-text
+//     scanner. Deliberately left open rather than partially patched; see
+//     its own test below for the honest proof.
+//   - `'git'` as a THIRD (or later) argument — `foo(a, b, 'git', args)` — is
+//     not recognized. Shape 1's leading-token handling only covers a single
+//     optional token before 'git', matching the one real second-argument
+//     shape in this repo (`runCommand(label, 'git', args)`); no real site
+//     needs a third position today.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -380,14 +395,19 @@ function hasLocalDeclaration(source, name) {
   return re.test(source);
 }
 
-/** Does the scanned file import `importedName` from a path ending in
- *  `pathSuffix`? Recognizes the ESM form AND the CommonJS `const { name } =
- *  require(<expr>)` form where `<expr>` may be a bare string literal OR an
- *  arbitrary expression (e.g. `path.join(__dirname, …, 'git-env.mjs')`,
- *  pinokio-scripts/lib/resolve-release.js's real shape) — the require
- *  call's own argument text just needs SOME quoted segment ending in
- *  `pathSuffix`. Guards the `scrubGitEnv`/`runCommand` scrub-terminal
- *  trust — see header. */
+/** Does the scanned file import `importedName` from a path whose SPECIFIER
+ *  TEXT ends in `pathSuffix`? This is a suffix match on the literal source
+ *  text, not a resolved canonical path — it does not follow `../` segments
+ *  or verify the specifier actually reaches scripts/git-env.mjs /
+ *  scripts/lib/run-command.mjs on disk. See KNOWN BLIND SPOTS for the
+ *  adversarial gap that leaves open (a decoy `evil/git-env.mjs`) and why it
+ *  is deliberately not closed. Recognizes the ESM form AND the CommonJS
+ *  `const { name } = require(<expr>)` form where `<expr>` may be a bare
+ *  string literal OR an arbitrary expression (e.g.
+ *  `path.join(__dirname, …, 'git-env.mjs')`, pinokio-scripts/lib/
+ *  resolve-release.js's real shape) — the require call's own argument text
+ *  just needs SOME quoted segment ending in `pathSuffix`. Guards the
+ *  `scrubGitEnv`/`runCommand` scrub-terminal trust — see header. */
 export function fileImportsFrom(source, importedName, pathSuffix) {
   const suffixPattern = pathSuffix.replace(/[.]/g, '\\.');
   const esm = new RegExp(
@@ -996,4 +1016,26 @@ test('fileImportsFrom still recognizes a bare string-literal require()', () => {
 test('fileImportsFrom returns false when the name is not actually imported', () => {
   const src = "const { somethingElse } = require('./git-env.mjs');";
   assert.equal(fileImportsFrom(src, 'scrubGitEnv', 'git-env.mjs'), false);
+});
+
+// --- Documented, NOT-closed gaps (honest proof, not just a header claim) ---
+
+test('KNOWN BLIND SPOT: fileImportsFrom accepts a decoy path that merely ends in the right filename', () => {
+  const src = "import { scrubGitEnv } from '../../evil/git-env.mjs';";
+  assert.equal(
+    fileImportsFrom(src, 'scrubGitEnv', 'git-env.mjs'),
+    true,
+    'documented gap: this is a suffix match on specifier text, not a resolved canonical ' +
+      'path — see the header KNOWN BLIND SPOTS',
+  );
+});
+
+test("KNOWN BLIND SPOT: 'git' as a third (or later) argument is not detected", () => {
+  const violations = findUnscrubbedGitCalls("someWrapper('probe', 'label2', 'git', ['status']);");
+  assert.deepEqual(
+    violations,
+    [],
+    'documented gap: the leading-token handling covers only ONE optional token before ' +
+      "'git' — see the header KNOWN BLIND SPOTS",
+  );
 });

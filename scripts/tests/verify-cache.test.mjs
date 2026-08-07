@@ -479,6 +479,30 @@ test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraF
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// #2216 review round 3 — git-scrub.test.mjs is the first hooks test whose
+// scan surface reaches outside scripts/** (it walks pinokio-scripts/** too),
+// but test:hooks' globs didn't cover that directory: a pinokio-scripts-only
+// diff printed [cached] locally and scheduled only test:pinokio in cloud CI
+// (ci-scope.mjs derives both from this same STEPS[] entry) — neither of
+// which runs git-scrub.test.mjs, so a scrub deleted from e.g.
+// resolve-release.js's `git checkout` (no `cwd`, runs on an end user's
+// machine — the highest-risk site the guard covers) would ship undetected.
+test('stepTouchedByDiff: a pinokio-scripts/ diff matches test:hooks via globs (#2216 — git-scrub.test.mjs scans that directory too)', () => {
+  const diff = ['pinokio-scripts/lib/resolve-release.js'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+// #2216 review round 3 — the glob was *.{mjs,cjs} only, narrower than the
+// SCANNED_EXTENSIONS both gh-chokepoint.test.mjs and git-scrub.test.mjs
+// actually walk (.mjs/.cjs/.js/.mts/.cts/.ts). audit-stage2-coverage.mts is
+// a real file this gap already reached (cited by name in gh-chokepoint's own
+// header) — a raw `gh`/`git` call added there would print test:hooks
+// [cached] on exactly the diff that introduced it.
+test('stepTouchedByDiff: a scripts/*.mts diff matches test:hooks via globs (#2216 — SCANNED_EXTENSIONS parity)', () => {
+  const diff = ['scripts/audit-stage2-coverage.mts'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
 // Defect D (#2119 review): verify.yml matched NO scope, so a workflow-only
 // PR ran zero legs — in cloud AND locally. This suite's own stepTouchedByDiff
 // assertions against real workflow paths are what must stay in scope when
@@ -1075,6 +1099,25 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
   }
+});
+
+// #2216 review round 3 — restores the property the deleted wrong-premise
+// test (see git history) used to pin: stagedDiffFiles must return `null`,
+// not `[]`, when git fails outright. This is the exact distinction the
+// whole #2216 correction turns on — verify-cache's scope filter treats
+// `null` as "diff failed, run everything" (safe) but a successful `[]` as
+// "nothing staged" (skips every leg). Mutation `return null` -> `return []`
+// in stagedDiffFiles passed 88/88 and 1270/1270 with neither replacement
+// test catching it — branchDiffFiles' own null test doesn't exercise
+// stagedDiffFiles at all. Independent of any ambient GIT_INDEX_FILE:
+// verified directly that a non-repo cwd fails git's discovery entirely
+// (falls back to --no-index usage-error interpretation, exit 129) even with
+// a real, valid, absolute GIT_INDEX_FILE set — the temp-index scrub this
+// file's `honours an ambient GIT_INDEX_FILE` test proves is a separate axis.
+test('stagedDiffFiles: returns null when cwd is not a git repo', () => {
+  const dir = mkTmp(); // no git init — nothing for git to discover
+  const files = stagedDiffFiles(dir);
+  assert.equal(files, null);
 });
 
 test('stagedDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
