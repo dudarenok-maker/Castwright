@@ -224,6 +224,55 @@ export async function loadCastIdHistoryWithStatus(
   return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
 }
 
+/** Thrown by every mutating helper below when the read that would decide
+ *  what to preserve came back `degraded` (#2214) — the file exists but is
+ *  unreadable or the wrong shape. Every helper here used to read through the
+ *  COLLAPSING `loadCastIdHistory` and write back unconditionally, which
+ *  REPLACED the damaged file with a valid, empty one — silently destroying
+ *  every retirement, displacement and rejection ever recorded for the book,
+ *  with every later read then reporting `ok`. Throwing here instead, before
+ *  any inspection or mutation, is the fix: a caller cannot tell a
+ *  degraded-read no-op from a genuinely needed write (e.g.
+ *  `restoreSupersededId`'s `existing === target` early return, or
+ *  `rejectOrphanedPair`'s idempotent-pair return), so nothing below may run
+ *  at all once the verdict is `degraded`.
+ *
+ *  `absent` and `ok` are unaffected — a missing file is the common, expected
+ *  case (most books never retire an id) and stays silently writable, exactly
+ *  as before. Callers already tolerate a throw from these helpers (the write
+ *  itself could always fail — EPERM/ENOSPC — see `loadCastIdHistory`'s own
+ *  doc comment above); this is the same contract extended to a degraded
+ *  READ. Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel
+ *  (#2185): a transient read blip must never be mistaken for evidence. */
+export class CastIdHistoryUnreadableError extends Error {
+  readonly bookDir: string;
+  readonly path: string;
+
+  constructor(bookDir: string) {
+    const path = castIdHistoryPath(bookDir);
+    super(
+      `[cast-id-history] refusing to write ${path} — it exists but could not be read or did not ` +
+        `pass the shape check (see the [cast-id-history] warning just above for the cause). Writing ` +
+        `through this read would replace it with a valid, empty history, silently losing every ` +
+        `recorded retirement, displacement and rejection for this book. Fix or remove the file, then retry.`,
+    );
+    this.name = 'CastIdHistoryUnreadableError';
+    this.bookDir = bookDir;
+    this.path = path;
+  }
+}
+
+/** Read the history for a mutating helper below, refusing to proceed on a
+ *  `degraded` verdict (#2214) — see `CastIdHistoryUnreadableError`'s own doc
+ *  comment for why. `absent` and `ok` return their history unchanged. */
+async function loadHistoryOrThrow(bookDir: string): Promise<CastIdHistory> {
+  const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+  if (status === 'degraded') {
+    throw new CastIdHistoryUnreadableError(bookDir);
+  }
+  return history;
+}
+
 /** Record that characterId `from` has been retired and replaced by `to`.
  *  Updates transitive mappings: whether a→b then b→c is recorded, or b→c
  *  then a→b, both a and b end up pointing to c in the final map (O(1)
@@ -334,7 +383,9 @@ export async function retireCharacterId(
   // Serialize writes per-book
   const bookId = bookDir; // Use bookDir as the lock key
   return withKeyLock(`cast-id-history:${bookId}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
 
     /* Direct reversal (#2040 Task 8 fix round 1, item 3): `to` is itself
        recorded as having been retired in favour of `from` — an earlier call
@@ -472,7 +523,9 @@ export async function dropSupersededIdsReclaimedByLiveCast(
 ): Promise<DisplacedHistoryEntry[]> {
   const live = new Set(liveIds);
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (live.has(key)) {
@@ -562,7 +615,9 @@ export async function dropSupersededTargetsNoLongerLive(
 ): Promise<DisplacedHistoryEntry[]> {
   const live = new Set(liveIds);
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (!live.has(target)) {
@@ -624,7 +679,9 @@ export async function forgetSupersededId(
   expectedTarget?: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const removed = history.supersededBy[id];
     if (removed === undefined) return undefined;
     if (expectedTarget !== undefined && removed !== expectedTarget) {
@@ -682,7 +739,9 @@ export async function restoreSupersededId(
   target: string,
 ): Promise<{ restored: boolean; supersededByOther?: string }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const existing = history.supersededBy[id];
     if (existing === target) {
       return { restored: true };
@@ -715,7 +774,9 @@ export async function restoreSupersededId(
  *  `supersededBy` itself. */
 export async function rejectOrphanedId(bookDir: string, id: string): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const rejected = history.rejected ?? [];
     if (rejected.includes(id)) return;
     history.rejected = [...rejected, id];
@@ -751,7 +812,9 @@ export async function rejectOrphanedPair(
   forgotSupersededTo?: string,
 ): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const pairs = history.rejectedPairs ?? [];
     if (pairs.some((p) => p.from === from && p.to === to)) return;
     const entry: RejectedPair =
@@ -779,7 +842,9 @@ export async function unrejectOrphanedPair(
   to: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const pairs = history.rejectedPairs ?? [];
     const idx = pairs.findIndex((p) => p.from === from && p.to === to);
     if (idx < 0) return undefined;

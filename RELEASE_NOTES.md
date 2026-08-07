@@ -100,6 +100,12 @@
   names from ever being matched again — with no way to undo it. Now a failure leaves the decision
   visible and undoable, and any book already carrying an invisible mark is cleaned up the next
   time it's analysed.
+- If the file that remembers your "not the same character" decisions was ever temporarily
+  unreadable — a brief hiccup from antivirus or cloud sync, the same kind of interruption
+  Castwright already shrugs off elsewhere — it used to quietly get rewritten as empty the next
+  time analysis touched it, silently losing every decision you'd made on that book. It's left
+  exactly as it is now instead, and analysis says so right in the run log, so a run that skipped
+  that check never reads as proof nothing needed your attention.
 - **Renaming a book while Castwright is still reading it now waits its turn.** Change a book's author, series or title mid-analysis and Castwright used to move the folder out from under the run — which could quietly leave your cast in the old folder and everything else in the new one, so the app read a book with nobody in it. Castwright now asks you to wait until the analysis finishes, and says so plainly. Everything else about a book stays editable while it's being analysed.
 - **A setting that refuses to save — or refuses to revert — now tells you why, instead of silently reverting.** Advanced Configuration used to discard a rejected change without a word — the field just snapped back to its old value, with no explanation anywhere. It now shows the reason right next to the setting that failed, and tells apart a value Castwright won't accept from one that's simply pinned in your environment and can't be changed here. Fix it and try again, and the message clears the moment it works. Clicking a field's **Revert** button shows the same message if that fails too — an earlier version of this fix missed Revert entirely, so an invalid combination could sneak back in through that button even after the equivalent save was refused. A change that affects a whole section — Reset section, or Reset all — surfaces the same way, as a brief notice rather than silence.
 - **"Restart sidecar" now tells you when the restart didn't happen.** Until now, a failed restart request looked exactly like a successful one — the button just went back to normal with nothing said. It now shows a brief notice when the restart fails, so you know to try again instead of assuming it worked.
