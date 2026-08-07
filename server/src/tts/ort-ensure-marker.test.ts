@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { ensureOrtMarker, writeOrtMarker } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 function venv({ owner, realDist }: { owner: 'swap' | 'plain' | 'none'; realDist?: boolean }) {
@@ -45,7 +46,7 @@ describe('ensureOrtMarker', () => {
   it('REFUSES on a clobbered venv and names the remedy', () => {
     const { root, sp } = venv({ owner: 'swap', realDist: true });
     const lines: string[] = [];
-    expect(ensureOrtMarker(root, (m) => lines.push(m))).toBe('clobbered');
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('clobbered');
     expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
     expect(lines.join('\n')).toContain('install-ort.mjs');
   });
@@ -82,8 +83,8 @@ describe('ensureOrtMarker', () => {
     mkdirSync(join(root, 'Lib'), { recursive: true });
     writeFileSync(join(root, 'Lib', 'site-packages'), 'not a directory');
     const lines: string[] = [];
-    expect(() => ensureOrtMarker(root, (m) => lines.push(m))).not.toThrow();
-    expect(ensureOrtMarker(root, (m) => lines.push(m))).toBe('noop');
+    expect(() => ensureOrtMarker(root, (m: string) => lines.push(m))).not.toThrow();
+    expect(ensureOrtMarker(root, (m: string) => lines.push(m))).toBe('noop');
     expect(lines.some((line) => line.includes('skipped') && line.includes('not a directory'))).toBe(true);
   });
 

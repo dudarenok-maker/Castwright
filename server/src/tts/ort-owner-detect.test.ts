@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { detectOrtOwner } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 function venvWith(info: string | null, extra: string[] = []) {

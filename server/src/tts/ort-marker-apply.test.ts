@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   applyOrtMarkerWrite, applyOrtMarkerDelete, planOrtSwap, writeOrtMarker,
+  // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 function venv(withGpuDist = false) {

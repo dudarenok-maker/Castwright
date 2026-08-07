@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   MARKER_INSTALLER, isOurMarker, writeOrtMarker, deleteOrtMarkerIfOurs, findPlainOrtDistInfos,
+  // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 function sp() { return mkdtempSync(join(tmpdir(), 'sp-')); }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { SWAP_ORT_PACKAGES, escapeDistName, sitePackagesDir } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 describe('escapeDistName', () => {
