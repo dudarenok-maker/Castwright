@@ -181,7 +181,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">54</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">55</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">1</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -193,7 +193,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>37</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>3</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>1</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
@@ -209,7 +209,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">37 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -728,6 +728,19 @@
           <li>Across the same render (or a longer, healthy-content one), confirm the new override does <b>not</b> fire on ordinary hard-to-transcribe-but-correct lines — an invented character name, a foreign phrase, background noise — i.e. no new false-positive re-record rate versus the pre-#2055 baseline.</li>
         </ul>
         <p class="src">A Coqui-capable sidecar, ASR content-QA enabled, a non-English book (Russian ideal — matches #2026's own repro) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2055">#2055</a> · criteria: the <code>CATASTROPHIC_WER</code> comment in <code>server/src/tts/segment-asr-qa.ts</code>; #2026's own repro recipe · short-to-medium — the collapse is intermittent, budget a few repeated renders of the same short lines, not one pass</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A38</span><span class="iname">Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install</span><span class="risk hot">Newly LIVE, never watched fire</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>.env.example</code> used to ship <code>SIDECAR_RESTART_MB=0</code> / <code>SIDECAR_VRAM_RECYCLE_SOFT_MB=0</code> / <code>SIDECAR_VRAM_RESTART_MB=0</code> as literal, active env assignments — and each of the three threshold functions in <code>main.py</code> treats a <b>present</b> <code>0</code> (or any parseable value) as an explicit override, not as "unset." Since #2179 comments the generated <code>.env.example</code> block out instead of emitting it active, a fresh install now leaves all three <b>absent</b>, so the sidecar self-computes 70% of total physical RAM (hard restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the card's total VRAM (hard restart) — three lifecycle behaviours that were silently disabled on every install that copied <code>.env.example</code> verbatim (Pinokio, and the documented manual/<code>INSTALL.md</code> path) until this fix, and are now live. None of this is exercised by any pytest/vitest suite — the three threshold functions are unit-tested for their env-present/absent MATH, not for whether a real sidecar process ever crosses a live threshold and actually exits/recycles.</p>
+        <ul>
+          <li>Confirm a fresh install (a <code>server/.env</code> written from the current <code>.env.example</code> — all three of <code>SIDECAR_RESTART_MB</code> / <code>SIDECAR_VRAM_RECYCLE_SOFT_MB</code> / <code>SIDECAR_VRAM_RESTART_MB</code> absent) computes and uses the auto thresholds at sidecar startup rather than treating them as disabled.</li>
+          <li>Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run, or a synthetic host-memory hog alongside the sidecar) and confirm the sidecar self-exits with code 43 for the supervisor to respawn, rather than never recycling.</li>
+          <li>Drive reserved VRAM up toward the 90% soft threshold and confirm <code>/health</code> sets <code>recycle_pending</code> and a clean chapter-boundary recycle fires (not a mid-chapter hard exit); then, on a card where the soft recycle didn't already relieve the pressure, continue up toward the 98% hard threshold and confirm the hard self-exit fires instead of an uncontrolled OOM.</li>
+          <li>Watch for thrash: across an ordinary render, the auto thresholds must not fire routinely — a card sitting in the high-80s/90s% reserved as a normal batch peak (the <code>_TORCH_ACTIVE_RESERVED_MB</code> torch-managed-card carve-out in <code>main.py</code>) should not trip a recycle storm now that the ceiling is live where it was previously inert.</li>
+        </ul>
+        <p class="src">A fresh install (or a <code>server/.env</code> with the three vars removed), the single 8 GB card, and a way to push committed RAM/reserved VRAM toward the thresholds · <a href="https://github.com/dudarenok-maker/Castwright/issues/2179">#2179</a> · criteria: <code>_mem_restart_threshold_mb</code> / <code>_vram_recycle_soft_threshold_mb</code> / <code>_vram_restart_threshold_mb</code> in <code>server/tts-sidecar/main.py</code> (<code>:8265-8284</code>, <code>:8154-8185</code>); the PR #2210 body and <code>0b0e7694</code>'s commit message record the before/after values · short-to-medium — the VRAM-pressure legs need a way to actually saturate the card</p>
       </div>
     </details>
 

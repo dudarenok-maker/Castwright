@@ -1064,8 +1064,16 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Gemini analyzer model',
     help: 'Gemini model used directly (engine=gemini) or as the Ollama-unreachable fallback (engine=local). Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
     type: 'string',
-    // Shipped default; the code-level last-resort fallback in analyzer/index.ts
-    // + routes/analysis.ts intentionally stays gemma-4-31b-it (RECITATION-safe).
+    // #2179 — analyzer/index.ts, routes/analysis.ts, and run-eval-cli.ts used
+    // to read process.env.GEMINI_MODEL directly with a hardcoded
+    // `?? 'gemma-4-31b-it'` last-resort fallback, deliberately different from
+    // this default (RECITATION-safe). That divergence depended on
+    // server/.env.example always shipping this line ACTIVE so the two values
+    // matched in practice; once the emitter started shipping the generated
+    // block commented out (#2179), the divergence would have silently become
+    // real for every fresh install. All three sites were converted to
+    // configValue('analyzer.gemini.model') instead, so this default is now
+    // the only fallback — the gemma-4-31b-it literal is retired.
     default: 'gemini-3.5-flash-lite', // ← GEMINI_MODEL default mirrored in server/.env.example
     apply: 'live', risk: 'medium',
   },
