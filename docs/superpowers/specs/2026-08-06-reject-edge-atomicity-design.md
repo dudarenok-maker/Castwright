@@ -284,8 +284,8 @@ reconciliation then writes their edges back.
 This is a real defect in the same seam, but it is not #2166's, and its fix is a design
 decision of its own (ordering `restoreSupersededId` against `unrejectOrphanedPair`, or
 making the DELETE's multi-pair loop transactional). It fails the fix-now bar — two
-defensible answers, a changed failure contract — so it gets its own issue, referenced from
-plan 278's invariant 10.
+defensible answers, a changed failure contract — so it gets its own issue, #2198,
+referenced from plan 278's invariant 10.
 
 ## Test plan
 

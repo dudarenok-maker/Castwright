@@ -63,6 +63,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { maxNvidiaSmiUtil, GPU_BUSY_THRESHOLD } from './verify-cache.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 // Re-exported for backward compatibility: scripts/tests/run-golden-audio.test.mjs
 // imports maxNvidiaSmiUtil from this module. The implementation itself moved to
@@ -153,12 +154,24 @@ function warnIfGpuBusyForBless() {
 
 const results = [];
 
-function run(label, cmd, cmdArgs, { env, shell } = {}) {
+// #2193 — scrub git repo-discovery env vars before every spawn here, even
+// though this wrapper launches npm/pytest rather than git directly: an npm
+// script is free to shell out to git at any time without ever touching this
+// file, so the scrub is unconditional rather than a per-callee judgement
+// call. `scrubGitEnv()` returns a plain object copy of `process.env`, so
+// spreading `env` over it clears an ambient key exactly like spreading over
+// `process.env` did (see the two call sites' own GOLDEN_BLESS comments).
+//
+// Exported solely so scripts/tests/run-golden-audio.test.mjs can call it
+// directly and observe the scrub at a real spawned child, without triggering
+// a full golden-audio run (#2193) — not part of the module's documented CLI
+// surface.
+export function run(label, cmd, cmdArgs, { env, shell } = {}) {
   console.log(`\n=== golden-audio: ${label} ===`);
   const r = spawnSync(cmd, cmdArgs, {
     stdio: 'inherit',
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: { ...scrubGitEnv(), ...env },
     // npm is a `.cmd` shim on Windows; Node refuses to spawn `.cmd` directly
     // (EINVAL) unless routed through a shell.
     shell: shell ?? false,
@@ -227,7 +240,7 @@ if (isDirectInvocation) {
       // Explicit `undefined` (not `{}`) so an ambient GOLDEN_BLESS=1 exported in
       // the shell can't leak through on the non-bless path and silently turn an
       // ordinary assert run into a bless that overwrites committed fixtures —
-      // `run()`'s `{ ...process.env, ...env }` spread only clears an inherited
+      // `run()`'s `{ ...scrubGitEnv(), ...env }` spread only clears an inherited
       // key when this object explicitly sets it to `undefined`.
       env: { GOLDEN_BLESS: bless ? '1' : undefined },
     });

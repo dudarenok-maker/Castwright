@@ -10,6 +10,7 @@ import {
   maxNvidiaSmiUtil,
   gpuBusyWarningFor,
   CONTENTION_UNKNOWN_MESSAGE,
+  run,
 } from '../run-golden-audio.mjs';
 
 // Resolve relative to THIS file, not the process cwd — `node --test` can be
@@ -22,7 +23,7 @@ const REPO_ROOT = join(HERE, '..', '..');
 const src = readFileSync(SRC_PATH, 'utf8');
 
 // The exact non-leaking shape both Suite calls must use: `undefined` (not
-// `{}`) on the non-bless arm, so `run()`'s `{ ...process.env, ...env }`
+// `{}`) on the non-bless arm, so `run()`'s `{ ...scrubGitEnv(), ...env }`
 // spread actually clears an ambient GOLDEN_BLESS instead of leaving it to
 // leak through. Anchored on the `'1'` / `undefined` ORDER, so an inverted
 // ternary (`bless ? undefined : '1'`) fails this regex — it would silently
@@ -56,6 +57,133 @@ test('GOLDEN_BLESS is cleared (not left ambient) on the non-bless path for BOTH 
         '`undefined` (which clears an ambient value) otherwise — an inverted ternary, ' +
         'or a bare `env: {}`, must fail this test',
     );
+  }
+});
+
+// #2193 — run()'s spawned children used to inherit `process.env` verbatim,
+// so an ambient GIT_DIR/GIT_WORK_TREE (e.g. exported by a parent git hook,
+// or left behind in an operator's shell) would pass straight through to the
+// `npm`/pytest child. This calls the real exported `run()` and observes the
+// child's OWN view of GIT_DIR — not the options object `run()` built — so a
+// regression that reverts the `scrubGitEnv()` spread fails this test.
+// `stdio: 'inherit'` (run()'s own default) forwards the child's stdout
+// straight to this test process's stdout rather than back through
+// spawnSync's return value, so the probe child writes what it saw to a temp
+// file instead, which this test then reads back.
+//
+// #2217 review, F2 — asserting only GIT_DIR's absence is equally satisfied
+// by `scrubGitEnv({})` (an empty base, dropping the REST of the parent
+// environment too) as by the real fix (`scrubGitEnv()`, which scrubs the
+// real `process.env`) — both leave GIT_DIR absent. `GOLDEN_COQUI`,
+// `GOLDEN_QWEN_VOICE`, `CUDA_VISIBLE_DEVICES`, etc. all ride the same spread
+// as an ordinary ambient var, so this also asserts a decoy non-git ambient
+// variable DOES reach the child, ruling out the empty-base regression.
+test('run() scrubs an inherited GIT_DIR from the spawned child env, while an unrelated ambient var survives', () => {
+  const probeFile = join(
+    tmpdir(),
+    `run-golden-audio-gitdir-probe-${process.pid}-${Date.now()}.txt`,
+  );
+  const SENTINEL_KEY = 'RUN_GOLDEN_AUDIO_TEST_SENTINEL';
+  const savedGitDir = process.env.GIT_DIR;
+  const savedSentinel = process.env[SENTINEL_KEY];
+  process.env.GIT_DIR = '/decoy/.git';
+  process.env[SENTINEL_KEY] = 'sentinel-value';
+  try {
+    const code = run('gitdir-probe', process.execPath, [
+      '-e',
+      `require('fs').writeFileSync(${JSON.stringify(probeFile)}, ` +
+        `String(process.env.GIT_DIR) + '\\n' + String(process.env.${SENTINEL_KEY}))`,
+    ]);
+    assert.equal(code, 0);
+    const [gitDirSeen, sentinelSeen] = readFileSync(probeFile, 'utf8').split('\n');
+    assert.equal(
+      gitDirSeen,
+      'undefined',
+      `expected the spawned child to see no GIT_DIR at all; it saw ${JSON.stringify(gitDirSeen)}`,
+    );
+    assert.equal(
+      sentinelSeen,
+      'sentinel-value',
+      'expected an unrelated ambient var to survive the scrub and reach the child; saw ' +
+        JSON.stringify(sentinelSeen),
+    );
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = savedGitDir;
+    if (savedSentinel === undefined) delete process.env[SENTINEL_KEY];
+    else process.env[SENTINEL_KEY] = savedSentinel;
+    rmSync(probeFile, { force: true });
+  }
+});
+
+// #2193 — the regex test above (line 51) only proves the two call sites
+// still WRITE `env: { GOLDEN_BLESS: bless ? '1' : undefined }`; it does not
+// prove that shape actually clears an ambient GOLDEN_BLESS at the spawned
+// child now that run()'s spread base changed from `process.env` to
+// `scrubGitEnv()`. Same probe-file pattern as the GIT_DIR test above.
+//
+// #2217 review, F1 — the positive control below must NOT set the ambient
+// GOLDEN_BLESS to the SAME value ('1') it then asserts the child saw: with
+// the ambient also '1', the assertion can't tell "the caller's explicit '1'
+// reached the child" from "the ambient '1' leaked through uncleared" — those
+// are two different bugs and the control was blind to the first. Fixed by
+// deleting the ambient entirely before the control run, so a '1' at the
+// child can only have come from the caller-supplied `env`. What this now
+// catches: a `run()` that honours a caller key only when its value is
+// `undefined` (i.e. only ever clears, never sets) and silently drops any
+// caller key carrying a real value — which in production would make
+// `npm run test:golden-audio -- --bless` silently degrade to an ordinary
+// assert run that never blesses.
+test('run() clears an ambient GOLDEN_BLESS via an explicit undefined, and honours an explicit "1" with no ambient present', () => {
+  const probeFile = join(
+    tmpdir(),
+    `run-golden-audio-bless-probe-${process.pid}-${Date.now()}.txt`,
+  );
+  const savedBless = process.env.GOLDEN_BLESS;
+  try {
+    // Non-bless shape: an ambient '1' must be cleared by an explicit `undefined`.
+    process.env.GOLDEN_BLESS = '1';
+    run(
+      'bless-probe-clear',
+      process.execPath,
+      [
+        '-e',
+        `require('fs').writeFileSync(${JSON.stringify(probeFile)}, String(process.env.GOLDEN_BLESS))`,
+      ],
+      { env: { GOLDEN_BLESS: undefined } },
+    );
+    const seenWhileClearing = readFileSync(probeFile, 'utf8');
+    assert.equal(
+      seenWhileClearing,
+      'undefined',
+      'an explicit `undefined` must clear the ambient GOLDEN_BLESS at the spawned child; saw ' +
+        JSON.stringify(seenWhileClearing),
+    );
+
+    // Positive control: bless shape, with NO ambient GOLDEN_BLESS at all —
+    // the child can only see '1' if run() actually forwarded the caller's
+    // explicit value, not because it happened to match a leaked ambient one.
+    delete process.env.GOLDEN_BLESS;
+    run(
+      'bless-probe-set',
+      process.execPath,
+      [
+        '-e',
+        `require('fs').writeFileSync(${JSON.stringify(probeFile)}, String(process.env.GOLDEN_BLESS))`,
+      ],
+      { env: { GOLDEN_BLESS: '1' } },
+    );
+    const seenWhileSetting = readFileSync(probeFile, 'utf8');
+    assert.equal(
+      seenWhileSetting,
+      '1',
+      'an explicit GOLDEN_BLESS: "1" must still reach the spawned child even with no ambient ' +
+        `value present; saw ${JSON.stringify(seenWhileSetting)}`,
+    );
+  } finally {
+    if (savedBless === undefined) delete process.env.GOLDEN_BLESS;
+    else process.env.GOLDEN_BLESS = savedBless;
+    rmSync(probeFile, { force: true });
   }
 });
 

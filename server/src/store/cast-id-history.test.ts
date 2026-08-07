@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   loadCastIdHistory,
+  loadCastIdHistoryWithStatus,
   retireCharacterId,
   castIdHistoryPath,
   dropSupersededIdsReclaimedByLiveCast,
@@ -211,6 +212,81 @@ describe('cast id history', () => {
         const result = await loadCastIdHistory(dir);
         expect(result).toEqual({ schema: 1, supersededBy: {} });
         expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('loadCastIdHistoryWithStatus (#2166 final review — Critical)', () => {
+    /* `loadCastIdHistory` collapses three states onto one value. That is fine
+       for a caller whose worst case is losing protection for a run, and
+       actively destructive for `reconcileRejectEdgesOnDisk`, which reads an
+       empty history as proof that every notLinkedTo edge is stranded. These
+       pin that the sibling loader keeps the three apart. */
+    it('reports `absent` when the file does not exist', async () => {
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('absent');
+      expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+    });
+
+    it('reports `ok` and the real history when the file reads and validates', async () => {
+      await retireCharacterId(dir, 'mayrin', 'mairin');
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('ok');
+      expect(result.history.supersededBy).toEqual({ mayrin: 'mairin' });
+    });
+
+    it('reports `degraded`, not `absent`, when the file exists but will not parse', async () => {
+      writeTestHistoryFile('{invalid json');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistoryWithStatus(dir);
+        expect(result.status).toBe('degraded');
+        expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('reports `degraded`, not `absent`, when the file parses but fails the shape check', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 2, supersededBy: {} }));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistoryWithStatus(dir);
+        expect(result.status).toBe('degraded');
+        expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('a well-formed file that keeps its optional fields still reads `ok`', async () => {
+      // The shape check tolerates displaced/rejected/rejectedPairs; none of
+      // them may be mistaken for a degraded read.
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'mairin' },
+          displaced: { old: 'new' },
+          rejected: ['m2'],
+          rejectedPairs: [{ from: 'm2', to: 'mairin' }],
+        }),
+      );
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('ok');
+      expect(result.history.rejectedPairs).toEqual([{ from: 'm2', to: 'mairin' }]);
+    });
+
+    it('loadCastIdHistory still collapses all three onto the same value', async () => {
+      // The additive-refactor guarantee: existing callers see no change.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
+        writeTestHistoryFile('{invalid json');
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
+        writeTestHistoryFile(JSON.stringify({ schema: 2, supersededBy: {} }));
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
       } finally {
         warnSpy.mockRestore();
       }
