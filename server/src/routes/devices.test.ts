@@ -5,7 +5,7 @@
    requireLanToken with a mocked non-loopback request. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -245,5 +245,81 @@ describe('devices route (srv-33)', () => {
   it('caps an over-long device label at 64 chars', async () => {
     const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
     expect(device.label.length).toBe(64);
+  });
+
+  // #2183 — a non-string label (e.g. a hand-edited store, or a future writer
+  // bug) is coerced at load, not dropped: it's a display fault, not a
+  // security/lifecycle one, so the device stays usable and revocable.
+  // Asserted against the raw HTTP response body (not deviceTokens'
+  // in-memory PublicDevice) per the #2183 decision comment's correction:
+  // redactDevice sets `label`/`id` unconditionally, so an in-memory
+  // assertion can pass for the wrong reason where the serialised body would
+  // not — this also folds in the openapi Device required-key check for the
+  // same reason (see below).
+  it('a record with a non-string label is served as a coerced string, and stays revocable (#2183)', async () => {
+    const raw = {
+      id: 'bad-label',
+      label: { evil: true },
+      tokenHash: deviceTokens.hashToken('bad-label-token'),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    };
+    await writeFile(
+      join(workspaceRoot, 'device-tokens.json'),
+      JSON.stringify({ schema: 2, devices: [raw] }),
+      'utf8',
+    );
+    deviceTokens._resetDeviceTokenCacheForTests();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).get('/api/devices');
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.devices).toHaveLength(1);
+    expect(typeof res.body.devices[0].label).toBe('string');
+    expect(res.body.devices[0].label).toBe('Unnamed device');
+
+    const del = await request(app).delete(`/api/devices/${res.body.devices[0].id}`);
+    expect(del.status).toBe(200);
+  });
+
+  // #2183 — every device GET /api/devices serves must satisfy openapi.yaml's
+  // Device schema `required: [id, label, createdAt, revoked]`. Asserted on
+  // the ACTUAL SERIALISED response body, per the decision comment's
+  // correction: redactDevice sets `id`/`label` unconditionally (not
+  // spread-guarded like expiresAt/lastSeenAt), so an id-less in-memory
+  // PublicDevice still carries an `id: undefined` OWN property —
+  // `hasOwnProperty` on that in-memory object would pass even though the key
+  // vanishes over the wire at JSON.stringify time. Seeding an id-less raw
+  // record directly (bypassing the normal mint path) is what makes this
+  // genuinely red pre-fix: before #2183, loadSync never validated `id`, so
+  // the id-less record survived to redactDevice and was served with its
+  // `id` key silently missing over the wire. After #2183, it's dropped at
+  // load and never reaches this response at all.
+  it('every device served by GET /api/devices satisfies the openapi Device required key list [id, label, createdAt, revoked] (#2183)', async () => {
+    const idless = {
+      label: 'No id',
+      tokenHash: deviceTokens.hashToken('idless-token'),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }; // deliberately no `id` field
+    await writeFile(
+      join(workspaceRoot, 'device-tokens.json'),
+      JSON.stringify({ schema: 2, devices: [idless] }),
+      'utf8',
+    );
+    deviceTokens._resetDeviceTokenCacheForTests();
+    await request(app).post('/api/devices').send({ label: 'Normal' });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(app).get('/api/devices');
+    warn.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.devices.length).toBeGreaterThan(0);
+    for (const d of res.body.devices as Record<string, unknown>[]) {
+      for (const key of ['id', 'label', 'createdAt', 'revoked']) {
+        expect(Object.prototype.hasOwnProperty.call(d, key)).toBe(true);
+      }
+    }
   });
 });
