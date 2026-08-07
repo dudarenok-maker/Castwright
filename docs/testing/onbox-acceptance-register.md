@@ -138,6 +138,14 @@ comparison, see the edge list above). The merge step that closes this, run
      call failed (`fetch` or `show`) — run that command by hand
      (`git fetch origin main`) to see the underlying error, fix whatever it
      reports (network, auth, the remote), then re-run step 2.
+
+   **Known limitation:** a row that's live and still genuinely owed but was
+   never actually merged into `main` at all (e.g. published straight from a
+   branch that never merged, or from a PR later reverted) is not
+   distinguishable from a deliberate discharge — it silently reads as
+   discharged rather than being flagged. Accepted trade-off, not an
+   oversight; see `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 

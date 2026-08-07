@@ -459,23 +459,68 @@ function parseLiveViewSections(html) {
 // Parses a baseline register text (origin/main's copy, per #2199) into the
 // same shape used elsewhere: the glance table's letters and the body's
 // letter -> row-numbers map. Returns `null` when the baseline can't be
-// trusted at all — an unterminated fence, or no "## At a glance" section —
-// so the caller can fail closed rather than silently treating a truncated
-// or garbled baseline as "row not found, must be discharged". Reuses the
-// SAME parsing helpers as the working register (`stripFences`,
-// `splitSections`, `parseGlanceTable`, `parseBodyGroups`) rather than a
-// second parser, per the #2199 design.
+// TRUSTED, which this function tests by running it through `checkRegister`
+// (the exact same internal-consistency check `check:onbox-register` runs
+// against the tracked register) and rejecting it outright if that reports
+// ANYTHING — not just the narrower "unterminated fence or no glance
+// section" test an earlier version used.
+//
+// #2199 review round 3 (A2): that narrower test was too weak. Every OTHER
+// kind of malformed baseline — a glance-table row with no matching body
+// section, a body section with no glance-table row, a count mismatch, a
+// contiguity gap, a duplicate letter, a sub-lettered row heading, ... —
+// used to fall through it and produce a non-null result with an EMPTY (or
+// merely incomplete) `bodyGroups` for the broken group. Since an empty
+// baseline group makes every live-page row for that group read as
+// "discharged" (nothing in the baseline to contradict it), that was a
+// fail-OPEN hole with the same shape and stakes as the one round 2 closed:
+// an internally-inconsistent register CAN reach `main` (the register's own
+// consistency check is neither required nor unconditionally path-triggered
+// — see `.github/workflows/onbox-register-check.yml`), and from that point
+// every `--against-published` run against it would be silently vacuous.
+// Delegating to `checkRegister` — rather than hand-rolling a wider version
+// of the same narrow test — is what makes "can't be trusted" mean the same
+// thing here as it does everywhere else in this file, instead of two
+// definitions quietly drifting apart.
+//
+// Reuses the SAME parsing helpers as the working register (`stripFences`,
+// `splitSections`, `parseGlanceTable`, `parseBodyGroups`) for the actual
+// extraction — no second parser — once `checkRegister` has already vouched
+// for the text; the fence-stripping/glance-section lookups below are just
+// pulling out what `checkRegister` already confirmed is there.
 function resolveBaselineGroups(baselineText) {
   if (typeof baselineText !== 'string') return null;
-  const { text: strippedBaseline, unterminatedFenceLine } = stripFences(baselineText);
-  if (unterminatedFenceLine !== null) return null;
+  if (checkRegister(baselineText).length > 0) return null;
+  const { text: strippedBaseline } = stripFences(baselineText);
   const baselineSections = splitSections(strippedBaseline);
   const baselineGlanceSection = baselineSections.find((s) => s.title === 'At a glance');
+  // Defence in depth, not the primary gate: `checkRegister` returning no
+  // errors already guarantees this section exists, so this branch should be
+  // unreachable — but failing CLOSED (null) instead of throwing a raw
+  // TypeError on `.body` is strictly better if that guarantee is ever
+  // violated by a future change to either function, and costs nothing here.
   if (!baselineGlanceSection) return null;
   const { groups: baselineTableGroups } = parseGlanceTable(baselineGlanceSection.body);
   const { groups: baselineBodyGroups } = parseBodyGroups(baselineSections);
   return { tableLetters: new Set(baselineTableGroups.keys()), bodyGroups: baselineBodyGroups };
 }
+
+// The single-error array `checkLiveView` returns when `extraOnly` can't
+// resolve or trust a baseline at all (see `resolveBaselineGroups` above).
+// Exported and matched by IDENTITY (`errors[0] === CANNOT_VERIFY_BASELINE_ERROR`)
+// rather than by prose-sniffing a message prefix — #2199 review round 3
+// (B2) flagged the original `errors.length === 1 &&
+// errors[0].startsWith('Cannot verify')` check in the CLI layer as a
+// fragile contract between this string and the CLI's remedy text: a future
+// reword of the message (e.g. fixing a typo) would silently break the CLI's
+// detection with no test catching it, since nothing tied the two together.
+// A single shared constant makes that impossible — both sides reference the
+// same value, so they cannot drift independently.
+export const CANNOT_VERIFY_BASELINE_ERROR =
+  'Cannot verify --against-published: the origin/main baseline register is ' +
+  'unavailable, unreadable, or internally inconsistent, so a row the live page ' +
+  "has but this register lacks can't be told apart from a genuine competing-lane " +
+  'row. Do not publish until this passes.';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -521,6 +566,23 @@ function resolveBaselineGroups(baselineText) {
 //     error — rather than silently treating "baseline unknown" the same as
 //     "baseline lacks it too", which would let a discharge-shaped bug pass
 //     unnoticed for the same reason a real competing-lane row would.
+//
+//     Residual limitation, deliberately not fixed here (#2199 review round
+//     3, A3): a row that is LIVE and still genuinely OWED but never actually
+//     landed on `origin/main` at all — e.g. published straight from a
+//     branch that never merged, or from a PR that was later reverted — now
+//     reads as "discharged" too, identically to a row someone legitimately
+//     removed: both are "absent from origin/main, absent from the working
+//     register". The `'both'`-mode message this replaces already names this
+//     exact cause ("A row published from an unmerged branch ... is the
+//     usual cause"); `extraOnly` has no way left to distinguish "removed on
+//     purpose" from "never merged in the first place", because the ONLY
+//     signal it has is origin/main's content, and both cases agree on what
+//     that says. This is an intentional narrowing of the guard's envelope,
+//     not an oversight: the alternative — treating any row absent from
+//     origin/main as suspect — is the exact false positive #2199 exists to
+//     fix, just with the roles of "register" and "origin/main" swapped. See
+//     the register's own "Live view" step 3 for the operator-facing note.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
@@ -558,13 +620,18 @@ export function checkLiveView(
   if (direction === 'extraOnly') {
     const baseline = resolveBaselineGroups(baselineText);
     if (!baseline) {
-      return [
-        'Cannot verify --against-published: the origin/main baseline register is ' +
-          'unavailable or could not be parsed, so a row the live page has but this ' +
-          "register lacks can't be told apart from a genuine competing-lane row. Run " +
-          '`git fetch origin main` (so origin/main is resolvable and up to date) and try ' +
-          'again. Do not publish until this passes.',
-      ];
+      // Deliberately cause-agnostic (unavailable, unreadable, AND
+      // internally-inconsistent-per-checkRegister all land here — see
+      // resolveBaselineGroups' own header comment) and deliberately does
+      // NOT prescribe a specific remedy like "run git fetch": that used to
+      // read as a live contradiction when the actual cause was a fetch that
+      // had already succeeded (#2199 review round 3, B3) — the CLI layer,
+      // which knows which git call actually failed, is what prints the
+      // specific remedy (see the `baseline.failedStep` branch below); this
+      // message is also reached directly by callers that never touch git at
+      // all (e.g. a unit test passing a malformed `baselineText`), for whom
+      // "run git fetch" would be actively wrong advice.
+      return [CANNOT_VERIFY_BASELINE_ERROR];
     }
     baselineTableLetters = baseline.tableLetters;
     baselineBodyGroups = baseline.bodyGroups;
@@ -793,12 +860,31 @@ function runGitCommand(args, cwd) {
 // layer can tell the operator specifically what to retry. `checkLiveView`
 // itself never shells out (see its own header comment) — this function is
 // the CLI layer's entire git surface for baseline resolution.
+//
+// #2199 review round 3 (A1): reads `FETCH_HEAD`, NOT `origin/main`, for the
+// `show`. "Fetch, then read the local ref" (round 2's version) is not
+// provably fresh: `git fetch origin main` only GUARANTEES it writes
+// `FETCH_HEAD` — updating `refs/remotes/origin/main` is an opportunistic
+// side effect that happens only when the repo's `remote.origin.fetch`
+// refspec maps `refs/heads/main` at all. A narrowed refspec (e.g. one that
+// only tracks `refs/heads/other/*`) makes the fetch exit 0 while
+// `origin/main` silently stays wherever it was — reopening the exact
+// staleness hole round 2 was meant to close, through a different door. This
+// repo's own default clone uses the wildcard refspec, so it isn't exposed
+// today, but "a ref that updates only sometimes" is precisely the
+// "unenforced prerequisite" argument this function already makes above
+// about the network requirement itself — it shouldn't apply to the fetch
+// but not to what the fetch is trusted to have updated. `FETCH_HEAD` has no
+// such conditionality: any `git fetch` — regardless of refspec — writes it
+// unconditionally to the tip(s) it just fetched, so reading it instead of
+// the remote-tracking ref is correct independent of how this or any other
+// clone's refspec is configured.
 export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCommand) {
   const fetchResult = gitRunner(['fetch', 'origin', 'main'], repoRoot);
   if (fetchResult.error || fetchResult.status !== 0) {
     return { text: null, failedStep: 'fetch' };
   }
-  const showResult = gitRunner(['show', `origin/main:${registerPath}`], repoRoot);
+  const showResult = gitRunner(['show', `FETCH_HEAD:${registerPath}`], repoRoot);
   if (showResult.error || showResult.status !== 0) {
     return { text: null, failedStep: 'show' };
   }
@@ -893,8 +979,38 @@ if (invokedAsCli) {
     // #2199 review round 2: `origin/main` is FETCHED fresh here, not just
     // read as-is — see `resolveBaselineText`'s own header comment for why a
     // read-only local ref reopens the #1931 race this mode exists to close.
+    //
+    // #2199 review round 3 (A4/A5): `ONBOX_TEST_BASELINE_FILE` is a TEST-ONLY
+    // escape hatch — never mentioned in the register's operator-facing "Live
+    // view" procedure, and deliberately narrow: when set, it substitutes
+    // ONLY this one read (the baseline text), never the rest of the flow.
+    // When unset (every real invocation), behaviour is exactly
+    // `resolveBaselineText`'s real `git fetch` + `git show FETCH_HEAD`. It
+    // exists so the test suite can pin CLI behaviour against a KNOWN,
+    // hermetic baseline instead of depending on live network access or
+    // whatever `origin/main` happens to contain at test-run time — a CLI
+    // test that derives its expected verdict from live git state is a
+    // latent bug (a genuinely new row landing in the same group on `main`
+    // while this branch is open silently flips the test's verdict; see the
+    // now-hermetic tests below for what that looked like before this seam
+    // existed). The real-git, real-network fetch-failure test further down
+    // deliberately does NOT use this override — it is the one place a live
+    // `git fetch` failing is exactly the point.
     const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-    const baseline = resolveBaselineText(repoRoot, REGISTER);
+    const baselineFileOverride = process.env.ONBOX_TEST_BASELINE_FILE;
+    let baseline;
+    if (baselineFileOverride) {
+      try {
+        baseline = {
+          text: readFileSync(resolve(baselineFileOverride), 'utf8'),
+          failedStep: null,
+        };
+      } catch {
+        baseline = { text: null, failedStep: 'show' };
+      }
+    } else {
+      baseline = resolveBaselineText(repoRoot, REGISTER);
+    }
     if (baseline.failedStep) {
       // Named explicitly, distinct from checkLiveView's generic "cannot
       // verify" error below (which fires too, since baseline.text is null) —
@@ -902,25 +1018,30 @@ if (invokedAsCli) {
       console.error(
         baseline.failedStep === 'fetch'
           ? '`git fetch origin main` failed — cannot verify --against-published without ' +
-              'a freshly-fetched origin/main baseline, and there is no offline fallback ' +
-              '(a stale local origin/main is exactly the hole this check exists to close). ' +
-              'Check your network connection and the `origin` remote, then try again.'
-          : '`git show origin/main:...` failed even after a successful `git fetch origin ' +
-              'main` — origin/main may not have this file at this ref. Check the file path ' +
-              'and try again.',
+              'a freshly-fetched baseline, and there is no offline fallback (a stale ' +
+              'baseline is exactly the hole this check exists to close). Check your ' +
+              'network connection and the `origin` remote, then try again — do not retry ' +
+              'the fetch again without addressing the underlying error first.'
+          : '`git show FETCH_HEAD:...` failed even though the preceding `git fetch origin ' +
+              'main` just succeeded — FETCH_HEAD may not have this file at this ref. ' +
+              'Check the file path, not the network or the fetch (which already worked), ' +
+              'then try again.',
       );
     }
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
       baselineText: baseline.text,
     });
-    // The fail-closed "cannot verify" case (#2199) is a single, self-
-    // contained error that already tells the operator what to do (`git
-    // fetch origin main`) — it does not mean the register IS behind (that's
-    // unknown), so it gets its own label rather than the "shows the register
-    // is BEHIND" framing below, which would overstate what's actually known.
+    // The fail-closed "cannot verify" case (#2199) does not mean the
+    // register IS behind (that's unknown), so it gets its own label rather
+    // than the "shows the register is BEHIND" framing below, which would
+    // overstate what's actually known — the `baseline.failedStep` branch
+    // above already printed the specific, actionable remedy. Matched by
+    // IDENTITY against the shared `CANNOT_VERIFY_BASELINE_ERROR` constant,
+    // not by sniffing message prose (#2199 review round 3, B2) — see that
+    // constant's own comment for why.
     const cannotVerify =
-      publishedErrors.length === 1 && publishedErrors[0].startsWith('Cannot verify');
+      publishedErrors.length === 1 && publishedErrors[0] === CANNOT_VERIFY_BASELINE_ERROR;
     const publishedFailed = report(
       cannotVerify
         ? `${publishedPath} could not be checked`
