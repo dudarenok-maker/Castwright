@@ -36,7 +36,9 @@ import {
 } from './venv-migration.mjs';
 import { resolveInstallProfile } from './accelerator-profile.mjs';
 import { planTorchPreinstall } from './install-torch.mjs';
-import { planOrtSwap } from './install-ort.mjs';
+import { planOrtSwap, applyOrtMarkerDelete, applyOrtMarkerWrite } from './install-ort.mjs';
+
+const REAL_MARKER = { del: applyOrtMarkerDelete, write: applyOrtMarkerWrite };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root  (3 levels up)
@@ -151,7 +153,14 @@ export function installForProfile(
   runPip = (a) => pipOk(venvPy, a),
   platform = process.platform,
   venvDir = null,
+  marker = REAL_MARKER,
 ) {
+  const plan = planOrtSwap(profile, platform);
+  // Delete FIRST: cpu.txt carries an explicit `onnxruntime` line, and the
+  // AMD->CPU fallback below installs it. A stale marker present at that moment
+  // makes pip skip the real install.
+  if (venvDir) marker.del(venvDir, plan);
+
   if (profile === 'amd') {
     const torch = planTorchPreinstall('amd', platform);
     if (torch.action === 'install') {
@@ -209,14 +218,16 @@ export function installForProfile(
   // CUDAExecutionProvider is actually available (a missing swap = silent CPU-only
   // Kokoro on a GPU box). A swap failure is fatal here — better to fail the install
   // loudly than ship a GPU box that quietly synthesises on the CPU.
-  const ort = planOrtSwap(profile, platform);
+  const ort = plan;
   if (ort.action === 'swap') {
     log(`swapping ONNX runtime → the ${profile} GPU build`);
     for (const step of ort.steps) {
       if (!runPip(step)) {
+        if (venvDir) marker.del(venvDir, ort);
         throw new Error(`ONNX runtime swap failed (pip ${step.join(' ')}) for the ${profile} overlay`);
       }
     }
+    if (venvDir) marker.write(venvDir, ort);
   }
   return profile;
 }
