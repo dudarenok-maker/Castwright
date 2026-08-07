@@ -15,6 +15,7 @@ import {
   rejectOrphanedId,
   rejectOrphanedPair,
   unrejectOrphanedPair,
+  undoRejectedPairs,
   CastIdHistoryUnreadableError,
 } from './cast-id-history.js';
 
@@ -415,6 +416,19 @@ describe('cast id history', () => {
             await expect(unrejectOrphanedPair(dir, 'mayrin', 'mairin')).rejects.toThrow(
               CastIdHistoryUnreadableError,
             );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('undoRejectedPairs throws and leaves the file byte-identical — even on what would have been a no-op (#2198)', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(
+              undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }]),
+            ).rejects.toThrow(CastIdHistoryUnreadableError);
             expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
           } finally {
             warnSpy.mockRestore();
@@ -873,6 +887,99 @@ describe('cast id history', () => {
       expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
         { from: 'mayrin', to: 'wren' },
       ]);
+    });
+  });
+
+  /* #2198 — the transactional batch primitive the DELETE undo route now
+     calls instead of looping `restoreSupersededId` + `unrejectOrphanedPair`
+     per pair. These pin the primitive's own contract directly, independent
+     of the route: restore semantics identical to `restoreSupersededId`'s
+     (never overwrite a newer alias), removal always happens regardless of
+     whether the restore ran or was skipped, and the whole batch writes
+     ONCE (or not at all, when nothing changes). */
+  describe('undoRejectedPairs (#2198 — batched multi-pair undo)', () => {
+    it('restores the alias and removes the pair in one call', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+      const results = await undoRejectedPairs(dir, [
+        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
+      ]);
+      expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ mayrin: 'wren' });
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('does NOT overwrite a NEWER alias — restored: false + supersededByOther, original entry untouched, but the pair is still removed', async () => {
+      // A later, unrelated re-analysis recorded the CORRECT alias since the
+      // original reject stashed 'wren' — seeded directly, mirroring C1's own
+      // scenario (`restoreSupersededId`'s doc comment).
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'newer-target' },
+          rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+        }),
+      );
+
+      const results = await undoRejectedPairs(dir, [
+        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
+      ]);
+      expect(results).toEqual([
+        { from: 'mayrin', to: 'mairin', restored: false, supersededByOther: 'newer-target' },
+      ]);
+      const history = await loadCastIdHistory(dir);
+      // The newer alias survives untouched — the failure mode C1 exists to prevent.
+      expect(history.supersededBy.mayrin).toBe('newer-target');
+      // The rejection is still undone regardless — Undo's primary consequence.
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('a pair with no forgotSupersededTo contributes no alias restore, only pair removal', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const results = await undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin' }]);
+      expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('an absent pair is a no-op for that entry, and a batch that changes nothing writes no file at all', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      const results = await undoRejectedPairs(dir, [{ from: 'ghost', to: 'nobody' }]);
+      expect(results).toEqual([{ from: 'ghost', to: 'nobody', restored: true }]);
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+
+    /* NOTE (PR #2236 review, M1): this case does NOT prove "no write happened".
+       `writeJsonAtomic` reproduces byte-identical output for an unmutated
+       object, so it stays green even with the `if (changed)` guard forced to
+       always-write — verified. What actually pins the guard is its sibling
+       above, which asserts an ABSENT file is not created. Kept because
+       byte-identity on an existing file is still worth asserting; the title no
+       longer claims it detects a redundant rewrite. */
+    it('a batch that changes nothing leaves an EXISTING file byte-identical', async () => {
+      await rejectOrphanedPair(dir, 'unrelated-from', 'unrelated-to');
+      const before = readFileSync(castIdHistoryPath(dir), 'utf8');
+      // Neither pair below matches anything present, and neither carries a
+      // forgotSupersededTo — nothing for the batch to change.
+      await undoRejectedPairs(dir, [{ from: 'ghost-1', to: 'nobody-1' }, { from: 'ghost-2', to: 'nobody-2' }]);
+      expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(before);
+    });
+
+    it('two pairs in one batch: both restored and both removed, independent of each other', async () => {
+      await rejectOrphanedPair(dir, 'a', 'target', 'alias-a');
+      await rejectOrphanedPair(dir, 'b', 'target', 'alias-b');
+      const results = await undoRejectedPairs(dir, [
+        { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
+        { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
+      ]);
+      expect(results).toEqual([
+        { from: 'a', to: 'target', restored: true },
+        { from: 'b', to: 'target', restored: true },
+      ]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ a: 'alias-a', b: 'alias-b' });
+      expect(history.rejectedPairs).toEqual([]);
     });
   });
 
