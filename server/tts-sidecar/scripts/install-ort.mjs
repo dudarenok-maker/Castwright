@@ -240,6 +240,30 @@ export function planOrtSwap(profile, platform) {
   };
 }
 
+/** Delete our marker. Safe on every plan and every venv shape — the failure
+ *  path calls it with a SWAP plan before re-throwing. */
+export function applyOrtMarkerDelete(venvDir, _plan) {
+  const sp = sitePackagesDir(venvDir);
+  if (!sp) return;
+  deleteOrtMarkerIfOurs(sp);
+}
+
+/** Write the marker. NO-OP unless the plan says write — the skip variant has no
+ *  ortPackage, so a write there would glob `undefined-*` and either resolve
+ *  nothing or overwrite the REAL plain distribution. */
+export function applyOrtMarkerWrite(venvDir, plan) {
+  if (plan?.marker?.action !== 'write') return;
+  const sp = sitePackagesDir(venvDir);
+  if (!sp) throw new Error(`ORT marker: no site-packages under ${venvDir}`);
+  const version = readInstalledOrtVersion(sp, plan.ortPackage);
+  if (!version) {
+    throw new Error(
+      `ORT marker: could not read the installed ${plan.ortPackage} version (absent or ambiguous)`,
+    );
+  }
+  writeOrtMarker(sp, version);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
   const plan = planOrtSwap(profile, process.platform);
