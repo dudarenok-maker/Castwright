@@ -37,6 +37,25 @@ import type {
   AnalyzerDeviceResponse,
 } from '../lib/types';
 
+/* #2221 — extracts a displayable message from a rejected restartSidecar
+   promise WITHOUT going through describeConfigSaveError: that parser is
+   specifically for /api/config's `{error}` JSON envelope
+   (configApiErrorMessage, lib/api.ts), and restartSidecar hits a
+   different route (/api/sidecar/restart, realRestartSidecar) with no such
+   guarantee — forcing it through the config parser would either coerce an
+   unrelated shape onto it or (more likely) just fall through to raw-
+   message-as-is, which happens to work today only by accident. `.unwrap()`
+   re-throws RTK's SerializedError — a plain object, never a real Error
+   instance — so this reads `.message` off either shape. */
+function restartFailureMessage(reason: unknown): string {
+  if (reason instanceof Error && reason.message) return reason.message;
+  if (typeof reason === 'object' && reason !== null && 'message' in reason) {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  return 'Failed to restart the sidecar.';
+}
+
 /* ── per-device-knob staleReason derivation ──────────────────────────────── */
 
 /* Which sidecar engine a device knob's key pins. */
@@ -257,6 +276,10 @@ export function AdvancedView() {
           notificationsActions.pushToast({
             kind: 'error',
             message: `Couldn't reset all settings: ${describeConfigSaveError(reason).message}`,
+            // #2209 review "also fix" — every other pushToast site
+            // (layout.tsx) dedupes; without it, repeated Reset-all
+            // failures (e.g. a user retrying the same button) stack.
+            dedupeKey: 'config-reset-all-failed',
           }),
         );
       });
@@ -266,7 +289,26 @@ export function AdvancedView() {
     setRestarting(true);
     try {
       await dispatch(restartSidecar()).unwrap();
+    } catch (reason) {
+      // #2221 — this button's own row-vs-page distinction: a restart is
+      // page-level (there's no single OverrideRow it's attributable to),
+      // so it toasts, the same pattern handleResetAll/onResetSection
+      // already use — NOT describeConfigSaveError, which is specifically
+      // for /api/config's `{error}` JSON envelope. restartSidecar hits
+      // /api/sidecar/restart, a different route with no such guarantee;
+      // this reads the rejection's own message with a plain fallback.
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Couldn't restart the sidecar: ${restartFailureMessage(reason)}`,
+          dedupeKey: 'sidecar-restart-failed',
+        }),
+      );
     } finally {
+      // Runs on EITHER outcome — restarting must clear so Restart sidecar
+      // is clickable again either way; the toast above is what tells the
+      // two outcomes apart, since the banner itself (RestartSidecarBanner)
+      // reverts to the same "Restart sidecar" idle state regardless.
       setRestarting(false);
     }
   };
@@ -386,6 +428,10 @@ export function AdvancedView() {
                           notificationsActions.pushToast({
                             kind: 'error',
                             message: `Couldn't reset "${group.label}": ${describeConfigSaveError(reason).message}`,
+                            // Keyed per-group — a different group's failure
+                            // must not collapse into (or be collapsed by)
+                            // this one's toast.
+                            dedupeKey: `config-reset-section-${group.id}-failed`,
                           }),
                         );
                       });

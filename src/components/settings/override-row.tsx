@@ -2,7 +2,7 @@
    the Advanced Settings UI. Pure props-and-callbacks — no slice access.
    The parent view wires this to the knob registry + change dispatch. */
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { Checkbox } from '../primitives';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
@@ -121,19 +121,50 @@ export interface ConfigSaveError {
   message: string;
 }
 
-/* realPutConfig (lib/api.ts) wraps a non-2xx PUT /api/config response as
-   `Config update failed (${status}): ${bodyText}` before throwing, and the
-   route always replies with a JSON `{ error: string }` body on a 400/409
-   (server/src/routes/config.ts) — so bodyText is that JSON, verbatim. This
-   pulls the server's own `error` string back out of the wrapper, rather
-   than showing the wrapper text (or a generic "failed to save") verbatim. */
-const WRAPPED_CONFIG_ERROR = /^Config update failed \((\d+)\):\s*([\s\S]*)$/;
+/* configApiErrorMessage (lib/api.ts) wraps a non-2xx /api/config response
+   as `Config ${action} failed (${status}): ${bodyText}` before throwing —
+   ONE shared builder, called by realGetConfig ('fetch'), realPutConfig
+   ('update'), AND realResetConfig ('reset'), so the three verbs cannot
+   independently drift the way "update" vs "reset" already had (#2209
+   review B1: this regex used to match "update" only, so every rejected
+   Revert/Reset — which all go through api.resetConfig — rendered the raw
+   wrapper text instead of the server's own message). `\w+` matches
+   whichever verb actually failed. The route always replies with a JSON
+   `{ error: string }` body on a 400/409 (server/src/routes/config.ts) —
+   so bodyText is that JSON, verbatim. This pulls the server's own `error`
+   string back out of the wrapper, rather than showing the wrapper text
+   (or a generic "failed to save") verbatim. */
+const WRAPPED_CONFIG_ERROR = /^Config \w+ failed \((\d+)\):\s*([\s\S]*)$/;
+
+/* #2209 review "also fix" — an unparseable body can be a full HTML error
+   page (a 500 from a proxy/middleware that never reached the JSON route
+   handler at all); rendering that verbatim inside role="alert" is its own
+   defect. Capped well past any real pair-rule message's length (#2180's
+   longest is ~300 chars) so a genuine server message is never truncated. */
+const MAX_SAVE_ERROR_MESSAGE_LENGTH = 500;
+
+/** Trims, truncates, and — critically — replaces an EMPTY result with a
+    real sentence: an empty body (`Config update failed (400): ` with
+    nothing after the colon) previously produced `message: ''`, so the
+    rendered row read "Couldn't save:" and nothing after it — turning this
+    fix back into the exact silence it exists to close. */
+function finalizeSaveErrorMessage(message: string, status: number | null): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return status === null
+      ? "The server didn't say why."
+      : `The server didn't say why (HTTP ${status}).`;
+  }
+  return trimmed.length > MAX_SAVE_ERROR_MESSAGE_LENGTH
+    ? `${trimmed.slice(0, MAX_SAVE_ERROR_MESSAGE_LENGTH)}…`
+    : trimmed;
+}
 
 /** Extract a displayable message + 409/other classification from a
-    rejected saveOverride promise. `.unwrap()` re-throws RTK's
-    SerializedError — a plain object, never a real Error instance — so this
-    reads `.message` off either shape instead of relying on
-    `instanceof Error`. */
+    rejected saveOverride/resetKnob/resetGroup/resetAllConfig promise.
+    `.unwrap()` re-throws RTK's SerializedError — a plain object, never a
+    real Error instance — so this reads `.message` off either shape
+    instead of relying on `instanceof Error`. */
 export function describeConfigSaveError(reason: unknown): ConfigSaveError {
   const raw =
     reason instanceof Error
@@ -143,7 +174,7 @@ export function describeConfigSaveError(reason: unknown): ConfigSaveError {
         : String(reason);
 
   const match = raw.match(WRAPPED_CONFIG_ERROR);
-  if (!match) return { status: null, locked: false, message: raw };
+  if (!match) return { status: null, locked: false, message: finalizeSaveErrorMessage(raw, null) };
 
   const status = Number(match[1]);
   const body = match[2];
@@ -159,10 +190,11 @@ export function describeConfigSaveError(reason: unknown): ConfigSaveError {
     }
   } catch {
     /* Not JSON (or an unexpected shape) — fall back to the raw body text,
-       still more useful than the wrapper's "Config update failed (…)"
-       prefix alone. */
+       still more useful than the wrapper's "Config <action> failed (…)"
+       prefix alone (capped below — the raw body can be an entire HTML
+       error page). */
   }
-  return { status, locked: status === 409, message };
+  return { status, locked: status === 409, message: finalizeSaveErrorMessage(message, status) };
 }
 
 interface ControlProps {
@@ -182,6 +214,21 @@ interface ControlProps {
       or the extracted error when one is rejected. OverrideRow owns the
       state and renders it full-width below the control row (#2209). */
   onSaveErrorChange: (err: ConfigSaveError | null) => void;
+  /** #2209 review B2 — OWNED BY OverrideRow, not this component: Revert
+      (handleRevertClick, below) is a THIRD source of writes to this same
+      row's saveError, alongside this component's own commitEdit/
+      commitSimple, and all three must stomp on the same staleness clock
+      or a stale rejection from any one of them can clobber a since-
+      superseded outcome from either of the other two. Passing the ref
+      down (rather than each side keeping its own) is what makes that a
+      single shared clock instead of three independent ones. */
+  generationRef: MutableRefObject<number>;
+  /** id of the row's rendered error <p>, present only while one is shown
+      — associates the control with it via aria-describedby (#2209 "also
+      fix": screen-reader users tabbing back to the field previously got
+      no indication anything had failed). */
+  describedBy?: string;
+  invalid: boolean;
 }
 
 function KnobControl({
@@ -192,6 +239,9 @@ function KnobControl({
   gpuDevices,
   inputRef,
   onSaveErrorChange,
+  generationRef,
+  describedBy,
+  invalid,
 }: ControlProps) {
   const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
 
@@ -229,8 +279,10 @@ function KnobControl({
   // re-edit happens in that case, so editingRef never blocks it), and a
   // bare "did a newer local commit happen" counter alone doesn't cover
   // it either (nothing local happened — the field's truth moved out from
-  // under it via an external reset instead).
-  const generationRef = useRef(0);
+  // under it via an external reset instead). Owned by OverrideRow and
+  // passed down as a prop (#2209 review B2) — Revert's own
+  // handleRevertClick bumps and checks this SAME ref, so a stale
+  // rejection from either side can't clobber the other's outcome.
 
   useEffect(() => {
     generationRef.current += 1;
@@ -329,6 +381,8 @@ function KnobControl({
         disabled={disabled}
         onChange={(next) => commitSimple(next)}
         label={value.effective ? 'Enabled' : 'Disabled'}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
       />
     );
   }
@@ -337,6 +391,8 @@ function KnobControl({
     return (
       <select
         aria-label={descriptor.label}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         value={String(value.effective)}
         disabled={disabled}
         onChange={(e) => commitSimple(e.target.value)}
@@ -369,6 +425,8 @@ function KnobControl({
       <div>
         <select
           aria-label={descriptor.label}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
           value={current}
           disabled={disabled}
           onChange={(e) => {
@@ -410,6 +468,8 @@ function KnobControl({
         ref={inputRef}
         type="number"
         aria-label={descriptor.label}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         value={draft}
         min={descriptor.min}
         max={descriptor.max}
@@ -433,6 +493,8 @@ function KnobControl({
       ref={inputRef}
       type="text"
       aria-label={descriptor.label}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
       value={draft}
       disabled={disabled}
       onFocus={() => setEditing(true)}
@@ -451,12 +513,16 @@ export interface OverrideRowProps {
   descriptor: KnobDescriptor;
   value: KnobValue;
   onChange: (raw: number | boolean | string) => void | Promise<unknown>;
-  /** Revert is a config save too — POST /api/config/reset can 409 (env-
-      locked) or 400 (cross-field pair rule) exactly like PUT, so its
-      rejection needs the same surfacing as onChange's (#2209 follow-up:
-      a knob pinned in .env, or one half of a cross-field pair, 409s/400s
-      on Revert the same way it does on save — this was the one write
-      path on this row still swallowing its rejection). */
+  /** Revert is a config save too — POST /api/config/reset can 400 (the
+      same cross-field pair rule PUT enforces), so its rejection needs the
+      same surfacing as onChange's (#2209 follow-up). **Not** 409: the
+      reset route has no env-locked check at all (that guard lives only in
+      the PUT handler, config.ts:97), and a locked row never renders this
+      button in the first place ({!locked && value.overridden} below) — so
+      the 409/"pinned in your environment" copy is reachable through
+      onChange but structurally unreachable through this prop. (An
+      earlier version of this comment claimed 409 was reachable here too;
+      it wasn't — corrected in review, #2209 B1.) */
   onRevert: () => void | Promise<unknown>;
   /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
   gpuDevices?: GpuDevice[];
@@ -470,20 +536,32 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
   // .map()), so two rows failing in sequence can never blank or overwrite
   // each other's message the way a single shared slice field would.
   const [saveError, setSaveError] = useState<ConfigSaveError | null>(null);
+  const errorId = `knob-save-error-${descriptor.key}`;
+
+  // #2209 review B2 — ONE staleness clock shared by every write this row
+  // can make: KnobControl's own commitEdit/commitSimple (passed down as a
+  // prop, below) AND this component's own handleRevertClick. Before this
+  // fix each side tracked its own, so a slow Revert whose OWN rejection
+  // arrived after a newer save had already succeeded still rendered its
+  // stale message beside a control that now works — and the reverse: a
+  // slow save's stale rejection could clobber a Revert's own outcome.
+  const generationRef = useRef(0);
 
   // A successful Revert changes value.effective, which KnobControl's own
-  // [value.effective] effect already treats as "clear this row's error"
-  // (onSaveErrorChange(null), passed through as setSaveError below) — so
-  // only the REJECTED case needs handling here: resetKnob.rejected leaves
-  // `values` untouched (config-slice, mirroring saveOverride.rejected),
-  // so nothing else will clear or set this row's error for a failed
-  // Revert.
+  // [value.effective] effect already treats as "clear this row's error
+  // AND bump the shared generation" (onSaveErrorChange(null), passed
+  // through as setSaveError below) — so only the REJECTED case needs
+  // handling here: resetKnob.rejected leaves `values` untouched
+  // (config-slice, mirroring saveOverride.rejected), so nothing else will
+  // clear or set this row's error for a failed Revert.
   const handleRevertClick = () => {
     setSaveError(null);
+    generationRef.current += 1;
+    const myGeneration = generationRef.current;
     const result = onRevert();
     if (result && typeof (result as Promise<unknown>).catch === 'function') {
       (result as Promise<unknown>).catch((reason: unknown) => {
-        setSaveError(describeConfigSaveError(reason));
+        if (generationRef.current === myGeneration) setSaveError(describeConfigSaveError(reason));
       });
     }
   };
@@ -530,6 +608,9 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
           gpuDevices={gpuDevices}
           inputRef={inputRef}
           onSaveErrorChange={setSaveError}
+          generationRef={generationRef}
+          describedBy={saveError ? errorId : undefined}
+          invalid={Boolean(saveError)}
         />
 
         {/* Env-locked indicator */}
@@ -570,8 +651,9 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
           button, and stays readable at <640px (mobile protocol). */}
       {saveError && (
         <p
+          id={errorId}
           role="alert"
-          data-testid={`knob-save-error-${descriptor.key}`}
+          data-testid={errorId}
           className={`mt-1.5 text-xs ${saveError.locked ? 'text-amber-800' : 'text-rose-700'}`}
         >
           {saveError.locked
