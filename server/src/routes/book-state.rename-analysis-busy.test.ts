@@ -210,4 +210,30 @@ describe('#2165 — PUT /:bookId/state refuses a rename while an analysis is reg
     expect(res.status).toBe(409);
     expect(existsSync(newDir)).toBe(false);
   });
+
+  it('reports analysis-busy 409 when both analysis is running AND destination path exists', async () => {
+    seedBook();
+    /* Set up both preconditions: mark the book busy AND create the destination
+       folder so existsSync(newDir) is true. The guard order test: when both
+       conditions hold simultaneously, isAnalysisBusy is checked FIRST, so the
+       caller receives the analysis-busy 409, not the path-collision 409. */
+    markAnalysisBusy(bookDir);
+    mkdirSync(newDir, { recursive: true });
+
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'state', patch: { title: NEW_TITLE } });
+
+    expect(res.status).toBe(409);
+    /* Assert the analysis-busy message specifically, not just any 409 — this
+       pins the guard precedence. Both branches return 409; without the message
+       check this test passes under either guard order and proves nothing. */
+    expect(res.body.error).toMatch(/analysis is running/i);
+    expect(existsSync(bookDir)).toBe(true);
+    expect(existsSync(newDir)).toBe(true); // destination remains untouched
+    /* Nothing was written: state.json still carries the old title. */
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.title).toBe(TITLE);
+  });
 });
