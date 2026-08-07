@@ -55,7 +55,7 @@ let bookId: string;
 
 const rejectOrphanedPairMock = vi.fn();
 const forgetSupersededIdMock = vi.fn();
-const restoreSupersededIdMock = vi.fn();
+const undoRejectedPairsMock = vi.fn();
 
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
@@ -65,8 +65,11 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
       rejectOrphanedPairMock(...args) ?? actual.rejectOrphanedPair(...args),
     forgetSupersededId: (...args: Parameters<typeof actual.forgetSupersededId>) =>
       forgetSupersededIdMock(...args) ?? actual.forgetSupersededId(...args),
-    restoreSupersededId: (...args: Parameters<typeof actual.restoreSupersededId>) =>
-      restoreSupersededIdMock(...args) ?? actual.restoreSupersededId(...args),
+    // #2198 — the DELETE route now undoes a whole batch through this single
+    // primitive instead of calling restoreSupersededId directly, so this is
+    // the seam a failure-mode test on the id-history side must mock.
+    undoRejectedPairs: (...args: Parameters<typeof actual.undoRejectedPairs>) =>
+      undoRejectedPairsMock(...args) ?? actual.undoRejectedPairs(...args),
   };
 });
 
@@ -143,13 +146,13 @@ beforeEach(() => {
   writeBookOnDisk(initialCast);
   rejectOrphanedPairMock.mockReset();
   forgetSupersededIdMock.mockReset();
-  restoreSupersededIdMock.mockReset();
+  undoRejectedPairsMock.mockReset();
   // Default: all three no-op and fall through to the real implementation
   // (`?? actual...` in the mock factory above), so a test only needs to
   // override the ONE primitive it's exercising.
   rejectOrphanedPairMock.mockReturnValue(undefined);
   forgetSupersededIdMock.mockReturnValue(undefined);
-  restoreSupersededIdMock.mockReturnValue(undefined);
+  undoRejectedPairsMock.mockReturnValue(undefined);
 });
 
 afterAll(() => {
@@ -288,7 +291,7 @@ describe('POST reject-orphan-match — id-history write failure modes (#2040 Tas
 });
 
 describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLinkedTo removal already landed before any fatal id-history step can fail', () => {
-  it('a restoreSupersededId failure 500s with a message that does NOT claim "nothing else was changed" — the notLinkedTo edge is already gone', async () => {
+  it('#2198 — an undoRejectedPairs failure 500s with a message that does NOT claim "nothing else was changed" — the notLinkedTo edge is already gone', async () => {
     // Seed a state matching what a genuine prior POST reject leaves behind:
     // the notLinkedTo edge on cast.json, and a pair with a stash to restore
     // on cast-id-history.json.
@@ -311,7 +314,10 @@ describe('DELETE reject-orphan-match (undo) — I5 (review round 1): the notLink
       }),
     );
 
-    restoreSupersededIdMock.mockImplementation(() => {
+    // #2198 — the route now calls the single batched `undoRejectedPairs`
+    // instead of `restoreSupersededId` directly, so that's the primitive a
+    // DELETE id-history failure-mode test mocks.
+    undoRejectedPairsMock.mockImplementation(() => {
       throw new Error('disk full');
     });
     const res = await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
