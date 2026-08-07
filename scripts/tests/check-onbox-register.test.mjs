@@ -8,7 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { checkRegister, checkLiveView } from '../check-onbox-register.mjs';
+import {
+  checkRegister,
+  checkLiveView,
+  resolveBaselineText,
+  CANNOT_VERIFY_BASELINE_ERROR,
+} from '../check-onbox-register.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-onbox-register.mjs');
@@ -19,6 +24,14 @@ const REAL_LIVE_VIEW_PATH = join(
   'docs',
   'testing',
   'onbox-acceptance-register-live-view.html',
+);
+const REAL_REGISTER_PATH = join(
+  HERE,
+  '..',
+  '..',
+  'docs',
+  'testing',
+  'onbox-acceptance-register.md',
 );
 
 // A minimal but structurally complete register: an "At a glance" table with
@@ -1196,6 +1209,463 @@ test('a markdown with no "At a glance" section reports that, and nothing else', 
 });
 
 // ---------------------------------------------------------------------------
+// #2199: `extraOnly` + `baselineText` — discharge-aware --against-published.
+//
+// A discharge (removing a row, which contiguity then renumbers the
+// survivors) makes the still-live page look "ahead" in exactly the same
+// shape as a genuine competing-lane publish: a live-page row/group the
+// working register doesn't have. `checkLiveView` disambiguates the two by
+// checking whether a SECOND register text — meant to be origin/main's copy,
+// injected here directly rather than fetched via git, per the design's
+// "keep checkLiveView unit-testable, do the git show in the CLI layer"
+// requirement — also lacks the row: baseline-lacks-it-too means discharged
+// (not reported); baseline-still-has-it means genuinely behind (reported).
+// ---------------------------------------------------------------------------
+
+// A minimal single-group register/live-view pair, parameterised by letter and
+// row numbers — reused for all four #2199 scenarios below so each test only
+// states the one thing that differs (working rows vs. baseline rows vs.
+// live-page rows).
+function buildSingleGroupRegister(letter, rowNumbers) {
+  const body = rowNumbers.map((n) => `### ${letter}${n} · thing ${n}\n\nBody text.\n`).join('\n');
+  return `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **${letter}** | Setup ${letter} | ${rowNumbers.length} |
+
+**${rowNumbers.length} owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group ${letter} — setup ${letter.toLowerCase()}
+
+${body}
+---
+`;
+}
+
+function buildSingleGroupLiveView(letter, { owed, glanceCount, headerCount, rowIds }) {
+  const rowSpans = rowIds
+    .map(
+      (id) => `      <summary><span class="num">${id}</span><span class="iname">t</span></summary>`,
+    )
+    .join('\n');
+  const lower = letter.toLowerCase();
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="n owed">${owed}</div><div class="l">Owed</div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#g${lower}">${letter}</a></td><td>Setup ${letter}</td><td>${glanceCount}</td></tr>
+    </tbody>
+  </table>
+
+  <section class="group" id="g${lower}">
+    <h3 class="gtitle"><span class="gtag">${letter}</span> Setup ${letter} <span class="gcount">${headerCount} rows</span></h3>
+${rowSpans}
+  </section>
+`;
+}
+
+// The exact 2026-08-06 shape from #2199: Group C's C1/C2 were discharged and
+// C3 renumbered to C1. The live page (fetched before the publish that will
+// fix it) still shows all three original IDs; the working register has only
+// the renumbered survivor; origin/main already carries the same discharge
+// (this change, or an already-merged one) so its baseline copy agrees with
+// the working register, not the stale live page.
+test('#2199: a discharge + renumber passes when origin/main also lacks the discharged IDs', () => {
+  const workingRegister = buildSingleGroupRegister('C', [1]);
+  const baselineRegister = buildSingleGroupRegister('C', [1]);
+  const liveView = buildSingleGroupLiveView('C', {
+    owed: 3,
+    glanceCount: 3,
+    headerCount: 3,
+    rowIds: ['C1', 'C2', 'C3'],
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+  });
+  assert.deepEqual(errors, []);
+});
+
+// The acceptance criteria's other named case: a row genuinely published from
+// a competing lane. A38 exists on the live page and on origin/main (the
+// competing lane's PR already merged there) but not yet in this register —
+// this must still fail, and name A38.
+test('#2199: a row still present on origin/main is reported as a genuine competing-lane row (names A38)', () => {
+  const workingRegister = buildSingleGroupRegister(
+    'A',
+    Array.from({ length: 37 }, (_, i) => i + 1),
+  );
+  const baselineRegister = buildSingleGroupRegister(
+    'A',
+    Array.from({ length: 38 }, (_, i) => i + 1),
+  );
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 38,
+    glanceCount: 38,
+    headerCount: 38,
+    rowIds: Array.from({ length: 38 }, (_, i) => `A${i + 1}`),
+  });
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+  });
+  assert.ok(
+    errors.some((e) => e.includes('BEHIND what is already published') && e.includes('A38')),
+    `expected a stale-row error naming A38, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Fail-closed (not fail-open): when the baseline can't be resolved at all —
+// modelling `git show origin/main:...` failing in the CLI layer — the check
+// must refuse to guess, not silently treat "unknown" as "discharged".
+test('#2199: an unresolvable baseline fails closed with a "cannot verify" error, not a silent pass', () => {
+  const workingRegister = buildSingleGroupRegister('C', [1]);
+  const liveView = buildSingleGroupLiveView('C', {
+    owed: 3,
+    glanceCount: 3,
+    headerCount: 3,
+    rowIds: ['C1', 'C2', 'C3'],
+  });
+  for (const unavailable of [null, undefined, 'not a register at all — no headings here']) {
+    const errors = checkLiveView(workingRegister, liveView, {
+      direction: 'extraOnly',
+      baselineText: unavailable,
+    });
+    assert.notDeepEqual(
+      errors,
+      [],
+      `baselineText=${JSON.stringify(unavailable)} must not silently pass`,
+    );
+    assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+    assert.match(errors[0], /cannot verify/i);
+    // #2199 review round 3 (B2): pins that the CLI's `cannotVerify` sniff
+    // (identity against this same exported constant, not a message-prose
+    // prefix match) actually matches what checkLiveView returns.
+    assert.equal(errors[0], CANNOT_VERIFY_BASELINE_ERROR);
+  }
+});
+
+// #2199 review round 3 (A2): a PARTIALLY parseable baseline used to fail
+// OPEN. The old `resolveBaselineGroups` only rejected a baseline for two
+// narrow reasons (an unterminated fence, or no "## At a glance" section at
+// all) — every OTHER kind of internal inconsistency (a glance-table row
+// with no matching body section, a count mismatch, a contiguity gap, ...)
+// fell through as a "resolved" baseline with an empty or incomplete
+// `bodyGroups` for the broken group, which then made every live-page row in
+// that group read as "discharged" (nothing in the baseline to contradict
+// it). These pin the fix: `resolveBaselineGroups` now runs `checkRegister`
+// over the baseline and rejects it outright if that reports ANYTHING.
+test('#2199 review (A2): a baseline with a valid glance-table row but NO matching body section fails closed, not open', () => {
+  // The reviewer's exact repro shape: working register A1-A3, live page
+  // A1-A4, baseline glance table says "A: 3" (a plausible, non-obviously-
+  // broken number) but has no "## Group A" body section at all. The old
+  // code returned `{ tableLetters: {A}, bodyGroups: {} }` here — a
+  // non-null, "resolved" result — so A4 read as discharged and the check
+  // returned zero errors. The correct verdict is "BEHIND by A4".
+  const workingRegister = buildSingleGroupRegister('A', [1, 2, 3]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 4,
+    glanceCount: 4,
+    headerCount: 4,
+    rowIds: ['A1', 'A2', 'A3', 'A4'],
+  });
+  const partiallyParseableBaseline = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 3 |
+
+**3 owed.** Oldest: **2026-01-01**.
+
+---
+`;
+  // Fixture sanity: confirm this baseline really is the "falls through the
+  // old narrow test" shape — it HAS "## At a glance" and no unterminated
+  // fence, so the pre-A2 code would have treated it as resolved.
+  assert.ok(partiallyParseableBaseline.includes('## At a glance'));
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: partiallyParseableBaseline,
+  });
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.equal(errors[0], CANNOT_VERIFY_BASELINE_ERROR);
+});
+
+test('#2199 review (A2): a baseline with an internal count mismatch (glance vs. body) also fails closed', () => {
+  // A different flavour of "partially parseable" than the missing-section
+  // case above — the glance table and body both exist and both have SOME
+  // content for Group A, but they disagree with each other (checkRegister's
+  // own check 1). Still must not read as a usable, trustworthy baseline.
+  const workingRegister = buildSingleGroupRegister('A', [1, 2]);
+  const liveView = buildSingleGroupLiveView('A', {
+    owed: 3,
+    glanceCount: 3,
+    headerCount: 3,
+    rowIds: ['A1', 'A2', 'A3'],
+  });
+  const inconsistentBaseline = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 5 |
+
+**5 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+### A1 · thing 1
+
+Body text.
+
+### A2 · thing 2
+
+Body text.
+
+---
+`;
+  const errors = checkLiveView(workingRegister, liveView, {
+    direction: 'extraOnly',
+    baselineText: inconsistentBaseline,
+  });
+  assert.equal(errors.length, 1, `expected exactly one error, got: ${JSON.stringify(errors)}`);
+  assert.equal(errors[0], CANNOT_VERIFY_BASELINE_ERROR);
+});
+
+// The default `direction: 'both'` tracked-pair comparison must not change
+// behaviour just because a `baselineText` happens to be passed alongside it
+// — it is scoped to `extraOnly` only.
+test("#2199: passing baselineText has no effect on the default direction:'both' comparison", () => {
+  const withBaseline = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+    {
+      baselineText: 'irrelevant and, deliberately, not even a parseable register',
+    },
+  );
+  const withoutBaseline = checkLiveView(
+    buildRegister(),
+    buildLiveView({ rowsA: ['A1', 'A2', 'A3'] }),
+  );
+  assert.deepEqual(withBaseline, withoutBaseline);
+  assert.ok(
+    withBaseline.some((e) => e.startsWith("Live view's Group A section has row A3")),
+    `expected the ordinary 'both'-mode extra-row error to still fire, got: ${JSON.stringify(withBaseline)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #2199 review round 2: `resolveBaselineText` — the CLI layer's git surface.
+//
+// A first version of the fix read the LOCAL `origin/main` ref as-is, with no
+// fetch — which trusts a ref that only moves on `git fetch`/`pull`. An
+// operator whose local checkout predates a merge on `main` would see that
+// merge's row as absent from BOTH their working register and their stale
+// local baseline, which the discharge filter then wrongly read as "already
+// discharged" and let through — a false negative on the exact #1931 shape
+// `--against-published` exists to catch. The fix: `resolveBaselineText`
+// fetches FRESH before reading, and fails closed (not open) if the fetch
+// itself fails.
+//
+// These tests inject a fake `gitRunner` rather than touching real git or the
+// network, so they're fast and hermetic — they pin the ORCHESTRATION
+// (fetch always precedes show; a fetch failure short-circuits before show
+// ever runs; both failure shapes are correctly labelled) independent of
+// whatever the real git binary or network happens to do. A separate CLI-level
+// test further down proves the same fetch-failure shape end-to-end through a
+// real (but deliberately unreachable) `git fetch`.
+// ---------------------------------------------------------------------------
+
+test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in that order, on success', () => {
+  const calls = [];
+  const fakeRunner = (args, cwd) => {
+    calls.push({ args, cwd });
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '', error: undefined };
+    if (args[0] === 'rev-parse') {
+      return { status: 0, stdout: 'deadbeefcafe\n', stderr: '', error: undefined };
+    }
+    if (args[0] === 'show') {
+      return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
+    }
+    throw new Error(`unexpected git subcommand in test: ${args[0]}`);
+  };
+  const result = resolveBaselineText(
+    '/fake/repo',
+    'docs/testing/onbox-acceptance-register.md',
+    fakeRunner,
+  );
+  assert.deepEqual(
+    calls.map((c) => c.args[0]),
+    ['fetch', 'rev-parse', 'show'],
+    'expected fetch, then rev-parse, then show, in that order',
+  );
+  assert.deepEqual(calls[0].args, ['fetch', 'origin', 'main']);
+  assert.deepEqual(calls[1].args, ['rev-parse', 'FETCH_HEAD']);
+  // #2199 review round 5 (optional hardening): reads the SHA `rev-parse`
+  // resolved, not the symbolic name `FETCH_HEAD` — freezing it immediately
+  // after the fetch narrows the window for a concurrent same-worktree fetch
+  // to move FETCH_HEAD out from under this read.
+  assert.deepEqual(calls[2].args, [
+    'show',
+    'deadbeefcafe:docs/testing/onbox-acceptance-register.md',
+  ]);
+  assert.equal(calls[0].cwd, '/fake/repo');
+  assert.equal(calls[1].cwd, '/fake/repo');
+  assert.equal(calls[2].cwd, '/fake/repo');
+  assert.deepEqual(result, { text: 'FAKE REGISTER TEXT', failedStep: null });
+});
+
+test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimmed before the show', () => {
+  // Real `git rev-parse` output ends with a trailing newline — asserting
+  // this explicitly pins that the SHA is trimmed, not concatenated as-is
+  // (which would produce an invalid `<sha>\n:<path>` show argument).
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: '  abc123  \n', stderr: '' };
+    if (args[0] === 'show') return { status: 0, stdout: 'TEXT', stderr: '' };
+    throw new Error(`unexpected git subcommand in test: ${args[0]}`);
+  };
+  resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(calls[2], ['show', 'abc123:reg.md']);
+});
+
+// #2199 review round 3 (A1): `git fetch origin main` only GUARANTEES it
+// writes `FETCH_HEAD` — updating `refs/remotes/origin/main` is an
+// opportunistic side effect that depends on `remote.origin.fetch`'s
+// refspec mapping `refs/heads/main` at all. A narrowed refspec makes the
+// fetch exit 0 while `origin/main` silently stays stale, reopening the
+// exact staleness hole round 2 closed, through a different door. This test
+// pins the chosen fix (read `FETCH_HEAD`, never `origin/main:<path>`) by
+// asserting on the LITERAL show args — a regression back to `origin/main:`
+// would pass every other test in this file (they never touch the real,
+// possibly-narrowly-configured origin) but must fail this one.
+test("resolveBaselineText: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'cafef00d\n', stderr: '' };
+    if (args[0] === 'show') return { status: 0, stdout: 'FRESH', stderr: '' };
+    throw new Error(`unexpected git subcommand in test: ${args[0]}`);
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(calls[1], ['rev-parse', 'FETCH_HEAD']);
+  assert.deepEqual(calls[2], ['show', 'cafef00d:reg.md']);
+  for (const call of calls) {
+    assert.ok(
+      !call.some((arg) => typeof arg === 'string' && arg.includes('origin/main')),
+      `no git call may ever reference origin/main directly, got: ${JSON.stringify(call)}`,
+    );
+  }
+  assert.equal(result.text, 'FRESH');
+});
+
+test('resolveBaselineText: a failing fetch (non-zero exit) short-circuits before show ever runs', () => {
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'fetch') return { status: 1, stdout: '', stderr: 'fake fetch failure' };
+    return { status: 0, stdout: 'should never be reached', stderr: '' };
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  assert.deepEqual(calls, ['fetch'], 'show must not run after a failed fetch');
+});
+
+test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeout) is also a fetch failure', () => {
+  // Node's spawnSync sets `result.error` (not just a non-zero `status`) both
+  // when the executable can't be spawned at all (ENOENT) and when its own
+  // `timeout` option fires — this fixture models either, since the
+  // production code treats them identically.
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'fetch') {
+      return { status: null, error: new Error('spawnSync git ETIMEDOUT'), stdout: '', stderr: '' };
+    }
+    return { status: 0, stdout: 'should never be reached', stderr: '' };
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  assert.deepEqual(calls, ['fetch']);
+});
+
+test('resolveBaselineText: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'cafef00d\n', stderr: '' };
+    if (args[0] === 'show') return { status: 128, stdout: '', stderr: 'fake show failure' };
+    throw new Error(`unexpected git subcommand in test: ${args[0]}`);
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(result, { text: null, failedStep: 'show' });
+  assert.deepEqual(
+    calls,
+    ['fetch', 'rev-parse', 'show'],
+    'show must still run after a successful fetch + rev-parse',
+  );
+});
+
+test('resolveBaselineText: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
+  // #2199 review round 5 (optional hardening): rev-parse and show are folded
+  // into the same failedStep, deliberately — see resolveBaselineText's own
+  // comment for why. This pins that folding, and that a rev-parse failure
+  // still short-circuits before an invalid `undefined:<path>` show is ever
+  // attempted.
+  const calls = [];
+  const fakeRunner = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') {
+      return { status: 128, stdout: '', stderr: 'fake rev-parse failure' };
+    }
+    return { status: 0, stdout: 'should never be reached', stderr: '' };
+  };
+  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  assert.deepEqual(result, { text: null, failedStep: 'show' });
+  assert.deepEqual(calls, ['fetch', 'rev-parse'], 'show must not run after a failed rev-parse');
+});
+
+// #2199 review round 3 (B3): on a `failedStep === 'show'` failure, the CLI
+// layer prints a specific line saying the fetch ALREADY succeeded — so the
+// generic `checkLiveView` "cannot verify" message (which fires alongside it,
+// unconditionally, for every cannot-verify cause) must never itself tell the
+// operator to "run git fetch", or the two lines contradict each other in the
+// same output (one says the fetch just worked; the other says to run it).
+// A real end-to-end CLI test for the `show`-only-fails shape would need a
+// git repo with a fetchable ref that lacks the target file at that ref — not
+// something constructible deterministically without a scratch repo — so
+// this pins the fix at its source: the shared constant's own text.
+test('#2199 review (B3): the generic cannot-verify message does not prescribe git fetch (would contradict a show-only failure)', () => {
+  assert.doesNotMatch(
+    CANNOT_VERIFY_BASELINE_ERROR,
+    /git fetch/i,
+    'the generic message must not tell the operator to run git fetch — that reads as a ' +
+      'live contradiction when the actual failure was `git show`, which only runs AFTER ' +
+      'a fetch that already succeeded',
+  );
+});
+
+// ---------------------------------------------------------------------------
 // `--against-published <file>` — #1931's "re-read immediately before
 // publishing" step, mechanised (2036 review round 2 / R3 amendment). CI has
 // no credentials to fetch the published artifact, so this mode takes a
@@ -1207,10 +1677,32 @@ test('a markdown with no "At a glance" section reports that, and nothing else', 
 //
 // The real, committed `docs/testing/onbox-acceptance-register.md` is what
 // the CLI's REGISTER path always reads (it is not overridable), so these
-// tests start from a byte-identical COPY of the real, currently-committed
-// live view — known-agreeing with the real register at the time these tests
-// run — and mutate the copy, never the checked-in files.
+// tests start from a copy of the real, currently-committed live view —
+// known-agreeing with the real register at the time these tests run — and
+// mutate the copy, never the checked-in files.
+//
+// #2199 review round 3 (A4/A5): most of these tests use
+// `ONBOX_TEST_BASELINE_FILE` (see that env var's own comment in
+// `scripts/check-onbox-register.mjs`) to supply a KNOWN, hermetic baseline
+// instead of letting the CLI run a real `git fetch`/`git show` against
+// whatever `origin/main` happens to contain at test-run time. Two defects
+// that shape used to cause, both fixed by using this seam:
+//   - **A5**: a real `git fetch` makes these tests (and therefore
+//     `test:hooks`, wired into pre-commit/pre-push via `verify:fast:scoped`/
+//     `verify:fast:branch`) require network access, so any commit touching
+//     the on-box register could no longer be made offline.
+//   - **A4**: a test whose expected verdict depends on live `origin/main`
+//     content is itself a latent bug — a fixture computed as "one past
+//     Group B's highest row, so it's surely not on origin/main yet" breaks
+//     the moment ANY lane merges a new Group B row while this branch is
+//     open, including the exact discharge-and-renumber workflow #2199
+//     exists to unblock.
+// The one deliberate exception is the real-git-fetch-FAILURE test further
+// down, which does NOT use this override — a live `git fetch` failing is
+// the entire point there, and it's engineered (via an unreachable proxy) to
+// fail deterministically rather than depending on ambient network state.
 const REAL_LIVE_VIEW_HTML = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+const REAL_REGISTER_TEXT = readFileSync(REAL_REGISTER_PATH, 'utf8');
 
 function withTempCopy(html, fn) {
   const dir = mkdtempSync(join(tmpdir(), 'onbox-published-'));
@@ -1223,8 +1715,108 @@ function withTempCopy(html, fn) {
   }
 }
 
-function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+// Writes BOTH the published-page HTML and a baseline register text to their
+// own files in one temp dir, for tests that inject a hermetic baseline via
+// `ONBOX_TEST_BASELINE_FILE` rather than letting the CLI fetch a real one.
+function withHermeticBaseline(publishedHtml, baselineText, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-hermetic-'));
+  const publishedPath = join(dir, 'published.html');
+  const baselinePath = join(dir, 'baseline.md');
+  writeFileSync(publishedPath, publishedHtml, 'utf8');
+  writeFileSync(baselinePath, baselineText, 'utf8');
+  try {
+    return fn(publishedPath, baselinePath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runCli(args, envOverrides) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: 'utf8',
+    timeout: 60000,
+    env: envOverrides ? { ...process.env, ...envOverrides } : process.env,
+  });
+}
+
+// The highest row number Group `letter` has in `registerText`, computed from
+// the register's OWN `### <Letter><N>` body headings — the authoritative
+// source, not the live view — so a fixture built from it is correct by
+// construction regardless of whether the live view happens to be in sync.
+function computeMaxRowNumber(registerText, letter) {
+  const numbers = [...registerText.matchAll(new RegExp(`^### ${letter}(\\d+)\\b`, 'gm'))].map((m) =>
+    Number(m[1]),
+  );
+  assert.ok(
+    numbers.length > 0,
+    `fixture setup: Group ${letter} must have at least one row in the register`,
+  );
+  return Math.max(...numbers);
+}
+
+// Renames one live-view row span from `<letter><oldNumber>` to
+// `<letter><newNumber>` — used to synthesise "the live page has a row this
+// register doesn't" without depending on any row ID that doesn't already
+// exist in the fixture.
+function renameLiveViewRowId(liveViewHtml, letter, oldNumber, newNumber) {
+  const oldId = `${letter}${oldNumber}`;
+  const newId = `${letter}${newNumber}`;
+  const mutated = liveViewHtml.replace(
+    `<span class="num">${oldId}</span>`,
+    `<span class="num">${newId}</span>`,
+  );
+  assert.notEqual(
+    mutated,
+    liveViewHtml,
+    `fixture setup: the ${oldId} row ID must have matched in the live view`,
+  );
+  return { newId, mutated };
+}
+
+// Builds a baseline register text that is `registerText` PLUS one extra,
+// contiguous, internally-consistent row for Group `letter` — models "another
+// lane already merged this row into origin/main". Bumps the glance-table
+// count, the stated total, AND appends a matching body heading, all three in
+// lockstep, so the result passes `checkRegister` (required since #2199
+// review round 3's A2 fix rejects a baseline `checkRegister` finds
+// inconsistent) — an earlier draft of this helper that only added the body
+// heading produced a baseline `checkRegister` correctly refused, which
+// would have made the test below assert "cannot verify" instead of the
+// intended "genuinely behind" verdict.
+function buildAheadBaselineText(registerText, letter, newRowNumber, title) {
+  const glanceRegex = new RegExp(`(\\| \\*\\*${letter}\\*\\* \\| [^|]+ \\| )(\\d+)( \\|)`);
+  assert.ok(
+    glanceRegex.test(registerText),
+    `fixture setup: the glance-table row for Group ${letter} must be found`,
+  );
+  let text = registerText.replace(
+    glanceRegex,
+    (_, pre, count, post) => `${pre}${Number(count) + 1}${post}`,
+  );
+
+  const totalRegex = /\*\*(\d+) owed\.\*\*/;
+  assert.ok(totalRegex.test(text), 'fixture setup: the owed total must be found');
+  text = text.replace(totalRegex, (_, total) => `**${Number(total) + 1} owed.**`);
+
+  const groupHeadingIdx = text.indexOf(`## Group ${letter} `);
+  assert.notEqual(
+    groupHeadingIdx,
+    -1,
+    `fixture setup: the "## Group ${letter} " heading must be found`,
+  );
+  const nextHeadingIdx = text.indexOf('\n## ', groupHeadingIdx + 1);
+  const sectionEnd = nextHeadingIdx === -1 ? text.length : nextHeadingIdx;
+  const section = text.slice(groupHeadingIdx, sectionEnd);
+  const lastDividerIdx = section.lastIndexOf('\n---\n');
+  assert.notEqual(
+    lastDividerIdx,
+    -1,
+    `fixture setup: Group ${letter}'s closing "---" divider must be found`,
+  );
+  const insertion = `\n### ${letter}${newRowNumber} · ${title}\n\nBody text (test fixture).\n`;
+  const mutatedSection =
+    section.slice(0, lastDividerIdx) + insertion + section.slice(lastDividerIdx);
+  return text.slice(0, groupHeadingIdx) + mutatedSection + text.slice(sectionEnd);
 }
 
 // #1931 review round 3: the FIRST version of this mode reported checkLiveView's
@@ -1246,8 +1838,13 @@ function runCli(args) {
 // did exactly that, and stayed green with the entire CLI block deleted).
 
 test('--against-published exits 0, with the OK signal, when the saved copy agrees with the real register', () => {
-  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
-    const r = runCli(['--against-published', filePath]);
+  // #2199 review round 3 (A5): hermetic — injects the REAL register's own
+  // text as the baseline via ONBOX_TEST_BASELINE_FILE, so this needs no
+  // network and no dependency on live origin/main content.
+  withHermeticBaseline(REAL_LIVE_VIEW_HTML, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
     assert.equal(r.status, 0, `expected exit 0, got ${r.status}. stderr: ${r.stderr}`);
     assert.match(
       r.stdout,
@@ -1258,11 +1855,134 @@ test('--against-published exits 0, with the OK signal, when the saved copy agree
   });
 });
 
+// #2199 review round 4: the ONBOX_TEST_BASELINE_FILE seam (A4/A5) was itself
+// a silent bypass of the guard — a green run with it set was byte-for-byte
+// indistinguishable in the output from a genuine pass. Reachable danger: set
+// in a shell profile, a CI job, or copied into a real invocation by a future
+// agent, and `--against-published` silently becomes decorative. These pin
+// the fix (an unconditional stderr WARNING) on BOTH the success and failure
+// paths — the reviewer's own framing was "the green is the dangerous case; a
+// failure already stops the operator", so the success-path assertion is the
+// one that matters most.
+test('--against-published prints an unmistakable WARNING when ONBOX_TEST_BASELINE_FILE is set — success path', () => {
+  withHermeticBaseline(REAL_LIVE_VIEW_HTML, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(r.status, 0, `expected exit 0 (this is the success-path case), got ${r.status}`);
+    // Plain substring checks, not a regex over the path — a Windows path
+    // contains backslashes that are regex metacharacters in some positions
+    // and would need escaping; `includes` sidesteps that entirely.
+    assert.ok(
+      r.stderr.includes('WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE='),
+      `expected the warning prefix, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      r.stderr.includes(baselinePath),
+      `expected the warning to name the override path (${baselinePath}), got stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /must never be used to gate a publish/,
+      `expected the warning to say the seam must never gate a publish, got stderr: ${r.stderr}`,
+    );
+  });
+});
+
+test('--against-published prints an unmistakable WARNING when ONBOX_TEST_BASELINE_FILE is set — failure path', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, warning test)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(r.status, 1, `expected exit 1 (this is the failure-path case), got ${r.status}`);
+    assert.match(
+      r.stderr,
+      /WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE=/,
+      `expected the warning even on a failing run, got stderr: ${r.stderr}`,
+    );
+  });
+});
+
+// #2199 review round 5 (nit 1): an unreadable ONBOX_TEST_BASELINE_FILE used
+// to set `failedStep: 'show'`, so the CLI claimed "`git show FETCH_HEAD:...`
+// failed even though the preceding `git fetch origin main` just succeeded"
+// when NO git ran at all — this is the TEST-ONLY seam, unset means real git
+// never gets invoked. Pins the fix: its own honest label, naming the
+// override path and explicitly saying no git call ran.
+test('--against-published gives an unreadable ONBOX_TEST_BASELINE_FILE its own honest failure message, not a fabricated git-show failure', () => {
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const missingBaselinePath = filePath + '.does-not-exist-as-a-baseline';
+    const r = runCli(['--against-published', filePath], {
+      ONBOX_TEST_BASELINE_FILE: missingBaselinePath,
+    });
+    assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
+    // The WARNING still fires (the override IS set, even though unreadable).
+    assert.match(r.stderr, /WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE=/);
+    assert.ok(
+      r.stderr.includes(`Could not read ONBOX_TEST_BASELINE_FILE=${missingBaselinePath}`),
+      `expected an honest "could not read" message naming the override path, got stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /no `git fetch` or `git show` ran/,
+      `expected the message to say no git ran, got stderr: ${r.stderr}`,
+    );
+    // The fabricated-failure shape this replaces: claiming `git show`
+    // failed when git was never invoked at all.
+    assert.doesNotMatch(
+      r.stderr,
+      /`git show FETCH_HEAD:/,
+      'must not claim git show failed when the override path was simply unreadable',
+    );
+  });
+});
+
+test('--against-published does NOT print the ONBOX_TEST_BASELINE_FILE warning on a normal run (override unset)', () => {
+  // Reuses the real-fetch-failure fixture below rather than a fresh one: it
+  // already exercises the baseline-resolution code path (with the override
+  // deliberately UNSET) all the way through a real, failing `git fetch` —
+  // proving the warning's absence here isn't just because this run never
+  // reached that code.
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const r = runCli(['--against-published', filePath], {
+      HTTPS_PROXY: 'http://127.0.0.1:1',
+      https_proxy: 'http://127.0.0.1:1',
+    });
+    assert.doesNotMatch(
+      r.stderr,
+      /ONBOX_TEST_BASELINE_FILE/,
+      `the warning must never appear when the override is unset, got stderr: ${r.stderr}`,
+    );
+    // #2199 review round 5 (nit 4): the comment above CLAIMS this run reaches
+    // the baseline-resolution block via a real, failing fetch — but nothing
+    // asserted that. Without this, the test would pass vacuously if a future
+    // change made the CLI exit BEFORE that block for any reason (a changed
+    // arg-parsing order, an early return, ...), since an absent warning is
+    // indistinguishable from "never got far enough to print it".
+    assert.match(
+      r.stderr,
+      /`git fetch origin main` failed/,
+      `expected proof this run actually reached the baseline-resolution block (a real, ` +
+        `failing fetch), not just that the warning happens to be absent — got stderr: ${r.stderr}`,
+    );
+  });
+});
+
 test('--against-published exits 0 when the saved copy LAGS the register (the normal pre-publish state)', () => {
   // The register is about to gain rows the published page does not have yet
   // — that is the entire reason a publish is happening. Modelled here by
   // decrementing the published owed total, exactly the shape review round 3
-  // found being (wrongly) treated as a failure.
+  // found being (wrongly) treated as a failure. Hermetic per A5, same as
+  // above.
   const lagging = REAL_LIVE_VIEW_HTML.replace(
     /<div class="n owed">(\d+)<\/div>/,
     (_, n) => `<div class="n owed">${Number(n) - 4}</div>`,
@@ -1272,8 +1992,10 @@ test('--against-published exits 0 when the saved copy LAGS the register (the nor
     REAL_LIVE_VIEW_HTML,
     'fixture setup: the owed-total span must have matched',
   );
-  withTempCopy(lagging, (filePath) => {
-    const r = runCli(['--against-published', filePath]);
+  withHermeticBaseline(lagging, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
     assert.equal(
       r.status,
       0,
@@ -1283,43 +2005,142 @@ test('--against-published exits 0 when the saved copy LAGS the register (the nor
   });
 });
 
-test('--against-published exits 1 and names the row when the published page is AHEAD (has a row the register lacks)', () => {
-  // Rename the LAST existing Group B row ID on the published copy to one
-  // past it, so the page carries a row the register genuinely does not have
-  // — the real "lane A already published, lane B hasn't merged that row
-  // yet" signature. Computed from the real content rather than hardcoded:
-  // a fixed 'B3' -> 'B4' rename silently stopped modelling "a row the
-  // register lacks" the moment Group B actually grew a real B4 row (#2185
-  // fix wave, item 2) — the rename then collided with genuine content
-  // instead of representing missing content. Deriving the target from
-  // whatever Group B's highest row actually is keeps this fixture correct
-  // no matter how many more B rows land later.
-  const bIds = [...REAL_LIVE_VIEW_HTML.matchAll(/<span class="num">B(\d+)<\/span>/g)].map((m) =>
-    Number(m[1]),
+// #2199 review round 3 (A4): the previous version of this test derived its
+// "definitely not on origin/main yet" row ID from the live view's CURRENT
+// highest Group B row and asserted exit 0 — which only held while
+// origin/main's Group B genuinely had no row at that number. It went red on
+// exactly the workflow #2199 exists to unblock (a branch discharging the
+// last Group B row, or any lane merging a new Group B row while this branch
+// was open). Hermetic now: `newId` is computed from — and the injected
+// baseline literally IS — this checkout's own register text, so "the
+// baseline lacks `newId`" is true by construction (the highest existing row
+// number, by definition, isn't itself present as one-past-itself), not by
+// assumption about live git state.
+test('--against-published exits 0 when a live-page row is absent from BOTH the register and its (hermetic) baseline (a discharge, #2199)', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      0,
+      `expected exit 0 (row ${newId} absent from both), got ${r.status}. stdout: ${r.stdout}, ` +
+        `stderr: ${r.stderr}`,
+    );
+    assert.match(r.stdout, /check:onbox-register: OK/);
+  });
+});
+
+// #2199 review round 3 (A6): the test this replaced (the pre-#2199 "AHEAD"
+// test) was the ONLY CLI-level coverage of the genuine "register is BEHIND"
+// branch, and it was deleted rather than converted when #2199 rewrote the
+// discharge test above — leaving that branch with zero CLI coverage.
+// Restored here using the same hermetic seam as A4/A5: the injected baseline
+// genuinely HAS the extra row (built via `buildAheadBaselineText`, which
+// keeps it `checkRegister`-consistent per the A2 fix), so this models a real
+// competing-lane publish rather than a discharge — the live page and the
+// baseline agree that `newId` exists; only this checkout's own register
+// doesn't have it yet.
+test('--against-published exits 1 and shows the register is BEHIND when the (hermetic) baseline still has the row', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, A6)',
   );
-  assert.ok(bIds.length > 0, 'fixture setup: Group B must have at least one row to rename');
-  const lastB = Math.max(...bIds);
-  const aheadId = `B${lastB + 1}`;
-  const ahead = REAL_LIVE_VIEW_HTML.replace(
-    `<span class="num">B${lastB}</span>`,
-    `<span class="num">${aheadId}</span>`,
-  );
-  assert.notEqual(ahead, REAL_LIVE_VIEW_HTML, `fixture setup: the B${lastB} row ID must have matched`);
-  withTempCopy(ahead, (filePath) => {
-    const r = runCli(['--against-published', filePath]);
-    assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stdout: ${r.stdout}`);
-    assert.match(r.stderr, /BEHIND what is already live/);
-    assert.match(r.stderr, new RegExp(`Group B section has row ${aheadId}`));
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(
+      r.status,
+      1,
+      `expected exit 1 (row ${newId} still owed per the baseline), got ${r.status}. ` +
+        `stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /shows the register is BEHIND what is already live/,
+      `expected the BEHIND label, got stderr: ${r.stderr}`,
+    );
+    assert.match(r.stderr, new RegExp(`Group B section has row ${newId}`));
     assert.match(
       r.stderr,
       /Do not publish\. Merge the rows named above/,
       'a failing --against-published run must tell the operator to merge the LIVE rows ' +
         'in, not to edit the tracked file down to match the stale page',
     );
-    // The inverted-diagnosis shape this test replaces: a "missing" message
-    // must never appear, because "register has a row the page doesn't" is
-    // not a failure in this mode.
+    // The inverted-diagnosis shape #1931 review round 3 fixed: a "missing"
+    // message must never appear, because "register has a row the page
+    // doesn't" is not a failure in this mode.
     assert.doesNotMatch(r.stderr, /is missing row/);
+  });
+});
+
+// #2199 review round 2: end-to-end proof (real CLI process, real `git`
+// binary) that a genuinely failing `git fetch origin main` fails closed —
+// not just the injected-runner unit tests above, which pin the
+// orchestration but stub git out entirely. `HTTPS_PROXY` pointed at a port
+// nothing listens on makes git's own fetch attempt fail fast (connection
+// refused, no DNS/network dependency either way) without touching this
+// repo's git config, remotes, or any tracked state — scoped to this one
+// child process's environment only.
+test('--against-published fails closed with a NON-ZERO exit when `git fetch origin main` itself fails, and the message names the fetch', () => {
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const r = runCli(['--against-published', filePath], {
+      HTTPS_PROXY: 'http://127.0.0.1:1',
+      https_proxy: 'http://127.0.0.1:1',
+    });
+    assert.equal(
+      r.status,
+      1,
+      `a failed git fetch must not pass — expected exit 1, got ${r.status}. ` +
+        `stdout: ${r.stdout}, stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /`git fetch origin main` failed/,
+      `expected the message to name the fetch as what failed, got stderr: ${r.stderr}`,
+    );
+    assert.match(r.stderr, /[Cc]annot verify/);
+    assert.doesNotMatch(
+      r.stdout,
+      /check:onbox-register: OK/,
+      'a failed fetch must not read as a pass',
+    );
+    // #2199 review round 3 (B2): pins that the CLI's `cannotVerify` label and
+    // remedy actually fire for a real (not just injected-runner-simulated)
+    // failure — the label is "could not be checked" / "Do not publish until
+    // this passes.", NOT the genuine-behind framing ("shows the register is
+    // BEHIND" / "Merge the rows named above"), which would misdirect the
+    // operator (there are no rows to merge; the check couldn't run at all).
+    assert.match(
+      r.stderr,
+      /could not be checked/,
+      `expected the cannot-verify-specific label, got stderr: ${r.stderr}`,
+    );
+    assert.match(r.stderr, /Do not publish until this passes\./);
+    // #2199 review round 5 (nit 2): this sentence used to print TWICE on the
+    // cannot-verify path — once as part of the CANNOT_VERIFY_BASELINE_ERROR
+    // text `report()` prints, once more as a redundant follow-up line.
+    // `.match(...g)` with a global regex returns every match, so its length
+    // is the occurrence count.
+    const occurrences = (r.stderr.match(/Do not publish until this passes\./g) ?? []).length;
+    assert.equal(
+      occurrences,
+      1,
+      `expected "Do not publish until this passes." exactly once, got ${occurrences} in: ${r.stderr}`,
+    );
+    assert.doesNotMatch(
+      r.stderr,
+      /Merge the rows named above/,
+      'the cannot-verify case has no rows to name, so the genuine-BEHIND remedy must not print',
+    );
   });
 });
 
