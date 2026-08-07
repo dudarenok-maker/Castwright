@@ -3332,7 +3332,10 @@ paths:
             Refused (nothing was written). Either the write would have replaced
             a character's consented cloned voice, or it would have overwritten an
             analysed manuscript with an empty sentence list, or the new
-            Author/Series/Title path is already taken.
+            Author/Series/Title path is already taken, or an analysis is
+            currently running for this book and the patch would move its folder
+            (renaming mid-analysis would split the book's state across two
+            directories — retry once the run finishes).
 
   /api/books/{bookId}/cast/{characterId}/not-linked-to:
     post:

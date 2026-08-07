@@ -53,6 +53,7 @@ import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
+import { isAnalysisBusy } from '../tts/design-lock.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
@@ -837,6 +838,32 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
         const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
         if (newDir !== bookDir) {
+          /* #2165 — refuse while an analysis is registered for this book. A
+             running analysis pins this directory in four places (the cast
+             merge-base writer, analysis-state.json's throttled snapshot
+             writes, its end-of-run delete, and this very busy key); moving the
+             folder out from under it recreates the pre-rename directory and
+             splits the book's state across two folders.
+
+             A pure predicate over a ref-counted in-memory Map — NO lock is
+             taken here, so it cannot interact with the global
+             design → library-voice → cast lock order. Refuse only; never wait.
+             Waiting would hold a request open across a multi-minute run.
+
+             Reported BEFORE the path-collision 409 below on purpose: this one
+             is transient and self-clearing, so naming it first stops the user
+             changing a title they didn't need to change.
+
+             Deliberately inside this branch — a PUT that moves no folder
+             (castConfirmed, prosody flags, notes, tags: the autosaves the
+             persistence middleware fires constantly, including during an
+             analysis) must keep returning 204. */
+          if (isAnalysisBusy(bookDir)) {
+            return res.status(409).json({
+              error:
+                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+            });
+          }
           if (existsSync(newDir)) {
             return res.status(409).json({
               error:
@@ -847,6 +874,27 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
              before the rename — fs.rename on Windows fails with ENOENT if
              they don't. */
           await mkdir(dirname(newDir), { recursive: true });
+          /* #2165 — re-check after the mkdir yield. The guard above reads
+             in-memory state, and there are two `await`s between it and the
+             move; an analysis start that lands in that window would call
+             markAnalysisBusy(record.bookDir) against the PRE-rename path
+             (analysis.ts:2764), and since the busy key is pinned by design,
+             isAnalysisBusy(newDir) would then be false for that run's whole
+             life — silently disabling cast-design.ts:684's analysis-vs-design
+             mutual exclusion for this book.
+
+             ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
+             itself, it does NOT close it. Check-then-rename is still two
+             operations. Closing it properly needs a primitive that spans the
+             analysis registration and the rename (a per-book lock, or keying
+             busy state on book id rather than path) — out of scope for #2165,
+             deliberately, not by oversight. */
+          if (isAnalysisBusy(bookDir)) {
+            return res.status(409).json({
+              error:
+                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+            });
+          }
           /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
              (atomic-rename.ts). Any other failure surfaces immediately. */
           await renameWithRetry(bookDir, newDir);
