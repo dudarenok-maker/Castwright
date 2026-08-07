@@ -264,6 +264,51 @@ export function applyOrtMarkerWrite(venvDir, plan) {
   writeOrtMarker(sp, version);
 }
 
+/** Boot-time self-heal for venvs bootstrapped before the marker existed.
+ *  Pure fs: no pip, no network, no subprocess, no `import onnxruntime`.
+ *  NEVER throws — its caller runs during server startup. */
+export function ensureOrtMarker(venvDir, log = () => {}) {
+  try {
+    const sp = sitePackagesDir(venvDir);
+    if (!sp) return 'noop';
+    const owner = detectOrtOwner(sp);
+    const realPlain = findPlainOrtDistInfos(sp);
+
+    if (owner === 'swap' && realPlain.length > 0) {
+      log(
+        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
+          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
+          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+      );
+      return 'clobbered';
+    }
+    if (owner === 'swap') {
+      const existing = ortMarkerVersion(sp);
+      if (existing !== null) return 'noop';
+      const pkg = SWAP_ORT_PACKAGES.find((p) => readInstalledOrtVersion(sp, p) !== null);
+      const version = pkg ? readInstalledOrtVersion(sp, pkg) : null;
+      if (!version) return 'noop';
+      writeOrtMarker(sp, version);
+      log(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
+      return 'wrote';
+    }
+    // owner is 'plain' or 'none' — any marker of ours is a lie.
+    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+  } catch {
+    return 'noop';
+  }
+}
+
+/** Version recorded by OUR marker, or null when we have not written one. */
+function ortMarkerVersion(sitePackages) {
+  for (const dir of ortDistInfoDirs(sitePackages)) {
+    if (!isOurMarker(dir)) continue;
+    const m = /onnxruntime-(.+)\.dist-info$/.exec(dir.replace(/\\/g, '/').split('/').pop());
+    if (m) return m[1];
+  }
+  return null;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
   const plan = planOrtSwap(profile, process.platform);
