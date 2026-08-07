@@ -11,6 +11,7 @@
 import { Router } from 'express';
 import { GROUPS, allKnobs, getKnob, knobsInGroup } from '../config/registry.js';
 import { resolveAll, resolveKnob, coerceAndValidate } from '../config/resolver.js';
+import { PAIR_RULES } from '../config/pair-rules.js';
 import {
   writeConfigOverride,
   clearConfigOverride,
@@ -70,7 +71,12 @@ configRouter.get('/', async (_req, res) => {
 
 configRouter.put('/', async (req, res) => {
   const patch = (req.body ?? {}) as Record<string, unknown>;
-  const applied: string[] = [];
+  /* Pass 1: coerce + per-key validate every entry in the patch, but don't
+     write anything yet — cross-field validation (below) needs the WHOLE
+     patch's coerced values before it can decide anything, and a rejected
+     pair must not leave an earlier key in the same patch already written
+     (#2180). */
+  const coerced: Record<string, number | boolean | string> = {};
   /* Resolve the sidecar's device list at most once for the whole request,
      lazily — a PUT patching all three tts.*.device knobs in one body used
      to pay 3 sequential sidecar round-trips for an identical list (issue
@@ -101,7 +107,36 @@ configRouter.put('/', async (req, res) => {
       if (sidecarDevices === undefined) sidecarDevices = await fetchSidecarDevices();
       r.value = await toUuidForm(r.value, sidecarDevices);
     }
-    await writeConfigOverride(key, r.value!);
+    coerced[key] = r.value!;
+  }
+
+  /* Pass 2: cross-field validation against the RESULTING EFFECTIVE config —
+     the patch's own coerced value for a key it touches, otherwise whatever
+     is already in effect for that key (env/override/default) — not just the
+     incoming patch in isolation (#2180). A rule only runs when the patch
+     actually touches at least one of its keys; an untouched pair that was
+     already bad stays untouched (this is a save-time gate, not a repair). */
+  for (const rule of PAIR_RULES) {
+    if (!rule.keys.some((k) => Object.prototype.hasOwnProperty.call(coerced, k))) continue;
+    const values: Record<string, number | boolean | string> = {};
+    for (const k of rule.keys) {
+      if (Object.prototype.hasOwnProperty.call(coerced, k)) {
+        values[k] = coerced[k];
+      } else {
+        const knob = getKnob(k);
+        if (knob) values[k] = resolveKnob(knob).effective;
+      }
+    }
+    const error = rule.check(values);
+    if (error) {
+      res.status(400).json({ error });
+      return;
+    }
+  }
+
+  const applied: string[] = [];
+  for (const [key, value] of Object.entries(coerced)) {
+    await writeConfigOverride(key, value);
     applied.push(key);
   }
   res.json({ ok: true, applied, values: resolveAll() });

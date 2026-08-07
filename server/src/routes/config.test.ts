@@ -136,6 +136,80 @@ describe('PUT /api/config', () => {
   });
 });
 
+/* #2180 — PUT /api/config validates the qa.asr.device / qa.asr.computeType
+   pair against the RESULTING EFFECTIVE config, not just the incoming patch,
+   so setting one field can't leave the pair in a combination that 500s
+   every /transcribe. Measured (ctranslate2 4.8.0, this dev box, 2026-08):
+     cpu  -> float32, int8, int8_float32
+     cuda -> bfloat16, float16, float32, int8, int8_bfloat16, int8_float16, int8_float32
+   Sentinels (sidecar-default, auto, default) are always accepted. */
+describe('PUT /api/config — qa.asr.device / qa.asr.computeType cross-field validation (#2180)', () => {
+  it('rejects qa.asr.device=cuda1 (typo — fails the device pattern, not the pair rule)', async () => {
+    const res = await request(app).put('/api/config').send({ 'qa.asr.device': 'cuda1' });
+    expect(res.status).toBe(400);
+  });
+
+  // Must-fail-first (per the brief): reproduces the recorded on-box failure
+  // — qa.asr.device defaults to "cpu" and was never touched; only
+  // computeType is patched. Before the fix, PUT validated the incoming
+  // patch key in isolation and had no view of the already-effective device.
+  it('rejects computeType=int8_float16 patched ALONE while device is already effective as the default cpu', async () => {
+    const res = await request(app).put('/api/config').send({ 'qa.asr.computeType': 'int8_float16' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/qa\.asr\.device/);
+    expect(res.body.error).toMatch(/qa\.asr\.computeType/);
+  });
+
+  it('rejects the same bad pair when both fields are in the same patch', async () => {
+    const res = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cpu', 'qa.asr.computeType': 'int8_float16' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects device=cpu patched ALONE while computeType is already effective as int8_float16 (symmetric direction)', async () => {
+    const setup = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'int8_float16' });
+    expect(setup.status).toBe(200);
+
+    const res = await request(app).put('/api/config').send({ 'qa.asr.device': 'cpu' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts every sentinel computeType on both cpu and cuda', async () => {
+    for (const device of ['cpu', 'cuda']) {
+      for (const computeType of ['sidecar-default', 'auto', 'default']) {
+        const res = await request(app)
+          .put('/api/config')
+          .send({ 'qa.asr.device': device, 'qa.asr.computeType': computeType });
+        expect(res.status).toBe(200);
+      }
+    }
+  });
+
+  it('a valid pair still saves (cuda + float16, and cuda:1 + int8_bfloat16)', async () => {
+    const a = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' });
+    expect(a.status).toBe(200);
+    expect(a.body.values['qa.asr.device'].effective).toBe('cuda');
+    expect(a.body.values['qa.asr.computeType'].effective).toBe('float16');
+
+    const b = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cuda:1', 'qa.asr.computeType': 'int8_bfloat16' });
+    expect(b.status).toBe(200);
+  });
+
+  it('a valid cpu pair still saves (cpu + int8)', async () => {
+    const res = await request(app)
+      .put('/api/config')
+      .send({ 'qa.asr.device': 'cpu', 'qa.asr.computeType': 'int8' });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('POST /api/config/reset', () => {
   it('reset by key clears the override', async () => {
     await request(app).put('/api/config').send({ 'analyzer.stage2.minCoverage': 0.5 });

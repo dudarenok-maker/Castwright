@@ -75,6 +75,22 @@ describe('resolver precedence', () => {
   it('configValue throws on an unknown key', () => {
     expect(() => configValue('no.such.knob')).toThrow(/unknown config key/);
   });
+
+  // #2180 correction 1 — qa.asr.device is free-form `type: 'string'` with no
+  // `options` array, so `cuda`, `cuda:1`, and a typo like `cuda1` were all
+  // equally "valid" at the coercion layer. Constrained to
+  // cpu | auto | cuda | cuda:<n> via a new general `pattern` capability on
+  // the knob shape (coerceAndValidate's string/default case).
+  it('qa.asr.device is constrained to cpu | auto | cuda | cuda:<n> via a pattern', () => {
+    const knob = getKnob('qa.asr.device')!;
+    expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
+    expect(coerceAndValidate(knob, 'auto')).toEqual({ ok: true, value: 'auto' });
+    expect(coerceAndValidate(knob, 'cuda')).toEqual({ ok: true, value: 'cuda' });
+    expect(coerceAndValidate(knob, 'cuda:1')).toEqual({ ok: true, value: 'cuda:1' });
+    expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' }); // case-insensitive
+    expect(coerceAndValidate(knob, 'cuda1').ok).toBe(false); // the typo shape named in the decision comment
+    expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
+  });
 });
 
 describe('resolveKnob — device UUID reconcile (Plan 2 §2.1)', () => {

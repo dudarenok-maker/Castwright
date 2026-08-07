@@ -28,9 +28,21 @@ vi.mock('undici', async (importOriginal) => {
    bare fetch before. */
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
 
+/* #2178 — asrRunsOnGpu() must resolve qa.asr.device through configValue()
+   (env -> override store -> default), not a raw process.env.ASR_DEVICE read,
+   so a UI-set override is actually seen. Real module preserved via
+   importOriginal (getResolvedSidecarUrl etc. stay real — every test in this
+   file passes an explicit sidecarUrl, so it's never invoked); only
+   readConfigOverrides is swapped for a controllable mock. */
+vi.mock('../workspace/user-settings.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/user-settings.js')>();
+  return { ...actual, readConfigOverrides: vi.fn(() => ({})) };
+});
+
 import { transcribeSegment, asrRunsOnGpu, normalizeWhisperLanguage } from './transcribe-client.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
+import * as us from '../workspace/user-settings.js';
 
 const mockFetch = vi.mocked(undiciFetch);
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
@@ -269,5 +281,40 @@ describe('asrRunsOnGpu — indexed cuda', () => {
     process.env.ASR_DEVICE = 'cuda:1'; expect(asrRunsOnGpu()).toBe(true);
     process.env.ASR_DEVICE = 'CUDA:0'; expect(asrRunsOnGpu()).toBe(true);
     process.env.ASR_DEVICE = 'cpu'; expect(asrRunsOnGpu()).toBe(false);
+  });
+});
+
+describe('asrRunsOnGpu — resolves through configValue(qa.asr.device), not raw env (#2178)', () => {
+  const prevEnv = process.env.ASR_DEVICE;
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.ASR_DEVICE; else process.env.ASR_DEVICE = prevEnv;
+    (us.readConfigOverrides as any).mockReturnValue({});
+  });
+
+  // Must-fail-first assertion (per the brief): an .env-only test passes
+  // against the bug and proves nothing — this one sets NO ASR_DEVICE env var
+  // at all, so it can only pass if the override store is actually consulted.
+  it('returns true when qa.asr.device is cuda via the OVERRIDE STORE ONLY, with no ASR_DEVICE in process.env', () => {
+    delete process.env.ASR_DEVICE;
+    (us.readConfigOverrides as any).mockReturnValue({ 'qa.asr.device': 'cuda' });
+    expect(asrRunsOnGpu()).toBe(true);
+  });
+
+  it('an .env-set ASR_DEVICE still wins over a conflicting override (env precedence unchanged)', () => {
+    process.env.ASR_DEVICE = 'cpu';
+    (us.readConfigOverrides as any).mockReturnValue({ 'qa.asr.device': 'cuda' });
+    expect(asrRunsOnGpu()).toBe(false);
+  });
+
+  it('cuda:1 and case/whitespace variants resolve as GPU via the override store', () => {
+    delete process.env.ASR_DEVICE;
+    (us.readConfigOverrides as any).mockReturnValue({ 'qa.asr.device': ' CUDA:1 ' });
+    expect(asrRunsOnGpu()).toBe(true);
+  });
+
+  it('cpu via the override store resolves false', () => {
+    delete process.env.ASR_DEVICE;
+    (us.readConfigOverrides as any).mockReturnValue({ 'qa.asr.device': 'cpu' });
+    expect(asrRunsOnGpu()).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ import { fetch as undiciFetch, Agent } from 'undici';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
+import { configValue } from '../config/resolver.js';
 
 export interface TranscribeResult {
   text: string;
@@ -59,11 +60,28 @@ const TRANSCRIBE_DISPATCHER = new Agent({
   connectTimeout: 10_000,
 });
 
-/** True when ASR runs on the GPU. The server reads the SAME `ASR_DEVICE` env
-    the sidecar process reads (they share the env under `npm start`), so this
-    stays in lockstep with where Whisper actually runs. */
+/** True when ASR runs on the GPU. Resolved through `configValue('qa.asr.device')`
+    (env -> override store -> registry default) rather than a raw
+    `process.env.ASR_DEVICE` read, so a UI-set override in Advanced
+    Configuration is actually seen — the two used to diverge whenever the
+    knob was set from the UI rather than `.env` (#2178).
+
+    This is correct because `WhisperEngine` has no self-demotion: unlike
+    `SpeakerEngine` (which falls back cuda -> cpu on a load failure), a CUDA
+    load failure in `_ensure_loaded` (main.py) propagates as an exception
+    rather than degrading, so there is no live sidecar state this function
+    could disagree with — configuration IS the truth for ASR device
+    placement. If ASR ever gains self-demotion, this must switch to reading
+    `/health`'s `asr_device` instead (which already reports the real,
+    possibly-demoted device, `main.py`'s `_ensure_loaded`).
+
+    The only window where the server's resolved value and the sidecar's
+    actual device can genuinely disagree is between an override being saved
+    and the sidecar restarting to pick it up (`qa.asr.device` is
+    `apply: 'restart-sidecar'`, and the resolved value is injected into the
+    child's env at every spawn via `buildSidecarEnv`) — out of scope here. */
 export function asrRunsOnGpu(): boolean {
-  return (process.env.ASR_DEVICE ?? 'cpu').trim().toLowerCase().startsWith('cuda');
+  return configValue<string>('qa.asr.device').trim().toLowerCase().startsWith('cuda');
 }
 
 export async function transcribeSegment(

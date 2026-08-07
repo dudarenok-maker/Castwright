@@ -132,7 +132,12 @@ export function coerceAndValidate(knob: ConfigKnob, raw: unknown): CoerceResult 
       return { ok: true, value: s };
     }
     case 'string':
-    default:
-      return { ok: true, value: String(raw) };
+    default: {
+      const s = String(raw);
+      if (knob.pattern && !knob.pattern.test(s.trim())) {
+        return { ok: false, error: `does not match the required shape (${knob.pattern.source})` };
+      }
+      return { ok: true, value: s };
+    }
   }
 }
