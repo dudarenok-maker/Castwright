@@ -162,7 +162,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 3 |
+| **C** | One *Ночной дозор* re-analysis session | 1 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -170,7 +170,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**56 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**54 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2050,28 +2050,30 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-Three rows re-analyze the **same manuscript** for different reasons. One local pass
-plus one cloud pass, captured with scene-break output, attribution output and
-truncation/429 telemetry all in mind, discharges all three. No TTS or GPU synthesis.
+**One row left.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
+structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
+and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
+attribution). Results are recorded in each plan's acceptance section, and the
+headline finding is filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187).
+
+In short: **C1 passed** (24 separators, 22 flagged, median separator→opener
+distance 5 chars — the `* * *` glyph itself; the ~92k forward-overshoot is
+mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) because
+chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
+flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
+flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+The cloud row remains (renumbered **C1** now that the other two are discharged;
+it was C3 before 2026-08-06 and is referenced under that ID in
+[#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)). It needs the
+separate **cloud** pass, which the local run did not exercise. No TTS or GPU
+synthesis.
 
 Book: `C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`.
 
-### C1 · Manuscript scene separator — Russian re-run (plan 261)
-
-Plan 261 could not measure this book in its original round: it was mid-re-analysis
-and its `manuscript-edits.json` was deleted by the reparse (`:203-206`). The
-marker-anchored rule change is claimed to *mechanically* eliminate the old
-~92k-character forward-overshoot — that claim is what the re-run confirms. Failure
-here is always cosmetic: a divider off by a sentence, never data corruption.
-
-### C2 · srv-59 deterministic dialogue-structure attribution (plan 247)
-
-"Manual acceptance walkthrough (on-box, owed post-merge)" (`:247-249,338-340`).
-Re-analyze the same book — 9 chapters, 14,065 sentences — on the default pipeline.
-Ship notes: "Not yet shipped: on-box acceptance is owed post-merge." Core engine
-merged PR #1482 (2026-07-09); still unrun as of 2026-07-21.
-
-### C3 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
+### C1 · Cloud request sizing + local input-fraction calibration ([#1685](https://github.com/dudarenok-maker/Castwright/issues/1685))
 
 Three unchecked items. Uses the free-tier `GEMINI_API_KEY` **already configured** in
 `server/.env` — a credential this run exercises, not a blocker.
@@ -2082,6 +2084,25 @@ pass that actually 429'd in the original incident (all 22 logged failures were
 misclassified as daily-quota. Then calibrate `analyzer.stage2.localInputFraction`
 (ships at 0.3) downward until a full local re-analysis completes with **zero**
 stage-2 truncation drops, and record the working value.
+
+**Two things the 2026-08-06 local pass established for this row, before anyone
+sets it up again:**
+
+- **`gemini-*` really does RECITATION-block this book — observed, not inherited.**
+  Mid-run, a queued Ollama call timed out into the cloud fallback and
+  `gemini-3.5-flash-lite` returned `PROHIBITED_CONTENT` on a stage-2 chapter-1
+  section. That is exactly why this row specifies `gemma-4-31b-it`.
+- **`server/.env` sets `GEMINI_MODEL=gemini-3.5-flash-lite`, which overrides the
+  RECITATION-safe code default.** The last-resort fallback in `analyzer/index.ts`
+  and `routes/analysis.ts` is already `gemma-4-31b-it`, so it is the `.env` line —
+  not the code — that must change for this row, or the pass silently runs on the
+  wrong model and dies on the filter.
+
+**Run it against a throwaway re-import, not the library book.** The analysis cache
+is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), so
+re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
+and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
+for cast + generation.
 
 ---
 

@@ -8,7 +8,10 @@ owner: null
 
 > Status: active (deterministic engine + escalation + provenance land first; script-review inbox
 > annotations are sequenced after the concurrent script-review-persistence PR merges — see
-> "Delivery sequencing" below; on-box acceptance owed post-merge)
+> "Delivery sequencing" below; **on-box acceptance RUN 2026-08-06 — flagged 6,568 vs the ≤~500
+> target, because only 1 of 5 measured chapters cleared the 80% alignment floor; where the engine
+> did run it hit the target at 488. The aligner, not the engine, is the bottleneck —
+> [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). See "Acceptance RESULT" below.**)
 > Key files: `server/src/analyzer/dialogue-structure/{types,parser,windows,aligner,cross-examine,escalation,name-matcher}.ts`,
 > `server/src/analyzer/dialogue-structure/lang/{en,es,fr,de,ru,index}.ts`, `server/src/routes/analysis.ts`
 > (`attributeChapterStage2`), `server/src/config/registry.ts` (`analyzer-structure` group),
@@ -282,6 +285,48 @@ aggregated `{alignedPct, confirmed, corrected, flagged, escalated, escalationAcc
 the before/after instrument for acceptance, replacing the "we could not determine which
 analyzer/model produced this analysis" forensics gap this spec also closes.
 
+### Acceptance RESULT — run 2026-08-06 · targets missed, root cause identified
+
+Run by Claude Code on the dual-GPU box: full 9-chapter re-analysis, **15,069 sentences**,
+`qwen36-cw-iq4-32k` via local Ollama, structure engine on, `escalation='local'`, no mock mode.
+Provenance recorded `engine: local, model: qwen36-cw-iq4-32k:latest, structureEngineVersion: 1`.
+
+| Target | Result | Verdict |
+|---|---|---|
+| 1. Flagged ≤ ~500 | **6,568** | ❌ missed |
+| 2. Hard-error class near-zero | narrator holds 10,240 / 15,059 lines (68%) | ❌ not demonstrated |
+| 3. Unknown-bucket share falls | roster folded 58 → 35; unknown bucket **3 entries / 61 lines (0.4%)** | ✅ met |
+| 4. Chapter 1/9 spot-check | ch9 flagged **488** — under target | ✅ where the engine ran |
+| 5. Wall-clock +2–5 h at `'local'` | escalation barely ran (22 windows vs ~553 expected) | n/a — see below |
+
+**Why target 1 was missed — the aligner, not the engine.** Per-chapter
+`[analysis:structure]` output:
+
+| Chapter | aligned | outcome | flagged |
+|---|---|---|---|
+| 5 | 4% | below floor — escalation skipped | 1,732 |
+| 6 | 2% | below floor — escalation skipped | 1,679 |
+| 7 | 66% | below floor — escalation skipped | 1,447 |
+| 8 | 73% | below floor — escalation skipped | 1,222 |
+| 9 | **95%** | **engine ran** — confirmed 580, corrected 531, escalated 22, accepted 130 | **488** |
+
+Only chapter 9 cleared the hardcoded **80% alignment floor** (`dialogue-structure/evidence.ts:40`);
+everything else hit the §5.2 chapter-wide flag-only fallback exactly as designed. **Where alignment
+succeeded, the engine met the target** (488 ≤ ~500). So the design is validated and
+`locateSentenceOffsets` is the bottleneck — filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187). Root-cause signal: short,
+highly-repeated dialogue sentences bind to a later occurrence (ch7's `"- Да."` resolved to offset
+69,710 instead of ~60,850, and the two sentences after it did not locate at all).
+
+**Measurement caveat — the report covers chapters 5–9 only.** Chapters 1–4 were served from the
+resume cache after two environmental restarts (an unrelated concurrent session's `stop-app` port
+sweep, and a `tsx watch` restart), so they contributed nothing to the aggregate: book `flagged`,
+`corrected` and `confirmed` sum *exactly* to the ch5–9 components, and `alignedPct` 47.4% is their
+weighted average. Deliberately not re-run — the diagnostic is conclusive without the missing four,
+and #2187 is the deliverable either way.
+
+This discharged register row **C2**.
+
 ## Appendix — §5.4 probe methodology (reproduce for acceptance re-runs)
 
 The spec's §5.4 measurement ("what this does to the triage queue") was a sentence-level pilot run
@@ -335,6 +380,13 @@ flagged (unanchored vs. contested-alternation vs. lumped, etc.) during the chapt
 
 ## Ship notes
 
-(Filled in when status flips to `stable` — commit SHA, on-box acceptance results against the
-targets above, any behaviour delta vs. this plan. Not yet shipped: on-box acceptance is owed
-post-merge per the Test plan above.)
+**On-box acceptance discharged 2026-08-06** — full results, per-chapter alignment table and the
+measurement caveat are in "Acceptance RESULT — run 2026-08-06" above. Headline: the deterministic
+engine is validated (chapter 9, aligned 95%, landed flagged **488** against the ≤~500 target), but
+book-level flagged is **6,568** because chapters 5–8 fell below the 80% alignment floor and degraded
+to flag-only. Follow-up filed as
+[#2187](https://github.com/dudarenok-maker/Castwright/issues/2187); this plan stays `active` until
+that lands, since the shipped engine does not yet deliver its intended benefit on Russian dash
+dialogue.
+
+(Still to fill when status flips to `stable` — commit SHA and any behaviour delta vs. this plan.)

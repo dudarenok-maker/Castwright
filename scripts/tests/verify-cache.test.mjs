@@ -31,6 +31,8 @@ import {
   stepTouchedByDiff,
   computeShared,
   parseNvidiaSmiUtil,
+  maxNvidiaSmiUtil,
+  gpuContentionFor,
   isVitestPoolCrash,
   branchDiffFiles,
   sidecarFingerprint,
@@ -39,6 +41,12 @@ import {
 } from '../verify-cache.mjs';
 
 const { SCHEMA_VERSION } = _internals;
+
+// Resolve relative to THIS file, not the process cwd — same rationale as
+// scripts/tests/run-golden-audio.test.mjs's own HERE/SRC_PATH.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
+const src = readFileSync(SRC_PATH, 'utf8');
 
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
@@ -885,6 +893,103 @@ test('parseNvidiaSmiUtil returns null on empty / unparseable output', () => {
   assert.equal(parseNvidiaSmiUtil(''), null);
   assert.equal(parseNvidiaSmiUtil('\n'), null);
   assert.equal(parseNvidiaSmiUtil('N/A\n'), null);
+});
+
+// #2164: the contention probe used to read only the FIRST GPU line
+// (parseNvidiaSmiUtil above), which on a dual-GPU box misses a busy SECOND
+// card entirely — this dev box is cuda:0 (4070 8GB) idle / cuda:1 (5070 Ti
+// 16GB) busy, and the busy card sits at index 1. maxNvidiaSmiUtil takes the
+// max across every parseable line instead.
+
+test('maxNvidiaSmiUtil takes the max across a two-GPU output, not just the first line', () => {
+  assert.equal(maxNvidiaSmiUtil('3\n97\n'), 97);
+  // Order shouldn't matter.
+  assert.equal(maxNvidiaSmiUtil('97\n3\n'), 97);
+});
+
+test('maxNvidiaSmiUtil returns null on empty / unparseable output', () => {
+  assert.equal(maxNvidiaSmiUtil(''), null);
+  assert.equal(maxNvidiaSmiUtil('\n'), null);
+  assert.equal(maxNvidiaSmiUtil('N/A\nN/A\n'), null);
+});
+
+test('maxNvidiaSmiUtil ignores unparseable lines but keeps the max of the rest', () => {
+  assert.equal(maxNvidiaSmiUtil('N/A\n85\n'), 85);
+});
+
+// The actual regression test (#2164): a two-GPU stdout whose SECOND card is
+// over threshold must be detected as contention. Before the fix,
+// detectGpuContention called parseNvidiaSmiUtil (first-line-only) here, read
+// cuda:0's idle 3%, and returned busy:false — missing the busy cuda:1 card
+// entirely. That is the exact bug that let six commits die to co-running
+// generations tonight.
+test('gpuContentionFor: busy SECOND GPU (not the first) is detected as contention', () => {
+  assert.deepEqual(gpuContentionFor('3\n97\n'), { busy: true, util: 97 });
+});
+
+test('gpuContentionFor: idle when every GPU is under threshold', () => {
+  assert.deepEqual(gpuContentionFor('3\n12\n'), { busy: false, util: 12 });
+});
+
+test('gpuContentionFor: falls back to busy:false, util:null on unparseable output', () => {
+  // Mirrors detectGpuContention's own fallback for an absent/errored nvidia-smi
+  // (e.g. CI ubuntu runners, non-NVIDIA boxes) — the spawn failure itself is
+  // handled in detectGpuContention, but an empty/garbage stdout reaching this
+  // pure function must resolve the same way.
+  assert.deepEqual(gpuContentionFor(''), { busy: false, util: null });
+  assert.deepEqual(gpuContentionFor('N/A\n'), { busy: false, util: null });
+});
+
+// #2164 review finding 1: `gpuContentionFor` itself is fully unit-tested
+// above, but `detectGpuContention` — the actual production wire, which spawns
+// a real nvidia-smi and is not exported — was never asserted to actually call
+// it. A one-line revert of detectGpuContention's body back to
+// `parseNvidiaSmiUtil(r.stdout)` (the pre-#2164 first-line-only bug) left
+// every other test in this file green. Since detectGpuContention isn't
+// directly testable without spawning a real nvidia-smi, this pins the
+// production wire at the source level instead — same technique as
+// BLESS_ENV_SHAPE in scripts/tests/run-golden-audio.test.mjs.
+function detectGpuContentionBody() {
+  const match = src.match(/function detectGpuContention\(\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "could not locate detectGpuContention's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /return gpuContentionFor\(r\.stdout\);/,
+    'detectGpuContention must return gpuContentionFor(r.stdout) — the pure decision seam — ' +
+      'not inline its own threshold check',
+  );
+  assert.doesNotMatch(
+    body,
+    /parseNvidiaSmiUtil\(/,
+    'detectGpuContention must not call parseNvidiaSmiUtil directly — that is the first-line-only ' +
+      'parser this fix moved away from; calling it here silently reintroduces the #2164 bug ' +
+      'even though gpuContentionFor itself stays correct',
+  );
+});
+
+// #2164 review finding 2: the `--query-gpu` argument is unpinned and silently
+// determines correctness. parseNvidiaSmiUtil/maxNvidiaSmiUtil both read the
+// FIRST CSV field as the utilization percentage, which is only true because
+// the query requests utilization.gpu ALONE. Widening it — e.g. to
+// `index,utilization.gpu`, the richer shape #2164's own issue body pastes
+// ("1, NVIDIA GeForce RTX 5070 Ti, 91 %, 15455 MiB") — shifts the first field
+// to the GPU index (0 or 1, always under GPU_BUSY_THRESHOLD), reintroducing
+// #2164's always-idle bug through the query string instead of the parser,
+// with every existing test still green (they all pass CSV directly, not
+// through a real nvidia-smi query).
+test('detectGpuContention pins the --query-gpu=utilization.gpu flag the parsers depend on', () => {
+  const body = detectGpuContentionBody();
+  assert.match(
+    body,
+    /'--query-gpu=utilization\.gpu'/,
+    "detectGpuContention must query ONLY utilization.gpu — adding a field (e.g. 'index,') " +
+      'shifts the first CSV column the parsers read away from the utilization percentage',
+  );
 });
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
