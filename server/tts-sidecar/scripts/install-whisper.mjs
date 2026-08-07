@@ -9,7 +9,9 @@
 // What it does:
 //   1. Locate the sidecar venv's python (.venv/Scripts/python.exe on Windows,
 //      .venv/bin/python elsewhere). Fail with a clear bootstrap hint if absent.
-//   2. `python -m pip install -U faster-whisper` (pulls ctranslate2 + av).
+//   2. `python -m pip install faster-whisper` (no -U: base.txt pins faster-whisper
+//      >=1.0,<2.0 and -U can walk it past that pin). On a bootstrapped box this
+//      step is idempotent/no-op.
 //   3. Pre-fetch the model via `WhisperModel(<model>, device='cpu',
 //      compute_type='int8')` into the default Hugging Face cache, so the first
 //      real transcription doesn't stall on the download. The runtime device
@@ -33,9 +35,16 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeSanitizedConstraintsFile } from './pip-constraints.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIDECAR_DIR = resolve(__dirname, '..');
+
+/** Pip args for the faster-whisper install. No -U: base.txt pins
+ *  faster-whisper>=1.0,<2.0 and -U can walk it past that pin. */
+export function whisperPipInstallArgs(constraintsPath) {
+  return ['-m', 'pip', 'install', 'faster-whisper', '-c', constraintsPath];
+}
 
 const args = process.argv.slice(2);
 function flag(name) {
@@ -92,8 +101,9 @@ function main() {
   // Mode) — benign, same as the qwen installer + runtime warning_filters.py.
   const env = { HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
 
-  step('Installing faster-whisper (pulls ctranslate2 + av)...');
-  if (run(python, ['-m', 'pip', 'install', '-U', 'faster-whisper'], env) !== 0) {
+  step('Installing faster-whisper (pinned via base.txt)...');
+  const constraints = writeSanitizedConstraintsFile(join(SIDECAR_DIR, 'requirements', 'base.txt'));
+  if (run(python, whisperPipInstallArgs(constraints), env) !== 0) {
     step('FAIL: pip install faster-whisper failed. Check network + sidecar venv.');
     process.exit(1);
   }
@@ -118,7 +128,7 @@ function main() {
 }
 
 // Run only when invoked directly; stay inert on import so a unit test can import
-// MODEL resolution helpers without bootstrapping.
+// helpers without bootstrapping.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
