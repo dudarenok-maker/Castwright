@@ -294,7 +294,8 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
     return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
-  } catch {
+  } catch (err) {
+    log(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';
   }
 }

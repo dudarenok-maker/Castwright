@@ -81,7 +81,14 @@ describe('ensureOrtMarker', () => {
     const root = mkdtempSync(join(tmpdir(), 'venv-'));
     mkdirSync(join(root, 'Lib'), { recursive: true });
     writeFileSync(join(root, 'Lib', 'site-packages'), 'not a directory');
-    expect(() => ensureOrtMarker(root)).not.toThrow();
+    const lines: string[] = [];
+    expect(() => ensureOrtMarker(root, (m) => lines.push(m))).not.toThrow();
+    expect(ensureOrtMarker(root, (m) => lines.push(m))).toBe('noop');
+    expect(lines.some((line) => line.includes('skipped') && line.includes('not a directory'))).toBe(true);
+  });
+
+  it('returns noop when no runtime exists and no marker is present (row 6)', () => {
+    const { root } = venv({ owner: 'none' });
     expect(ensureOrtMarker(root)).toBe('noop');
   });
 });
