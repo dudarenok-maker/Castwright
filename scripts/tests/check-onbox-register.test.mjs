@@ -1798,6 +1798,82 @@ test('--against-published exits 0, with the OK signal, when the saved copy agree
   });
 });
 
+// #2199 review round 4: the ONBOX_TEST_BASELINE_FILE seam (A4/A5) was itself
+// a silent bypass of the guard — a green run with it set was byte-for-byte
+// indistinguishable in the output from a genuine pass. Reachable danger: set
+// in a shell profile, a CI job, or copied into a real invocation by a future
+// agent, and `--against-published` silently becomes decorative. These pin
+// the fix (an unconditional stderr WARNING) on BOTH the success and failure
+// paths — the reviewer's own framing was "the green is the dangerous case; a
+// failure already stops the operator", so the success-path assertion is the
+// one that matters most.
+test('--against-published prints an unmistakable WARNING when ONBOX_TEST_BASELINE_FILE is set — success path', () => {
+  withHermeticBaseline(REAL_LIVE_VIEW_HTML, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(r.status, 0, `expected exit 0 (this is the success-path case), got ${r.status}`);
+    // Plain substring checks, not a regex over the path — a Windows path
+    // contains backslashes that are regex metacharacters in some positions
+    // and would need escaping; `includes` sidesteps that entirely.
+    assert.ok(
+      r.stderr.includes('WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE='),
+      `expected the warning prefix, got stderr: ${r.stderr}`,
+    );
+    assert.ok(
+      r.stderr.includes(baselinePath),
+      `expected the warning to name the override path (${baselinePath}), got stderr: ${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /must never be used to gate a publish/,
+      `expected the warning to say the seam must never gate a publish, got stderr: ${r.stderr}`,
+    );
+  });
+});
+
+test('--against-published prints an unmistakable WARNING when ONBOX_TEST_BASELINE_FILE is set — failure path', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const newRowNumber = lastB + 1;
+  const { mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, newRowNumber);
+  const aheadBaseline = buildAheadBaselineText(
+    REAL_REGISTER_TEXT,
+    'B',
+    newRowNumber,
+    'synthetic ahead row (fixture, warning test)',
+  );
+  withHermeticBaseline(mutated, aheadBaseline, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(r.status, 1, `expected exit 1 (this is the failure-path case), got ${r.status}`);
+    assert.match(
+      r.stderr,
+      /WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE=/,
+      `expected the warning even on a failing run, got stderr: ${r.stderr}`,
+    );
+  });
+});
+
+test('--against-published does NOT print the ONBOX_TEST_BASELINE_FILE warning on a normal run (override unset)', () => {
+  // Reuses the real-fetch-failure fixture below rather than a fresh one: it
+  // already exercises the baseline-resolution code path (with the override
+  // deliberately UNSET) all the way through a real, failing `git fetch` —
+  // proving the warning's absence here isn't just because this run never
+  // reached that code.
+  withTempCopy(REAL_LIVE_VIEW_HTML, (filePath) => {
+    const r = runCli(['--against-published', filePath], {
+      HTTPS_PROXY: 'http://127.0.0.1:1',
+      https_proxy: 'http://127.0.0.1:1',
+    });
+    assert.doesNotMatch(
+      r.stderr,
+      /ONBOX_TEST_BASELINE_FILE/,
+      `the warning must never appear when the override is unset, got stderr: ${r.stderr}`,
+    );
+  });
+});
+
 test('--against-published exits 0 when the saved copy LAGS the register (the normal pre-publish state)', () => {
   // The register is about to gain rows the published page does not have yet
   // — that is the entire reason a publish is happening. Modelled here by

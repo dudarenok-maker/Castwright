@@ -998,6 +998,26 @@ if (invokedAsCli) {
     // `git fetch` failing is exactly the point.
     const repoRoot = fileURLToPath(new URL('..', import.meta.url));
     const baselineFileOverride = process.env.ONBOX_TEST_BASELINE_FILE;
+    if (baselineFileOverride) {
+      // #2199 review round 4: printed UNCONDITIONALLY whenever the override
+      // is active — before the verdict, and on the success path as much as
+      // the failure path. A silent bypass here is exactly the "guard
+      // evaporates on missing/substituted input" shape #2199 exists to fix,
+      // just reached through the environment instead of a malformed
+      // baseline: a green `--against-published` run with this set is
+      // otherwise byte-for-byte indistinguishable from a genuine pass — the
+      // exit code is 0 either way, and the "OK" line doesn't say where the
+      // baseline came from. If this is ever set in a shell profile, a CI
+      // job, or copied into a real invocation by a future agent, the check
+      // silently becomes decorative and the operator publishes on a green
+      // that means nothing. This line is what makes that state loud instead
+      // of silent — it fires on EVERY run where the override is set, not
+      // just when something else also goes wrong.
+      console.error(
+        `WARNING: baseline injected from ONBOX_TEST_BASELINE_FILE=${baselineFileOverride}; ` +
+          'this is NOT a real origin/main check and must never be used to gate a publish.',
+      );
+    }
     let baseline;
     if (baselineFileOverride) {
       try {
