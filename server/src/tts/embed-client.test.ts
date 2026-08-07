@@ -23,9 +23,22 @@ vi.mock('undici', async (importOriginal) => {
    bare fetch before. */
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
 
+/* #2224 — spkRunsOnGpu() must resolve qa.speaker.device through configValue()
+   (env -> override store -> default), not a raw process.env.SPK_DEVICE read,
+   so a UI-set override is actually seen. Mirrors #2178's fix for
+   transcribe-client.ts's asrRunsOnGpu. Real module preserved via
+   importOriginal (getResolvedSidecarUrl etc. stay real — every test in this
+   file passes an explicit sidecarUrl, so it's never invoked); only
+   readConfigOverrides is swapped for a controllable mock. */
+vi.mock('../workspace/user-settings.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/user-settings.js')>();
+  return { ...actual, readConfigOverrides: vi.fn(() => ({})) };
+});
+
 import { embedSegment, spkRunsOnGpu } from './embed-client.js';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from './tts-errors.js';
+import * as us from '../workspace/user-settings.js';
 
 const mockFetch = vi.mocked(undiciFetch);
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
@@ -168,5 +181,35 @@ describe('spkRunsOnGpu — indexed cuda', () => {
     process.env.SPK_DEVICE = 'cuda:1'; expect(spkRunsOnGpu()).toBe(true);
     process.env.SPK_DEVICE = 'CUDA:0'; expect(spkRunsOnGpu()).toBe(true);
     process.env.SPK_DEVICE = 'cpu'; expect(spkRunsOnGpu()).toBe(false);
+  });
+});
+
+describe('spkRunsOnGpu — resolves through configValue(qa.speaker.device), not raw env (#2224)', () => {
+  const prevEnv = process.env.SPK_DEVICE;
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.SPK_DEVICE; else process.env.SPK_DEVICE = prevEnv;
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
+  });
+
+  // Must-fail-first assertion (mirrors #2178's own test for asrRunsOnGpu): an
+  // .env-only test passes against the pre-#2224 bug and proves nothing — this
+  // one sets NO SPK_DEVICE env var at all, so it can only pass if the
+  // override store is actually consulted.
+  it('returns true when qa.speaker.device is cuda via the OVERRIDE STORE ONLY, with no SPK_DEVICE in process.env', () => {
+    delete process.env.SPK_DEVICE;
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({ 'qa.speaker.device': 'cuda' });
+    expect(spkRunsOnGpu()).toBe(true);
+  });
+
+  it('an .env-set SPK_DEVICE still wins over a conflicting override (env precedence unchanged)', () => {
+    process.env.SPK_DEVICE = 'cpu';
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({ 'qa.speaker.device': 'cuda' });
+    expect(spkRunsOnGpu()).toBe(false);
+  });
+
+  it('cpu via the override store resolves false', () => {
+    delete process.env.SPK_DEVICE;
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({ 'qa.speaker.device': 'cpu' });
+    expect(spkRunsOnGpu()).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import {
   resolveKnobForSidecarEnv,
   coerceAndValidate,
   configValue,
+  isEnvValueRejected,
 } from './resolver.js';
 import { getKnob } from './registry.js';
 import * as us from '../workspace/user-settings.js';
@@ -80,7 +81,8 @@ describe('resolver precedence', () => {
   // `options` array, so `cuda`, `cuda:1`, and a typo like `cuda1` were all
   // equally "valid" at the coercion layer. Constrained to
   // cpu | auto | cuda | cuda:<n> via a new general `pattern` capability on
-  // the knob shape (coerceAndValidate's string/default case).
+  // the knob shape (coerceAndValidate's string/default case). Widened by
+  // #2224 — see the dedicated grammar suite below for the full mps/rocm story.
   it('qa.asr.device is constrained to cpu | auto | cuda | cuda:<n> via a pattern', () => {
     const knob = getKnob('qa.asr.device')!;
     expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
@@ -90,6 +92,76 @@ describe('resolver precedence', () => {
     expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' }); // case-insensitive
     expect(coerceAndValidate(knob, 'cuda1').ok).toBe(false); // the typo shape named in the decision comment
     expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
+  });
+
+  /* #2224 — the #2180 pattern above was too narrow: it rejected "mps" and
+     "rocm", both of which `_parse_device` (main.py:3269-3281) and
+     `_engine_env_pin` (main.py:3355-3369) treat as first-class, MEANINGFUL
+     device families for both "asr" and "spk" — main.py:10712/:10787 gate GPU
+     capacity admission on `_parse_device(...)[0] in ("cuda", "rocm")`. A Mac
+     (ASR_DEVICE=mps) or AMD (ASR_DEVICE=rocm) operator had their pin silently
+     rejected and downgraded to cpu — a regression #2180/#2205 shipped, found
+     while investigating #2224. This suite ties the pattern to what main.py
+     ACTUALLY parses as meaningful, not to a hand-typed list: every accepted
+     form is one this suite's own comment traces to a main.py line, and the
+     two forms deliberately excluded (see registry.ts's pattern comment) are
+     asserted rejected here too, so the exclusion can't silently erode. */
+  describe('qa.asr.device / qa.speaker.device grammar, derived from main.py (#2224)', () => {
+    const KNOBS = ['qa.asr.device', 'qa.speaker.device'] as const;
+
+    it.each(KNOBS)('%s accepts every device family main.py parses as meaningful', (key) => {
+      const knob = getKnob(key)!;
+      // cpu/auto: _parse_device's own explicit branches (main.py:3274-3277).
+      expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
+      expect(coerceAndValidate(knob, 'auto')).toEqual({ ok: true, value: 'auto' });
+      // mps: _parse_device's explicit `p in ("cpu", "mps")` branch (:3276-3277).
+      expect(coerceAndValidate(knob, 'mps')).toEqual({ ok: true, value: 'mps' });
+      expect(coerceAndValidate(knob, 'MPS')).toEqual({ ok: true, value: 'MPS' }); // case-insensitive
+      // cuda / cuda:<n>: the startswith("cuda") branch (:3278-3280).
+      expect(coerceAndValidate(knob, 'cuda')).toEqual({ ok: true, value: 'cuda' });
+      expect(coerceAndValidate(knob, 'cuda:1')).toEqual({ ok: true, value: 'cuda:1' });
+      expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' });
+      // bare rocm: falls through _parse_device's catch-all (:3281) to family
+      // "rocm" exactly (only because the whole trimmed/lowercased string IS
+      // "rocm") — the form main.py:10712/:10787's `in ("cuda","rocm")` checks
+      // actually match, and this repo ships a real amd-rocm torch overlay.
+      expect(coerceAndValidate(knob, 'rocm')).toEqual({ ok: true, value: 'rocm' });
+      expect(coerceAndValidate(knob, 'ROCM')).toEqual({ ok: true, value: 'ROCM' });
+    });
+
+    it.each(KNOBS)('%s still rejects a genuinely malformed value — the pattern exists to catch typos, not to accept everything', (key) => {
+      const knob = getKnob(key)!;
+      expect(coerceAndValidate(knob, 'cuda1').ok).toBe(false); // the original #2207 typo case
+      expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
+    });
+
+    it.each(KNOBS)('%s rejects an indexed rocm pin ("rocm:1") — main.py cannot actually place it', (key) => {
+      // _parse_device's catch-all only splits an index off a string that
+      // STARTS WITH "cuda" (:3278-3280); a non-cuda-prefixed string comes
+      // back as its own whole "family", so "rocm:1" parses as family
+      // "rocm:1" (not "rocm"), which fails every `in ("cuda","rocm")` check
+      // main.py has. Accepting it here would pass a value through the
+      // resolver that main.py cannot place on any device.
+      const knob = getKnob(key)!;
+      expect(coerceAndValidate(knob, 'rocm:1').ok).toBe(false);
+    });
+
+    it.each(KNOBS)('%s rejects a cuda-uuid pin — WhisperEngine/SpeakerEngine read the raw env var directly, bypassing uuid resolution', (key) => {
+      // Unlike tts.coqui.device/tts.kokoro.device/tts.qwen.device (type:
+      // 'device', whose engine constructors read via `_read_device_env`,
+      // which DOES resolve a "cuda-uuid:<uuid>" pin, main.py:3341-3352),
+      // WhisperEngine/SpeakerEngine read `os.environ.get("ASR_DEVICE"/
+      // "SPK_DEVICE", "cpu")` directly at construction (main.py:7148, :7488)
+      // — the resolving reader is used only by `_engine_env_pin`, which
+      // feeds the capacity ledger's PIN METADATA, not actual device
+      // placement. A uuid form would resolve correctly for capacity
+      // bookkeeping and WRONGLY for where the model actually loads, so it's
+      // excluded — consistent with these two knobs being `type: 'string'`,
+      // not `type: 'device'` (only 'device' knobs get resolveKnobInner's
+      // uuid-reconcile branch).
+      const knob = getKnob(key)!;
+      expect(coerceAndValidate(knob, 'cuda-uuid:GPU-1').ok).toBe(false);
+    });
   });
 
   /* Independent review of PR #2205, finding F4 — coerceAndValidate matched
@@ -108,6 +180,77 @@ describe('resolver precedence', () => {
   it('a pattern-less string knob keeps its historical no-trim behaviour', () => {
     const knob = getKnob('qa.asr.model')!; // free-form string, no pattern
     expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: '  base  ' });
+  });
+});
+
+/* Independent review of PR #2219, finding F6 — isEnvValueRejected (consumed
+   by buildSidecarEnv, #2207) had no direct unit test; its null/empty/
+   whitespace/falsy-but-valid edges were unpinned.
+
+   Two categories, deliberately kept separate:
+   (1) a legitimately falsy PARSED value (boolean `false`, numeric `0`) must
+       not misfire the `parseEnv(...) == null` check — `==null` only matches
+       null/undefined in JS, not other falsy values, but that correctness
+       is exactly the kind of thing a later "simplify this to `!v`" edit
+       could silently break, so it's pinned here explicitly.
+   (2) a blank/whitespace-only RAW value is a SEPARATE case, decided by
+       finding F3 in the same review round: resolveKnobInner already treats
+       blank identically to "no env var at all" (falls through to override/
+       default without validating or warning), so isEnvValueRejected now
+       returns true for it too — the same thesis this whole predicate is
+       built on (the resolver didn't use the ambient text, so a consumer
+       forwarding it verbatim disagrees with the resolver either way).
+       NOTE: this supersedes the review's own F6 wording ("false, 0 and ''
+       must NOT read as rejected") for the '' case specifically — after F3,
+       a blank raw ('' or whitespace) DOES read as rejected. Category (1)'s
+       "false, 0" guidance stands unchanged; the '' third of that list is
+       the part F3 overrides, and this suite tests the current, F3-
+       authorized behaviour rather than the pre-F3 wording. */
+describe('isEnvValueRejected (independent review of PR #2219, F6)', () => {
+  const NUM_KEY = 'analyzer.stage2.minCoverage'; // number, min 0 max 1, env STAGE2_MIN_COVERAGE
+  const BOOL_KEY = 'qa.asr.enabled'; // boolean, env SEG_ASR_ENABLED
+
+  beforeEach(() => {
+    delete process.env.STAGE2_MIN_COVERAGE;
+    delete process.env.SEG_ASR_ENABLED;
+  });
+
+  it('no ambient env var at all (undefined) is not rejected', () => {
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(false);
+  });
+
+  it('a knob with no `env` name at all (a prompt knob, env: "") is never rejected', () => {
+    expect(isEnvValueRejected(getKnob('prompt.castDetection')!)).toBe(false);
+  });
+
+  it('an empty-string ambient value IS rejected (F3 — treated the same as unset by the resolver)', () => {
+    process.env.STAGE2_MIN_COVERAGE = '';
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(true);
+  });
+
+  it('a whitespace-only ambient value IS rejected (F3 — same reasoning as empty-string)', () => {
+    process.env.STAGE2_MIN_COVERAGE = '   ';
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(true);
+  });
+
+  it('a falsy-but-VALID numeric value ("0") is not rejected', () => {
+    process.env.STAGE2_MIN_COVERAGE = '0'; // within [0,1] — a genuinely valid value
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(false);
+  });
+
+  it('a falsy-but-VALID boolean value ("false") is not rejected', () => {
+    process.env.SEG_ASR_ENABLED = 'false';
+    expect(isEnvValueRejected(getKnob(BOOL_KEY)!)).toBe(false);
+  });
+
+  it('an out-of-range value IS rejected', () => {
+    process.env.STAGE2_MIN_COVERAGE = '2'; // > max 1
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(true);
+  });
+
+  it('a genuinely valid non-falsy value is not rejected', () => {
+    process.env.STAGE2_MIN_COVERAGE = '0.7';
+    expect(isEnvValueRejected(getKnob(NUM_KEY)!)).toBe(false);
   });
 });
 

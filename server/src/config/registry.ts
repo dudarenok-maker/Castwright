@@ -360,6 +360,11 @@ export const KNOBS: ConfigKnob[] = [
         + 'same device and is likely slower than cpu. Changing the device '
         + 'restarts the sidecar.',
     type: 'string',
+    // #2224 — SPK_DEVICE routes through the same `_parse_device` sidecar
+    // helper qa.asr.device does (`_engine_env_pin` maps both "asr" and
+    // "spk"), so it gets the identical validated grammar — see the pattern
+    // comment on qa.asr.device below for the full derivation.
+    pattern: /^(cpu|auto|mps|rocm|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar',
     risk: 'medium',
@@ -377,7 +382,40 @@ export const KNOBS: ConfigKnob[] = [
     // card index in "cuda:<n>" is unbounded), so a validated pattern
     // constrains it instead — see the new `pattern` capability in
     // resolver.ts's coerceAndValidate.
-    pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
+    //
+    // #2224 correction — the #2180 pattern above was too narrow: it accepted
+    // only cpu/auto/cuda/cuda:<n>, but `_parse_device` (main.py:3269-3281)
+    // and `_engine_env_pin` (main.py:3355-3369, mapping both "asr" and "spk")
+    // also treat "mps" and bare "rocm" as first-class, MEANING FUL device
+    // families — main.py:10712/10787 gate GPU capacity admission on
+    // `_parse_device(...)[0] in ("cuda", "rocm")`, and this repo genuinely
+    // ships an AMD ROCm torch overlay (server/tts-sidecar's bootstrap). A
+    // Mac (ASR_DEVICE=mps) or AMD (ASR_DEVICE=rocm) operator had their pin
+    // silently rejected by this pattern, falling back to cpu — a regression
+    // #2180/#2205 shipped. Widened to include both. Two forms considered and
+    // deliberately EXCLUDED after checking main.py, not merely assumed:
+    //   - "rocm:<n>" (indexed) — `_parse_device`'s catch-all only splits an
+    //     index off a string that STARTS WITH "cuda"; a non-cuda-prefixed
+    //     string is returned whole as its own "family", so "rocm:1" comes
+    //     back as family "rocm:1" (not "rocm"), which fails every
+    //     `in ("cuda","rocm")` check main.py has. Accepting it here would
+    //     let a value through the resolver that the sidecar itself cannot
+    //     place — worse than rejecting it.
+    //   - "cuda-uuid:<uuid>" — real for the `type:'device'` knobs
+    //     (tts.coqui.device/tts.kokoro.device/tts.qwen.device), whose engine
+    //     constructors read via `_read_device_env` (which resolves it,
+    //     main.py:3341-3352). WhisperEngine/SpeakerEngine do NOT: both read
+    //     `os.environ.get("ASR_DEVICE"/"SPK_DEVICE", "cpu")` directly at
+    //     construction (main.py:7148, :7488) — the resolving reader is used
+    //     only by `_engine_env_pin`, a SEPARATE function that feeds the
+    //     capacity-ledger's pin metadata, not actual device placement. A
+    //     uuid pin here would resolve correctly for capacity bookkeeping and
+    //     WRONGLY for where the model actually loads. `qa.asr.device`/
+    //     `qa.speaker.device` are `type:'string'`, not `type:'device'`,
+    //     precisely because they were never wired into the uuid-reconcile
+    //     path (`resolveKnobInner`'s `reconcileDeviceUuid` branch only fires
+    //     for `knob.type === 'device'`) — this is consistent with that.
+    pattern: /^(cpu|auto|mps|rocm|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar', risk: 'medium',
   },
