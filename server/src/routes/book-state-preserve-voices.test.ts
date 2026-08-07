@@ -405,7 +405,19 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
      after construction forces real dispatch now, decoupled from when the
      result is actually awaited below — without it, /assign's request doesn't
      even reach the network until the final `Promise.all`, by which point the
-     gate has long since released and there is nothing left to race. */
+     gate has long since released and there is nothing left to race.
+
+     [#2215] Waiting for PUT to *reach* the intercepted read used to be a
+     fixed ~20ms wall-clock sleep followed by `expect(intercepted).toBe(true)`
+     — a guess at how long PUT "should" take to get there, which is not a
+     synchronisation primitive: under load (parallel vitest workers, a
+     concurrent GPU job, a cold import) PUT can still be short of the
+     interceptor when the sleep elapses, and the assertion goes red on
+     ordering alone rather than on the behaviour under test. `interceptedSignal`
+     replaces the guess with the real happens-before edge: the mock itself
+     resolves it the instant PUT's readJson call reaches the interceptor, so
+     the await returns as soon as that is true and no sooner — deterministic
+     regardless of machine load. */
   it('#1981 — a stale cast PUT does not erase a concurrently /assign-planted voice', async () => {
     const stateIo = await import('../workspace/state-io.js');
     const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
@@ -418,10 +430,22 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       released = resolve;
     });
     let intercepted = false;
+    let signalIntercepted!: () => void;
+    const interceptedSignal = new Promise<void>((resolve) => {
+      signalIntercepted = resolve;
+    });
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (!intercepted && path === raceCastPath) {
         intercepted = true;
         const value = await actual.readJson(path); // real read, now — happens-before /assign's write
+        /* Signalled AFTER the real read, not at interceptor entry (PR #2232
+           review, finding 1). The invariant this edge exists to establish is
+           "PUT's read genuinely happens-before /assign's write" — resolving on
+           entry would release /assign while the read was still pending, which
+           is harmless while the route holds withCastLock but gives the
+           lock-removed mutation strictly LESS slack than the 20ms sleep did.
+           Signal what the comment actually claims. */
+        signalIntercepted();
         await gate; // hold the RESOLUTION open until released below
         return value;
       }
@@ -444,7 +468,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
         });
       putPromise.catch(() => {}); // force dispatch now (see header comment)
       // Let PUT reach (and get stuck behind) the intercepted read.
-      await new Promise((r) => setTimeout(r, 20));
+      await interceptedSignal;
       expect(intercepted).toBe(true);
 
       const assignPromise = request(app)
