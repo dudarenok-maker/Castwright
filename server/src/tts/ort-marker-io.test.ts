@@ -39,6 +39,16 @@ describe('isOurMarker', () => {
     writeFileSync(join(d, 'RECORD'), 'something\n');
     expect(isOurMarker(d)).toBe(false);
   });
+
+  it('REFUSES a foreign dist-info even when its RECORD is empty', () => {
+    const root = sp();
+    const d = join(root, 'onnxruntime-1.28.0.dist-info');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'METADATA'), 'Metadata-Version: 2.1\nName: onnxruntime\nVersion: 1.28.0\n');
+    writeFileSync(join(d, 'INSTALLER'), 'pip\n');
+    writeFileSync(join(d, 'RECORD'), '');
+    expect(isOurMarker(d)).toBe(false);
+  });
 });
 
 describe('writeOrtMarker', () => {
@@ -87,13 +97,24 @@ describe('deleteOrtMarkerIfOurs', () => {
     expect(deleteOrtMarkerIfOurs(root)).toBe(true);
     expect(existsSync(real)).toBe(true);
   });
+
+  it('REFUSES to delete a foreign dist-info with an empty RECORD', () => {
+    const root = sp();
+    const d = join(root, 'onnxruntime-1.28.0.dist-info');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'INSTALLER'), 'pip\n');
+    writeFileSync(join(d, 'RECORD'), '');
+    expect(deleteOrtMarkerIfOurs(root)).toBe(false);
+    expect(existsSync(d)).toBe(true);
+  });
 });
 
 describe('findPlainOrtDistInfos', () => {
   it('identity-tests EVERY match, not just the first', () => {
     const root = sp();
     writeOrtMarker(root, '1.27.0');          // ours, sorts first
-    const real = realPlainDist(root, '1.28.0');
-    expect(findPlainOrtDistInfos(root)).toEqual([real]);
+    const realA = realPlainDist(root, '1.28.0');
+    const realB = realPlainDist(root, '1.29.0');
+    expect(findPlainOrtDistInfos(root).sort()).toEqual([realA, realB].sort());
   });
 });
