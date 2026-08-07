@@ -112,7 +112,7 @@ let cache: DeviceTokenRecord[] | null = null;
  *  outright, because a now-valid record is absent from both the stale
  *  `cache` and the malformed-only re-read. The extra read is bounded by
  *  write frequency — mint, revoke, and the hourly-throttled touch — never by
- *  request frequency (see `freshReadDegradedAt` below); the synchronous auth
+ *  request frequency (see `persistDegradedAt` below); the synchronous auth
  *  guard (`isValidDeviceToken`) never calls `persist` and is unaffected. */
 let quarantine: unknown[] = [];
 
@@ -376,13 +376,29 @@ function readUnclaimedRecordsFromDisk(
   }
 }
 
-/** Wall-clock time (ms) of the most recent failed fresh re-read inside
- *  `persist`; 0 when the last attempt succeeded (or none has run yet).
- *  Backs the negative-cache TTL `persist` applies to that re-read — see
- *  there. #2208 independent review, F2: mirrors `degradedAt`'s shape
- *  exactly (same `DEGRADED_RETRY_MS` window, same "0 means not degraded"
- *  convention) rather than inventing a second mechanism. */
-let freshReadDegradedAt = 0;
+/** Wall-clock time (ms) of the most recent FAILED `persist` attempt — either
+ *  half of it: the fresh re-read, OR the actual `writeJsonAtomic` write; 0
+ *  when the last attempt succeeded (or none has run yet). Backs the
+ *  negative-cache TTL `persist` applies to itself — see there. #2208
+ *  independent review, F2: mirrors `degradedAt`'s shape exactly (same
+ *  `DEGRADED_RETRY_MS` window, same "0 means not degraded" convention)
+ *  rather than inventing a second mechanism.
+ *
+ *  Second independent-review pass: originally named `freshReadDegradedAt`
+ *  and set ONLY on a failed re-read. That missed the exact scenario this
+ *  module's own docs cite as the motivating case for the guard —
+ *  EBUSY/EPERM from a OneDrive/AV lock — because that fault typically hits
+ *  the WRITE, not the read: `readUnclaimedRecordsFromDisk` succeeds, this
+ *  variable resets to 0, and only THEN does `writeJsonAtomic` fail. `cache`
+ *  never advances past a failed persist (see this function's final two
+ *  lines), so `shouldTouchLastSeen` stays permanently true and every
+ *  guarded request re-fires `touchLastSeen` -> `persist`, each one
+ *  repeating the FULL read again (bounded fine) but then hitting the SAME
+ *  unbounded write fault on every single request — measured 20 requests ->
+ *  20 real `writeJsonAtomic` attempts against unmodified persist, 0 against
+ *  `main` (which has no fresh-read/write step in `persist` at all). Renamed
+ *  and now set on EITHER failure so one guard bounds both. */
+let persistDegradedAt = 0;
 
 async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // #2182(b) — refuse to write while the last load was degraded: the
@@ -391,21 +407,22 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   if (loadDegraded) {
     throw new DeviceStoreDegradedError();
   }
-  // #2208 independent review, F2 — the "bounded by write frequency, not
-  // request frequency" claim only holds while persist SUCCEEDS: a
-  // successful persist is what advances `cache`'s lastSeenAt and so is what
-  // stops `shouldTouchLastSeen` firing again. A persist that throws leaves
+  // #2208 independent review — the "bounded by write frequency, not request
+  // frequency" claim only holds while persist SUCCEEDS: a successful
+  // persist is what advances `cache`'s lastSeenAt and so is what stops
+  // `shouldTouchLastSeen` firing again. A persist that throws — for EITHER
+  // reason `persistDegradedAt` covers, see its own doc comment — leaves
   // `lastSeenAt` exactly where it was, so the NEXT guarded request re-fires
   // `touchLastSeen` -> `enqueueWrite` -> `persist` immediately — and without
-  // this check, each of those would re-attempt the real disk read below,
-  // turning a persistent fault (EBUSY/EPERM — the OneDrive/AV case
-  // `state-io.ts` documents) into one blocking disk read per request for as
-  // long as the fault lasts. That is the exact per-request amplification
-  // #2204's review (F1) closed for `loadSync`, reopened one level down —
-  // same fix, same shape: retry the real read at most once per
-  // `DEGRADED_RETRY_MS`, refuse immediately on every attempt inside the
-  // window.
-  if (freshReadDegradedAt !== 0 && Date.now() - freshReadDegradedAt < DEGRADED_RETRY_MS) {
+  // this check, each of those would re-attempt whichever real disk
+  // operation just failed, turning a persistent fault (EBUSY/EPERM — the
+  // OneDrive/AV case `state-io.ts` documents) into one blocking disk
+  // operation per request for as long as the fault lasts. That is the exact
+  // per-request amplification #2204's review (F1) closed for `loadSync`,
+  // reopened one level down — same fix, same shape: retry the real
+  // operation at most once per `DEGRADED_RETRY_MS`, refuse immediately on
+  // every attempt inside the window.
+  if (persistDegradedAt !== 0 && Date.now() - persistDegradedAt < DEGRADED_RETRY_MS) {
     throw new DeviceStoreDegradedError();
   }
   // #2208 — recompute the on-disk-but-unclaimed set RIGHT NOW rather than
@@ -421,10 +438,9 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // may no longer reflect what's actually on disk.
   const unclaimed = readUnclaimedRecordsFromDisk(devices);
   if (unclaimed === QUARANTINE_READ_DEGRADED) {
-    freshReadDegradedAt = Date.now();
+    persistDegradedAt = Date.now();
     throw new DeviceStoreDegradedError();
   }
-  freshReadDegradedAt = 0;
   quarantine = unclaimed;
   // #2182(a) / #2208 — round-trip every on-disk record the live roster
   // doesn't claim, verbatim, alongside the (possibly mutated) survivors, so
@@ -447,7 +463,23 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // fallback — is a real decision with its own design and test surface, not
   // a same-diff addition; left for a follow-up rather than shipped as a
   // writer with no reader.
-  await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+  //
+  // #2208 independent review, second pass — the write itself is wrapped so a
+  // WRITE fault (not just the fresh-read fault above) also sets
+  // `persistDegradedAt`, closing the amplification described in that
+  // variable's doc comment. The original error is rethrown UNCHANGED (not
+  // wrapped in `DeviceStoreDegradedError`) — callers already handle whatever
+  // `writeJsonAtomic` throws today, and reclassifying a write-specific
+  // failure as the read-oriented `DeviceStoreDegradedError` message ("could
+  // not be read...") would be actively misleading; only the RETRY RATE
+  // needed fixing here, not the error's shape.
+  try {
+    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+  } catch (err) {
+    persistDegradedAt = Date.now();
+    throw err;
+  }
+  persistDegradedAt = 0; // only after a FULLY successful persist — read AND write both landed
   cache = devices; // only after the write durably succeeds
 }
 
@@ -596,10 +628,10 @@ export function listDevices(): PublicDevice[] {
  *  isolation should not depend on that invariant holding in every future
  *  edit to stay correct.
  *
- *  Also resets `freshReadDegradedAt` (#2208 independent review, F2): a
- *  process restart clears that negative-cache timer along with everything
- *  else in this module, and a mid-test "restart" via this hook should mean
- *  the same thing.
+ *  Also resets `persistDegradedAt` (#2208 independent review): a process
+ *  restart clears that negative-cache timer along with everything else in
+ *  this module, and a mid-test "restart" via this hook should mean the
+ *  same thing.
  *
  *  Deliberately does NOT reset `writeChain`/`pendingWrites` (#2204 review
  *  F8, correcting an earlier version of this comment that overclaimed
@@ -625,7 +657,7 @@ export function _resetDeviceTokenCacheForTests(): void {
   loadDegraded = false;
   degradedAt = 0;
   lastWarnedError = null;
-  freshReadDegradedAt = 0;
+  persistDegradedAt = 0;
 }
 
 /** Test hook — await every fire-and-forget `touchLastSeen` write kicked off

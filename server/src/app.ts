@@ -4,8 +4,8 @@
    app.listen(). All middleware order is identical to the original index.ts. */
 
 import express from 'express';
-import { mkdirSync } from 'node:fs';
-import { basename, dirname, posix as posixPath, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { dirname, posix as posixPath, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mountFrontendStatic } from './frontend-static.js';
 import { manuscriptsRouter } from './routes/manuscripts.js';
@@ -123,66 +123,118 @@ app.use(['/api', '/workspace'], requireLanToken);
 /* CSRF guard — only triggers on cookie-bearing state-changing requests (Task 6).
    Mounted after the LAN token guard so it only applies to authenticated sessions. */
 app.use(['/api', '/workspace'], requireSameOrigin);
-/* #2223 — two rules, both registered BEFORE express.static so `fallthrough`
-   can't matter, both 404 (indistinguishable from a path that was never on
-   disk, same as everything else this mount 404s on a miss):
+/* #2223 — the /workspace static mount runs on an ALLOWLIST, not a denylist.
+   Two rounds of denylist name-matching were tried and both failed against a
+   real request over a real socket: an exact-name-plus-suffix-pattern check
+   missed an NTFS alternate-data-stream form (`device-tokens.json::$DATA`,
+   empirically confirmed to return 200 with the full file body); widening
+   that to a bare prefix match still missed case-folding
+   (`DEVICE-TOKENS.JSON`) and a deterministic, guessable 8.3 short-name
+   alias (`DEVICE~1.JSO`, live on this box's `C:` volume) — both still 200,
+   and the 8.3 form has no leading dot, so it also bypassed the dot-segment
+   rule below AND `send`'s own `dotfiles:'ignore'` default, which is what
+   made `.upgrade-backups` (a plaintext `geminiApiKey` copy, see
+   `upgrade-coordinator.ts`'s `backupSeamFiles`) reachable via its 8.3 form
+   even though its long form was correctly blocked. A denylist has to name
+   every alias a case-insensitive, 8.3-generating filesystem can produce for
+   the SAME bytes; an allowlist doesn't need to, because it asks a different
+   question — not "does this name look like something to block" but "does
+   this resolve to a real path under a directory I've decided to serve."
 
-   RULE 1 — internals are not served; content is. Any path whose FIRST
-   segment (immediately under /workspace) is dot-prefixed is workspace-
-   internal state, never something a client fetches: `.upgrade-backups`
-   (independent review of this PR found it holds a plaintext copy of
-   `user-settings.json` — including `geminiApiKey` — taken on every version
-   bump; see `upgrade-coordinator.ts`'s `backupSeamFiles`), `.backups`,
-   `.telemetry`, `.queue.json`, and whatever the next one turns out to be.
-   The legitimate content this mount exists for — `books/`, `voices.json`,
-   `voices/`, `voice-library/` — has no dot-prefixed top segment, so this
-   rule can't reach it. A RULE catches the next internal file too; the
-   original cut of this fix was a filename list, which only ever catches
-   what someone remembered to add.
+   Serve ONLY `books/**`, `voices.json`, `voices/**`, `voice-library/**` —
+   the content this mount exists for — and 404 everything else. Notably,
+   `device-tokens.json` itself needs no name-matching rule anymore: it isn't
+   under any of those roots, in any of its aliased forms, so it's denied
+   the same way anything else outside the allowlist is.
 
-   RULE 2 — device-tokens.json specifically (and any name that starts with
-   it — a rotate backup like `device-tokens.json.bak.1`, and, on Windows, an
-   alternate-data-stream form like `device-tokens.json::$DATA` or a
-   trailing-dot form like `device-tokens.json.`, EMPIRICALLY CONFIRMED to
-   otherwise reach `express.static` and return 200 with the full file body
-   on this platform). Kept as its own rule because the file itself is NOT
-   dot-prefixed, so rule 1 doesn't reach it — it lives at the workspace
-   root alongside legitimate content like `voices.json`. Matched by
-   basename, not just the top segment, so a nested collision (however
-   unlikely, since this file only ever lives at the workspace root today)
-   is covered too. `startsWith('device-tokens.json')` WITHOUT a trailing
-   dot, deliberately: an ADS/trailing-dot suffix addresses the SAME
-   underlying file's bytes but does not start with a `.`-suffixed prefix,
-   and reasoning from memory about which suffix forms `send` would resolve
-   is exactly what burned the first cut of rule 2 — dropping the trailing
-   dot subsumes the exact match and every suffix form in one check, so the
-   answer is never needed again. The only thing this could ever over-match
-   is a hypothetical real file literally named `device-tokens.jsonsomething`,
-   which doesn't exist and wouldn't be a legitimate asset to serve.
+   The decision is made on the REQUESTED path's REAL, on-disk form
+   (`resolveWorkspaceStaticCandidate`, below) — `realpathSync` when the
+   target exists, which canonicalises case, 8.3 short names, and ADS
+   suffixes down to whatever the OS considers the one real path; a plain
+   syntactic resolve when it doesn't, since there's nothing on disk to
+   canonicalise and `express.static` 404s a genuinely-missing path on its
+   own regardless. `isUnderAllowedWorkspaceRoot` then checks that resolved
+   path is CONTAINED in one of the allowed roots — themselves resolved the
+   exact same way, every request, so a case/symlink quirk on the allowed
+   root can't desync the comparison — via a prefix match against the real
+   path PLUS a trailing separator (so a sibling like `voices-secret` can't
+   pass as being "under" `voices`), or an exact match for the one allowed
+   FILE, `voices.json`. A `realpathSync` failure on a path that DOES exist
+   (permissions, a broken reparse point, ...) DENIES; it does not fall
+   through to the raw candidate. Malformed percent-encoding denies outright
+   for the same reason — an allowlist defaults closed.
 
-   Both rules match against the DECODED, NORMALISED path, not the raw
-   request path — percent-encoding (`%2E`, `%2F`, ...) and `.`/`..`
-   traversal segments collapse to whatever segment they'd actually resolve
-   to on disk BEFORE either rule inspects it, so `/books/../.upgrade-backups/x`
-   is caught the same as `/.upgrade-backups/x` directly, and a legitimate
-   `books/<id>/…` path with a dot INSIDE a filename (not as a segment's
-   first character) is untouched. `path.posix.normalize` specifically
-   (not the OS-default `normalize`, which on Windows would flip the
-   forward slashes this URL path uses into backslashes and break the
-   subsequent split). Malformed percent-encoding falls through to the raw
-   path rather than throwing, so a garbled request still gets SOME check
-   rather than none. */
+   The dot-segment check below (any path whose first segment under
+   /workspace starts with `.`) is kept as a cheap PRE-FILTER — it
+   short-circuits the obviously-internal paths (`.upgrade-backups`,
+   `.backups`, `.telemetry`, `.queue.json`) without touching the filesystem
+   at all — but it is NOT the security boundary anymore. Delete it entirely
+   and the allowlist below still denies every one of those paths on its
+   own, because none of them resolve under an allowed root. */
+
+/** Resolve `candidate` to its real, on-disk form when it exists (see the
+ *  #2223 comment above for why that specifically defeats case/8.3/ADS
+ *  aliasing), or to its syntactically-resolved form when it doesn't.
+ *  Returns `null` on a `realpathSync` failure for a path that DOES exist —
+ *  callers must treat that as deny, never as "fall back to the raw path". */
+function resolveWorkspaceStaticCandidate(candidate: string): string | null {
+  if (!existsSync(candidate)) return candidate;
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/** Directory containment: `resolvedPath` must equal `root` or sit strictly
+ *  underneath it (a real path separator immediately after `root`), never a
+ *  bare string-prefix match — otherwise a sibling directory sharing `root`
+ *  as a text prefix (e.g. `voices-secret` against `voices`) would pass. */
+function isContainedIn(resolvedPath: string, root: string): boolean {
+  return resolvedPath === root || resolvedPath.startsWith(root + sep);
+}
+
+/** The only content /workspace serves (#2223). Resolved fresh on every call
+ *  rather than cached at module load, so an allowed root that doesn't exist
+ *  yet at boot (a fresh install with no books, no designed voices) still
+ *  gets the same realpath-canonicalised comparison once it's created
+ *  mid-process, instead of staying pinned to a boot-time syntactic-only
+ *  resolution for the rest of the process's life. */
+function isUnderAllowedWorkspaceRoot(decodedRequestPath: string): boolean {
+  // The '.' prefix keeps a leading '/' from resetting path.resolve to the
+  // filesystem root instead of joining onto WORKSPACE_ROOT.
+  const rawCandidate = resolve(WORKSPACE_ROOT, '.' + decodedRequestPath);
+  const candidate = resolveWorkspaceStaticCandidate(rawCandidate);
+  if (candidate === null) return false;
+
+  const allowedDirs = ['books', 'voices', 'voice-library']
+    .map((name) => resolveWorkspaceStaticCandidate(resolve(WORKSPACE_ROOT, name)))
+    .filter((p): p is string => p !== null);
+  const allowedFiles = [resolveWorkspaceStaticCandidate(resolve(WORKSPACE_ROOT, 'voices.json'))].filter(
+    (p): p is string => p !== null,
+  );
+
+  return allowedDirs.some((root) => isContainedIn(candidate, root)) || allowedFiles.includes(candidate);
+}
+
 app.use('/workspace', (req, res, next) => {
   let decodedPath: string;
   try {
     decodedPath = decodeURIComponent(req.path);
   } catch {
-    decodedPath = req.path; // malformed percent-encoding — still checked, just undecoded
+    res.status(404).end(); // malformed percent-encoding — an allowlist defaults closed
+    return;
   }
-  const normalised = posixPath.normalize(decodedPath);
-  const firstSegment = normalised.split('/').find((s) => s.length > 0 && s !== '.');
-  const base = basename(normalised);
-  if ((firstSegment !== undefined && firstSegment.startsWith('.')) || base.startsWith('device-tokens.json')) {
+
+  // Cheap pre-filter only — see the block comment above. Not load-bearing.
+  const normalisedForDotCheck = posixPath.normalize(decodedPath);
+  const firstSegment = normalisedForDotCheck.split('/').find((s) => s.length > 0 && s !== '.');
+  if (firstSegment !== undefined && firstSegment.startsWith('.')) {
+    res.status(404).end();
+    return;
+  }
+
+  if (!isUnderAllowedWorkspaceRoot(decodedPath)) {
     res.status(404).end();
     return;
   }

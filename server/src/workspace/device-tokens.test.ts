@@ -5,17 +5,31 @@ import { join } from 'node:path';
 
 /* Mock fs/promises so the flush-contract test can delay writeFile and prove
    _flushPendingWritesForTests() genuinely awaits the in-flight write —
-   mirrors the intercept pattern in state-io.test.ts. */
+   mirrors the intercept pattern in state-io.test.ts.
+
+   writeFilePersistentThrow (#2208 independent review, F3/round 2) mirrors
+   readFileSyncPersistentThrow's shape below but for the WRITE half of
+   persist — the EBUSY/EPERM OneDrive/AV case this module's own docs cite as
+   the motivating scenario typically fails the WRITE, not the read.
+   writeFileCallCount counts every invocation (real or faulted) the same way
+   readFileSyncCallCount does. */
 let writeFileImpl:
   | ((path: string, data: string, encoding: BufferEncoding) => Promise<void>)
   | null = null;
+let writeFilePersistentThrow: (() => never) | null = null;
+let writeFileCallCount = 0;
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
     ...actual,
-    writeFile: (path: string, data: string, encoding: BufferEncoding): Promise<void> =>
-      (writeFileImpl ?? actual.writeFile)(path, data, encoding),
+    writeFile: (path: string, data: string, encoding: BufferEncoding): Promise<void> => {
+      writeFileCallCount++;
+      if (writeFilePersistentThrow) {
+        writeFilePersistentThrow(); // throws — synchronous, but caught by the awaiting async caller
+      }
+      return (writeFileImpl ?? actual.writeFile)(path, data, encoding);
+    },
   };
 });
 
@@ -63,6 +77,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   writeFileImpl = null;
+  writeFilePersistentThrow = null;
+  writeFileCallCount = 0;
   readFileSyncOverride = null;
   readFileSyncPersistentThrow = null;
   readFileSyncCallCount = 0;
@@ -814,6 +830,47 @@ it('a persisting fresh-read fault costs at most one disk read per DEGRADED_RETRY
   warn.mockRestore();
 
   expect(readFileSyncCallCount).toBe(1); // exactly ONE real disk read reached the fault, not 5
+});
+
+// #2208 independent review, ROUND 2 — the F2 fix above only bounded a
+// FAILING RE-READ. The scenario this module's own docs cite as the
+// motivating case for the guard (EBUSY/EPERM — a OneDrive/AV lock) usually
+// fails the WRITE, not the read: readUnclaimedRecordsFromDisk succeeds (the
+// READ half is fine), `persistDegradedAt` (renamed from
+// `freshReadDegradedAt`) resets to 0 right after that success — BEFORE the
+// write is even attempted — and only then does writeJsonAtomic fail.
+// Because `cache` never advances past a failed persist, shouldTouchLastSeen
+// never clears, and — pre-round-2 — every guarded request re-ran the FULL
+// read (bounded by nothing, since the read itself always succeeds) before
+// hitting the SAME unbounded write fault. Measured independently: 20
+// requests -> 20 real reads on the pre-round-2 branch, 0 extra reads on
+// `main` (whose `persist` has no fresh-read step at all, so a write-only
+// fault there costs 0 reads, not 20 — see the task report for the exact
+// branch-vs-main probe). This test pins BOTH halves: the read count (the
+// specific metric the independent review measured) and the write count
+// (the fault this scenario is actually about).
+it('a persisting WRITE fault costs at most one READ and one WRITE attempt per DEGRADED_RETRY_MS, not one per guarded request (#2208 independent review, round 2)', async () => {
+  const { token } = await dt.createDevice('Phone', 30); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
+
+  vi.useFakeTimers();
+  const start = 1_700_000_000_000;
+  vi.setSystemTime(start);
+
+  writeFilePersistentThrow = () => {
+    throw new Error('EBUSY: resource busy or locked (simulated write fault)');
+  };
+  writeFileCallCount = 0;
+  readFileSyncCallCount = 0; // the read succeeds every time it's attempted — this counts HOW OFTEN it's attempted
+
+  // 20 guarded requests at effectively the same instant — matches the scale
+  // measured in the independent review.
+  for (let i = 0; i < 20; i++) {
+    expect(dt.isValidDeviceToken(token)).toBe(true); // auth itself is unaffected — best-effort touch only
+  }
+  await dt._flushPendingWritesForTests();
+
+  expect(readFileSyncCallCount).toBe(1); // exactly ONE real read attempt, not 20 — this is what the independent review measured
+  expect(writeFileCallCount).toBe(1); // exactly ONE real write attempt reached the fault, not 20
 });
 
 // #2208 independent review, F3 — `rotate` is dropped from this file's
