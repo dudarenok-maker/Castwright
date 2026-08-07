@@ -2058,6 +2058,7 @@ async function loadServerModules() {
     loadCastIdHistory: castIdHistory.loadCastIdHistory,
     retireCharacterId: castIdHistory.retireCharacterId,
     castIdHistoryPath: castIdHistory.castIdHistoryPath,
+    CastIdHistoryUnreadableError: castIdHistory.CastIdHistoryUnreadableError,
     normaliseForMatch: textMatch.normaliseForMatch,
     normaliseIdKey: characterId.normaliseIdKey,
     loadSegmentsFiles: segmentsIo.loadSegmentsFiles,
@@ -2628,9 +2629,29 @@ async function main() {
     for (const w of pendingWrites) {
       const backupPath = backupCastIdHistory(w.historyPath);
       if (backupPath) console.log(`  backed up ${w.historyPath} -> ${backupPath}`);
-      for (const a of w.autoRecord) {
-        await mods.retireCharacterId(w.bookDir, a.id, a.to);
-        console.log(`  recorded ${a.id} -> ${a.to} (${w.bookDir})`);
+      try {
+        for (const a of w.autoRecord) {
+          await mods.retireCharacterId(w.bookDir, a.id, a.to);
+          console.log(`  recorded ${a.id} -> ${a.to} (${w.bookDir})`);
+        }
+      } catch (err) {
+        // PR #2233 review, finding 2 — retireCharacterId now THROWS
+        // CastIdHistoryUnreadableError on a degraded read (#2214) instead of
+        // laundering the file, which is right for this book but wrong for
+        // this loop: unguarded, one bad book's throw used to abort every
+        // later book in the same --apply run, surfacing nothing but a raw
+        // stack from main()'s top-level catch. backupCastIdHistory already
+        // ran above, so the operator has a pre-write copy regardless — skip
+        // this book's remaining writes and keep going.
+        if (err instanceof mods.CastIdHistoryUnreadableError) {
+          console.error(
+            `  SKIPPED ${w.bookDir}: cast-id-history.json could not be read (${err.message}). ` +
+              `A backup was taken at ${backupPath ?? '(none — see the earlier backup line for this book)'}; ` +
+              `fix or restore the file and re-run --apply for this book. Continuing with the remaining books.`,
+          );
+          continue;
+        }
+        throw err;
       }
     }
   }

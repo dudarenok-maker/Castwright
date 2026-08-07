@@ -142,6 +142,22 @@ A character's `id` is free text the analyzer mints, and it is the join key acros
   Undo works. A new reconciliation heals books already stranded by the old order at the next
   analysis, and `notLinkedTo` became server-owned on the cast PUT so a stale client cannot undo
   the repair. (PR #2202)
+- **A degraded `cast-id-history.json` can no longer be silently rewritten into a valid, empty one
+  — losing every recorded "not the same character" decision on the book — and a run against a
+  damaged file now says so in the in-app log instead of reading as clean** (#2214, #2201). PR
+  #2202's guard only protected `reconcileRejectEdgesOnDisk`'s own consequence; every OTHER
+  id-history-mutating step in the same persist block (`recordRetirements`,
+  `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`) read the file
+  through the collapsing `loadCastIdHistory` and wrote it back unconditionally, so by the time the
+  guard ran, an unreadable file had already been laundered into a valid empty one — and an empty
+  history is indistinguishable from "nothing was ever rejected," so every reject on the book was
+  then deleted for good. All eight mutating helpers in `cast-id-history.ts` now read through
+  `loadCastIdHistoryWithStatus` and throw `CastIdHistoryUnreadableError` on a degraded verdict
+  before touching anything, closing the laundering off at its source rather than only at the one
+  downstream consequence PR #2202 could see. Both authoritative persist blocks
+  (`runMainAnalyzerJob`/`runSubsetAnalyzerJob`) catch that error and add one run-log line naming
+  the skip — previously this failure mode was visible only in the server console, never in the
+  run the user was actually watching. (PR #2233)
 
 ### 🧠 GPU memory and the sidecar now look after themselves
 

@@ -95,6 +95,12 @@
   names from ever being matched again — with no way to undo it. Now a failure leaves the decision
   visible and undoable, and any book already carrying an invisible mark is cleaned up the next
   time it's analysed.
+- If the file that remembers your "not the same character" decisions was ever temporarily
+  unreadable — a brief hiccup from antivirus or cloud sync, the same kind of interruption
+  Castwright already shrugs off elsewhere — it used to quietly get rewritten as empty the next
+  time analysis touched it, silently losing every decision you'd made on that book. It's left
+  exactly as it is now instead, and analysis says so right in the run log, so a run that skipped
+  that check never reads as proof nothing needed your attention.
 
 # Castwright 1.14.0
 

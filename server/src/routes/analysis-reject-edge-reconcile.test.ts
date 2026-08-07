@@ -8,7 +8,11 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { reconcileRejectEdgesOnDisk, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE } from './analysis.js';
+import {
+  reconcileRejectEdgesOnDisk,
+  DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE,
+  logIfDegradedCastIdHistory,
+} from './analysis.js';
 import {
   loadCastIdHistoryWithStatus,
   dropSupersededIdsReclaimedByLiveCast,
@@ -270,15 +274,53 @@ describe('reconcileRejectEdgesOnDisk', () => {
         { bookId: BOOK_ID, characterId: 'm2' },
       ]);
       // And nothing claims to have cleared a stranded link — #2201's log
-      // line reports the skip, never a clear/restore.
-      expect(lines.some((l) => l.includes('Cleared') || l.includes('Restored'))).toBe(false);
-      expect(lines.some((l) => l.includes('could not be read'))).toBe(true);
+      // line reports the skip, never a clear/restore. Pin the line COUNT too
+      // (finding 4, PR #2233 review) — [C8]/[C9] pin it this way already;
+      // the `.some()` pair above only checked content, not that exactly one
+      // line was emitted.
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/could not be read/);
+      expect(lines[0]).not.toMatch(/Cleared|Restored/);
 
       const skip = warnSpy.mock.calls
         .map((c) => String(c[0]))
         .filter((m) => m.includes('reject-edge reconciliation skipped'));
       expect(skip).toHaveLength(1);
       expect(skip[0]).toContain(BOOK_ID);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  /* PR #2233 review, finding 1. [C10] cannot tell "the ternary is honoured"
+     from "the ternary is inert", because its own local read ALSO comes back
+     `degraded` — `statusNow` already equals `statusBeforePersist` there, so
+     `statusBeforePersist === 'degraded' ? 'degraded' : statusNow` and a bare
+     `statusNow` produce the same answer. This case forces them apart: the
+     history on disk is HEALTHY (a genuine `ok` local read, no
+     `rejectedPairs`) so pass 1 would delete the edge on its own — only the
+     ternary honouring the pre-persist `degraded` verdict can save it. */
+  it('[C14] a degraded statusBeforePersist overrides a HEALTHY local read', async () => {
+    seed(
+      { characters: [{ id: 'mairin', notLinkedTo: [{ bookId: BOOK_ID, characterId: 'm2' }] }] },
+      { schema: 1, supersededBy: {}, rejectedPairs: [] },
+    );
+    const before = statSync(join(bookDir, '.audiobook', 'cast.json')).mtimeMs;
+    const { lines, log } = collectLog();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log, 'degraded');
+
+      // The edge survives even though the local read is healthy.
+      expect(readCast().characters[0].notLinkedTo).toEqual([
+        { bookId: BOOK_ID, characterId: 'm2' },
+      ]);
+      // No write at all.
+      expect(statSync(join(bookDir, '.audiobook', 'cast.json')).mtimeMs).toBe(before);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/could not be read/);
+      expect(lines[0]).not.toMatch(/Cleared|Restored/);
     } finally {
       warnSpy.mockRestore();
     }
@@ -356,11 +398,31 @@ describe('reconcileRejectEdgesOnDisk', () => {
      comments for why — no test in this file, or `book-state-preserve-
      voices.test.ts`'s only other reference to `reconcileRejectEdgesOnDisk`,
      exercises `runMainAnalyzerJob`/`runSubsetAnalyzerJob` end to end), so
-     this pins the fix at the same source-scan seam [C7]/[C11] already use,
-     rather than calling `reconcileRejectEdgesOnDisk` directly — which is
-     exactly the blind spot (#2214's own PR description) that let the
-     original defect through undetected. */
-  it('[C13] both persist-block catch handlers emit the shared degraded-history log line on CastIdHistoryUnreadableError', () => {
+     this pins the wiring at the same source-scan seam [C7]/[C11] already
+     use — but PR #2233 review, finding 5 pulled the actual behaviour
+     (`instanceof` check + log call) out into an exported
+     `logIfDegradedCastIdHistory` helper, so it no longer has to be a source
+     scan ALONE: the helper below is driven directly, including the negative
+     case (a plain `Error` emits nothing) a source scan can't check at all. */
+  describe('logIfDegradedCastIdHistory', () => {
+    it('[C13a] emits the shared degraded-history log line for CastIdHistoryUnreadableError', () => {
+      const { lines, log } = collectLog();
+
+      logIfDegradedCastIdHistory(new CastIdHistoryUnreadableError('boom'), log);
+
+      expect(lines).toEqual([DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE]);
+    });
+
+    it('[C13b] emits nothing for a plain Error', () => {
+      const { lines, log } = collectLog();
+
+      logIfDegradedCastIdHistory(new Error('boom'), log);
+
+      expect(lines).toEqual([]);
+    });
+  });
+
+  it('[C13] both persist-block catch handlers call the shared helper', () => {
     const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
 
     const catchHandlerWarnLines = [
@@ -381,18 +443,16 @@ describe('reconcileRejectEdgesOnDisk', () => {
 
       expect(
         block,
-        `catch handler after "${warnLine}" does not check instanceof CastIdHistoryUnreadableError`,
-      ).toContain('if (historyErr instanceof CastIdHistoryUnreadableError) {');
-      expect(
-        block,
-        `catch handler after "${warnLine}" does not emit the shared degraded-history log line`,
-      ).toContain('log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);');
+        `catch handler after "${warnLine}" does not call logIfDegradedCastIdHistory`,
+      ).toContain('logIfDegradedCastIdHistory(historyErr, log);');
     }
 
-    // Reused, not copy-pasted, per #2214's brief: the exact same constant
-    // backs reconcileRejectEdgesOnDisk's own degraded branch AND both catch
-    // handlers — three call sites, one wording.
-    expect(src.match(/log\(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE\);/g) ?? []).toHaveLength(3);
+    // Reused, not copy-pasted: the instanceof check + log call live in the
+    // helper ONCE; each catch handler is one call site, plus
+    // reconcileRejectEdgesOnDisk's own degraded branch still emits directly
+    // (it already has the verdict in hand, not a caught error).
+    expect(src.match(/logIfDegradedCastIdHistory\(historyErr, log\);/g) ?? []).toHaveLength(2);
+    expect(src.match(/log\(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE\);/g) ?? []).toHaveLength(2);
 
     // The shared constant itself carries the user-facing wording a reader of
     // reconcileRejectEdgesOnDisk's own degraded branch already recognises.

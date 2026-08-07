@@ -384,6 +384,22 @@ export const DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE =
   `Skipped "not the same character" link check — cast-id-history.json for this book could not ` +
   `be read. No links were changed; the file needs attention (see the server log for the cause).`;
 
+/* #2214/#2201 review finding 5 — the two persist-block `catch (historyErr)`
+   handlers below had identical bodies (an `instanceof` check plus the same
+   `log()` call), pinned only by a source-scan test because the persist
+   blocks themselves aren't standable-up in a unit test. Extracting the
+   shared body into its own exported function gives that behaviour a
+   reachable seam: this can be driven directly, including the negative case
+   (a plain `Error` emits nothing) that a source scan can't check at all. */
+export function logIfDegradedCastIdHistory(
+  err: unknown,
+  log: (phaseId: number, message: string) => void,
+): void {
+  if (err instanceof CastIdHistoryUnreadableError) {
+    log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
+  }
+}
+
 export async function reconcileRejectEdgesOnDisk(
   bookDir: string,
   bookId: string | undefined,
@@ -5326,9 +5342,7 @@ export async function runMainAnalyzerJob(
                the same user-facing wording here so a run against a damaged
                file still shows something in the in-app log instead of
                reading as clean. */
-            if (historyErr instanceof CastIdHistoryUnreadableError) {
-              log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
-            }
+            logIfDegradedCastIdHistory(historyErr, log);
           }
           await logCarriedForwardCharacters(
             record.bookDir,
@@ -6639,9 +6653,7 @@ export async function runSubsetAnalyzerJob(
           } catch (historyErr) {
             console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);
             // #2214/#2201 — mirrors the main path's same-named handler above.
-            if (historyErr instanceof CastIdHistoryUnreadableError) {
-              log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
-            }
+            logIfDegradedCastIdHistory(historyErr, log);
           }
           await logCarriedForwardCharacters(
             record.bookDir,
