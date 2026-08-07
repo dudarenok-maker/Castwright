@@ -17,8 +17,10 @@ Closes the design work behind **#2192**.
 > Revision 4 fixed the wiring and restored the self-heal; **round 4 then returned "not safe
 > to implement from"** — three Criticals in those fixes, including a venv state no revision
 > had ever named (the already-clobbered box, which #2192 says is the largest population) and
-> a version glob that would have failed every NVIDIA bootstrap. **Revision 5** folds all of
-> them. §Review findings records all four rounds.
+> a version glob that would have failed every NVIDIA bootstrap. **Round 5**, scoped to those
+> three, resolved one and rejected two — the ownership predicate could not tell a GPU build
+> from a CPU one, and would have deleted a correct marker on every boot. **Revision 6** folds
+> all of it. §Review findings records all five rounds.
 
 ## Problem
 
@@ -140,16 +142,22 @@ for "this profile swaps." **AMD and Apple both resolve to plain `onnxruntime`**
 (`accelerator-profile.mjs:178,189`) and take the `delete` branch — a "GPU profile"
 shorthand would wrongly group AMD with NVIDIA.
 
-**Critically, both consumers apply the marker OUTSIDE their `ort.action === 'swap'` gate.**
-Today each does `if (ort.action === 'swap') { …steps… }`, so the skip branch executes
-nothing. The delete side must still run on cpu/amd/apple.
+**The two halves sit on opposite sides of the existing `ort.action === 'swap'` gate.** Today
+each consumer does `if (ort.action === 'swap') { …steps… }`, so the skip branch executes
+nothing at all.
+
+- **`delete` goes OUTSIDE the gate**, at function entry — it must still run on
+  cpu/amd/apple, which never enter the block.
+- **`write` goes INSIDE the gate**, as its last statement — a write outside it would fire on
+  profiles that have no `ortPackage` to derive a version from (see below).
 
 **The two halves run at different points, and the order is load-bearing:**
 
 - **`delete` runs FIRST**, before any overlay `pip install` in that flow.
 - **`write` runs LAST**, after the swap steps succeed.
 
-A single call sited after the swap block would be too late. `cpu.txt:26` carries an
+A single combined call — of either half — sited after the swap block would be too late for
+the delete. `cpu.txt:26` carries an
 **explicit** `onnxruntime` line (the nvidia overlay only pulls it transitively), and
 `bootstrap-venv.mjs:181`'s AMD→ROCm-failure→CPU fallback runs
 `pip install -r <cpu overlay>`. With a stale marker still present at that moment, pip
