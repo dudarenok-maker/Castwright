@@ -62,25 +62,36 @@ vi.mock('node:fs', async (orig) => {
   return { ...real, readFileSync: (p: unknown, ...rest: unknown[]) =>
     p === 'FAKE' ? Buffer.from(TEST_CERT_PEM) : (real.readFileSync as any)(p, ...rest) };
 });
-vi.mock('../workspace/device-tokens.js', () => ({
-  createDevice: vi.fn(async (label: string, ttlDays: number) => ({
-    device: {
-      id: 'd1',
-      label,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(),
-      revoked: false,
-    },
-    token: 'tok_test',
-  })),
-  clampTtlDays: (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 30),
-}));
+vi.mock('../workspace/device-tokens.js', () => {
+  // Matches the real class's no-arg constructor (checked by TypeScript
+  // against the real export's type even though the mock supplies the
+  // runtime value) with a fixed, known message tests can assert against.
+  class DeviceStoreDegradedError extends Error {
+    constructor() {
+      super('store unreadable');
+    }
+  }
+  return {
+    createDevice: vi.fn(async (label: string, ttlDays: number) => ({
+      device: {
+        id: 'd1',
+        label,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + ttlDays * 86_400_000).toISOString(),
+        revoked: false,
+      },
+      token: 'tok_test',
+    })),
+    clampTtlDays: (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : 30),
+    DeviceStoreDegradedError,
+  };
+});
 
 import { pairSessionRouter, pairRedeemRouter, redeemLimiter } from './pairing.js';
 import { _resetPairingSessionsForTests, createPairingSession } from '../workspace/pairing-sessions.js';
 import { mayStartPairingSession, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 import { getLanRuntime } from '../lan-runtime.js';
-import { createDevice } from '../workspace/device-tokens.js';
+import { createDevice, DeviceStoreDegradedError } from '../workspace/device-tokens.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -127,6 +138,63 @@ describe('pairing routes', () => {
   it('POST /redeem 401s an unknown code', async () => {
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem').send({ code: 'ZZZZZZZZ' });
     expect(res.status).toBe(401);
+  });
+
+  // #2204 review (F2/F7, pairing-ordering note) — redeemPairingSession
+  // already consumed the code before createDevice ever runs, so a degraded
+  // device store used to burn the one-time code for nothing: the user would
+  // have to generate a whole fresh QR code with no explanation. The code
+  // must survive a failed mint and still work on retry.
+  it('POST /redeem does not burn the pairing code when the device store is degraded, and answers 503', async () => {
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    vi.mocked(createDevice).mockRejectedValueOnce(new DeviceStoreDegradedError());
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(first.status).toBe(503);
+    expect(first.body.error).toBe('store unreadable');
+
+    // The code was NOT consumed by the failed attempt -- a retry with the
+    // same code succeeds once createDevice is healthy again (the mock's
+    // default implementation, restored automatically after the one-shot
+    // mockRejectedValueOnce above).
+    const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(second.status).toBe(201);
+    expect(second.body.token).toBe('tok_test');
+  });
+
+  // Same fix, the cookie-setting sibling endpoint.
+  it('POST /redeem-browser does not burn the pairing code when the device store is degraded, and answers 503', async () => {
+    const { code } = createPairingSession('x', undefined, 10);
+    vi.mocked(createDevice).mockRejectedValueOnce(new DeviceStoreDegradedError());
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem-browser').send({ code });
+    expect(first.status).toBe(503);
+    expect(first.body.error).toBe('store unreadable');
+
+    const second = await request(redeem).post('/api/pair/redeem-browser').send({ code });
+    expect(second.status).toBe(201);
+  });
+
+  // A genuine (non-degraded) createDevice failure must still surface as a
+  // plain 500 -- the `instanceof DeviceStoreDegradedError` check must
+  // actually discriminate, not swallow every error as a 503. The code is
+  // still restored (the restore happens unconditionally in the catch, not
+  // gated on the error type): burning a one-time code because of a
+  // transient, unrelated failure is exactly the same user-hostile outcome
+  // the degraded-store case was fixed for, so the fix generalises rather
+  // than special-casing one error class.
+  it('POST /redeem still 500s on a non-degraded createDevice failure, but still restores the code', async () => {
+    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
+    vi.mocked(createDevice).mockRejectedValueOnce(new Error('boom'));
+    const redeem = appWith(pairRedeemRouter);
+
+    const first = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(first.status).toBe(500);
+
+    const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
+    expect(second.status).toBe(201);
   });
 
   it('POST /session 403s when the caller may not start a pairing session (non-loopback, non-friendly)', async () => {

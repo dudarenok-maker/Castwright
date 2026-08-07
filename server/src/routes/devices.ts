@@ -14,7 +14,13 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { createDevice, listDevices, revokeDevice, clampTtlDays } from '../workspace/device-tokens.js';
+import {
+  createDevice,
+  listDevices,
+  revokeDevice,
+  clampTtlDays,
+  DeviceStoreDegradedError,
+} from '../workspace/device-tokens.js';
 import { createPairingSession } from '../workspace/pairing-sessions.js';
 import {
   isLanTokenEnforced,
@@ -28,8 +34,23 @@ import { configValue } from '../config/resolver.js';
 
 export const devicesRouter = Router();
 
+// #2204 review (F2/F7) — a degraded store must answer 503 with the reason,
+// not the shape of a genuine result: 200/{devices:[]} (list), 404 "Unknown
+// device." (revoke), or an opaque 500 (mint) all lie about what happened.
+function respondIfDegraded(res: Response, err: unknown): boolean {
+  if (err instanceof DeviceStoreDegradedError) {
+    res.status(503).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
 devicesRouter.get('/devices', (_req: Request, res: Response) => {
-  res.json({ devices: listDevices() });
+  try {
+    res.json({ devices: listDevices() });
+  } catch (err) {
+    if (!respondIfDegraded(res, err)) throw err;
+  }
 });
 
 // admin mint — LOOPBACK-ONLY (defense-in-depth: a stolen browser cookie must NOT
@@ -43,9 +64,13 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
   const raw = (req.body as { label?: unknown } | undefined)?.label;
   const label = typeof raw === 'string' ? raw : 'Device';
   const ttl = clampTtlDays(configValue('lan.deviceTokenTtlDays'));
-  const { device, token } = await createDevice(label, ttl);
-  // The raw token is shown exactly once — only its hash is persisted.
-  res.status(201).json({ ...device, token });
+  try {
+    const { device, token } = await createDevice(label, ttl);
+    // The raw token is shown exactly once — only its hash is persisted.
+    res.status(201).json({ ...device, token });
+  } catch (err) {
+    if (!respondIfDegraded(res, err)) throw err;
+  }
 });
 
 // browser pairing session — startable from loopback (the host UI) OR an already-paired
@@ -86,10 +111,14 @@ devicesRouter.post('/devices/pair-session', (req: Request, res: Response) => {
 });
 
 devicesRouter.delete('/devices/:id', async (req: Request, res: Response) => {
-  const ok = await revokeDevice(req.params.id);
-  if (!ok) {
-    res.status(404).json({ error: 'Unknown device.' });
-    return;
+  try {
+    const ok = await revokeDevice(req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: 'Unknown device.' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    if (!respondIfDegraded(res, err)) throw err;
   }
-  res.json({ ok: true });
 });
