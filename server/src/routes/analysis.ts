@@ -7,7 +7,7 @@
 import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
@@ -2547,15 +2547,38 @@ export function snapshotInFlightAnalysis(manuscriptId: string): AnalysisStateFil
     seconds for cold-boot rehydration purposes. */
 const ANALYSIS_STATE_WRITE_THROTTLE_MS = 5_000;
 
+/* #2165 — the job's CURRENT book directory. `job.bookDir` is a string copy
+   taken at job creation; renaming the book mid-run mutates the
+   ManuscriptRecord in place (book-state.ts's `rec.bookDir = newDir`) but
+   cannot reach that copy, so a disk write keyed on it recreates the
+   pre-rename directory and lands the file where nothing reads it. Re-read
+   the record instead.
+
+   Falls back to the pinned copy if the record is absent for any reason:
+   belt-and-braces when the store has no record. The case that genuinely
+   motivates re-reading is a record being replaced (reparse via
+   `putManuscript` — a captured reference would miss the fresh path).
+
+   NOT for markAnalysisBusy/clearAnalysisBusy. Those are a matched pair over
+   a ref-counted Map; clearing under a different key than the one marked
+   would leak the old entry forever AND underflow the new one, releasing a
+   guard a sibling job may still hold. The busy key stays pinned — see the
+   accepted-gap note at the clearAnalysisBusy site for the race that the
+   rename guard narrows but does not close. */
+function liveBookDir(job: AnalysisJob): string | null {
+  return getManuscript(job.manuscriptId)?.bookDir ?? job.bookDir;
+}
+
 async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise<void> {
-  if (!job.bookDir) return;
+  const bookDir = liveBookDir(job); // #2165
+  if (!bookDir) return;
   const phase = job.replay.lastPhase;
   if (!phase) return;
   const now = Date.now();
   if (!force && now - job.lastDiskWriteAt < ANALYSIS_STATE_WRITE_THROTTLE_MS) return;
   job.lastDiskWriteAt = now;
   try {
-    await writeAnalysisState(job.bookDir, {
+    await writeAnalysisState(bookDir, {
       manuscriptId: job.manuscriptId,
       phaseId: phase.phaseId,
       phaseLabel: phase.label,
@@ -2579,10 +2602,11 @@ async function persistTerminalSnapshot(
   state: 'paused' | 'halted',
   finalEv: { code?: string; message?: string } | null,
 ): Promise<void> {
-  if (!job.bookDir) return;
+  const bookDir = liveBookDir(job); // #2165
+  if (!bookDir) return;
   const phase = job.replay.lastPhase;
   try {
-    await writeAnalysisState(job.bookDir, {
+    await writeAnalysisState(bookDir, {
       manuscriptId: job.manuscriptId,
       phaseId: phase?.phaseId ?? 0,
       phaseLabel: phase?.label ?? PHASES[0].label,
@@ -2711,7 +2735,12 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
          any main run's snapshot survives a sibling subset
          completing successfully. */
       if (job.kind === 'main') {
-        void deleteAnalysisState(job.bookDir);
+        /* #2165 — the CURRENT directory, not the pinned copy: deleting the
+           pre-rename path leaves the real analysis-state.json behind, and
+           scanActiveAnalyses later offers it as a resumable analysis for a
+           book that finished. */
+        const dir = liveBookDir(job);
+        if (dir) void deleteAnalysisState(dir);
       }
     } else if (kind === 'error' && code === 'aborted') {
       /* Paused or displaced. Write paused state so the cold-boot
@@ -2742,6 +2771,20 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
   /* Release the cross-operation busy flag so a "Design full cast" run can
      start once analysis is done (mutual exclusion — re-analysis rewrites the
      whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
+  /* Pinned deliberately (#2165) — mark/clear must use the same key, or the
+     ref count leaks on one side and underflows on the other, releasing a
+     guard a sibling job may still hold.
+
+     KNOWN, ACCEPTED GAP: book-state.ts's rename guard narrows but does NOT
+     close the race that makes this key wrong. An analysis whose
+     markAnalysisBusy lands between that route's last check and its
+     renameWithRetry registers against the pre-rename directory, so
+     isAnalysisBusy(newDir) is false for this run's whole life and
+     cast-design.ts's analysis-vs-bulk-design exclusion silently disappears
+     for that book. The run's own disk writes are unaffected (liveBookDir
+     above). Closing it needs a primitive spanning registration and rename —
+     a per-book lock, or keying busy state on book id instead of path — which
+     is out of scope for #2165. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
   /* Release the run-scoped analyzer PIN. keepAliveFor() returned -1 for every
      Ollama call while a run was in flight (see analyzer/ollama.ts) so the model
@@ -3167,7 +3210,12 @@ export async function runMainAnalyzerJob(
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
        every merge-base write and reset by the Start-fresh delete below. */
     const castBase: CastMergeBase | null = recordRef.bookDir
-      ? createCastMergeBase(recordRef.bookDir, priorSnapshot.fingerprint)
+      ? createCastMergeBase(
+          /* #2165 — live, not pinned. The fallback and the `!` are belt-and-
+             braces that TypeScript cannot prove unreachable. */
+          () => liveBookDir(job) ?? recordRef.bookDir!,
+          priorSnapshot.fingerprint,
+        )
       : null;
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
@@ -5795,7 +5843,10 @@ export async function runSubsetAnalyzerJob(
   /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
      every merge-base write. */
   const castBase: CastMergeBase | null = record.bookDir
-    ? createCastMergeBase(record.bookDir, priorSnapshot.fingerprint)
+    ? createCastMergeBase(
+        () => liveBookDir(job) ?? record.bookDir!, // #2165 — fallback + ! are belt-and-braces
+        priorSnapshot.fingerprint,
+      )
     : null;
 
   /* Heal cross-series/author reuse links in the prior cast before it feeds the

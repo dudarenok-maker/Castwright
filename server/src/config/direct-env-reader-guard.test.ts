@@ -366,8 +366,6 @@ const ALLOWLISTED_SITES: Record<string, number> = {
   'server/src/gpu/gpu-load.ts': 1,
   // SEG_QA_MAX_RERECORDS: non-finite/absent falls back to 2, the registry default.
   'server/src/routes/chapter-qa-repair.ts': 1,
-  // SPK_DEVICE ?? 'cpu' — matches the registry default.
-  'server/src/tts/embed-client.ts': 1,
   // ACCELERATOR ?? null. 'auto' (the registry default) is not in the
   // sidecar's PROFILES list (tts-sidecar/scripts/accelerator-profile.mjs),
   // so an active 'auto' and an absent env fall through to the same
@@ -416,7 +414,6 @@ const EXPECTED_FALLBACKS: Array<{ file: string; name: string; fallback: string }
   },
   { file: 'server/src/gpu/gpu-load.ts', name: 'GPU_RESERVE_MB', fallback: '500' },
   { file: 'server/src/routes/chapter-qa-repair.ts', name: 'SEG_QA_MAX_RERECORDS', fallback: ': 2;' },
-  { file: 'server/src/tts/embed-client.ts', name: 'SPK_DEVICE', fallback: "'cpu'" },
   { file: 'server/src/tts/spawn-sidecar.ts', name: 'ACCELERATOR', fallback: 'null' },
   { file: 'server/src/upgrade/apply.ts', name: 'ACCELERATOR', fallback: 'null' },
   {

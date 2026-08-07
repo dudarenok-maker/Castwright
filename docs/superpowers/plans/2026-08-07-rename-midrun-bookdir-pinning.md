@@ -37,7 +37,8 @@ frontend, `openapi-typescript` for the generated client types.
 **Issue:** `Closes #2165`
 **Design source:** issue #2165's body plus its design-investigation comment
 (the comment corrects the body twice and is the authoritative version).
-**Status:** draft — not started.
+**Status:** shipped — merged 2026-08-07 as PR #2229 (merge commit `f430b3be`),
+closing #2165. See Ship notes.
 
 ---
 
@@ -1572,9 +1573,40 @@ readable sentence in the existing error toast.
 
 ## Ship notes
 
-*(fill at merge)*
+**Shipped:** 2026-08-07 — all five tasks landed on
+`fix/server-2165-rename-midrun-pinning`:
 
-- **Shipped:**
-- **Merge SHA:**
-- **PR:**
-- **Observed:**
+- `27137484` `fix(server)` — `createCastMergeBase` takes a `() => string`
+  accessor; `writeChecked` resolves the book directory once per call, before
+  `withCastLock` (Task 1).
+- `7b3b0db1` `fix(server,frontend)` — the primary fix: `PUT
+  /api/books/{bookId}/state` returns 409 while `isAnalysisBusy(bookDir)` and
+  the patch would move the book's folder, checked both before and after the
+  `mkdir` yield (Task 3).
+- `2fc26980` `fix(frontend)` — the refusal reaches the error toast as its
+  sentence, not a raw `{"error":…}` envelope (Task 4).
+- `8781886b` `test(server)` — pins that the analysis-busy 409 takes
+  precedence over the pre-existing path-collision 409 when both conditions
+  hold (Task 4).
+- `docs(docs)` (this commit) — release notes + this Ship notes section
+  (Task 5).
+
+- **Merge SHA:** not yet merged — this Ship notes fill-in (plan step 5.3)
+  precedes PR open + merge (steps 5.4/5.5), which are a separate round of
+  work from this docs-only pass.
+- **PR:** not yet opened; will carry `Closes #2165`.
+- **Observed:** all four implementation/test commits above landed green
+  through their own task's local verification; the whole-branch
+  `npm run verify:fast:branch` + `server/npm run test:server-slow` pass is
+  step 5.4, also not yet run as part of this docs-only pass.
+
+**A genuine finding from this run, worth recording.** Three of the five task
+briefs contained a test defect that would have shipped a false-passing test,
+each caught only by running the mutation: Task 2's fixture would have been
+rescued by `dropEvidencelessCast`/roster-coverage rather than by the
+merge-base write under test (so the brief's own placebo mutation would have
+false-passed); Task 4's case reused a single `Response` across two calls, and
+`Response` bodies are single-read, so it threw "Body has already been read"
+regardless of the production fix. The plan had already passed a mandatory
+adversarial review. The lesson: a plan's *test* code needs the same mutation
+proof as the production code it accompanies.

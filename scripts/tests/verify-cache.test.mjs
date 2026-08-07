@@ -12,6 +12,7 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  copyFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -35,6 +36,7 @@ import {
   gpuContentionFor,
   isVitestPoolCrash,
   branchDiffFiles,
+  stagedDiffFiles,
   sidecarFingerprint,
   STEPS,
   _internals,
@@ -474,6 +476,30 @@ test('stepTouchedByDiff: a pip-constraints.mjs diff matches test:hooks via extra
 
 test('stepTouchedByDiff: an eslint.config.mjs diff matches test:hooks via extraFiles (runtime dep of eslint-guardrail.test.mjs)', () => {
   const diff = ['eslint.config.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+// #2216 review round 3 — git-scrub.test.mjs is the first hooks test whose
+// scan surface reaches outside scripts/** (it walks pinokio-scripts/** too),
+// but test:hooks' globs didn't cover that directory: a pinokio-scripts-only
+// diff printed [cached] locally and scheduled only test:pinokio in cloud CI
+// (ci-scope.mjs derives both from this same STEPS[] entry) — neither of
+// which runs git-scrub.test.mjs, so a scrub deleted from e.g.
+// resolve-release.js's `git checkout` (no `cwd`, runs on an end user's
+// machine — the highest-risk site the guard covers) would ship undetected.
+test('stepTouchedByDiff: a pinokio-scripts/ diff matches test:hooks via globs (#2216 — git-scrub.test.mjs scans that directory too)', () => {
+  const diff = ['pinokio-scripts/lib/resolve-release.js'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+// #2216 review round 3 — the glob was *.{mjs,cjs} only, narrower than the
+// SCANNED_EXTENSIONS both gh-chokepoint.test.mjs and git-scrub.test.mjs
+// actually walk (.mjs/.cjs/.js/.mts/.cts/.ts). audit-stage2-coverage.mts is
+// a real file this gap already reached (cited by name in gh-chokepoint's own
+// header) — a raw `gh`/`git` call added there would print test:hooks
+// [cached] on exactly the diff that introduced it.
+test('stepTouchedByDiff: a scripts/*.mts diff matches test:hooks via globs (#2216 — SCANNED_EXTENSIONS parity)', () => {
+  const diff = ['scripts/audit-stage2-coverage.mts'];
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
@@ -1072,6 +1098,141 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
   } finally {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
+  }
+});
+
+// #2216 review round 3 — restores the property the deleted wrong-premise
+// test (see git history) used to pin: stagedDiffFiles must return `null`,
+// not `[]`, when git fails outright. This is the exact distinction the
+// whole #2216 correction turns on — verify-cache's scope filter treats
+// `null` as "diff failed, run everything" (safe) but a successful `[]` as
+// "nothing staged" (skips every leg). Mutation `return null` -> `return []`
+// in stagedDiffFiles passed 88/88 and 1270/1270 with neither replacement
+// test catching it — branchDiffFiles' own null test doesn't exercise
+// stagedDiffFiles at all. Independent of any ambient GIT_INDEX_FILE:
+// verified directly that a non-repo cwd fails git's discovery entirely
+// (falls back to --no-index usage-error interpretation, exit 129) even with
+// a real, valid, absolute GIT_INDEX_FILE set — the temp-index scrub this
+// file's `honours an ambient GIT_INDEX_FILE` test proves is a separate axis.
+test('stagedDiffFiles: returns null when cwd is not a git repo', () => {
+  const dir = mkTmp(); // no git init — nothing for git to discover
+  const files = stagedDiffFiles(dir);
+  assert.equal(files, null);
+});
+
+test('stagedDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
+  // Same shape as branchDiffFiles' own "ignores an ambient GIT_DIR" test
+  // above — stagedDiffFiles must resolve git state strictly relative to its
+  // `cwd` argument, even with GIT_DIR set in the process env for an
+  // unrelated repo. This is the actual #2169 hazard class this sweep closes
+  // (repository redirection); it does not depend on an ordinary git hook
+  // exporting GIT_DIR (it doesn't — see git-env.mjs's header) to be a real
+  // risk, since an operator's shell or another script's tooling can.
+  //
+  // Also isolates ambient GIT_INDEX_FILE around this call (save/clear/
+  // restore), which this test is NOT exercising — found live while landing
+  // #2216: running this suite from inside a REAL pre-commit hook in a git
+  // WORKTREE (as CLAUDE.md's branching workflow mandates for every non-
+  // trivial change — i.e. every real run of this hook), GIT_INDEX_FILE is
+  // an ABSOLUTE path into `.git/worktrees/<name>/index` — not the relative
+  // `.git/index` a primary checkout gets — and stagedDiffFiles deliberately
+  // does NOT scrub it (see git-env.mjs's header). Left uncontrolled, that
+  // real, unrelated index leaks into this test's throwaway `repoDir` spawn:
+  // `git diff --cached` resolves the repository correctly via `cwd` (GIT_DIR
+  // is scrubbed) but reads the WRONG index — the real worktree's, referencing
+  // blobs this fixture's object store has never heard of — and fails with
+  // `fatal: unable to read <sha>`, not a clean mismatch. That failure is
+  // real and correctly demonstrates why GIT_INDEX_FILE isolation belongs to
+  // the caller when the property under test is GIT_DIR specifically, the
+  // same way `gitAt()`'s own fixture-setup helper above already isolates it.
+  const repoDir = makeGitFixture();
+  writeFileSync(join(repoDir, 'staged.txt'), 'staged', 'utf8');
+  gitAt(repoDir, ['add', 'staged.txt']);
+
+  const bogusGitDir = join(mkTmp(), 'unrelated-repo', '.git');
+  const prevGitDir = process.env.GIT_DIR;
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
+  process.env.GIT_DIR = bogusGitDir;
+  delete process.env.GIT_INDEX_FILE;
+  try {
+    const files = stagedDiffFiles(repoDir);
+    assert.deepEqual(files, ['staged.txt']);
+  } finally {
+    if (prevGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = prevGitDir;
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
+  }
+});
+
+// --- #2216 correction: stagedDiffFiles must HONOUR the ambient GIT_INDEX_FILE,
+// --- not scrub it. This is the important test — it is the concrete case the
+// --- original (wrong) decision would have broken. -------------------------
+//
+// Native git routes ordinary commands through a TEMPORARY index. Measured
+// inside a real pre-commit hook (git 2.54.0.windows.1): `git commit -a` and
+// `git commit -- <path>` hand the hook an absolute path to a *.lock temp
+// index, not `.git/index`. stagedDiffFiles() exists specifically to read the
+// index the in-flight commit is about — scrubbing GIT_INDEX_FILE would make
+// it read `.git/index` (empty, or stale) instead of the real staged set,
+// and a successful-but-empty `[]` does NOT trip verify-cache's "diff failed,
+// run everything" safety branch (only `null` does) — every leg would report
+// `[skip] … (out of scope)` and the commit gate would go green having
+// verified nothing. See scripts/git-env.mjs's header for the full account.
+test('stagedDiffFiles: honours an ambient GIT_INDEX_FILE pointing at a temporary index (git commit -a / -- <path> shape)', () => {
+  const repoDir = makeGitFixture();
+
+  // Seed the temp index as a byte-for-byte copy of the real index WHILE it
+  // still matches HEAD (nothing staged yet) — this is what git itself does
+  // for `commit -a`'s temp index: a copy of the real index with working-tree
+  // changes applied, not a blank slate. A blank/fresh index compared with
+  // `--cached` would show every HEAD-tracked file as "removed", which is a
+  // different (and misleading) shape than the real hazard this test proves.
+  const tempIndexPath = join(mkTmp(), 'temp-index.lock');
+  copyFileSync(join(repoDir, '.git', 'index'), tempIndexPath);
+
+  // The REAL index (`.git/index`) gets a different staged file than the
+  // temp index — this is what makes the assertion below meaningful: if
+  // stagedDiffFiles read the wrong index, it would report the WRONG file,
+  // not just an empty or null result.
+  writeFileSync(join(repoDir, 'via-real-index.txt'), 'real', 'utf8');
+  gitAt(repoDir, ['add', 'via-real-index.txt']);
+
+  // Populate the temp index with a DIFFERENT file — the shape a hook hands
+  // a `git commit -a` / `git commit -- <path>` invocation, where the temp
+  // index reflects the files that invocation is actually committing.
+  writeFileSync(join(repoDir, 'via-temp-index.txt'), 'temp', 'utf8');
+  const {
+    GIT_DIR: _GIT_DIR,
+    GIT_WORK_TREE: _GIT_WORK_TREE,
+    GIT_INDEX_FILE: _GIT_INDEX_FILE,
+    GIT_PREFIX: _GIT_PREFIX,
+    ...cleanEnv
+  } = process.env;
+  const populateTempIndex = spawnSync('git', ['add', 'via-temp-index.txt'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+    env: { ...cleanEnv, GIT_INDEX_FILE: tempIndexPath },
+  });
+  assert.equal(populateTempIndex.status, 0, populateTempIndex.stderr);
+
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
+  // Simulates the ambient env a real pre-commit hook hands its child
+  // process for `git commit -a` / `git commit -- <path>` — GIT_DIR is
+  // deliberately NOT set here (an ordinary hook doesn't export it).
+  process.env.GIT_INDEX_FILE = tempIndexPath;
+  try {
+    const files = stagedDiffFiles(repoDir);
+    assert.deepEqual(
+      files,
+      ['via-temp-index.txt'],
+      'stagedDiffFiles must read the ambient (temporary) index, not .git/index — ' +
+        'returning the real-index file, an empty array, or null all indicate the ' +
+        'ambient GIT_INDEX_FILE was scrubbed instead of honoured',
+    );
+  } finally {
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
   }
 });
 

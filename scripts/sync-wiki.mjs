@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync } from
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runCommand } from './lib/run-command.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_REMOTE = 'https://github.com/dudarenok-maker/Castwright.wiki.git';
@@ -97,7 +98,10 @@ function getSourceSha() {
 // never-touched wiki and we bootstrap it instead.
 function cloneOrInitWikiRepo(cacheDir) {
   rmSync(cacheDir, { recursive: true, force: true });
-  const clone = spawnSync('git', ['clone', WIKI_REMOTE, cacheDir], { encoding: 'utf8' });
+  const clone = spawnSync('git', ['clone', WIKI_REMOTE, cacheDir], {
+    encoding: 'utf8',
+    env: scrubGitEnv(),
+  });
   if (clone.status === 0) return { fresh: false };
 
   mkdirSync(cacheDir, { recursive: true });

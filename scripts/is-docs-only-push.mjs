@@ -20,6 +20,7 @@
 
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { scrubGitEnv } from './git-env.mjs';
 
 const isZeroSha = (sha) => /^0+$/.test(sha ?? '');
 
@@ -61,13 +62,17 @@ function gitChangedFiles(remoteSha, localSha) {
   if (remoteSha && !isZeroSha(remoteSha)) {
     revArg = `${remoteSha}..${localSha}`;
   } else {
-    const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], { encoding: 'utf8' });
+    const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], {
+      encoding: 'utf8',
+      env: scrubGitEnv(),
+    });
     if (mb.status !== 0 || !mb.stdout.trim()) return null;
     revArg = `${mb.stdout.trim()}..${localSha}`;
   }
   const res = spawnSync('git', ['diff', '--name-only', revArg], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    env: scrubGitEnv(),
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') return null;
   return res.stdout

@@ -22,8 +22,9 @@ it never gates a merge.
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT does not erase a concurrently /assign-planted voice | `server/src/routes/book-state-preserve-voices.test.ts` | intermittent under full-suite box contention | Fails intermittently in a full `test:server` run under box contention; passes 7/7 in isolation. Observed 2026-08-07: `1 failed / 6741 passed`, `[fail] test:server (exit 1, took 746.6s)`. | #2226 | Not quarantined — still gates |
 
-_Empty — no tests are currently quarantined._
+_Otherwise empty — no other tests are currently quarantined._
 
 <!-- Graduated 2026-07-27: the two sleep-prevention wake-lock tests in
 `server/src/routes/generation.test.ts` (#1854). They were never flaky. They
