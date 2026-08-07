@@ -8,45 +8,65 @@
 // operation's callback. The failure is invisible: the command still exits 0,
 // just against the wrong repository.
 //
-// #2216 correction: an ordinary git hook process does NOT export GIT_DIR —
-// this file's own header used to claim it did ("e.g. every hook process git
-// spawns"), which was wrong and, worse, actively misleading: it made the
-// hook-resident call sites (verify-cache.mjs, guard-protected-push.mjs,
-// guard-commit-subjects.mjs, is-docs-only-push.mjs) read as the highest-risk
-// group when they weren't. The real #2169 exposure was an ambient shell
-// export, not a hook. The one repo-discovery var a hook genuinely DOES
-// export is GIT_INDEX_FILE — see the note on that key below.
+// This sweep (#2216) is about REPOSITORY REDIRECTION and nothing else. The
+// four keys below all answer "which repository" — `GIT_DIR`/`GIT_WORK_TREE`
+// directly, `GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR` for the object store a
+// linked worktree can point elsewhere. Inheriting any one of them silently
+// redirects a command that pins an explicit `cwd`, which is #2169's actual
+// defect, and there is no legitimate reason a script in this repo would want
+// that inherited value: every call site here already computes its own `cwd`.
+//
+// #2216 correction (this file's header used to be wrong on two points,
+// caught by review of #2227 before merge — see that issue's decision-comment
+// thread for the full account):
+//
+//   1. An ordinary git hook process does NOT export `GIT_DIR`. This header
+//      used to claim it did ("e.g. every hook process git spawns"), which
+//      made the hook-resident call sites (verify-cache.mjs,
+//      guard-protected-push.mjs, guard-commit-subjects.mjs,
+//      is-docs-only-push.mjs) read as the highest-risk group when they
+//      weren't. The real #2169 exposure was an ambient shell export, not a
+//      hook — an operator's shell, or a script invoked from inside another
+//      repo's tooling.
+//
+//   2. `GIT_INDEX_FILE` was in this list and is NOT anymore. It was added on
+//      the theory that a hook-exported relative `GIT_INDEX_FILE` resolves
+//      against a spawned child's cwd rather than the repo root — measured,
+//      and false: with `GIT_INDEX_FILE` set ALONE (the shape a hook actually
+//      exports), git re-anchors it to the discovered toplevel and the answer
+//      is correct regardless of cwd. The wrong-repository hazard needs
+//      `GIT_DIR` as well, and hooks don't export that (point 1). Worse: this
+//      key answers "which INDEX", not "which repository" — and native git
+//      routes ordinary commands through a temporary index. Measured inside a
+//      real `pre-commit` hook (git 2.54.0.windows.1): `git commit` (already
+//      staged) hands the hook `.git/index`, but `git commit -a` hands it
+//      `<abs>/.git/index.lock` and `git commit -- <path>` hands it
+//      `<abs>/.git/next-index-NNNNN.lock`. `scripts/verify-cache.mjs`'s
+//      `stagedDiffFiles()` exists specifically to read the index the
+//      in-flight commit is about — scrubbing this var doesn't prevent a
+//      redirection, it manufactures a wrong answer (or an empty one, which
+//      is worse: `verify-cache.mjs` treats null/error as "diff failed, run
+//      everything," but an empty array is a normal answer that disables the
+//      scope filter's per-leg checks — a silently-green commit gate having
+//      verified nothing, for `git commit -a` and `git commit -- <path>`).
+//      `GIT_INDEX_FILE` is deliberately left out of this list for exactly
+//      that reason: a command whose job is to read the staged set must
+//      honour whichever index git is actually using, not the one this repo
+//      guesses at.
 //
 // Shared by both scripts so a git call added to either later inherits the
 // fix automatically rather than growing its own copy of this list.
 export const GIT_ENV_SCRUB_KEYS = [
   'GIT_DIR',
   'GIT_WORK_TREE',
-  // #2216: a git hook subprocess DOES export this one, as a path RELATIVE
-  // to the hook's own cwd (typically `.git/index`). Any script that spawns
-  // git from a cwd other than the repo root — e.g. verify-cache.mjs's
-  // stagedDiffFiles(), which pins `cwd` explicitly — resolves that relative
-  // path against the CHILD's cwd, not the repo root, so it silently reads a
-  // path that doesn't exist. `git diff --cached` then reports an empty
-  // staged set rather than erroring, so a caller that scope-filters test
-  // legs off that set concludes nothing is staged and skips everything —
-  // the commit gate still reports green. Scrubbing this is neutral-to-
-  // protective for every site in scope today: git falls back to
-  // `$GIT_DIR/index`, the same file, minus the relative-path hazard.
-  // FUTURE HAZARD (accepted, not live today): if this repo ever adopts
-  // lint-staged or any tool that stages via a temporary index, that tool
-  // communicates it through exactly this variable — a scrubbed
-  // `git diff --cached` would then read the real index instead of the
-  // temp one. Not the case today (pre-commit runs
-  // `npm run verify:fast:scoped` directly, no temporary index involved).
-  'GIT_INDEX_FILE',
   'GIT_OBJECT_DIRECTORY',
   'GIT_COMMON_DIR',
 ];
 
 /** A copy of `process.env` with the repository-discovery-overriding GIT_*
  *  vars above removed, so a git call scoped to an explicit `cwd` can't be
- *  silently redirected by an inherited environment.
+ *  silently redirected by an inherited environment. Deliberately does NOT
+ *  touch `GIT_INDEX_FILE` — see the key-list comment above.
  *
  *  Matched case-insensitively: `{ ...process.env }` snapshots whatever
  *  casing Windows happened to store a variable under (env lookup itself is

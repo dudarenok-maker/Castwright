@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { extractRelativeSpecifiers, resolveSpecifier, classifyIgnored, walk } from '../lib/module-graph.mjs';
 import { execFileSync } from 'node:child_process';
+import { scrubGitEnv } from '../git-env.mjs';
 
 test('extracts static, dynamic and require specifiers', () => {
   const src = `
@@ -145,7 +146,13 @@ test('every hooks test file parses', () => {
 
 function gitRepo(files, ignore) {
   const dir = tree(files);
-  execFileSync('git', ['init', '-q'], { cwd: dir });
+  // #2216 (found in passing): scripts/tests/** is out of the git-scrub
+  // guard's scope by design, but `git init` with an inherited GIT_DIR would
+  // RE-INITIALISE whatever repo GIT_DIR points at instead of this throwaway
+  // fixture — a real risk if this suite ever runs alongside an ambient
+  // GIT_DIR export, not just the read-only hazard classifyIgnored's own
+  // scrub (module-graph.mjs) already guards against.
+  execFileSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv() });
   writeFileSync(join(dir, '.gitignore'), ignore, 'utf8');
   return dir;
 }

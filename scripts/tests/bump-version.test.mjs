@@ -590,7 +590,17 @@ test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () =>
 // override git checks BEFORE falling back to `cwd` gets stripped, and
 // nothing else does. Mutation-sensitive per key: dropping any one entry from
 // GIT_ENV_SCRUB_KEYS fails exactly that assertion.
-test('scrubGitEnv strips every git repo-discovery override and preserves everything else', () => {
+//
+// #2216 correction: GIT_INDEX_FILE is deliberately NOT one of these keys and
+// this test now pins that as an explicit assertion, not an omission. It
+// answers "which index", not "which repository" — the other four vars'
+// class — and a caller reading the staged set (verify-cache.mjs's
+// stagedDiffFiles()) must honour whichever index git handed it (a hook's
+// temporary index for `git commit -a` / `git commit -- <path>`), not the
+// one this repo assumes. Scrubbing it doesn't prevent redirection; it
+// manufactures a wrong (or silently empty) answer. See git-env.mjs's header
+// for the measured evidence.
+test('scrubGitEnv strips every git repository-discovery override, preserves GIT_INDEX_FILE and everything else', () => {
   const fakeEnv = {
     PATH: '/usr/bin',
     GIT_DIR: '/decoy/.git',
@@ -603,11 +613,12 @@ test('scrubGitEnv strips every git repo-discovery override and preserves everyth
   const scrubbed = scrubGitEnv(fakeEnv);
   assert.equal(scrubbed.GIT_DIR, undefined);
   assert.equal(scrubbed.GIT_WORK_TREE, undefined);
-  assert.equal(scrubbed.GIT_INDEX_FILE, undefined);
   assert.equal(scrubbed.GIT_OBJECT_DIRECTORY, undefined);
   assert.equal(scrubbed.GIT_COMMON_DIR, undefined);
   assert.equal(scrubbed.PATH, '/usr/bin');
   assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
+  // Deliberately preserved — see the #2216 correction above.
+  assert.equal(scrubbed.GIT_INDEX_FILE, '/decoy/.git/index');
 });
 
 // #2175 review, Finding 1 — Windows env lookup is case-insensitive, but

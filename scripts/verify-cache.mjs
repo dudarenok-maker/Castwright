@@ -678,8 +678,9 @@ export function stepTouchedByDiff(step, diffFiles) {
 
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
 // disables the scope filter and runs everything; never skip on uncertainty).
-// Exported (#2216) so its `GIT_INDEX_FILE` scrub can be unit-tested directly —
-// see scripts/tests/verify-cache.test.mjs's "staged-set hazard" tests.
+// Exported (#2216) so its scrub (repo-location vars only — see gitEnv() below)
+// can be unit-tested directly, including that it deliberately does NOT touch
+// GIT_INDEX_FILE — see scripts/tests/verify-cache.test.mjs.
 export function stagedDiffFiles(cwd) {
   const r = spawnSync('git', ['diff', '--cached', '--name-only'], {
     cwd,
@@ -706,22 +707,30 @@ export function stagedDiffFiles(cwd) {
 // verify.yml is now the required backstop. Exported so it can be unit-tested
 // directly (as of #2216, stagedDiffFiles above is too, for the same reason).
 //
-// Strips the ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_OBJECT_DIRECTORY/
-// GIT_COMMON_DIR repo-discovery vars (scrubGitEnv, scripts/git-env.mjs) plus
-// GIT_PREFIX before spawning: every function in this file that calls git is
-// invoked with an explicit `cwd` and must resolve git state strictly relative
-// to it. Without stripping, a caller running inside an enclosing git process
-// that already has these set (e.g. this very function running inside the
-// pre-push hook it's part of) would have git resolve against the ENCLOSING
+// Strips the ambient GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_DIRECTORY/GIT_COMMON_DIR
+// repo-LOCATION vars (scrubGitEnv, scripts/git-env.mjs) plus GIT_PREFIX before
+// spawning: every function in this file that calls git is invoked with an
+// explicit `cwd` and must resolve git state strictly relative to it. Without
+// stripping, a caller running inside an enclosing process that already has
+// one of these set (an operator's shell export, or a script invoked from
+// inside another repo's tooling — NOT an ordinary git hook, which doesn't
+// export GIT_DIR/GIT_WORK_TREE) would have git resolve against the ENCLOSING
 // process's repo instead of `cwd` — harmless when `cwd` happens to be that
-// same repo (the real pre-push path), but wrong whenever `cwd` points
-// elsewhere (exactly what this file's own unit tests do, and exactly the
-// #2216 `GIT_INDEX_FILE` hazard: a relative index path set by an enclosing
-// hook resolves against the CHILD's cwd, not the repo root, silently
-// yielding an empty staged set). GIT_PREFIX is not one of scrubGitEnv's
-// repo-discovery keys (it affects relative-path interpretation within an
+// same repo, but wrong whenever `cwd` points elsewhere (exactly what this
+// file's own unit tests do). GIT_PREFIX is not one of scrubGitEnv's
+// repo-location keys (it affects relative-path interpretation within an
 // already-resolved repo, not which repo is resolved) but is stripped here
 // too for the same cwd-pinning reason.
+//
+// Deliberately does NOT strip GIT_INDEX_FILE (#2216 correction — see
+// git-env.mjs's header for the full account). stagedDiffFiles() above reads
+// the index the in-flight commit is about; a hook stages `git commit -a` and
+// `git commit -- <path>` through a TEMPORARY index and hands this function
+// exactly that path via GIT_INDEX_FILE. Scrubbing it would make
+// stagedDiffFiles() read `.git/index` instead of the real temp index — the
+// wrong staged set, or an empty one, which (being a successful `[]`, not a
+// `null`) would NOT trip verify-cache's "diff failed, run everything" safety
+// branch. See scripts/tests/verify-cache.test.mjs for the behavioural proof.
 function gitEnv() {
   const { GIT_PREFIX: _GIT_PREFIX, ...cleanEnv } = scrubGitEnv();
   return cleanEnv;
