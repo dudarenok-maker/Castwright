@@ -24,7 +24,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { existsSync, readdirSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { installRecipe, PROFILES } from './accelerator-profile.mjs';
 
