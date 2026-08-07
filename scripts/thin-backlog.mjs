@@ -30,6 +30,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { scrubGitEnv } from './git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -215,6 +216,7 @@ function printUnifiedDiff(original, proposed) {
     try {
       execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', BACKLOG_PATH, tmp], {
         stdio: 'inherit',
+        env: scrubGitEnv(),
       });
     } catch {
       // `git diff --no-index` exits 1 when the files differ — that's expected,

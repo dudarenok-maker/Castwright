@@ -57,6 +57,29 @@ function resolveKnobInner(knob: ConfigKnob, reconcileDeviceUuid: boolean): KnobV
   return { key: knob.key, effective: knob.default, source: 'default', locked: false, overridden: false };
 }
 
+/** True when `knob.env` is set in the ambient environment to a value
+    `resolveKnobInner` will NOT use as the knob's env-sourced value — either
+    it fails `coerceAndValidate` (rejected, with the one-shot warning already
+    logged), or it's blank/whitespace-only, which `resolveKnobInner` treats
+    identically to "no env var at all" (falls through to override/default
+    WITHOUT validating or warning — see its `raw != null && raw.trim() !== ''`
+    guard). Both cases mean the server did not resolve this knob from its
+    ambient env text, so a consumer forwarding that raw text on regardless
+    (`buildSidecarEnv`, #2207) would disagree with the server for the same
+    reason either way (independent review of PR #2219, finding F3 — a blank
+    `GPU_RESERVE_MB=` reaches `main.py`'s unguarded `int(os.environ.get(...))`
+    and raises at capacity-admission time; verified in this repo, not merely
+    reported by the review). Lets a consumer act on a decision the resolver
+    already computes internally, without re-running validation itself and
+    without widening `KnobValueState` with a field only one caller needs. */
+export function isEnvValueRejected(knob: ConfigKnob): boolean {
+  if (!knob.env) return false;
+  const raw = process.env[knob.env];
+  if (raw == null) return false;
+  if (raw.trim() === '') return true;
+  return parseEnv(knob, raw) == null;
+}
+
 /** Effective value for a READ SITE or the Advanced UI. Reconciles a stored
     'cuda-uuid:<uuid>' override against the last-known device list, so the UI can
     show a concrete card and flag a vanished one as staleReason:'uuid_unresolved'. */
