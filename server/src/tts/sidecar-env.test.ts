@@ -375,19 +375,29 @@ describe('buildSidecarEnv deletes a rejected ambient env value (#2207)', () => {
 
   /* #2224 — qa.speaker.device (SPK_DEVICE) is the ASR twin's counterpart:
      same restart-sidecar shape, same "does the child env agree with what the
-     server resolved" thesis. UNLIKE qa.asr.device it has no `pattern` today
-     (see the #2224 report — a pattern was deliberately NOT added this round;
-     _parse_device/_engine_env_pin treat 'mps' and 'rocm' as first-class
-     device families for "spk", which qa.asr.device's own pattern would
-     reject, so reusing it verbatim would newly break a currently-valid pin).
-     That means a non-blank garbage value (e.g. "cuda1") is NOT rejected for
-     THIS knob yet — nothing to assert there. A blank ambient value IS
-     rejected regardless of pattern (F3's blank-is-absent semantics), so
-     that's what this test exercises: still real coverage of "rejected ->
-     deleted" for this knob, just not the pattern-driven path ASR_DEVICE has. */
+     server resolved" thesis. It now HAS a pattern (matching qa.asr.device's
+     cpu|auto|cuda|cuda:<n> grammar exactly — see registry.ts and
+     resolver.test.ts's dedicated grammar suite for the derivation, including
+     why "mps"/"rocm" are deliberately NOT in it). A blank ambient value is
+     rejected too, via a SEPARATE code path (F3's blank-is-absent semantics,
+     independent of any pattern) — this test exercises that path
+     specifically; the pattern-driven "cuda1"-shaped rejection is covered by
+     the test right after it. */
   it('F3/#2224 — a blank ambient SPK_DEVICE is deleted from the child env the same way GPU_RESERVE_MB is', () => {
     const prev = process.env.SPK_DEVICE;
     process.env.SPK_DEVICE = '   ';
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect('SPK_DEVICE' in env).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.SPK_DEVICE;
+      else process.env.SPK_DEVICE = prev;
+    }
+  });
+
+  it('#2224 — a rejected (pattern-mismatched) ambient SPK_DEVICE is deleted from the child env, same as ASR_DEVICE', () => {
+    const prev = process.env.SPK_DEVICE;
+    process.env.SPK_DEVICE = 'cuda1'; // no colon — fails the same pattern qa.asr.device has
     try {
       const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
       expect('SPK_DEVICE' in env).toBe(false);

@@ -81,8 +81,9 @@ describe('resolver precedence', () => {
   // `options` array, so `cuda`, `cuda:1`, and a typo like `cuda1` were all
   // equally "valid" at the coercion layer. Constrained to
   // cpu | auto | cuda | cuda:<n> via a new general `pattern` capability on
-  // the knob shape (coerceAndValidate's string/default case). Widened by
-  // #2224 — see the dedicated grammar suite below for the full mps/rocm story.
+  // the knob shape (coerceAndValidate's string/default case). Unchanged by
+  // #2224 — a widening attempt was tried and reverted; see the dedicated
+  // grammar suite below for why.
   it('qa.asr.device is constrained to cpu | auto | cuda | cuda:<n> via a pattern', () => {
     const knob = getKnob('qa.asr.device')!;
     expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
@@ -94,39 +95,52 @@ describe('resolver precedence', () => {
     expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
   });
 
-  /* #2224 — the #2180 pattern above was too narrow: it rejected "mps" and
-     "rocm", both of which `_parse_device` (main.py:3269-3281) and
-     `_engine_env_pin` (main.py:3355-3369) treat as first-class, MEANINGFUL
-     device families for both "asr" and "spk" — main.py:10712/:10787 gate GPU
-     capacity admission on `_parse_device(...)[0] in ("cuda", "rocm")`. A Mac
-     (ASR_DEVICE=mps) or AMD (ASR_DEVICE=rocm) operator had their pin silently
-     rejected and downgraded to cpu — a regression #2180/#2205 shipped, found
-     while investigating #2224. This suite ties the pattern to what main.py
-     ACTUALLY parses as meaningful, not to a hand-typed list: every accepted
-     form is one this suite's own comment traces to a main.py line, and the
-     two forms deliberately excluded (see registry.ts's pattern comment) are
-     asserted rejected here too, so the exclusion can't silently erode. */
-  describe('qa.asr.device / qa.speaker.device grammar, derived from main.py (#2224)', () => {
+  /* #2224 — a pass in this same review round widened this pattern to also
+     accept "mps"/"rocm", reasoning from `_engine_env_pin`'s
+     `fam in ("cuda","rocm")` check (main.py:3367) that main.py treats them
+     as first-class INPUT device families. That reasoning was wrong and was
+     reverted (checked directly against main.py, not merely asserted) — this
+     suite pins the CORRECTED grammar and asserts the wrongly-widened forms
+     are REJECTED, so the same mistake can't quietly land again:
+       - "rocm" is a DERIVED REPORTING label, never a valid input. On AMD,
+         HIP aliases the CUDA API, so the runtime device string an operator
+         must actually set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip`
+         (main.py:9100-9103) and `_normalize_device_family`
+         (main.py:9124-9134) exist specifically to re-label an ALREADY-
+         "cuda" value as "rocm" for honest reporting after the fact
+         (`scripts/accelerator-profile.mjs`'s `runtimeBackend` doc comment:
+         "we REPORT 'rocm' for honesty; the sidecar still uses
+         device='cuda'"). Nothing upstream of `_parse_device` ever PRODUCES
+         family "rocm" from a real input, so the `in ("cuda","rocm")` checks
+         scattered through main.py are unreachable dead code for that arm.
+         Typing "rocm" literally reaches `_parse_device`'s catch-all as an
+         OPAQUE family string — not the honest-reporting kind — and crashes
+         both engines: `SPK_DEVICE=rocm` hits `EncoderClassifier(run_opts=
+         {"device":"rocm"})` -> RuntimeError, and `SpeakerEngine.
+         ensure_loaded`'s demote-to-cpu path is gated on family=="cuda"
+         (main.py:7540), so it hits `else: raise` with NO fallback — every
+         `/embed` 500s. `ASR_DEVICE=rocm` crashes `WhisperModel(device=
+         "rocm")` the same way (CTranslate2 has no "rocm" device at all).
+       - "mps" IS a real torch device (Apple Silicon), but only for
+         PyTorch-backed engines. CTranslate2 (Whisper's backend) has no
+         Metal/MPS backend, so `ASR_DEVICE=mps` would crash `WhisperModel
+         (device="mps")` outright — a NET REGRESSION versus the unwidened
+         pattern, which rejected "mps" and fell back to a working cpu
+         default. Deliberately not added to qa.speaker.device either, even
+         though torch/speechbrain genuinely accept "mps" there — that is a
+         separate design decision (`pair-rules.ts`'s `asrDeviceFamily` and
+         its compute-type pairing, help text, `.env.example`), out of scope
+         for this delta. */
+  describe('qa.asr.device / qa.speaker.device grammar (#2180, corrected by #2224)', () => {
     const KNOBS = ['qa.asr.device', 'qa.speaker.device'] as const;
 
-    it.each(KNOBS)('%s accepts every device family main.py parses as meaningful', (key) => {
+    it.each(KNOBS)('%s accepts cpu | auto | cuda | cuda:<n> — the only forms main.py can actually place', (key) => {
       const knob = getKnob(key)!;
-      // cpu/auto: _parse_device's own explicit branches (main.py:3274-3277).
       expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
       expect(coerceAndValidate(knob, 'auto')).toEqual({ ok: true, value: 'auto' });
-      // mps: _parse_device's explicit `p in ("cpu", "mps")` branch (:3276-3277).
-      expect(coerceAndValidate(knob, 'mps')).toEqual({ ok: true, value: 'mps' });
-      expect(coerceAndValidate(knob, 'MPS')).toEqual({ ok: true, value: 'MPS' }); // case-insensitive
-      // cuda / cuda:<n>: the startswith("cuda") branch (:3278-3280).
       expect(coerceAndValidate(knob, 'cuda')).toEqual({ ok: true, value: 'cuda' });
       expect(coerceAndValidate(knob, 'cuda:1')).toEqual({ ok: true, value: 'cuda:1' });
-      expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' });
-      // bare rocm: falls through _parse_device's catch-all (:3281) to family
-      // "rocm" exactly (only because the whole trimmed/lowercased string IS
-      // "rocm") — the form main.py:10712/:10787's `in ("cuda","rocm")` checks
-      // actually match, and this repo ships a real amd-rocm torch overlay.
-      expect(coerceAndValidate(knob, 'rocm')).toEqual({ ok: true, value: 'rocm' });
-      expect(coerceAndValidate(knob, 'ROCM')).toEqual({ ok: true, value: 'ROCM' });
+      expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' }); // case-insensitive
     });
 
     it.each(KNOBS)('%s still rejects a genuinely malformed value — the pattern exists to catch typos, not to accept everything', (key) => {
@@ -135,13 +149,19 @@ describe('resolver precedence', () => {
       expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
     });
 
-    it.each(KNOBS)('%s rejects an indexed rocm pin ("rocm:1") — main.py cannot actually place it', (key) => {
-      // _parse_device's catch-all only splits an index off a string that
-      // STARTS WITH "cuda" (:3278-3280); a non-cuda-prefixed string comes
-      // back as its own whole "family", so "rocm:1" parses as family
-      // "rocm:1" (not "rocm"), which fails every `in ("cuda","rocm")` check
-      // main.py has. Accepting it here would pass a value through the
-      // resolver that main.py cannot place on any device.
+    it.each(KNOBS)('%s rejects "mps" — CTranslate2/speechbrain-on-rocm cannot actually place it; accepting it was a regression, reverted', (key) => {
+      const knob = getKnob(key)!;
+      expect(coerceAndValidate(knob, 'mps').ok).toBe(false);
+      expect(coerceAndValidate(knob, 'MPS').ok).toBe(false);
+    });
+
+    it.each(KNOBS)('%s rejects bare "rocm" — it is a DERIVED reporting label (main.py:9100-9103, :9124-9134), never a valid input; the AMD device string is "cuda"', (key) => {
+      const knob = getKnob(key)!;
+      expect(coerceAndValidate(knob, 'rocm').ok).toBe(false);
+      expect(coerceAndValidate(knob, 'ROCM').ok).toBe(false);
+    });
+
+    it.each(KNOBS)('%s rejects an indexed rocm pin ("rocm:1")', (key) => {
       const knob = getKnob(key)!;
       expect(coerceAndValidate(knob, 'rocm:1').ok).toBe(false);
     });
