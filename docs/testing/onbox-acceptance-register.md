@@ -228,9 +228,9 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 1 |
+| **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -238,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**54 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**56 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -435,6 +435,18 @@ asserts which voice reached the provider.
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
 device to `cpu` while `ASR_COMPUTE_TYPE=int8_float16` remains pinned makes every
 `/transcribe` 500. `_compute_type()` is correct; nothing enforces the pairing.
+**Fixed for the Advanced Configuration path by [#2180](https://github.com/dudarenok-maker/Castwright/issues/2180):**
+`PUT /api/config` rejects a `qa.asr.device` / `qa.asr.computeType` save that
+would leave this pair mismatched, checked against the resulting effective
+config (not just the incoming patch); `POST /api/config/reset` (every
+Advanced Settings row's per-key Revert, plus a group/`qa-gates` or `all`
+reset) checks the same resulting-effective-config rule before clearing
+anything, so a Revert click can't reopen the pair either (independent review
+of PR #2205, finding F1 — the reset path was still an open bypass when #2180
+first shipped). So the UI can no longer produce this state. A hand-edited
+`server/.env` still bypasses save-time validation by design and can still
+reach this combination — that residue is explicitly out of scope for #2180
+(belongs with #2131's sidecar-side surfacing work instead).
 (2) `npm start` appears to launch two sidecars but does not — the venv
 `python.exe` is a launcher that re-execs the base interpreter as a child. Only
 one holds :9000. Separately, `npm run stop` repeatedly reported
@@ -2070,6 +2082,54 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
+### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+
+`.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
+/ `SIDECAR_VRAM_RESTART_MB=0` as literal, active env assignments — and each of the
+three threshold functions in `main.py` treats a **present** `0` (or any parseable
+value) as an explicit override, not as "unset." Since #2179 comments the generated
+`.env.example` block out instead of emitting it active, a fresh install now leaves
+all three **absent**, so the sidecar self-computes 70% of total physical RAM (hard
+restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the
+card's total VRAM (hard restart) — three lifecycle behaviours that were silently
+disabled on every install that copied `.env.example` verbatim (Pinokio, and the
+documented manual/`INSTALL.md` path) until this fix, and are now live. None of this
+is exercised by any pytest/vitest suite — the three threshold functions are unit-
+tested for their env-present/absent MATH, not for whether a real sidecar process
+ever crosses a live threshold and actually exits/recycles.
+
+- Confirm a fresh install (a `server/.env` written from the current
+  `.env.example` — i.e. all three of `SIDECAR_RESTART_MB` /
+  `SIDECAR_VRAM_RECYCLE_SOFT_MB` / `SIDECAR_VRAM_RESTART_MB` absent from the
+  environment) computes and uses the auto thresholds at sidecar startup (70%
+  of total RAM; 90%/98% of the resident card's total VRAM) rather than
+  treating them as disabled.
+- Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run,
+  or a synthetic host-memory hog alongside the sidecar) and confirm the
+  sidecar self-exits with code 43 for the supervisor to respawn, rather than
+  never recycling.
+- Drive reserved VRAM up toward the 90% soft threshold and confirm `/health`
+  sets `recycle_pending` and a clean chapter-boundary recycle fires (not a
+  mid-chapter hard exit); then, on a card where the soft recycle didn't
+  already relieve the pressure, continue up toward the 98% hard threshold
+  and confirm the hard self-exit fires instead of an uncontrolled OOM.
+- Watch for thrash: across an ordinary render, the auto thresholds must not
+  fire routinely — a card sitting in the high-80s/90s% reserved as a normal
+  batch peak (see the `_TORCH_ACTIVE_RESERVED_MB` torch-managed-card
+  carve-out in `main.py`) should not trip a recycle storm now that the
+  ceiling is live where it was previously inert.
+
+*Needs:* a fresh install (or a `server/.env` with the three vars removed) so
+the auto path is actually reached; the single 8 GB card is enough; a way to
+push committed RAM/reserved VRAM toward the thresholds (a long render, or a
+synthetic memory/VRAM hog run alongside it). *Criteria:*
+`_mem_restart_threshold_mb` / `_vram_recycle_soft_threshold_mb` /
+`_vram_restart_threshold_mb` in `server/tts-sidecar/main.py` (`:8265-8284`,
+`:8154-8185`); the #2210 PR body and `0b0e7694`'s commit message record the
+before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
+way to actually saturate the card, which may need a synthetic hog rather
+than a real render.
+
 ---
 
 ## Group B — local Ollama analyzer only
@@ -2118,7 +2178,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**One row left.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2132,6 +2192,12 @@ mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) beca
 chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
 flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
 flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+Since then the #2187 aligner fix has landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's flagged-count target end to end. Alignment
+itself is already proven and is **not** what that row asks for. (The ID is
+reused: the C2 discharged above was the srv-59 attribution row. Row IDs are
+positional and renumber on discharge.)
 
 The cloud row remains (renumbered **C1** now that the other two are discharged;
 it was C3 before 2026-08-06 and is referenced under that ID in
@@ -2171,6 +2237,35 @@ is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), s
 re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
+
+### C2 · srv-59 flagged-count target, end to end after the #2187 aligner fix ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan [247](../features/247-dialogue-structure-attribution.md))
+
+**What is already proven, and does NOT need re-running:** alignment. The #2187 fix
+was measured offline against this exact corpus — the 15,069 cached stage-2
+sentences replayed through the production EPUB parser and the production aligner
+— taking chapters 5–8 from 3.7/1.7/66.4/73.5% to 94.6/92.7/92.0/95.7%, book-level
+67.7% → 96.0%, with the pre-fix column reproducing the on-box report to within
+rounding. Every chapter now clears the 80% floor. The aligner is pure, so no
+hardware was needed and none is needed again.
+
+**What is still owed:** plan 247's **target 1 — flagged ≤ ~500 per chapter**. That
+is a property of the cross-examiner running over a *real* stage-2 model output,
+not of alignment alone, so it cannot be replayed from cache. Observe, per chapter,
+the `[analysis:structure]` line's `flagged` count and confirm it lands near
+chapter 9's already-measured 488 rather than the 1,200–1,700 the below-floor
+chapters produced. Also confirm `escalation` actually runs now (it was skipped
+chapter-wide before) and record the escalated/accepted counts, plus wall-clock —
+target 5 (+2–5 h at `'local'`) was never measurable while escalation was being
+skipped.
+
+Same setup as the 2026-08-06 pass: local Ollama, `qwen36-cw-iq4-32k`, structure
+engine on, `analyzer.structure.escalation = 'local'`, no TTS. Force `fresh: true`
+— a resumed run serves cached chapters and measures nothing (see the Group C
+history above, and the chapters 1–4 caveat in plan 247).
+
+**Run it against a throwaway re-import, not the library book** — same reason as
+C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
+entry would overwrite the qwen36 cast the owner is keeping.
 
 ---
 

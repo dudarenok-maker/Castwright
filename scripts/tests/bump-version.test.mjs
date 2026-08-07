@@ -112,6 +112,12 @@ function setupRepo(startVersion) {
     resolve(dir, 'scripts', 'release-body.mjs'),
     readFileSync(resolve(here, '..', 'release-body.mjs'), 'utf8'),
   );
+  // #2184 — bump-version.mjs also imports ./gh.mjs (the shared gh() chokepoint);
+  // mirror it too, or the throwaway script crashes on module resolution.
+  writeFileSync(
+    resolve(dir, 'scripts', 'gh.mjs'),
+    readFileSync(resolve(here, '..', 'gh.mjs'), 'utf8'),
+  );
 
   // Init throwaway git repo with a local identity so commits work in CI.
   // env: cleanGitEnv() so a parent git-hook context doesn't redirect these
@@ -660,46 +666,17 @@ test('execGit merges a caller-supplied env with the scrub rather than discarding
 });
 
 // #2175 review, Finding 2 — `gh` resolves its target repository the same
-// GIT_DIR-first way git does (empirically: with GIT_DIR pointed at a decoy,
-// `gh repo view` reports "no git remotes found" instead of the real repo's
-// remotes), so every `gh` call site needs the same scrub the git() helper
-// already gets. Spawning a real (or faked) `gh` binary from this cross-
-// platform node:test suite isn't practical — a `.cmd`/`.bat` stand-in hits
-// Node's CVE-2024-27980 EINVAL guard on Windows without `shell: true` (which
-// gh() deliberately doesn't set), and a genuine `.exe` stand-in needs a
-// native compiler this suite can't assume is present, especially in Ubuntu
-// CI. So this is a structural check on the source itself — the same
-// approach `workflow-wiring.test.mjs` already uses for GitHub Actions wiring
-// that's equally impractical to exercise behaviourally — extracting each of
-// the three call sites `runCrossOsGate` reaches (`ghAvailable`, the dispatch
-// + discovery calls inside `gh()`, and the `gh run watch` spawnSync) and
-// asserting each passes `env: scrubGitEnv()`. Mutation-sensitive per site:
-// dropping the env option from any one of the three fails only that
-// assertion, naming the site.
-test('every gh() / ghAvailable() / "gh run watch" call site scrubs its env', () => {
-  const source = readFileSync(bumpScript, 'utf8');
-
-  const ghAvailableBody = source.slice(
-    source.indexOf('function ghAvailable()'),
-    source.indexOf('function sleep('),
-  );
-  assert.match(
-    ghAvailableBody,
-    /spawnSync\('gh', \['--version'\], \{ stdio: 'ignore', env: scrubGitEnv\(\) \}\)/,
-    'ghAvailable() must scrub its env',
-  );
-
-  const ghFnBody = source.slice(
-    source.indexOf("function gh(args, opts = {}) {"),
-    source.indexOf('function ghAvailable()'),
-  );
-  assert.match(ghFnBody, /env: scrubGitEnv\(\),?\s*\n\s*\}\);/, 'gh() must scrub its env');
-
-  const watchCallStart = source.indexOf("spawnSync('gh', ['run', 'watch'");
-  assert.notEqual(watchCallStart, -1, 'the gh run watch call site must exist');
-  const watchCallBody = source.slice(watchCallStart, source.indexOf(');', watchCallStart));
-  assert.match(watchCallBody, /env: scrubGitEnv\(\)/, 'the gh run watch spawnSync call must scrub its env');
-});
+// GIT_DIR-first way git does, so every `gh` call site needs the same scrub
+// the git() helper already gets. bump-version.mjs used to carry its own
+// local gh()/ghAvailable()/`gh run watch` trio and this file asserted each
+// one scrubbed its env by slicing the source around those three names.
+// #2184 replaced ALL of that with a single shared chokepoint
+// (scripts/gh.mjs's gh()/ghSpawn(), which unconditionally scrub) that every
+// gh-calling script under scripts/ — including this one — now imports
+// instead of growing its own copy. The enumerating, three-names-only check
+// this comment used to guard is gone; scripts/tests/gh-chokepoint.test.mjs
+// asserts the stronger, repo-wide invariant instead: no script anywhere
+// under scripts/ may call the `gh` binary directly except gh.mjs itself.
 
 // #2169's own regression test, as specified on the ticket: set GIT_DIR to a
 // decoy repo, call createAnnotatedTag({ repoRoot: realRepo, … }) DIRECTLY

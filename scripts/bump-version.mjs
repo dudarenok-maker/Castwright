@@ -21,7 +21,7 @@
 // Exits non-zero on any pre-flight, gate, or sub-command failure. Intended to
 // be run only from a clean working tree, on `main`, by a maintainer.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,6 +34,7 @@ import {
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
 import { scrubGitEnv } from './git-env.mjs';
+import { gh, ghSpawn } from './gh.mjs';
 // #2170 — same normaliser release.yml's publish step applies, imported
 // rather than copied so the two can't drift apart (see the refusal below).
 import { normalise } from './release-body.mjs';
@@ -254,26 +255,11 @@ function npm(args, opts = {}) {
   });
 }
 
-// `gh` wrapper. capture=true returns stdout; otherwise inherits stdio so
-// `gh run watch`'s live progress streams to the user.
-//
-// #2175 review, Finding 2 — `gh` resolves its target repository the same
-// GIT_DIR/GIT_WORK_TREE-first way git itself does (empirically: with GIT_DIR
-// pointed at a decoy, `gh repo view` reports "no git remotes found" instead
-// of the real repo's remotes). The scrub above was applied to every git()
-// call but not to gh — a workflow_dispatch could fire against a foreign
-// repository. Same fix, same shared scrub.
-function gh(args, opts = {}) {
-  return execFileSync('gh', args, {
-    cwd: repoRoot,
-    stdio: opts.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
-    encoding: 'utf8',
-    env: scrubGitEnv(),
-  });
-}
-
+// gh()/ghSpawn() (scripts/gh.mjs, #2184) are the shared chokepoint every
+// gh-calling script under scripts/ now imports instead of growing its own
+// copy of this scrub — see that file's header for the full rationale.
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore', env: scrubGitEnv() });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 
@@ -293,7 +279,7 @@ async function runCrossOsGate({ ref, headSha }) {
   const sinceMs = Date.now();
   info(`[GATE] firing ${CROSS_OS_WORKFLOW} on ${ref} — cross-OS verify must pass before the tag is created.`);
   try {
-    gh(['workflow', 'run', CROSS_OS_WORKFLOW, '--ref', ref]);
+    gh(['workflow', 'run', CROSS_OS_WORKFLOW, '--ref', ref], { stdio: 'inherit' });
   } catch {
     die(
       `Failed to dispatch ${CROSS_OS_WORKFLOW}. Confirm the workflow exists and you're authenticated (\`gh auth status\`), ` +
@@ -306,19 +292,16 @@ async function runCrossOsGate({ ref, headSha }) {
     await sleep(RUN_DISCOVERY_INTERVAL_MS);
     let parsed = [];
     try {
-      const json = gh(
-        [
-          'run',
-          'list',
-          '--workflow',
-          CROSS_OS_WORKFLOW,
-          '--limit',
-          '20',
-          '--json',
-          'databaseId,headSha,status,conclusion,event,createdAt',
-        ],
-        { capture: true },
-      );
+      const json = gh([
+        'run',
+        'list',
+        '--workflow',
+        CROSS_OS_WORKFLOW,
+        '--limit',
+        '20',
+        '--json',
+        'databaseId,headSha,status,conclusion,event,createdAt',
+      ]);
       parsed = JSON.parse(json);
     } catch {
       parsed = []; // transient gh/network hiccup — retry
@@ -335,11 +318,7 @@ async function runCrossOsGate({ ref, headSha }) {
     );
   }
   info(`[GATE] watching run ${runId} (blocks until macOS + Windows verify/build + mobile e2e finish)...`);
-  const watch = spawnSync('gh', ['run', 'watch', String(runId), '--exit-status'], {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    env: scrubGitEnv(),
-  });
+  const watch = ghSpawn(['run', 'watch', String(runId), '--exit-status'], { stdio: 'inherit' });
   if (watch.status !== 0) {
     die(
       `Cross-OS verify FAILED (run ${runId}). The tag was NOT created. ` +

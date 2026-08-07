@@ -58,6 +58,25 @@ export function redeemPairingSession(code: string, now: number = Date.now()): Re
   return { ok: true, label: s.label };
 }
 
+/** Un-consume a just-redeemed session so a failed downstream mint (e.g. the
+ *  device store being unreadable) doesn't burn the one-time code. Only
+ *  meaningful immediately after `redeemPairingSession` returned `ok: true`
+ *  for this exact code -- the caller is responsible for calling it only
+ *  from that failure path, not speculatively. A no-op if the session has
+ *  since been swept (consumed sessions are only reaped by the next
+ *  `createPairingSession` call, so this is safe to call synchronously
+ *  right after a same-tick failure). Deliberately does NOT re-run the
+ *  redeem/consume step atomically with anything else: the original
+ *  `redeemPairingSession` call already closed the single-use race for
+ *  every OTHER caller of the same code by consuming it synchronously the
+ *  moment it was read; this only widens the window during which the code
+ *  remains valid again, back up to its original TTL, for the one caller
+ *  who legitimately holds it and hasn't gotten a device yet. */
+export function restorePairingSession(code: string): void {
+  const s = sessions.get(code);
+  if (s) s.consumed = false;
+}
+
 export function _resetPairingSessionsForTests(): void {
   sessions.clear();
 }

@@ -11,7 +11,7 @@ export function renderManagedBlock(): string {
     lines.push('', `# ── ${g.label} ──`);
     for (const k of knobs) {
       lines.push(`# ${k.help} [${k.apply}${k.risk === 'high' ? ' · high risk' : ''}]`);
-      lines.push(`${k.env}=${String(k.default)}`);
+      lines.push(`# ${k.env}=${String(k.default)}`);
     }
   }
   lines.push('', END);

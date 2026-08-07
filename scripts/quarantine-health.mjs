@@ -162,6 +162,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { ghSpawn } from './gh.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTER_PATH = resolve(ROOT, 'docs/testing/flaky-register.md');
@@ -746,8 +747,7 @@ function runVitestJson(cwd, config, files) {
 }
 
 function checkIssueState(issueNumber) {
-  const r = spawnSync('gh', ['issue', 'view', String(issueNumber), '--json', 'state', '-q', '.state'], {
-    encoding: 'utf8',
+  const r = ghSpawn(['issue', 'view', String(issueNumber), '--json', 'state', '-q', '.state'], {
     timeout: GH_TIMEOUT_MS,
   });
   if (r.error || r.status !== 0) return null;

@@ -75,6 +75,40 @@ describe('resolver precedence', () => {
   it('configValue throws on an unknown key', () => {
     expect(() => configValue('no.such.knob')).toThrow(/unknown config key/);
   });
+
+  // #2180 correction 1 — qa.asr.device is free-form `type: 'string'` with no
+  // `options` array, so `cuda`, `cuda:1`, and a typo like `cuda1` were all
+  // equally "valid" at the coercion layer. Constrained to
+  // cpu | auto | cuda | cuda:<n> via a new general `pattern` capability on
+  // the knob shape (coerceAndValidate's string/default case).
+  it('qa.asr.device is constrained to cpu | auto | cuda | cuda:<n> via a pattern', () => {
+    const knob = getKnob('qa.asr.device')!;
+    expect(coerceAndValidate(knob, 'cpu')).toEqual({ ok: true, value: 'cpu' });
+    expect(coerceAndValidate(knob, 'auto')).toEqual({ ok: true, value: 'auto' });
+    expect(coerceAndValidate(knob, 'cuda')).toEqual({ ok: true, value: 'cuda' });
+    expect(coerceAndValidate(knob, 'cuda:1')).toEqual({ ok: true, value: 'cuda:1' });
+    expect(coerceAndValidate(knob, 'CUDA:1')).toEqual({ ok: true, value: 'CUDA:1' }); // case-insensitive
+    expect(coerceAndValidate(knob, 'cuda1').ok).toBe(false); // the typo shape named in the decision comment
+    expect(coerceAndValidate(knob, 'gpu').ok).toBe(false);
+  });
+
+  /* Independent review of PR #2205, finding F4 — coerceAndValidate matched
+     the pattern against s.trim() but returned the UNTRIMMED raw string, so
+     '  CUDA:1  ' passed validation (the trimmed form matches the pattern)
+     yet persisted — and reached the sidecar's spawn env — with its
+     whitespace intact. The persisted/returned value must be the same
+     trimmed form the pattern was actually checked against. */
+  it('trims a pattern-matched string knob value before returning it (persisted value has no stray whitespace)', () => {
+    const knob = getKnob('qa.asr.device')!;
+    expect(coerceAndValidate(knob, '  cuda:1  ')).toEqual({ ok: true, value: 'cuda:1' });
+    expect(coerceAndValidate(knob, '  CUDA:1  ')).toEqual({ ok: true, value: 'CUDA:1' }); // trims, keeps case
+    expect(coerceAndValidate(knob, '\tcpu\n')).toEqual({ ok: true, value: 'cpu' });
+  });
+
+  it('a pattern-less string knob keeps its historical no-trim behaviour', () => {
+    const knob = getKnob('qa.asr.model')!; // free-form string, no pattern
+    expect(coerceAndValidate(knob, '  base  ')).toEqual({ ok: true, value: '  base  ' });
+  });
 });
 
 describe('resolveKnob — device UUID reconcile (Plan 2 §2.1)', () => {

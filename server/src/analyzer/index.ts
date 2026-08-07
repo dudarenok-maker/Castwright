@@ -29,6 +29,7 @@ import {
   getResolvedGeminiApiKey,
   getResolvedAllowCloudFallback,
 } from '../workspace/user-settings.js';
+import { configValue } from '../config/resolver.js';
 
 export interface StageChunkInfo {
   /** Total bytes of model output received so far. */
@@ -204,7 +205,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
        (kept for Gemini TTS), so a local outage never routes analysis to the
        cloud — announced or otherwise. */
     if (apiKey && getResolvedAllowCloudFallback()) {
-      const fallbackModel = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+      const fallbackModel = configValue<string>('analyzer.gemini.model');
       const fallback = new GeminiAnalyzer({ apiKey, model: fallbackModel });
       return {
         analyzer: new FallbackAnalyzer(primary, fallback),
@@ -229,7 +230,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
         'or in server/.env for CI / power users.',
     );
   }
-  const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  const model = opts.model ?? configValue<string>('analyzer.gemini.model');
   return {
     analyzer: new GeminiAnalyzer({ apiKey, model }),
     engine: 'gemini',
