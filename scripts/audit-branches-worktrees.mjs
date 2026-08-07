@@ -8,6 +8,7 @@
 // Usage: node scripts/audit-branches-worktrees.mjs
 
 import { execFileSync } from 'node:child_process';
+import { gh } from './gh.mjs';
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 
@@ -45,7 +46,7 @@ function isMergedToMain(branch) {
 }
 
 function openIssueTitles() {
-  const raw = execFileSync('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title'], { encoding: 'utf8' });
+  const raw = gh(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title']);
   return JSON.parse(raw);
 }
 
