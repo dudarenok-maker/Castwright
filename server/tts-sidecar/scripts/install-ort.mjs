@@ -24,7 +24,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { installRecipe, PROFILES } from './accelerator-profile.mjs';
 
@@ -59,6 +59,62 @@ export function sitePackagesDir(venvDir) {
     .map((d) => join(libDir, d, 'site-packages'))
     .filter((p) => existsSync(p));
   return hits.length === 1 ? hits[0] : null;
+}
+
+export const MARKER_INSTALLER = 'castwright-ort-marker';
+
+/** Every `onnxruntime-<version>.dist-info` in site-packages — ours AND real ones.
+ *  The trailing `-\d` is what excludes `onnxruntime_gpu-…` (underscore at index 11). */
+function ortDistInfoDirs(sitePackages) {
+  if (!existsSync(sitePackages)) return [];
+  return readdirSync(sitePackages)
+    .filter((d) => /^onnxruntime-\d.*\.dist-info$/.test(d))
+    .map((d) => join(sitePackages, d));
+}
+
+/** Ours ONLY if the INSTALLER is our sentinel AND the RECORD is empty.
+ *  Name is never sufficient: the real plain distribution's directory name is
+ *  byte-identical to ours. */
+export function isOurMarker(distInfoDir) {
+  try {
+    const installer = readFileSync(join(distInfoDir, 'INSTALLER'), 'utf8').trim();
+    if (installer !== MARKER_INSTALLER) return false;
+    return readFileSync(join(distInfoDir, 'RECORD'), 'utf8').trim() === '';
+  } catch {
+    return false;
+  }
+}
+
+/** Real (non-marker) plain onnxruntime distributions. Tests EVERY match — ours
+ *  and a real one can coexist, so answering from the first is a false negative. */
+export function findPlainOrtDistInfos(sitePackages) {
+  return ortDistInfoDirs(sitePackages).filter((d) => !isOurMarker(d));
+}
+
+/** Write (or overwrite) the marker. Removes any stale marker first so the
+ *  version can never lag the installed runtime. */
+export function writeOrtMarker(sitePackages, version) {
+  deleteOrtMarkerIfOurs(sitePackages);
+  const dir = join(sitePackages, `onnxruntime-${version}.dist-info`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'METADATA'),
+    `Metadata-Version: 2.1\nName: onnxruntime\nVersion: ${version}\n` +
+      `Summary: Provided by ${SWAP_ORT_PACKAGES.join('/')} (same namespace, same API).\n`,
+  );
+  writeFileSync(join(dir, 'INSTALLER'), `${MARKER_INSTALLER}\n`);
+  writeFileSync(join(dir, 'RECORD'), ''); // MUST stay empty — see the spec's Spike 2
+}
+
+/** Delete the marker if (and only if) we wrote it. Returns whether it removed one. */
+export function deleteOrtMarkerIfOurs(sitePackages) {
+  let removed = false;
+  for (const dir of ortDistInfoDirs(sitePackages)) {
+    if (!isOurMarker(dir)) continue;
+    rmSync(dir, { recursive: true, force: true });
+    removed = true;
+  }
+  return removed;
 }
 
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
