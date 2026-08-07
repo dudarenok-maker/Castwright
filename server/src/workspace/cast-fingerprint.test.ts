@@ -33,8 +33,15 @@ function setReadFileImpl(fn: ReadFileUtf8 | null): void {
 
 /* Import AFTER vi.mock so cast-fingerprint.ts picks up the mocked readFile. */
 const { readFile } = await import('node:fs/promises');
-const { ABSENT, UNREADABLE, hashBytes, readJsonWithFingerprint, fingerprintOfWrite } =
-  await import('./cast-fingerprint.js');
+const {
+  ABSENT,
+  UNREADABLE,
+  FINGERPRINT_SENTINELS,
+  hashBytes,
+  readJsonWithFingerprint,
+  fingerprintOfWrite,
+  describeFingerprintForLog,
+} = await import('./cast-fingerprint.js');
 
 function tmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'castwright-fingerprint-'));
@@ -167,5 +174,44 @@ describe('fingerprintOfWrite — coupling guard against writeJsonAtomic', () => 
     expect(UNREADABLE).not.toMatch(/^[0-9a-f]{64}$/);
     expect(UNREADABLE.startsWith(String.fromCharCode(0))).toBe(true);
     expect(UNREADABLE).not.toBe(ABSENT);
+  });
+});
+
+describe('describeFingerprintForLog - every sentinel renders safe text (#2186)', () => {
+  it('renders every member of FINGERPRINT_SENTINELS as non-empty text with no NUL byte', () => {
+    /* Iterates the actual sentinel SET, not two hardcoded literals: a future
+       third sentinel added to FINGERPRINT_SENTINELS without a matching label
+       in describeFingerprintForLog falls through to the raw-hex-prefix
+       branch, which still carries the leading NUL and fails the assertions
+       below. That is the whole point: this test breaks the day someone adds
+       a sentinel to FINGERPRINT_SENTINELS and forgets to teach the renderer
+       about it — a sentinel declared but never added to that array is still
+       not caught. */
+    const nul = String.fromCharCode(0);
+    for (const sentinel of FINGERPRINT_SENTINELS) {
+      const rendered = describeFingerprintForLog(sentinel);
+      expect(rendered).not.toContain(nul);
+      expect(rendered.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('still renders a real sha256 digest as a 12-char prefix (unaffected by the sentinel table)', () => {
+    const digest = hashBytes('{"characters":[]}');
+    expect(describeFingerprintForLog(digest)).toBe(digest.slice(0, 12));
+  });
+
+  it('never resolves through Object.prototype for a prototype-shaped input (review finding 1)', () => {
+    /* A plain-object lookup table resolves 'constructor', 'toString',
+       '__proto__', 'hasOwnProperty' etc. through the prototype chain instead
+       of failing the lookup — despite the table's declared `string` value
+       type, which is only a compile-time claim TypeScript cannot verify
+       against a runtime index. Each of these must fall through to the
+       raw-hex-prefix branch like any other non-sentinel string, and the
+       result must always be a string. */
+    for (const input of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const rendered = describeFingerprintForLog(input);
+      expect(typeof rendered).toBe('string');
+      expect(rendered).toBe(input.slice(0, 12));
+    }
   });
 });

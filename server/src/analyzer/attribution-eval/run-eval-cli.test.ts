@@ -43,11 +43,15 @@ describe('slotLabel', () => {
     }
   });
 
-  it('falls back to the default gemma model id when GEMINI_MODEL is unset', () => {
+  /* #2179 — slotLabel now resolves GEMINI_MODEL via
+     configValue('analyzer.gemini.model') instead of a hardcoded
+     `?? 'gemma-4-31b-it'` literal, so an unset env falls through to the
+     registry default rather than the retired gemma fallback. */
+  it('falls back to the registry default model id when GEMINI_MODEL is unset', () => {
     const prev = process.env.GEMINI_MODEL;
     delete process.env.GEMINI_MODEL;
     try {
-      expect(slotLabel('gemma')).toBe('gemma:gemma-4-31b-it');
+      expect(slotLabel('gemma')).toBe('gemma:gemini-3.5-flash-lite');
     } finally {
       if (prev !== undefined) process.env.GEMINI_MODEL = prev;
     }

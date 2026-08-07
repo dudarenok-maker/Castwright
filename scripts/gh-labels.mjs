@@ -18,7 +18,7 @@
 // Idempotent: `gh label create --force` upserts, so --apply both creates
 // missing labels and reconciles colour/description drift on existing ones.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { gh, ghSpawn } from './gh.mjs';
 
 // Exported so a test (or a reader) can assert the taxonomy without invoking gh.
 export const LABELS = [
@@ -57,11 +57,8 @@ function die(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
   process.exit(1);
 }
-function gh(args) {
-  return execFileSync('gh', args, { stdio: 'inherit', encoding: 'utf8' });
-}
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 
@@ -102,7 +99,7 @@ function main() {
   }
 
   for (const label of LABELS) {
-    gh(labelArgs(label));
+    gh(labelArgs(label), { stdio: 'inherit' });
   }
   info(`\n[OK] reconciled ${LABELS.length} labels.`);
 }

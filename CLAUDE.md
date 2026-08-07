@@ -367,10 +367,13 @@ Design rationale:
     daemon is unreachable).
   - **Gemini** (`GEMINI_API_KEY=…`) — calls the free-tier Gemini API
     directly. Optional `GEMINI_MODEL` (ships defaulting to
-    `gemini-3.5-flash-lite`; code-level last-resort fallback stays
-    `gemma-4-31b-it` — its own free-tier bucket, 30 RPM / 14,400 RPD, and
-    RECITATION-filter-immune; flip via env). Every outbound call (primary
-    AND retry) is gated through a per-model RPM/TPM/RPD limiter
+    `gemini-3.5-flash-lite`; resolves through the config registry like every
+    other knob, so an unset env falls through to that same shipped default —
+    the prior hardcoded `gemma-4-31b-it` code-level last-resort was retired
+    in #2179. Switch to a `gemma-*` model manually — its own free-tier
+    bucket, 30 RPM / 14,400 RPD, and RECITATION-filter-immune — via env).
+    Every outbound call (primary AND retry) is gated through a per-model
+    RPM/TPM/RPD limiter
     (`server/src/analyzer/rate-limit.ts`) so retries can't compound into
     429/500 storms. See `server/.env.example` for `GEMINI_RPM_*` /
     `GEMINI_TPM_*` / `GEMINI_RPD_*` overrides and

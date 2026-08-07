@@ -7,7 +7,10 @@ owner: null
 # Manuscript view: visual scene-change separator
 
 > Status: active — server + frontend shipped and tested; Russian/restructure-heavy
-> reliability is bounded but unmeasured (owed acceptance, see below).
+> reliability **measured on-box 2026-08-06 and passing** (24 separators, 22 bound,
+> median sep→opener distance 5 chars; the ~92k forward-overshoot is mechanically
+> gone). One cosmetic ch7 blemish traces to the dialogue-structure aligner, not to
+> this rule — [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187).
 > Key files: `server/src/analyzer/scene-breaks.ts`,
 > `server/src/analyzer/dialogue-structure/aligner.ts` (`locateSentenceOffsets`),
 > `server/src/parsers/html-utils.ts` (`stripHtml`), `server/src/routes/analysis.ts`
@@ -200,15 +203,47 @@ script):
 - **`<hr>` conversion works end-to-end:** *The Coalfall Commission* went
   from **0 → 2 detected separators** once `stripHtml` started emitting
   `* * *` for `<hr>`.
-- **Russian acceptance is STILL OWED.** *Ночной дозор* (Night Watch) could
-  not be measured in this round — it was mid-re-analysis and its
-  `manuscript-edits.json` was deleted by the reparse. The marker-anchored +
-  skip-separator rule *mechanically* eliminates the old ~92k-character
-  forward-overshoot failure mode (it binds to the last-located-before
-  sentence plus a bounded skip, and never forward-searches to a distant
-  opener the way a naive "next locatable sentence anywhere ahead" rule
-  would) — but this is **unconfirmed on real Russian data**. Re-run before
-  claiming Russian reliability:
+- **Russian acceptance: RUN 2026-08-06 — PASS.** *Ночной дозор* re-analyzed
+  end-to-end (9 chapters, 15,069 sentences, `qwen36-cw-iq4-32k` via local
+  Ollama) by Claude Code on the dual-GPU box, and the separator binding was
+  then measured through the production functions (`annotateSceneBreaks` +
+  `locateSentenceOffsets`, bodies from `parseManuscript`):
+
+  | Chapter | body chars | separators | flagged | max sep→opener distance |
+  |---|---|---|---|---|
+  | 1–4 | 112,714 / 80,218 / 35,033 / 44,009 | **0** | 0 | — |
+  | 5 | 76,853 | 8 | 8 | 5 |
+  | 6 | 76,817 | 3 | 1 | — (opener unlocatable) |
+  | 7 | 88,881 | 6 | 6 | 8,059 (see below) |
+  | 8 | 69,294 | 4 | 4 | 5 |
+  | 9 | 67,097 | 3 | 3 | 5 |
+
+  **24 separators, 22 flagged** (2 dropped by the leading-separator rule, as
+  designed). **Median separator→opener distance is 5 characters** — the width
+  of the `* * *` glyph itself, i.e. the opener begins immediately after the
+  marker — in 20 of 21 measurable cases. Chapters 1–4 contain **no separators
+  at all**, so their zero flags are correct rather than a miss.
+
+  **The ~92k forward-overshoot is confirmed mechanically gone.** Binding is
+  index-adjacent (`lastBefore + 1`, skipping word-free separator sentences),
+  so it *cannot* forward-search to a distant opener regardless of alignment
+  quality.
+
+  **The one ch7 outlier is a location artifact, not a binding error.** The
+  separator at offset 61,651 opens `"У каждого из нас, дозорных, работа
+  отнимает…"`, but the bound sentence is `"- Да."`, whose offset
+  `locateSentenceOffsets` resolved to 69,710 — a *later* occurrence of that
+  ultra-common string (true position ~60,850); the two following sentences
+  don't locate at all. Chapter 7 aligned at only 66%. This is the same aligner
+  weakness that capped plan 247's acceptance in the same run, filed as
+  [#2187](https://github.com/dudarenok-maker/Castwright/issues/2187) — and its
+  effect here is exactly the documented worst case: a divider a sentence or
+  two off, never data corruption.
+
+  Note the probe below is the *original* intent; the 2026-08-06 measurement
+  used a throwaway script against the production functions instead, because
+  `scripts/scene-break-measure.ts` does not exist in the tree. Either
+  reproduces the numbers; re-run before claiming Russian reliability again:
 
   ```
   npx tsx scripts/scene-break-measure.ts --whole-book "C:/AudiobookWorkspace/books/Сергей Лукьяненко/The Night Watch Tetralogy/Ночной дозор"
@@ -252,5 +287,18 @@ script):
 
 ## Ship notes
 
-(Fill in when status flips to `stable`: shipped date, commit SHA, and the
-Russian acceptance re-run result once it lands.)
+**Russian acceptance re-run — 2026-08-06, PASS.** Run by Claude Code on the
+dual-GPU box against the real workspace book
+(`C:\AudiobookWorkspace\books\Сергей Лукьяненко\The Night Watch Tetralogy\Ночной дозор`),
+real local Ollama analyzer (`qwen36-cw-iq4-32k`), no mock mode: full 9-chapter
+re-analysis (15,069 sentences), then separator binding measured through the
+production `annotateSceneBreaks` / `locateSentenceOffsets` path.
+
+**24 separators, 22 flagged, median separator→opener distance 5 characters.** The
+~92k-character forward-overshoot is confirmed mechanically eliminated — binding is
+index-adjacent, so it cannot forward-search to a distant opener. Full numbers and
+the single ch7 outlier analysis are in "Acceptance measurement results" above.
+This discharged register row **C1** (see
+[`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)).
+
+(Still to fill when status flips to `stable`: shipped date + commit SHA.)

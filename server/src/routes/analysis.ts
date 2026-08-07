@@ -2058,7 +2058,7 @@ function buildCloudEscalationAnalyzer(): Analyzer | null {
     );
     return null;
   }
-  const model = process.env.GEMINI_MODEL ?? 'gemma-4-31b-it';
+  const model = configValue<string>('analyzer.gemini.model');
   return new GeminiAnalyzer({ apiKey, model });
 }
 

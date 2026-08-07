@@ -69,9 +69,10 @@ describe('multi-GPU device knobs (Wave 1)', () => {
     ]);
   });
 
-  it('adds ASR_CONCURRENCY registry knob (integer, restart-sidecar, default 2) documented alongside ASR_MODEL (#2014)', () => {
-    const k = getKnob('qa.asr.concurrency')!;
-    expect([k.env, k.type, k.apply, k.default]).toEqual(['ASR_CONCURRENCY', 'integer', 'restart-sidecar', 2]);
-    expect(k.min).toBe(1);
+  // #2177: ASR_CONCURRENCY has never had a consumer anywhere in the repo —
+  // no thread pool exists for it to size, and WhisperEngine._infer_lock
+  // already serialises the CT2 forward pass. Deleted rather than wired up.
+  it('has no qa.asr.concurrency knob (#2177 — deleted, never had a consumer)', () => {
+    expect(getKnob('qa.asr.concurrency')).toBeUndefined();
   });
 });
