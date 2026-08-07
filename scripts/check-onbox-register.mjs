@@ -9,6 +9,8 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -454,6 +456,27 @@ function parseLiveViewSections(html) {
   return { sections, duplicateLetters, invalidRowIds };
 }
 
+// Parses a baseline register text (origin/main's copy, per #2199) into the
+// same shape used elsewhere: the glance table's letters and the body's
+// letter -> row-numbers map. Returns `null` when the baseline can't be
+// trusted at all — an unterminated fence, or no "## At a glance" section —
+// so the caller can fail closed rather than silently treating a truncated
+// or garbled baseline as "row not found, must be discharged". Reuses the
+// SAME parsing helpers as the working register (`stripFences`,
+// `splitSections`, `parseGlanceTable`, `parseBodyGroups`) rather than a
+// second parser, per the #2199 design.
+function resolveBaselineGroups(baselineText) {
+  if (typeof baselineText !== 'string') return null;
+  const { text: strippedBaseline, unterminatedFenceLine } = stripFences(baselineText);
+  if (unterminatedFenceLine !== null) return null;
+  const baselineSections = splitSections(strippedBaseline);
+  const baselineGlanceSection = baselineSections.find((s) => s.title === 'At a glance');
+  if (!baselineGlanceSection) return null;
+  const { groups: baselineTableGroups } = parseGlanceTable(baselineGlanceSection.body);
+  const { groups: baselineBodyGroups } = parseBodyGroups(baselineSections);
+  return { tableLetters: new Set(baselineTableGroups.keys()), bodyGroups: baselineBodyGroups };
+}
+
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
 //
@@ -482,7 +505,27 @@ function parseLiveViewSections(html) {
 //     failures, malformed markup and duplicates are unaffected: they are not
 //     about direction, they are about whether the live page can be trusted
 //     at all, so they fire in both modes.
-export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both' } = {}) {
+//
+//     #2199: "the live page has X, the register doesn't" is ALSO the normal
+//     shape of a deliberate row discharge — removing a row (and, since rows
+//     renumber contiguously, often renumbering the survivors) always makes
+//     the still-live page look "ahead". `extraOnly` therefore disambiguates
+//     each such X against `options.baselineText` — a second register text,
+//     meant to be `origin/main`'s copy fetched by the CLI layer (this
+//     function never shells out itself, so it stays unit-testable without
+//     git): if the baseline ALSO lacks X, it was discharged (by this change
+//     or an already-merged one) and is not reported; if the baseline still
+//     has X, the register is genuinely behind and it IS reported. When the
+//     baseline can't be resolved or parsed at all, this fails CLOSED — every
+//     `extraOnly` check is skipped in favour of a single "cannot verify"
+//     error — rather than silently treating "baseline unknown" the same as
+//     "baseline lacks it too", which would let a discharge-shaped bug pass
+//     unnoticed for the same reason a real competing-lane row would.
+export function checkLiveView(
+  markdownText,
+  rawLiveViewHtml,
+  { direction = 'both', baselineText } = {},
+) {
   const errors = [];
   const liveViewHtml = stripHtmlComments(rawLiveViewHtml);
   const { text: fenceStrippedText, unterminatedFenceLine } = stripFences(markdownText);
@@ -502,6 +545,30 @@ export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both
   }
   const { groups: mdGroups, total: mdTotal } = parseGlanceTable(glanceSection.body);
   const { groups: mdBodyGroups } = parseBodyGroups(sections);
+
+  // 'extraOnly' needs a baseline to tell a discharge apart from a genuine
+  // competing-lane row (#2199) — resolve it once, up front, and fail closed
+  // immediately if it can't be trusted. This deliberately bails out before
+  // any other comparison runs, mirroring the fence/glance-section bail-outs
+  // above: a partial 'extraOnly' run built on an unverifiable baseline would
+  // just produce more wrong verdicts on top of the "can't verify" problem
+  // itself, not fewer.
+  let baselineTableLetters = null;
+  let baselineBodyGroups = null;
+  if (direction === 'extraOnly') {
+    const baseline = resolveBaselineGroups(baselineText);
+    if (!baseline) {
+      return [
+        'Cannot verify --against-published: the origin/main baseline register is ' +
+          'unavailable or could not be parsed, so a row the live page has but this ' +
+          "register lacks can't be told apart from a genuine competing-lane row. Run " +
+          '`git fetch origin main` (so origin/main is resolvable and up to date) and try ' +
+          'again. Do not publish until this passes.',
+      ];
+    }
+    baselineTableLetters = baseline.tableLetters;
+    baselineBodyGroups = baseline.bodyGroups;
+  }
 
   // The owed total, as the summary strip states it.
   const owedMatch = liveViewHtml.match(/<div class="n owed">(\d+)<\/div>/);
@@ -558,10 +625,20 @@ export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both
     }
     for (const letter of lvGroups.keys()) {
       if (!mdGroups.has(letter)) {
+        if (direction === 'extraOnly') {
+          // #2199: the live page has a group letter this register lacks. If
+          // origin/main ALSO lacks it, the whole group was discharged (by
+          // this change or an already-merged one) — not an error. Only when
+          // origin/main still has it is this register genuinely behind.
+          if (baselineTableLetters.has(letter)) {
+            errors.push(
+              `The live page's glance table has a Group ${letter} row that this register does not — the register is BEHIND what is already published. Add the group to the register before publishing.`,
+            );
+          }
+          continue;
+        }
         errors.push(
-          direction === 'extraOnly'
-            ? `The live page's glance table has a Group ${letter} row that this register does not — the register is BEHIND what is already published. Add the group to the register before publishing.`
-            : `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
+          `Live view: glance table has a Group ${letter} row that the register's glance table does not. Remove it or add the group to the register.`,
         );
       }
     }
@@ -617,17 +694,35 @@ export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both
     // missing" and "X is extra" — with nothing saying where it actually sits.
     // `missing` (register has, live page doesn't) is the normal pre-publish
     // state in 'extraOnly' mode — see the function header comment — so it is
-    // skipped there; `extra` (live page has, register doesn't) is the ONLY
-    // directional signal that mode exists to surface, so it always fires.
+    // skipped there; `extra` (live page has, register doesn't) is the
+    // directional signal that mode exists to surface, but as of #2199 it is
+    // not reported as-is: a row in `extra` that origin/main ALSO lacks was
+    // deliberately discharged, not left behind, so it's filtered out below
+    // before deciding whether to fire.
     if (direction === 'both' && missing.length > 0) {
       errors.push(
         `Live view's Group ${letter} section is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from that section.`,
       );
     }
-    if (extra.length > 0) {
+    // #2199: filter `extra` down to rows origin/main's baseline still has.
+    // Looked up by the ID's OWN letter (not this section's `letter`), so a
+    // row filed under the wrong group (see the comment above) is checked
+    // against ITS letter's baseline group, matching how `expected`/`found`
+    // are keyed.
+    const staleExtra =
+      direction === 'extraOnly'
+        ? extra.filter((id) => {
+            const idMatch = id.match(/^([A-Z])(\d+)$/);
+            if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
+            const [, idLetter, idNumber] = idMatch;
+            const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
+            return baselineNumbers.includes(Number(idNumber));
+          })
+        : extra;
+    if (staleExtra.length > 0) {
       errors.push(
         direction === 'extraOnly'
-          ? `The live page's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${extra.length === 1 ? 'it' : 'them'} in before publishing.`
+          ? `The live page's Group ${letter} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
           : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
@@ -639,15 +734,75 @@ export function checkLiveView(markdownText, rawLiveViewHtml, { direction = 'both
   }
   for (const letter of lvSections.keys()) {
     if (!mdBodyGroups.has(letter)) {
+      if (direction === 'extraOnly') {
+        // #2199: whole-group discharge — same baseline check as the
+        // glance-table letter loop above, applied to the body section list.
+        if (baselineBodyGroups.has(letter)) {
+          errors.push(
+            `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
+          );
+        }
+        continue;
+      }
       errors.push(
-        direction === 'extraOnly'
-          ? `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`
-          : `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
       );
     }
   }
 
   return errors;
+}
+
+// Default git runner used by `resolveBaselineText` below: real `spawnSync`,
+// with a timeout so a hanging network can't wedge the check indefinitely. A
+// timeout surfaces as `result.error` set (Node's own `spawnSync` behaviour
+// when its `timeout` option fires) — the caller already treats any truthy
+// `result.error` as a failure, so a timeout needs no special-casing to fail
+// closed like any other git failure.
+const GIT_TIMEOUT_MS = 15_000;
+function runGitCommand(args, cwd) {
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+}
+
+// #2199 review round 2: fetches `origin/main` FRESH before reading it,
+// rather than trusting the local remote-tracking ref as-is. `origin/main`
+// only moves on fetch/pull — reading it without fetching first reopens the
+// exact #1931 race `--against-published` exists to close: an operator whose
+// local checkout predates a merge on `main` sees that merge's row as absent
+// from BOTH their working register AND their (stale) local `origin/main` —
+// which the discharge filter in `checkLiveView` then (wrongly) reads as
+// "already discharged" and lets through. That is a false NEGATIVE on the
+// precise scenario this whole mode exists to catch — strictly worse than
+// the false positive it replaced, and the same class of hole the
+// unparseable-baseline fail-closed path already guards against, just for a
+// different cause (stale ref vs. unreadable content).
+//
+// No offline escape hatch (deliberately no `--no-fetch`): this mode runs
+// only immediately before publishing to a remote artifact URL, so an
+// operator who cannot reach the network to fetch cannot publish either —
+// requiring the network here costs nothing the rest of the procedure
+// doesn't already require.
+//
+// `gitRunner` is injectable (defaults to the real `spawnSync`-based
+// `runGitCommand`) so tests can record call order — proving the fetch runs
+// BEFORE the show, not just that both run — and simulate a failure at
+// either step (non-zero exit, a thrown/ENOENT spawn error, or a timeout,
+// which surfaces identically to a spawn error via `result.error`) without
+// touching the real network or git. Returns `{ text: null, failedStep }` on
+// any failure, where `failedStep` names which git call failed so the CLI
+// layer can tell the operator specifically what to retry. `checkLiveView`
+// itself never shells out (see its own header comment) — this function is
+// the CLI layer's entire git surface for baseline resolution.
+export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCommand) {
+  const fetchResult = gitRunner(['fetch', 'origin', 'main'], repoRoot);
+  if (fetchResult.error || fetchResult.status !== 0) {
+    return { text: null, failedStep: 'fetch' };
+  }
+  const showResult = gitRunner(['show', `origin/main:${registerPath}`], repoRoot);
+  if (showResult.error || showResult.status !== 0) {
+    return { text: null, failedStep: 'show' };
+  }
+  return { text: showResult.stdout, failedStep: null };
 }
 
 // CLI mode: `node scripts/check-onbox-register.mjs`
@@ -735,12 +890,47 @@ if (invokedAsCli) {
       }
       throw err;
     }
+    // #2199 review round 2: `origin/main` is FETCHED fresh here, not just
+    // read as-is — see `resolveBaselineText`'s own header comment for why a
+    // read-only local ref reopens the #1931 race this mode exists to close.
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+    const baseline = resolveBaselineText(repoRoot, REGISTER);
+    if (baseline.failedStep) {
+      // Named explicitly, distinct from checkLiveView's generic "cannot
+      // verify" error below (which fires too, since baseline.text is null) —
+      // this line is what tells the operator WHICH git call to retry.
+      console.error(
+        baseline.failedStep === 'fetch'
+          ? '`git fetch origin main` failed — cannot verify --against-published without ' +
+              'a freshly-fetched origin/main baseline, and there is no offline fallback ' +
+              '(a stale local origin/main is exactly the hole this check exists to close). ' +
+              'Check your network connection and the `origin` remote, then try again.'
+          : '`git show origin/main:...` failed even after a successful `git fetch origin ' +
+              'main` — origin/main may not have this file at this ref. Check the file path ' +
+              'and try again.',
+      );
+    }
+    const publishedErrors = checkLiveView(text, publishedHtml, {
+      direction: 'extraOnly',
+      baselineText: baseline.text,
+    });
+    // The fail-closed "cannot verify" case (#2199) is a single, self-
+    // contained error that already tells the operator what to do (`git
+    // fetch origin main`) — it does not mean the register IS behind (that's
+    // unknown), so it gets its own label rather than the "shows the register
+    // is BEHIND" framing below, which would overstate what's actually known.
+    const cannotVerify =
+      publishedErrors.length === 1 && publishedErrors[0].startsWith('Cannot verify');
     const publishedFailed = report(
-      `${publishedPath} (the currently-PUBLISHED page, fetched just now) shows the ` +
-        `register is BEHIND what is already live`,
-      checkLiveView(text, publishedHtml, { direction: 'extraOnly' }),
+      cannotVerify
+        ? `${publishedPath} could not be checked`
+        : `${publishedPath} (the currently-PUBLISHED page, fetched just now) shows the ` +
+            `register is BEHIND what is already live`,
+      publishedErrors,
     );
-    if (publishedFailed) {
+    if (publishedFailed && cannotVerify) {
+      console.error('Do not publish until this passes.');
+    } else if (publishedFailed) {
       console.error(
         'Do not publish. Merge the rows named above — already live, not yet in this ' +
           'register — then re-run this command against a fresh copy of the (still-current) ' +

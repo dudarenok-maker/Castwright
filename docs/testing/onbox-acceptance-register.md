@@ -97,19 +97,47 @@ comparison, see the edge list above). The merge step that closes this, run
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
-2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
-   Unlike `check:onbox-register`'s no-flag run, this comparison is
-   deliberately ONE-DIRECTIONAL: your register having rows the live page
-   doesn't have yet is the normal reason you're publishing, not a defect, so
-   it is never reported here. It fails ONLY when the live page has a row (or
-   group) your register does not — the signature of another lane having
-   already published ahead of you.
-3. **If it fails**, do NOT publish — your register is BEHIND what is already
-   live. Pull the latest `main` (the row that's already live should already
-   be merged there via its own PR), confirm `npm run check:onbox-register`
-   (no flag) is green, and re-run step 2 against the SAME saved copy from
-   step 1 to confirm it now passes. It should — main pulling in the missing
-   row is what resolves this, not another fetch of the live page.
+2. Run
+   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
+   `check:onbox-register`'s no-flag run, this comparison is deliberately
+   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
+   is the normal reason you're publishing, not a defect, so it is never
+   reported here. A row (or group) the live page has that your register
+   lacks is reported ONLY when `origin/main`'s own copy of this register
+   still has it too — the signature of another lane having already
+   published ahead of you. When `origin/main` also lacks it, the row was a
+   deliberate discharge (by this change or an already-merged one), not a
+   race, and is not reported: discharging a row (and, since rows renumber
+   contiguously, often renumbering the survivors) always makes the
+   still-live page look "ahead" of your working copy in this exact shape,
+   and that is expected. **The command fetches `origin/main` itself, fresh,
+   every run — you do not need to `git fetch` by hand first.** It reads the
+   LOCAL `origin/main` ref only after that fetch succeeds, deliberately: a
+   ref that was never re-fetched can be stale, and a stale one can hide a
+   genuine competing-lane row behind the discharge exemption — this
+   sub-step exists so that can't happen silently. It follows that this step
+   needs network access to `origin`, with no offline fallback: you're about
+   to publish to a remote URL anyway, so an operator who can't reach the
+   network here can't complete step 4 either.
+3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+   named in the error text:
+   - **A row/group named as already live and BEHIND** — your register is
+     genuinely behind. Pull the latest `main` (the row that's already live
+     should already be merged there via its own PR), confirm
+     `npm run check:onbox-register` (no flag) is green, and re-run step 2
+     against the SAME saved copy from step 1 to confirm it now passes. It
+     should — main pulling in the missing row is what resolves this, not
+     another fetch of the live page.
+   - **"Cannot verify"** — the command's own `git fetch origin main` or the
+     `git show` that reads the freshly-fetched ref failed (network
+     unreachable, no credentials, `origin` misconfigured or unresolvable, a
+     timeout, or a malformed baseline), so it refuses to guess whether an
+     extra row is a discharge or a race and fails closed instead. This is
+     NOT the same as the register being behind: pulling `main` won't clear
+     it if the fetch itself can't reach `origin`. The error names which git
+     call failed (`fetch` or `show`) — run that command by hand
+     (`git fetch origin main`) to see the underlying error, fix whatever it
+     reports (network, auth, the remote), then re-run step 2.
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 
@@ -122,8 +150,21 @@ eyeballed diff — it does not, and cannot, make the four steps happen on
 their own. An early version of this check compared both directions
 symmetrically, which inverted the diagnosis (failed on every ordinary
 publish and told the operator to delete the rows they were about to ship) —
-fixed before this landed; see the `checkLiveView` function's own header
-comment in `scripts/check-onbox-register.mjs` for the reasoning.
+fixed before this landed. A later version still fired on every legitimate
+row discharge, because removing a row is invisible in that same direction
+too: the still-live page always looks "ahead" of a register that just
+discharged a row from it. It now disambiguates the two by checking whether
+`origin/main`'s own copy of the register also lacks the row before reporting
+it (#2199); see the `checkLiveView` function's own header comment in
+`scripts/check-onbox-register.mjs` for the reasoning. The `origin/main` copy
+that comparison reads is fetched fresh by the command itself immediately
+before reading it, not taken from whatever the local `origin/main` ref
+already happened to point at — an operator whose local ref predated a merge
+would otherwise see that merge's row as absent from both their own register
+and their stale baseline, which reads identically to a deliberate discharge
+and would have let the exact #1931 race straight back through. See
+`resolveBaselineText`'s own header comment in
+`scripts/check-onbox-register.mjs` for that half of the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
