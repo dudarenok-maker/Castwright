@@ -17,6 +17,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { scrubGitEnv } from './git-env.mjs';
 
 export const PROTECTED_REFS = ['refs/heads/main'];
 export const ZERO = '0'.repeat(40);
@@ -83,7 +84,9 @@ if (invokedAsCli) {
   // unverifiable ancestry as "cannot prove non-fast-forward" => allow, so
   // ordinary pushes are never falsely blocked.
   const isAncestor = (ancestor, descendant) => {
-    const r = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant]);
+    const r = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      env: scrubGitEnv(),
+    });
     if (r.status === 0) return true; // ancestor → fast-forward
     if (r.status === 1) return false; // not an ancestor → non-fast-forward
     return true; // exit >1 or spawn error → can't verify → don't block

@@ -35,6 +35,7 @@ import {
   gpuContentionFor,
   isVitestPoolCrash,
   branchDiffFiles,
+  stagedDiffFiles,
   sidecarFingerprint,
   STEPS,
   _internals,
@@ -1072,6 +1073,100 @@ test('branchDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
   } finally {
     if (prevGitDir === undefined) delete process.env.GIT_DIR;
     else process.env.GIT_DIR = prevGitDir;
+  }
+});
+
+// --- #2216: the GIT_INDEX_FILE staged-set hazard, demonstrated behaviourally --
+// stagedDiffFiles' scrub (via gitEnv(), which now composes scrubGitEnv) covers
+// more than GIT_DIR/GIT_WORK_TREE — GIT_INDEX_FILE is the one repo-discovery
+// var an ordinary git hook DOES export (relative, typically `.git/index`).
+// This proves the concrete failure the decision comment's measurement rests
+// on: a relative GIT_INDEX_FILE resolves against the SPAWNED CHILD's cwd, not
+// the repo root, so a caller spawning from a cwd that doesn't hold that exact
+// relative path gets git's silent "no index found" behaviour, which is NOT an
+// error — it's treated as an empty index, so `git diff --cached` runs to
+// completion (exit 0) reporting a staged set that has nothing to do with
+// what's actually staged in the real repo. That is a WRONG result, not merely
+// an empty one, and status 0 means the caller has no signal to distinguish it
+// from a genuinely quiet repo. Empirically verified via a real git spawn
+// below, not assumed.
+
+test('#2216: an unscrubbed spawn with ambient GIT_DIR + relative GIT_INDEX_FILE silently returns the WRONG staged set', () => {
+  const repoDir = makeGitFixture();
+  writeFileSync(join(repoDir, 'staged.txt'), 'staged', 'utf8');
+  gitAt(repoDir, ['add', 'staged.txt']);
+
+  // Confirm the real staged set from inside the repo itself, as a sanity
+  // baseline — this is what a CORRECT resolution must report.
+  const realStaged = spawnSync('git', ['diff', '--cached', '--name-only'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+  })
+    .stdout.split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.deepEqual(
+    realStaged,
+    ['staged.txt'],
+    'sanity: the fixture must actually have staged.txt staged',
+  );
+
+  // A cwd that is NOT the repo root and is not itself a git repo — the
+  // scenario the decision comment names as the live hazard ("It is one cwd
+  // change away from [resolving correctly], and nothing would announce it").
+  const elsewhere = mkTmp();
+
+  const prevGitDir = process.env.GIT_DIR;
+  const prevIndexFile = process.env.GIT_INDEX_FILE;
+  // Simulates the ambient env an enclosing git hook process exports: GIT_DIR
+  // absolute and correct (git hooks do export this), GIT_INDEX_FILE relative
+  // (the real shape — see scripts/git-env.mjs's key-by-key comment).
+  process.env.GIT_DIR = join(repoDir, '.git');
+  process.env.GIT_INDEX_FILE = '.git/index';
+  try {
+    // UNSCRUBBED form: mirrors exactly what stagedDiffFiles looked like
+    // before #2216 (no env override — spawnSync inherits the ambient
+    // GIT_DIR/GIT_INDEX_FILE above verbatim).
+    const unscrubbed = spawnSync('git', ['diff', '--cached', '--name-only'], {
+      cwd: elsewhere,
+      encoding: 'utf8',
+    });
+    assert.equal(
+      unscrubbed.status,
+      0,
+      'sanity: the unscrubbed form must NOT error out — the danger is a silent WRONG ' +
+        "result at exit 0, not a loud failure. If this assertion fails, git's behaviour " +
+        'has changed and this test no longer proves the hazard it claims to.',
+    );
+    const unscrubbedFiles = (unscrubbed.stdout ?? '')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    assert.ok(
+      !unscrubbedFiles.includes('staged.txt'),
+      `sanity: the unscrubbed form must actually fail to see the real staged file — ` +
+        `got ${JSON.stringify(unscrubbedFiles)}. If this assertion fails, this test no ` +
+        `longer reproduces the hazard it claims to.`,
+    );
+
+    // SCRUBBED form (the #2216 fix): stagedDiffFiles strips GIT_DIR/
+    // GIT_INDEX_FILE (and the rest of GIT_ENV_SCRUB_KEYS) before spawning.
+    // With no repo-discovery override and `elsewhere` not itself a git repo,
+    // git correctly fails outright (status !== 0) — a caller-visible null,
+    // never the silently-wrong non-null result the unscrubbed form just
+    // produced above.
+    const scrubbed = stagedDiffFiles(elsewhere);
+    assert.equal(
+      scrubbed,
+      null,
+      'stagedDiffFiles must fail loudly (null, which disables the scope filter and runs ' +
+        'everything) rather than silently returning a staged set that does not match reality',
+    );
+  } finally {
+    if (prevGitDir === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = prevGitDir;
+    if (prevIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = prevIndexFile;
   }
 });
 

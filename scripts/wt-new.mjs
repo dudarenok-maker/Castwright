@@ -30,6 +30,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseBranchName } from './lib/branch-name.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const BASE_PORTS = {
   VITE_PORT: 5173,
@@ -77,7 +78,7 @@ export function parseArgs(argv) {
 }
 
 function gitOrThrow(args, opts = {}) {
-  const result = spawnSync('git', args, { encoding: 'utf8', ...opts });
+  const result = spawnSync('git', args, { encoding: 'utf8', ...opts, env: scrubGitEnv(opts.env) });
   if (result.error) throw new Error(`git ${args.join(' ')}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed (exit ${result.status}):\n${result.stderr || result.stdout}`);
@@ -120,6 +121,7 @@ export function renderEnvLocal({ slot, branch, ports }) {
 function branchExists(branch) {
   const result = spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], {
     encoding: 'utf8',
+    env: scrubGitEnv(),
   });
   return result.status === 0;
 }

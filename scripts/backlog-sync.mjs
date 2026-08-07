@@ -207,6 +207,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { gh, ghSpawn } from './gh.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -356,6 +357,7 @@ function printUnifiedDiff(original, proposed) {
     try {
       execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', before, after], {
         stdio: 'inherit',
+        env: scrubGitEnv(),
       });
     } catch {
       // git diff --no-index exits 1 when files differ — expected, already streamed.
