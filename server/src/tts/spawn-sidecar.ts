@@ -27,7 +27,7 @@ import { qwenVoicesDir, xttsVoicesDir } from '../workspace/paths.js';
 import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
-import { resolveKnob, resolveKnobForSidecarEnv } from '../config/resolver.js';
+import { resolveKnob, resolveKnobForSidecarEnv, isEnvValueRejected } from '../config/resolver.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -483,6 +483,29 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
       process.env.PYTORCH_CUDA_ALLOC_CONF ??
       'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
   };
+
+  /* Layer 1.5: an ambient env var that the resolver did NOT use — either it
+     FAILED validation (e.g. ASR_DEVICE=cuda1 against qa.asr.device's pattern)
+     or it's blank/whitespace-only (e.g. a half-restored GPU_RESERVE_MB=)
+     which resolveKnobInner treats identically to unset — survives the
+     `...process.env` spread above verbatim even though the server itself
+     resolved something else (an override, or the registry default) — the
+     #2207 divergence. Delete it here, before the layer-2 loop runs, so a
+     resolved override for the same knob still wins (layer 2 sets it back).
+
+     The `env[knob.env] === process.env[knob.env]` guard matters for exactly
+     one knob: PRELOAD_COQUI is also written by the base block above (line
+     468, derived from `modelKey`), so by the time this loop runs `env`'s
+     copy is no longer the ambient value the resolver rejected — it's
+     already been overwritten with the correct modelKey-derived one. Without
+     this guard, an ambient `PRELOAD_COQUI` the resolver rejects (anything
+     outside 1/true/yes/on/0/false/no/off) would delete that freshly-computed
+     value on the strength of a stale one that had already been neutralised
+     (independent review of PR #2219, finding F1). */
+  for (const knob of allKnobs()) {
+    if (knob.apply !== 'restart-sidecar' || !knob.env) continue;
+    if (isEnvValueRejected(knob) && env[knob.env] === process.env[knob.env]) delete env[knob.env];
+  }
 
   /* Layer 2: inject any restart-sidecar knob whose value is NOT the registry
      default (source==='env' or source==='override'). Knobs still at their

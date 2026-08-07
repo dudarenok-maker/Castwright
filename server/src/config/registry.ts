@@ -360,6 +360,13 @@ export const KNOBS: ConfigKnob[] = [
         + 'same device and is likely slower than cpu. Changing the device '
         + 'restarts the sidecar.',
     type: 'string',
+    // #2224 — SPK_DEVICE routes through the same `_parse_device` sidecar
+    // helper qa.asr.device does, so it gets the identical validated grammar
+    // — see the pattern comment on qa.asr.device below for the full
+    // derivation, INCLUDING why "mps"/"rocm" are NOT in it despite an
+    // earlier pass in this same review round briefly widening to include
+    // them (reverted — see that comment).
+    pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar',
     risk: 'medium',
@@ -377,6 +384,46 @@ export const KNOBS: ConfigKnob[] = [
     // card index in "cuda:<n>" is unbounded), so a validated pattern
     // constrains it instead — see the new `pattern` capability in
     // resolver.ts's coerceAndValidate.
+    //
+    // #2224 — a pass in this same review round widened this to
+    // /^(cpu|auto|mps|rocm|cuda|cuda:\d+)$/i, reasoning that main.py treats
+    // "mps"/"rocm" as first-class INPUT device families. That was wrong and
+    // was reverted — checked directly against main.py, not merely asserted:
+    //   - "rocm" is a DERIVED REPORTING label, never a valid input. On AMD,
+    //     HIP aliases the CUDA API, so the runtime device string an operator
+    //     must set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip` (:9100-9103)
+    //     and `_normalize_device_family` (:9124-9134) exist specifically to
+    //     re-label an already-"cuda" value as "rocm" for HONEST REPORTING
+    //     after the fact (`scripts/accelerator-profile.mjs`'s runtimeBackend
+    //     doc comment says the same: "we REPORT 'rocm' for honesty; the
+    //     sidecar still uses device='cuda'"). Nothing upstream of
+    //     `_parse_device` ever PRODUCES family "rocm" from a real input —
+    //     the `fam in ("cuda","rocm")` checks scattered through main.py
+    //     (`_engine_env_pin` :3367, :10712, :10787) are written
+    //     symmetrically as if a user could type "rocm", but no code path
+    //     ever does that translation, so that arm is unreachable dead code.
+    //     Typing "rocm" literally, which the widened pattern let through,
+    //     reaches `_parse_device`'s catch-all as an OPAQUE family string
+    //     "rocm" — not the honest-reporting kind — and gets handed to
+    //     torch/speechbrain verbatim: `SPK_DEVICE=rocm` crashes
+    //     `EncoderClassifier(run_opts={"device":"rocm"})`, and
+    //     `SpeakerEngine.ensure_loaded`'s cuda-load-failure demote path is
+    //     gated on family=="cuda" (:7540), so a "rocm" load failure hits
+    //     `else: raise` with NO cpu fallback — every `/embed` 500s.
+    //     `ASR_DEVICE=rocm` crashes `WhisperModel(device="rocm")` the same
+    //     way; CTranslate2 has no "rocm" device at all.
+    //   - "mps" IS a real torch device (Apple Silicon), but ONLY for
+    //     PyTorch-backed engines (Coqui/Qwen). CTranslate2 (Whisper's
+    //     backend) has no Metal/MPS backend, so `ASR_DEVICE=mps` would
+    //     crash `WhisperModel(device="mps")` outright — a NET REGRESSION
+    //     versus the unwidened pattern, which rejected "mps" and fell back
+    //     to a working cpu default. Not added to qa.speaker.device either
+    //     (torch/speechbrain genuinely accept "mps" there) — that is a
+    //     separate, deliberately out-of-scope decision: `pair-rules.ts`'s
+    //     `asrDeviceFamily` maps anything not starting with "cuda" to
+    //     'cpu', so accepting "mps" there needs that helper (and its
+    //     compute-type pairing), the help text, and `.env.example` updated
+    //     together — a design surface of its own, not a delta-sized fix.
     pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar', risk: 'medium',
