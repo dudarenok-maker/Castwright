@@ -9561,10 +9561,39 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
   };
 }
 
+/* #2209 — mirrors the real PUT /api/config route's per-key pattern
+   validation (server/src/config/registry.ts's `qa.asr.device` pattern,
+   applied by resolver.ts's coerceAndValidate) so mock mode can exercise a
+   genuine save rejection without inventing a fixture unrelated to real
+   server behaviour — this is #2180's own "cuda1 typo" example, on the
+   exact knob it names. Every other mock knob stays permissive. */
+const MOCK_ASR_DEVICE_PATTERN = /^(cpu|auto|cuda|cuda:\d+)$/i;
+
+/* Matches realPutConfig's thrown shape exactly (`Config update failed
+   (${status}): ${bodyText}`, further below in this file), where bodyText
+   is the server's `{ error }` JSON body verbatim — so
+   describeConfigSaveError (components/settings/override-row.tsx) parses a
+   mock-mode rejection identically to a real one. */
+function mockConfigErrorMessage(status: number, error: string): string {
+  return `Config update failed (${status}): ${JSON.stringify({ error })}`;
+}
+
 export async function mockPutConfig(
   patch: Record<string, number | boolean | string>,
 ): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
   await wait(30);
+  // Pass 1 (mirrors the real route): validate the whole patch before
+  // writing anything, so a rejected key can't leave an earlier key in the
+  // same patch already applied.
+  const asrDevice = patch['qa.asr.device'];
+  if (typeof asrDevice === 'string' && !MOCK_ASR_DEVICE_PATTERN.test(asrDevice.trim())) {
+    throw new Error(
+      mockConfigErrorMessage(
+        400,
+        `qa.asr.device: does not match the required shape (${MOCK_ASR_DEVICE_PATTERN.source})`,
+      ),
+    );
+  }
   const applied: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (key in MOCK_CONFIG_VALUES) {

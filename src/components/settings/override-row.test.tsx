@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { OverrideRow } from './override-row';
+import { OverrideRow, describeConfigSaveError } from './override-row';
 import type { GpuDevice, KnobDescriptor, KnobValue } from '../../lib/types';
+
+/* Builds an Error matching realPutConfig's exact thrown shape (lib/api.ts):
+   `Config update failed (${status}): ${JSON.stringify({ error })}` — the
+   same string RTK's `.unwrap()` re-throws as a SerializedError's .message
+   for a rejected saveOverride. */
+function wrappedConfigError(status: number, error: string): Error {
+  return new Error(`Config update failed (${status}): ${JSON.stringify({ error })}`);
+}
 
 /* ─── test fixtures ─────────────────────────────────────────────────────── */
 
@@ -830,5 +838,312 @@ describe('OverrideRow — apply pills', () => {
       <OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} />,
     );
     expect(screen.getByText('restart · app')).toBeInTheDocument();
+  });
+});
+
+/* ─── describeConfigSaveError (#2209) ────────────────────────────────────── */
+
+describe('describeConfigSaveError', () => {
+  it('extracts the server error field from a wrapped 400', () => {
+    const err = wrappedConfigError(
+      400,
+      'qa.asr.device: does not match the required shape (^(cpu|auto|cuda|cuda:\\d+)$)',
+    );
+    expect(describeConfigSaveError(err)).toEqual({
+      status: 400,
+      locked: false,
+      message: 'qa.asr.device: does not match the required shape (^(cpu|auto|cuda|cuda:\\d+)$)',
+    });
+  });
+
+  it('marks a 409 as locked', () => {
+    const err = wrappedConfigError(409, 'tts.qwen.attnImpl is set in environment');
+    expect(describeConfigSaveError(err)).toEqual({
+      status: 409,
+      locked: true,
+      message: 'tts.qwen.attnImpl is set in environment',
+    });
+  });
+
+  it('falls back to the raw message for an un-wrapped Error', () => {
+    expect(describeConfigSaveError(new Error('network error'))).toEqual({
+      status: null,
+      locked: false,
+      message: 'network error',
+    });
+  });
+
+  it('reads .message off a plain SerializedError-shaped object (RTK .unwrap())', () => {
+    const serialized = { name: 'Error', message: wrappedConfigError(400, 'bad value').message };
+    expect(describeConfigSaveError(serialized)).toEqual({
+      status: 400,
+      locked: false,
+      message: 'bad value',
+    });
+  });
+
+  it('falls back to the raw body text when the body is not JSON', () => {
+    const err = new Error('Config update failed (500): Internal Server Error');
+    expect(describeConfigSaveError(err)).toEqual({
+      status: 500,
+      locked: false,
+      message: 'Internal Server Error',
+    });
+  });
+});
+
+/* ─── save-error surfacing (#2209) ───────────────────────────────────────── */
+
+describe('OverrideRow — save-error surfacing (#2209)', () => {
+  it('surfaces the server message for a rejected ENUM select save', async () => {
+    const descriptor = makeDescriptor({
+      key: 'tts.qwen.attnImpl',
+      type: 'enum',
+      options: ['sdpa', 'flash_attention_2'],
+      default: 'sdpa',
+    });
+    const value = makeValue({ key: 'tts.qwen.attnImpl', effective: 'sdpa', source: 'default' });
+    const onChange = vi.fn(() =>
+      Promise.reject(
+        wrappedConfigError(
+          400,
+          'qa.asr.device=cuda + qa.asr.computeType=int16 is an unsupported pair — see the docs.',
+        ),
+      ),
+    );
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()} />,
+    );
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'flash_attention_2' } });
+
+    expect(
+      await screen.findByTestId('knob-save-error-tts.qwen.attnImpl'),
+    ).toHaveTextContent('qa.asr.device=cuda + qa.asr.computeType=int16 is an unsupported pair');
+  });
+
+  it('surfaces the server message for a rejected STRING commitEdit save', async () => {
+    const descriptor = makeDescriptor({ key: 'qa.asr.device', type: 'string', default: 'cpu' });
+    const value = makeValue({ key: 'qa.asr.device', effective: 'cpu', source: 'default' });
+    const onChange = vi.fn(() =>
+      Promise.reject(
+        wrappedConfigError(
+          400,
+          'qa.asr.device: does not match the required shape (^(cpu|auto|cuda|cuda:\\d+)$)',
+        ),
+      ),
+    );
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()} />,
+    );
+
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'cuda1' } });
+    fireEvent.blur(input);
+
+    expect(onChange).toHaveBeenCalledWith('cuda1');
+    expect(
+      await screen.findByTestId('knob-save-error-qa.asr.device'),
+    ).toHaveTextContent('qa.asr.device: does not match the required shape');
+  });
+
+  it('distinguishes a 409 env-lock rejection from a 400 bad-value rejection', async () => {
+    const descriptorEnum = makeDescriptor({
+      key: 'tts.qwen.attnImpl',
+      type: 'enum',
+      options: ['sdpa', 'flash_attention_2'],
+      default: 'sdpa',
+    });
+    const valueEnum = makeValue({ key: 'tts.qwen.attnImpl', effective: 'sdpa', source: 'default' });
+    const onChangeLocked = vi.fn(() =>
+      Promise.reject(wrappedConfigError(409, 'tts.qwen.attnImpl is set in environment')),
+    );
+    render(
+      <OverrideRow
+        descriptor={descriptorEnum}
+        value={valueEnum}
+        onChange={onChangeLocked}
+        onRevert={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'flash_attention_2' } });
+
+    const lockedEl = await screen.findByTestId('knob-save-error-tts.qwen.attnImpl');
+    expect(lockedEl).toHaveTextContent(/pinned in your environment/i);
+    expect(lockedEl).not.toHaveTextContent(/couldn't save/i);
+  });
+
+  it('uses "couldn\'t save" wording (not the env-lock wording) for a 400', async () => {
+    const descriptor = makeDescriptor({ key: 'qa.asr.device', type: 'string', default: 'cpu' });
+    const value = makeValue({ key: 'qa.asr.device', effective: 'cpu', source: 'default' });
+    const onChange = vi.fn(() => Promise.reject(wrappedConfigError(400, 'bad value')));
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()} />,
+    );
+    const input = screen.getByRole('textbox');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'nope' } });
+    fireEvent.blur(input);
+
+    const el = await screen.findByTestId('knob-save-error-qa.asr.device');
+    expect(el).toHaveTextContent(/couldn't save/i);
+    expect(el).not.toHaveTextContent(/pinned in your environment/i);
+  });
+
+  it('clears a shown error once a subsequent save on the same row succeeds', async () => {
+    const descriptor = makeDescriptor({ type: 'number', min: 0, max: 100, step: 1 });
+    const value = makeValue({ effective: 10 });
+    const onChange = vi.fn(() => Promise.reject(wrappedConfigError(400, 'nope, try again')));
+    const { rerender } = render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={onChange} onRevert={vi.fn()} />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByTestId('knob-save-error-test_knob')).toHaveTextContent(
+      'nope, try again',
+    );
+
+    // Simulate the retried save succeeding — value.effective moves to 99,
+    // which the row must treat as "this error is stale now" (req 4).
+    rerender(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ effective: 99, source: 'override', overridden: true })}
+        onChange={onChange}
+        onRevert={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('knob-save-error-test_knob')).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps each row's error independent when two different rows fail in sequence (req 3)", async () => {
+    const descriptorA = makeDescriptor({
+      key: 'knob_a',
+      label: 'Knob A',
+      type: 'string',
+      default: 'a',
+    });
+    const valueA = makeValue({ key: 'knob_a', effective: 'a', source: 'default' });
+    const onChangeA = vi.fn(() => Promise.reject(wrappedConfigError(400, 'Knob A is bad')));
+
+    const descriptorB = makeDescriptor({
+      key: 'knob_b',
+      label: 'Knob B',
+      type: 'string',
+      default: 'b',
+    });
+    const valueB = makeValue({ key: 'knob_b', effective: 'b', source: 'default' });
+    const onChangeB = vi.fn(() =>
+      Promise.reject(wrappedConfigError(409, 'Knob B is set in environment')),
+    );
+
+    render(
+      <>
+        <OverrideRow descriptor={descriptorA} value={valueA} onChange={onChangeA} onRevert={vi.fn()} />
+        <OverrideRow descriptor={descriptorB} value={valueB} onChange={onChangeB} onRevert={vi.fn()} />
+      </>,
+    );
+
+    const inputA = screen.getByRole('textbox', { name: 'Knob A' });
+    fireEvent.focus(inputA);
+    fireEvent.change(inputA, { target: { value: 'aa' } });
+    fireEvent.blur(inputA);
+    await screen.findByTestId('knob-save-error-knob_a');
+
+    const inputB = screen.getByRole('textbox', { name: 'Knob B' });
+    fireEvent.focus(inputB);
+    fireEvent.change(inputB, { target: { value: 'bb' } });
+    fireEvent.blur(inputB);
+    await screen.findByTestId('knob-save-error-knob_b');
+
+    // Both errors remain visible with their OWN message — row B failing
+    // (after row A already failed) must not blank or overwrite row A's.
+    expect(screen.getByTestId('knob-save-error-knob_a')).toHaveTextContent('Knob A is bad');
+    expect(screen.getByTestId('knob-save-error-knob_b')).toHaveTextContent(
+      /pinned in your environment/i,
+    );
+  });
+
+  /* #2209 follow-up — Revert (POST /api/config/reset) is a config save
+     too: #2180's cross-field validation ships on PUT but was missed on
+     reset entirely, so the Revert button could re-create the exact bad
+     pair it just cleared on the save path, in two clicks. It's
+     attributable to this exact row (the Revert button that fired it), so
+     it belongs in the SAME per-row error region onChange's rejections use
+     — not a toast. */
+  it('surfaces the server message when Revert (resetKnob) is rejected', async () => {
+    const descriptor = makeDescriptor({
+      key: 'tts.qwen.attnImpl',
+      type: 'enum',
+      options: ['sdpa', 'flash_attention_2'],
+      default: 'sdpa',
+    });
+    const value = makeValue({
+      key: 'tts.qwen.attnImpl',
+      effective: 'flash_attention_2',
+      source: 'override',
+      overridden: true,
+    });
+    const onRevert = vi.fn(() =>
+      Promise.reject(wrappedConfigError(409, 'tts.qwen.attnImpl is set in environment')),
+    );
+    render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={onRevert} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /revert/i }));
+
+    expect(onRevert).toHaveBeenCalledOnce();
+    const el = await screen.findByTestId('knob-save-error-tts.qwen.attnImpl');
+    expect(el).toHaveTextContent(/pinned in your environment/i);
+    expect(el).toHaveTextContent('tts.qwen.attnImpl is set in environment');
+  });
+
+  it('clears a shown Revert error once value.effective actually moves (a later successful attempt)', async () => {
+    const descriptor = makeDescriptor({
+      key: 'qa.asr.device',
+      type: 'string',
+      default: 'cpu',
+    });
+    const value = makeValue({
+      key: 'qa.asr.device',
+      effective: 'cuda:9',
+      source: 'override',
+      overridden: true,
+    });
+    const onRevert = vi.fn(() =>
+      Promise.reject(wrappedConfigError(400, 'reset blocked: bad combo')),
+    );
+    const { rerender } = render(
+      <OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={onRevert} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /revert/i }));
+    expect(await screen.findByTestId('knob-save-error-qa.asr.device')).toHaveTextContent(
+      'reset blocked: bad combo',
+    );
+
+    // A subsequent successful Revert (or any other resolution of this same
+    // key) moves value.effective back to the default — the row must treat
+    // that as "this error is stale now" the same way a retried save does.
+    rerender(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ key: 'qa.asr.device', effective: 'cpu', source: 'default' })}
+        onChange={vi.fn()}
+        onRevert={onRevert}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('knob-save-error-qa.asr.device')).not.toBeInTheDocument(),
+    );
   });
 });

@@ -8,6 +8,7 @@ import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configSlice } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
 import type { ConfigResponse, GpuDevicesResponse } from '../lib/types';
@@ -28,6 +29,7 @@ vi.mock('../lib/api', () => ({
 
 const mockGetConfig = vi.mocked(api.getConfig);
 const mockPutConfig = vi.mocked(api.putConfig);
+const mockResetConfig = vi.mocked(api.resetConfig);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
 const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
 
@@ -134,10 +136,14 @@ const FIXTURE_CONFIG: ConfigResponse = {
   cudaEnvShadow: false,
 };
 
-/* Build a minimal store with config + ui slices. */
+/* Build a minimal store with config + ui + notifications slices. */
 function makeStore() {
   return configureStore({
-    reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
+    reducer: {
+      config: configSlice.reducer,
+      ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
   });
 }
 
@@ -498,5 +504,69 @@ describe('AdvancedView — CUDA env-shadow banner (Plan 2 §2.5)', () => {
        convention above). */
     await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/CUDA_VISIBLE_DEVICES/i)).not.toBeInTheDocument();
+  });
+});
+
+/* ── Unattributable-failure toast (#2209) ─────────────────────────────────
+   "Reset all" and "Reset section" span every knob in their scope — there's
+   no single row to show the rejection inline next to, so these route
+   through the notifications slice instead (the "both" decision's toast
+   half). Asserted against store state directly: AdvancedView doesn't
+   render <ToastStack/> itself (that's mounted once at app-shell level in
+   layout.tsx), so the notifications slice's own state is the seam this
+   view's own test can observe. */
+describe('AdvancedView — unattributable-failure toast (#2209)', () => {
+  it('pushes an error toast with the server message when "Reset all" is rejected', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockResetConfig.mockRejectedValueOnce(
+      new Error('Config update failed (400): {"error":"reset blocked: bad combo"}'),
+    );
+
+    const { store } = renderView();
+    await screen.findAllByText('Text-to-speech');
+
+    fireEvent.click(screen.getByRole('button', { name: /^reset all$/i }));
+
+    await waitFor(() => expect(store.getState().notifications.toasts).toHaveLength(1));
+    expect(store.getState().notifications.toasts[0]).toMatchObject({
+      kind: 'error',
+      message: expect.stringContaining('reset blocked: bad combo'),
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it('does not push a toast when "Reset all" succeeds', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockResetConfig.mockResolvedValueOnce({ ok: true, values: FIXTURE_CONFIG.values });
+
+    const { store } = renderView();
+    await screen.findAllByText('Text-to-speech');
+
+    fireEvent.click(screen.getByRole('button', { name: /^reset all$/i }));
+
+    await waitFor(() => expect(mockResetConfig).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('does not push a toast for a row-level (inline) save rejection — the two paths stay disjoint', async () => {
+    mockPutConfig.mockRejectedValueOnce(
+      new Error('Config update failed (400): {"error":"bad value"}'),
+    );
+
+    const { store } = renderView();
+    const input = (await screen.findByRole('spinbutton')) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '16000' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(mockPutConfig).toHaveBeenCalled());
+    // Give the rejection's row-level .catch a tick to run.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.getState().notifications.toasts).toHaveLength(0);
   });
 });

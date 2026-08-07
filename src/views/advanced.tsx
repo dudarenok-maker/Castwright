@@ -10,10 +10,11 @@
 import { useEffect, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
-import { OverrideRow, beginConfigAction } from '../components/settings/override-row';
+import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   fetchConfig,
   saveOverride,
@@ -246,7 +247,19 @@ export function AdvancedView() {
 
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
-    void dispatch(resetAllConfig());
+    // #2209 — "Reset all" has no single row to attribute a rejection to
+    // (it can touch every knob at once), so a rejection here is the toast
+    // half of the "both" decision rather than an OverrideRow inline error.
+    dispatch(resetAllConfig())
+      .unwrap()
+      .catch((reason: unknown) => {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: `Couldn't reset all settings: ${describeConfigSaveError(reason).message}`,
+          }),
+        );
+      });
   };
 
   const handleRestart = async () => {
@@ -362,7 +375,21 @@ export function AdvancedView() {
                   key={group.id}
                   group={group}
                   overriddenCount={overriddenCount}
-                  onResetSection={() => dispatch(resetGroup(group.id))}
+                  onResetSection={() => {
+                    // #2209 — same toast rationale as "Reset all": a
+                    // section reset spans every knob in the group, so
+                    // there's no single row to show the rejection inline.
+                    dispatch(resetGroup(group.id))
+                      .unwrap()
+                      .catch((reason: unknown) => {
+                        dispatch(
+                          notificationsActions.pushToast({
+                            kind: 'error',
+                            message: `Couldn't reset "${group.label}": ${describeConfigSaveError(reason).message}`,
+                          }),
+                        );
+                      });
+                  }}
                 >
                   {groupDescriptors.map((d) => {
                     if (d.isPrompt) return <PromptRow key={d.key} descriptor={d} />;
@@ -379,7 +406,11 @@ export function AdvancedView() {
                         descriptor={d}
                         value={{ ...value, staleReason: deriveStaleReason(d, value, gpuDevices) }}
                         onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw })).unwrap()}
-                        onRevert={() => dispatch(resetKnob(d.key))}
+                        // #2209 follow-up — Revert is a config save too
+                        // (POST /api/config/reset), and is attributable to
+                        // this exact row, so its rejection surfaces inline
+                        // via OverrideRow the same way onChange's does.
+                        onRevert={() => dispatch(resetKnob(d.key)).unwrap()}
                         gpuDevices={gpuDevices}
                       />
                     );

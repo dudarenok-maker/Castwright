@@ -69,6 +69,37 @@ describe('mockPutConfig round-trip', () => {
   });
 });
 
+describe('mockPutConfig — qa.asr.device pattern validation (#2209)', () => {
+  /* Mirrors the real PUT /api/config route's per-key pattern validation
+     (server/src/config/registry.ts's qa.asr.device pattern, applied by
+     resolver.ts's coerceAndValidate) — #2180's own "cuda1 typo" example,
+     on the exact knob it names. Exercises the chain end-to-end: a rejected
+     mock-mode save must be shaped exactly like realPutConfig's thrown
+     Error so describeConfigSaveError (override-row.tsx) parses either one
+     identically. */
+  it('rejects an invalid device string with a 400-shaped error', async () => {
+    await expect(mockPutConfig({ 'qa.asr.device': 'cuda1' })).rejects.toThrow(
+      /^Config update failed \(400\): \{"error":"qa\.asr\.device: does not match the required shape/,
+    );
+  });
+
+  it('does not persist the rejected value', async () => {
+    await expect(mockPutConfig({ 'qa.asr.device': 'cuda1' })).rejects.toThrow();
+    const { values } = await mockGetConfig();
+    expect(values['qa.asr.device'].effective).toBe('cpu');
+    expect(values['qa.asr.device'].overridden).toBe(false);
+  });
+
+  it.each(['cpu', 'auto', 'cuda', 'cuda:0', 'cuda:12', 'CUDA:1'])(
+    'accepts %s',
+    async (good) => {
+      const result = await mockPutConfig({ 'qa.asr.device': good });
+      expect(result.ok).toBe(true);
+      expect(result.values['qa.asr.device'].effective).toBe(good);
+    },
+  );
+});
+
 describe('mockResetConfig round-trip', () => {
   it('resets a specific key back to its default', async () => {
     await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000 });

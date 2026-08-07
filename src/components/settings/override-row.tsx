@@ -109,14 +109,60 @@ function shouldAbandonOnBlur(relatedTarget: EventTarget | null): boolean {
   return viaMouseDown || isConfigActionTarget(relatedTarget);
 }
 
-/* Swallow a rejected save's promise for controls (boolean/enum/device) that
-   don't buffer a local draft to revert on failure — value.effective is
-   already the source of truth for them either way, so there's nothing to
-   recover; this only exists to prevent an unhandled promise rejection. */
-function swallowRejection(result: void | Promise<unknown>): void {
-  if (result && typeof (result as Promise<unknown>).catch === 'function') {
-    (result as Promise<unknown>).catch(() => {});
+/* ── save-error extraction (#2209) ───────────────────────────────────────── */
+
+/** A rejected config save, distilled for display. `locked` marks the 409
+    "this key is pinned in your environment" case — distinct from a
+    rejected value (400, or anything else): the user needs to be told
+    those two apart rather than shown one generic failure. */
+export interface ConfigSaveError {
+  status: number | null;
+  locked: boolean;
+  message: string;
+}
+
+/* realPutConfig (lib/api.ts) wraps a non-2xx PUT /api/config response as
+   `Config update failed (${status}): ${bodyText}` before throwing, and the
+   route always replies with a JSON `{ error: string }` body on a 400/409
+   (server/src/routes/config.ts) — so bodyText is that JSON, verbatim. This
+   pulls the server's own `error` string back out of the wrapper, rather
+   than showing the wrapper text (or a generic "failed to save") verbatim. */
+const WRAPPED_CONFIG_ERROR = /^Config update failed \((\d+)\):\s*([\s\S]*)$/;
+
+/** Extract a displayable message + 409/other classification from a
+    rejected saveOverride promise. `.unwrap()` re-throws RTK's
+    SerializedError — a plain object, never a real Error instance — so this
+    reads `.message` off either shape instead of relying on
+    `instanceof Error`. */
+export function describeConfigSaveError(reason: unknown): ConfigSaveError {
+  const raw =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === 'object' && reason !== null && 'message' in reason
+        ? String((reason as { message?: unknown }).message)
+        : String(reason);
+
+  const match = raw.match(WRAPPED_CONFIG_ERROR);
+  if (!match) return { status: null, locked: false, message: raw };
+
+  const status = Number(match[1]);
+  const body = match[2];
+  let message = body;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { error?: unknown }).error === 'string'
+    ) {
+      message = (parsed as { error: string }).error;
+    }
+  } catch {
+    /* Not JSON (or an unexpected shape) — fall back to the raw body text,
+       still more useful than the wrapper's "Config update failed (…)"
+       prefix alone. */
   }
+  return { status, locked: status === 409, message };
 }
 
 interface ControlProps {
@@ -131,9 +177,22 @@ interface ControlProps {
       unattached (stays null) for boolean/enum/device rows — they have no
       draft to abandon. */
   inputRef?: RefObject<HTMLInputElement | null>;
+  /** Reports the outcome of every save attempt this control makes —
+      `null` to clear (a new attempt starting, or one that succeeded),
+      or the extracted error when one is rejected. OverrideRow owns the
+      state and renders it full-width below the control row (#2209). */
+  onSaveErrorChange: (err: ConfigSaveError | null) => void;
 }
 
-function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputRef }: ControlProps) {
+function KnobControl({
+  descriptor,
+  value,
+  onChange,
+  disabled,
+  gpuDevices,
+  inputRef,
+  onSaveErrorChange,
+}: ControlProps) {
   const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
 
   // Free-typed knobs (number/integer/string) get a local draft buffer,
@@ -176,7 +235,12 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
   useEffect(() => {
     generationRef.current += 1;
     if (!editingRef.current) setDraft(String(value.effective));
-  }, [value.effective]);
+    // value.effective moving — for ANY reason (this row's own successful
+    // save, a Revert/Reset, or another tab's edit) — means whatever this
+    // row was showing an error about is no longer current. #2209 req 4:
+    // a stale error next to a control that now works is its own defect.
+    onSaveErrorChange(null);
+  }, [value.effective, onSaveErrorChange]);
 
   // Discard whatever's in the field without saving it — used when blur was
   // triggered by beginConfigAction() (a Revert/Reset click) rather than the
@@ -194,12 +258,37 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
   // generationRef's own comment for why neither alone is sufficient).
   const commitEdit = (parsed: number | string) => {
     const revertTo = String(value.effective);
+    onSaveErrorChange(null);
     generationRef.current += 1;
     const myGeneration = generationRef.current;
     const result = onChange(parsed);
     if (result && typeof (result as Promise<unknown>).catch === 'function') {
-      (result as Promise<unknown>).catch(() => {
+      (result as Promise<unknown>).catch((reason: unknown) => {
         if (!editingRef.current && generationRef.current === myGeneration) setDraft(revertTo);
+        // #2209 — surface the rejection too, guarded by the SAME
+        // staleness check as the draft-revert above: don't show this
+        // attempt's error next to a row a newer attempt (or an external
+        // Revert/Reset) has already superseded.
+        if (generationRef.current === myGeneration) onSaveErrorChange(describeConfigSaveError(reason));
+      });
+    }
+  };
+
+  /* Shared by the boolean/enum/device controls below — none of them buffer
+     a local draft to revert on failure (value.effective is already their
+     source of truth either way), but a rejection still needs reporting —
+     #2209. Same generation-staleness guard as commitEdit's rejection
+     handler, for the same reason: a rapid second change to the same
+     control must not let the FIRST attempt's late rejection overwrite the
+     second attempt's own (possibly successful) outcome. */
+  const commitSimple = (next: number | boolean | string) => {
+    onSaveErrorChange(null);
+    generationRef.current += 1;
+    const myGeneration = generationRef.current;
+    const result = onChange(next);
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch((reason: unknown) => {
+        if (generationRef.current === myGeneration) onSaveErrorChange(describeConfigSaveError(reason));
       });
     }
   };
@@ -238,7 +327,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
       <Checkbox
         checked={Boolean(value.effective)}
         disabled={disabled}
-        onChange={(next) => swallowRejection(onChange(next))}
+        onChange={(next) => commitSimple(next)}
         label={value.effective ? 'Enabled' : 'Disabled'}
       />
     );
@@ -250,7 +339,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
         aria-label={descriptor.label}
         value={String(value.effective)}
         disabled={disabled}
-        onChange={(e) => swallowRejection(onChange(e.target.value))}
+        onChange={(e) => commitSimple(e.target.value)}
         className={`w-full ${base}`}
       >
         {(descriptor.options ?? []).map((opt) => (
@@ -293,7 +382,7 @@ function KnobControl({ descriptor, value, onChange, disabled, gpuDevices, inputR
             } else {
               setFootprintWarning(null);
             }
-            swallowRejection(onChange(selected));
+            commitSimple(selected);
           }}
           className={`w-full ${base}`}
         >
@@ -362,7 +451,13 @@ export interface OverrideRowProps {
   descriptor: KnobDescriptor;
   value: KnobValue;
   onChange: (raw: number | boolean | string) => void | Promise<unknown>;
-  onRevert: () => void;
+  /** Revert is a config save too — POST /api/config/reset can 409 (env-
+      locked) or 400 (cross-field pair rule) exactly like PUT, so its
+      rejection needs the same surfacing as onChange's (#2209 follow-up:
+      a knob pinned in .env, or one half of a cross-field pair, 409s/400s
+      on Revert the same way it does on save — this was the one write
+      path on this row still swallowing its rejection). */
+  onRevert: () => void | Promise<unknown>;
   /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
   gpuDevices?: GpuDevice[];
 }
@@ -370,6 +465,28 @@ export interface OverrideRowProps {
 export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices }: OverrideRowProps) {
   const locked = value.locked;
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // #2209 — per-ROW error state: this is a fresh useState per rendered
+  // OverrideRow instance (one per descriptor.key, keyed in the parent's
+  // .map()), so two rows failing in sequence can never blank or overwrite
+  // each other's message the way a single shared slice field would.
+  const [saveError, setSaveError] = useState<ConfigSaveError | null>(null);
+
+  // A successful Revert changes value.effective, which KnobControl's own
+  // [value.effective] effect already treats as "clear this row's error"
+  // (onSaveErrorChange(null), passed through as setSaveError below) — so
+  // only the REJECTED case needs handling here: resetKnob.rejected leaves
+  // `values` untouched (config-slice, mirroring saveOverride.rejected),
+  // so nothing else will clear or set this row's error for a failed
+  // Revert.
+  const handleRevertClick = () => {
+    setSaveError(null);
+    const result = onRevert();
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      (result as Promise<unknown>).catch((reason: unknown) => {
+        setSaveError(describeConfigSaveError(reason));
+      });
+    }
+  };
 
   return (
     <div className="py-3 border-b border-ink/8 last:border-b-0">
@@ -412,6 +529,7 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
           disabled={locked}
           gpuDevices={gpuDevices}
           inputRef={inputRef}
+          onSaveErrorChange={setSaveError}
         />
 
         {/* Env-locked indicator */}
@@ -438,7 +556,7 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
                  discard an unrelated row's in-progress edit. */
               data-config-action
               onMouseDown={() => beginConfigAction(inputRef.current)}
-              onClick={onRevert}
+              onClick={handleRevertClick}
               className="px-2.5 py-1 rounded-lg border border-ink/15 bg-white text-xs text-ink/70 hover:bg-ink/4 min-h-[44px] fine-pointer:min-h-0"
             >
               Revert
@@ -446,6 +564,21 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
           </div>
         )}
       </div>
+
+      {/* Save-error region — full width so a long #2180 pair-rule message
+          wraps cleanly rather than getting squeezed against the Revert
+          button, and stays readable at <640px (mobile protocol). */}
+      {saveError && (
+        <p
+          role="alert"
+          data-testid={`knob-save-error-${descriptor.key}`}
+          className={`mt-1.5 text-xs ${saveError.locked ? 'text-amber-800' : 'text-rose-700'}`}
+        >
+          {saveError.locked
+            ? `This is pinned in your environment and can't be changed here. (${saveError.message})`
+            : `Couldn't save: ${saveError.message}`}
+        </p>
+      )}
     </div>
   );
 }
