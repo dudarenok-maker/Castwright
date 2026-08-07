@@ -437,8 +437,15 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (!intercepted && path === raceCastPath) {
         intercepted = true;
-        signalIntercepted(); // deterministic happens-before edge — see header comment
         const value = await actual.readJson(path); // real read, now — happens-before /assign's write
+        /* Signalled AFTER the real read, not at interceptor entry (PR #2232
+           review, finding 1). The invariant this edge exists to establish is
+           "PUT's read genuinely happens-before /assign's write" — resolving on
+           entry would release /assign while the read was still pending, which
+           is harmless while the route holds withCastLock but gives the
+           lock-removed mutation strictly LESS slack than the 20ms sleep did.
+           Signal what the comment actually claims. */
+        signalIntercepted();
         await gate; // hold the RESOLUTION open until released below
         return value;
       }
