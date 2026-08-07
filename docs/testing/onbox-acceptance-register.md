@@ -161,7 +161,7 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 1 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
@@ -170,7 +170,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 1 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**54 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2045,15 +2045,6 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 - Spot-check the rest of the roster (13 characters) is otherwise intact — no duplicate row, no character silently renamed onto another's id.
 
 *Needs:* a real analyzer (local Ollama or Gemini) and the real workspace book above — no TTS/GPU rendering is required for this row's own criteria. *Criteria:* the run sheet [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §7 (Wave 2). *Cost:* short — one re-analysis of an already-imported book, then a diff of two small JSON files.
-
-### B4 · Cast merge-base staleness detection is real, not mocked (PR [#2185](https://github.com/dudarenok-maker/Castwright/pull/2185), closes [#2155](https://github.com/dudarenok-maker/Castwright/issues/2155), refs [#2015](https://github.com/dudarenok-maker/Castwright/issues/2015))
-
-The route-level controls in `server/src/routes/analysis.merge-base-detect.test.ts` mock the analyzer and drive three stub chapters through the full write path in about a second — proving the mechanism wires correctly, not that it behaves sanely against a real multi-chapter book, a real analyzer, and a genuine concurrent cast edit landing mid-run. Two things are structurally unprovable from that harness: whether an uncontended real analysis run reports **zero** false positives across its (more numerous, differently-timed) real merge-base writes, and whether one genuine concurrent edit is detected **exactly once** — not zero, not several.
-
-- Run a full analysis on a real multi-chapter book with **no concurrent editing** and confirm **zero** `cast_merge_base_stale` advisories appear on the SSE stream (and in the server log).
-- Repeat on a real multi-chapter book while **deliberately editing the cast mid-run** — e.g. add an alias to an existing character from the cast UI while analysis is still in flight — and confirm **exactly one** `cast_merge_base_stale` advisory appears, with the server log line naming the expected/observed fingerprints (`describeFingerprintForLog`).
-
-*Needs:* a real analyzer (local Ollama or Gemini) and a real multi-chapter book — no TTS/GPU rendering required. *Criteria:* the design at `docs/superpowers/specs/2026-08-06-cast-merge-base-serialise-and-detect-design.md` §4 (the staleness-visibility deliverable) and the plan `docs/superpowers/plans/2026-08-06-cast-merge-base-serialise-and-detect.md`. *Cost:* short — one uncontended run, one contended run.
 
 ---
 

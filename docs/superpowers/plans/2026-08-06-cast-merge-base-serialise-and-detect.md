@@ -1763,3 +1763,64 @@ consumption point. The one intentional asymmetry — wire `'warning'` vs. toast
 tasks' numbers shift. Each of those tasks re-locates its targets by `grep`
 rather than by line number — do not navigate by the numbers in this document
 after Task 3.
+
+---
+
+## Ship notes
+
+Shipped 2026-08-06 via PR [#2185](https://github.com/dudarenok-maker/Castwright/pull/2185)
+(merge commit `b591813b`), closing #2155 and refs #2015.
+
+### On-box acceptance — register row B4, DISCHARGED 2026-08-07
+
+Run by Claude Code at the repo owner's direction, on the owner's dev box, against
+`main` @ `b6f5e866`. Both criteria met.
+
+**Setup.** A real **Gemini 3.5 Flash Lite** analyzer (`analysisEngine: "gemini"` — not
+mocked, not stubbed) against *The Coalfall Commission*, a real 4-chapter EPUB
+(2,897 words / 15,565 characters). The book was **copied into an isolated scratch
+workspace** (`C:\Claude\b4-workspace`, confirmed at boot by
+`[server] workspace root: …`) so the owner's real library was never written to. The TTS
+sidecar was disabled, so no GPU was involved.
+
+**One run was discarded as insufficient evidence, and why it matters.** The first
+(non-fresh) run resumed almost entirely from cache — *"Resuming — Phase 0 already
+complete"*, *"2 of 4 chapters already cached"*, *"Running 0 chapters"*. The two
+merge-base write sites that live **inside the per-chapter loops** therefore never
+executed, and those are precisely the sites a pinned baseline would false-positive on
+repeatedly. Zero advisories from a run that barely writes proves nothing; the accepted
+runs used `{"fresh": true}` to force real per-chapter work.
+
+**Criterion 1 — uncontended run reports zero.** 253 SSE events; 2 chapters genuinely
+cast-detected and attributed via Gemini; 13 characters detected; **311 sentences
+attributed across 4 chapters**; **3 `cast-update` events**, so the checked write path
+executed repeatedly. `cast_merge_base_stale` advisories: **0**.
+
+**Criterion 2 — one genuine concurrent edit is detected exactly once.** The same fresh
+run shape, with a real concurrent edit landing mid-attribution through the real API
+(`POST /api/books/:bookId/cast/add-alias`, which takes `withCastLock` — a genuine
+foreign writer, not a hand-poked file):
+
+```
+07:32:47.698  [cast-aliases] added alias "B4ProbeAlias" to narrator
+07:32:50.777  [analysis] cast_merge_base_stale mns=mns_-8zHQk0f3q site=interim
+                         expected=276970084539 observed=7a2b6381e65d
+```
+
+Advisories: **exactly 1** — not zero, not several. It reached the SSE stream with the
+user-facing copy intact, the run continued to completion (non-fatal, as designed), and
+both fingerprints rendered as 12-character hex via `describeFingerprintForLog` — **no
+raw NUL byte**, which is the hazard that helper exists to prevent.
+
+### The finding that matters for #2015
+
+**The concurrent edit really was lost.** After the run, `narrator.aliases == ['Narrator']`
+— `B4ProbeAlias` is gone. The advisory's *"may have been overwritten"* is not hedging;
+on this run the edit **was** overwritten.
+
+That settles the question which gated #2015's rebuild-on-conflict work: the detector
+neither fires spuriously (0 on a real uncontended run) nor under-reports (exactly 1 on a
+real contended one), and the loss it reports is real rather than theoretical. #2015 keeps
+its full motivation. This was worth measuring before building — had the detector fired
+constantly, or had the loss turned out to be illusory, the rebuild's cost/benefit would
+have changed completely.
