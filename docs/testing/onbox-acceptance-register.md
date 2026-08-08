@@ -160,17 +160,17 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 41 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 1 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **F** | A real Android device, optionally + a head unit | 1 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
-| — | **Blocked** (hardware absent) | 1 |
+| — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**54 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**59 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -2004,6 +2004,117 @@ repeated renders of the same short lines, not one pass.
 
 ---
 
+### A38 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 1. A from-scratch `bootstrap-venv.mjs`
+run on the nvidia profile is unit-tested at the seam
+(`bootstrap-venv-helpers.test.ts`'s ordering assertions), but a real pip venv's
+version string, real PEP-427 directory escaping, and a real `pip check`/Kokoro
+provider report have never confirmed the write actually lands correctly on a
+genuinely fresh box — every other row here starts from an already-bootstrapped
+venv (self-heal) or a deliberately broken one (clobbered), neither of which
+exercises `installForProfile`'s write branch on a first-ever install.
+
+- Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch
+  bootstrap on the nvidia profile — not an upgrade, not the boot-time self-heal.
+- Inspect `site-packages` for `onnxruntime-<version>.dist-info` at the version
+  `onnxruntime-gpu` actually installed.
+- Run `pip check` — expect exit 0.
+- Load Kokoro and confirm it reports `CUDAExecutionProvider`.
+
+*Needs:* the existing NVIDIA dev box, willingness to rebuild the venv from
+scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A39 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
+tester's exact scenario, with the app running. Every other row for this feature
+proves a mechanism; this one is the acceptance criterion the issue was actually
+filed against, and it has not been separately re-confirmed since the fix landed
+(the self-heal proof in §5 exercises boot, not an in-app package install).
+
+- Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).
+- From the app UI, install Qwen3 (Model Manager → the Qwen engine's Install
+  action) — the exact step the original report describes failing.
+- Confirm the install completes with **no** `WinError 5` / `Accès refusé` on any
+  `.dll` under `site-packages/onnxruntime/capi/`.
+- Load Kokoro afterward and confirm it still reports `CUDAExecutionProvider` — the
+  install must not have silently swapped the GPU runtime for CPU en route.
+
+*Needs:* the existing NVIDIA dev box, the app running. *Criteria:* design doc
+§On-box acceptance item 2; run sheet §4 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A40 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+
+Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
+branch (the clobbered-box row of the design doc's five-state table) is fully
+unit-tested against synthetic fixtures (`server/src/tts/ort-ensure-marker.test.ts`)
+but has never run against a **real** clobbered venv — a box where the GPU
+distribution's dist-info survives (pip uninstalls by name and never knew the two
+collided) while the actual files on disk are the CPU build. This is the population
+#2192 itself names as the largest affected group, and the state a wrong ownership
+predicate would entomb silently (see the design doc's §The three venv states).
+
+- **Manufacture the state deliberately**, on a copy of the venv or with the intent
+  to run the repair command afterward (this is destructive to a working GPU
+  install): with the sidecar stopped, `pip install --force-reinstall onnxruntime`
+  (plain, no `-gpu` suffix) into the sidecar venv that already has
+  `onnxruntime-gpu` installed. Confirm both `onnxruntime_gpu-*.dist-info` and a
+  **real** `onnxruntime-*.dist-info` (INSTALLER `pip`, non-empty RECORD) now exist,
+  and that `site-packages/onnxruntime/` is the CPU build's files.
+- **Boot the server.** Expect `ensureOrtMarker` to return `'clobbered'`: a log line
+  naming the condition and the exact remedy command
+  (`CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`),
+  and **no** `onnxruntime-<version>.dist-info` marker written over the real
+  distribution. `pip check` should still report the pre-existing broken
+  requirements — not silently "fixed" by a marker stamped over the wrong version.
+- **Run the named remedy command** and confirm it actually repairs the box: the
+  swap re-runs, `onnxruntime-gpu` is reinstalled, and a legitimate marker is
+  written afterward (`pip check` clean, Kokoro reports `CUDAExecutionProvider`
+  again).
+
+*Needs:* the existing NVIDIA dev box, no GPU activity required, ~10 minutes
+including the repair. *Criteria:* design doc §On-box acceptance item 6, the
+five-state table and "the clobbered box takes the loud path" in
+`docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
+### A41 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+
+**Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
+`upgrade/apply.ts`'s `pipInstall` marker handling (delete before the first
+`run(...)`, write as the function's last statement, delete-then-rethrow on a
+failed swap step) with a new dependency-injection seam added specifically because
+the real body had zero prior test coverage
+(`server/src/upgrade/apply-ort-marker.test.ts`) — but real `spawn`, a real
+`venvDir`, and a real packaged release directory have never driven it. A
+genuinely different consumer of the same `planOrtSwap` output than
+`bootstrap-venv.mjs` (A38), so that row passing proves nothing about this one.
+
+- Take a real installed Castwright release (not the dev checkout — the packaged
+  `release/` layout `upgrade/apply.ts` targets), on NVIDIA, with a marker already
+  present from a prior bootstrap or self-heal.
+- Trigger the in-app upgrade (Account → Check for updates → Install, or the
+  equivalent CLI path) to a release whose sidecar requirements changed enough to
+  re-run `pipInstall`.
+- Confirm the marker is deleted before the overlay install fires, and rewritten
+  (at the freshly-installed version) only after the swap steps succeed — inspect
+  `onnxruntime-<version>.dist-info`'s METADATA before/after, or watch for its
+  brief absence via a log/timestamp check if the window is too fast to catch by
+  hand. Confirm `pip check` is clean afterward.
+- If practical, force a swap-step failure (e.g. an interrupted network mid-swap)
+  and confirm the marker is deleted rather than left lying about a runtime that
+  was never reinstalled.
+
+*Needs:* a real installed release directory (not a dev worktree) and a way to
+trigger its upgrade path; the existing NVIDIA dev box otherwise. *Criteria:* the
+delete-first/write-last ordering invariant in
+`docs/features/282-ort-pip-consistency-marker.md`, and the `pipInstall` anchors in
+the design doc's §Changed files; run sheet §9 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
 ## Group B — local Ollama analyzer only
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 and B2 each have a **CPU-only sub-case** — the only checks here that want the analyzer *off* the GPU. Run those two together, and consider folding in E4. B3 uses its own real book fixture instead of the generic chapter and has no CPU-only case.
@@ -2335,6 +2446,36 @@ Criteria: [`docs/features/272-golden-assembly-comparison.md`](../features/272-go
 
 ---
 
+### E9 · ORT marker — the Pinokio update path ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **group with E1**
+
+Design doc §On-box acceptance, criterion 4: `pinokio-scripts/update.js` — named
+specifically, not `install.js` — as "the deployment shape that reported the bug."
+`update.js` and `install.js` both invoke `bootstrap-venv.mjs` directly with **no
+server process at all**, but they are not interchangeable: `update.js` loads from
+the *currently checked-out* release and iterates its `run[]`, per the Pinokio
+installer's own documented one-update-lag behaviour (see E1) — a fresh-install
+pass does not stand in for an update pass. Every other on-box row for this feature
+runs through the dev server, a different process entirely; this is the only row
+that proves the out-of-process invocation applies the marker identically rather
+than taking some code path only the server-mediated call exercises.
+
+- On a machine with Pinokio and an **existing** (pre-fix) install (Windows, the
+  original reporter's platform, is the priority; **group with E1**, which already
+  owns the Pinokio box), run Update on the nvidia profile.
+- Confirm `pip check` is clean immediately after Update completes, with no server
+  ever having started — the marker must have been written by
+  `bootstrap-venv.mjs`'s own call to `applyOrtMarkerWrite`, not by the server-boot
+  self-heal (which never ran).
+- From within the app once it does start, install Qwen3 (the original bug's own
+  repro) and confirm no `WinError 5`.
+- **In the same session, also run a fresh Install** (`install.js`) and confirm the
+  same outcome — a second shape of this criterion, not a separate row.
+
+*Needs:* a machine with Pinokio installed, an existing pre-fix install, nvidia
+profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
+§On-box acceptance item 4; run sheet §6 in
+`docs/testing/ort-marker-onbox-acceptance.md`.
+
 ## Group F — a real Android device
 
 ### F1 · Android companion app — v1 live-device acceptance (plan 188) · **an entire untested axis**
@@ -2498,6 +2639,23 @@ and the observations above are recorded here.
 Waves A–G were built and merged **dormant** — the code path exists but has never run
 against real ROCm hardware. A dormant capability, not an active bug. This box is
 dual-NVIDIA; this will not move until AMD/ROCm hardware exists.
+
+### ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
+
+Design doc §On-box acceptance, criterion 5: "no marker is written" on AMD.
+`planOrtSwap('amd', …)` resolves to plain `onnxruntime` (`accelerator-profile.mjs`),
+so the AMD profile takes the `marker.action === 'delete'` branch — the same branch
+cpu and apple take, both of which this box CAN exercise. What is genuinely
+AMD-specific and unverified is the ordering that branch exists to protect: the
+AMD→ROCm-failure→CPU fallback inside `bootstrap-venv.mjs`'s `installForProfile`
+(`cpu.txt` carries an **explicit** `onnxruntime` line the fallback needs to actually
+install; a stale marker present at that moment would make pip silently skip it).
+That fallback only fires on real AMD hardware attempting a ROCm bootstrap that then
+fails over to CPU — nothing on a dual-NVIDIA box can reach it. Dormant, not broken:
+the delete-at-entry ordering (invariant 3 in the plan doc) is unit-tested via the
+injected `runPip`/marker seam, just never against a real ROCm→CPU fallback. This box
+is dual-NVIDIA; this will not move until AMD/ROCm hardware exists. Run sheet §7 in
+`docs/testing/ort-marker-onbox-acceptance.md` has the recipe ready for when it does.
 
 ---
 

@@ -1,0 +1,336 @@
+# ORT pip-consistency marker — on-box acceptance run sheet
+
+> **This is a working document.** Fill in the `Result:` lines AS each criterion is
+> run on real hardware. Do not pre-fill them — criterion 3 below is filled in
+> because it was genuinely run during implementation (2026-08-07); the rest are
+> templates, left blank on purpose.
+>
+> **Revision note (2026-08-08):** the criterion↔row mapping below was corrected
+> after an earlier version of this sheet mis-tracked the design doc's own
+> §On-box acceptance numbering — it had dropped criteria 1 and 2 entirely and
+> invented an Apple Silicon criterion the spec never names. Apple takes the same
+> skip/delete branch as cpu and amd (`ortPackage` is plain `onnxruntime` for all
+> three profiles), so criterion 5's AMD row already covers that mechanism; no
+> separate Apple row is owed.
+>
+> Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](282-ort-pip-consistency-marker.md)
+> Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
+> ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
+> Register rows: [A38–A41](onbox-acceptance-register.md#group-a--the-gpu-box),
+> [E9](onbox-acceptance-register.md#group-e--not-the-gpu-box),
+> [Blocked — AMD/ROCm](onbox-acceptance-register.md#blocked--hardware-not-available)
+> Issue: [#2192](https://github.com/dudarenok-maker/Castwright/issues/2192)
+
+---
+
+## 1. Purpose & scope
+
+Automated tests pin every helper (`isOurMarker`, `detectOrtOwner`, `ensureOrtMarker`,
+the `installForProfile`/`pipInstall` ordering seams) against synthetic fixtures —
+throwaway temp directories with hand-built `dist-info` shapes. What they cannot
+prove is that the mechanism holds against a **real** pip venv: real PEP-427
+directory-name escaping, a real `onnxruntime-gpu` wheel's
+`build_and_package_info.py`, a real `pip check`, and a real server boot sequence.
+That needs the box.
+
+**Seven rows total: the design doc's own six numbered criteria, plus one addition
+this sheet owes on top of the spec.** The addition (the in-app upgrade path) is
+called out explicitly as *not* one of the spec's six — Task 8 wired
+`upgrade/apply.ts`'s marker handling and nothing on real hardware has ever proven
+it, so it is genuinely owed debt even though the design doc never named it as an
+acceptance criterion.
+
+| # | Criterion (design doc's own wording) | Register row | Status |
+|---|---|---|---|
+| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A38 | Owed |
+| 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A39 | Owed — this is #2192 itself |
+| 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
+| 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E9 | Owed |
+| 5 | AMD box — no marker is written; the live case is the AMD→ROCm-failure→CPU-fallback ordering | Blocked (AMD/ROCm) | Blocked — no hardware |
+| 6 | Clobbered box — both dist-infos present, CPU files in the namespace; boot takes the loud path | A40 | Owed |
+| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A41 | Owed |
+
+## 2. Preconditions (common to all criteria)
+
+- [ ] A Windows NVIDIA dev box with a real sidecar venv
+      (`server/tts-sidecar/.venv`), `onnxruntime-gpu` installed.
+- [ ] Shell access to run `python -m pip check` inside that venv
+      (`server/tts-sidecar/.venv/Scripts/python.exe -m pip check`).
+- [ ] For criteria 1, 2, 6 and the upgrade addition: willingness to deliberately
+      rebuild/break the venv, or a disposable copy of it.
+- [ ] For criterion 5: AMD/ROCm hardware — not present on the primary dev box; see
+      §6.
+- [ ] For criterion 4: a machine with Pinokio installed, on an existing (pre-fix)
+      install so the update path actually fires.
+
+---
+
+## 3. Criterion 1 — fresh NVIDIA bootstrap (A38)
+
+### 3.1 Procedure
+
+1. Wipe (or freshly clone into) the sidecar venv and run a from-scratch
+   `bootstrap-venv.mjs` on the nvidia profile — not an upgrade, not the boot-time
+   self-heal, a genuine first bootstrap.
+2. After it completes, inspect `site-packages` for `onnxruntime-<version>.dist-info`
+   at the version `onnxruntime-gpu` actually installed.
+3. Run `pip check` inside that venv.
+4. Load Kokoro (via the app or a direct sidecar call) and confirm its reported
+   execution provider.
+
+### 3.2 Expected result
+
+The marker is present, at the correct version, as a direct product of
+`installForProfile`'s own `applyOrtMarkerWrite` call — not the boot-time self-heal,
+which never needs to fire on a venv that was correct from the first pip call.
+`pip check` exits 0. Kokoro reports `CUDAExecutionProvider`.
+
+### 3.3 Result
+
+**Marker present + version:** _(fill in)_
+**`pip check` exit code:** _(fill in)_
+**Kokoro execution provider:** _(fill in)_
+**Run by:** _(fill in)_ **Date:** _(fill in)_
+
+---
+
+## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A39)
+
+This is **#2192 itself** — the alpha tester's exact scenario, with the app running.
+Every other row in this sheet is a mechanism check; this one is the actual
+acceptance criterion the issue was filed against.
+
+### 4.1 Procedure
+
+1. Start the app normally (`npm start`), NVIDIA profile, a bootstrapped sidecar
+   venv (marker present or absent — either starting state is fine, since boot's
+   `ensureOrtMarker` should have already handled it either way).
+2. From the app UI, install Qwen3 (Model Manager → the Qwen engine's Install
+   action) — the exact step #2192's report describes failing.
+3. Watch for the install completing without error, specifically **no**
+   `WinError 5` / `Accès refusé` on any `.dll` under
+   `site-packages/onnxruntime/capi/`.
+4. After install, load Kokoro and confirm it still reports `CUDAExecutionProvider`
+   — the install must not have silently swapped the GPU runtime for CPU en route.
+
+### 4.2 Expected result
+
+The install completes cleanly. No `WinError 5`. GPU Kokoro unaffected afterward.
+
+### 4.3 Result
+
+**Qwen3 install outcome:** _(fill in)_
+**`WinError 5` present/absent:** _(fill in)_
+**Kokoro execution provider after install:** _(fill in)_
+**Run by:** _(fill in)_ **Date:** _(fill in)_
+
+---
+
+## 5. Criterion 3 — self-heal on an existing box (DISCHARGED)
+
+### 5.1 Procedure
+
+1. Start from a sidecar venv bootstrapped **before** this change — `onnxruntime-gpu`
+   installed, no `onnxruntime-<version>.dist-info` marker present.
+2. Run `python -m pip check` and confirm it reports the three broken requirements
+   (`faster-whisper`, `kokoro-onnx`, `qwen-tts` all "requires onnxruntime, which is
+   not installed").
+3. Start the server (`npm run dev` or `npm start`) and watch the log for the
+   `[ort-marker]` line **before** `[server] listening`.
+4. Re-run `pip check` and confirm it now exits 0.
+5. Inspect the marker directory on disk: `INSTALLER` file content, `RECORD` file
+   size.
+
+### 5.2 Expected result
+
+`pip check` fails before boot, a single `[ort-marker] recorded …` log line appears
+during boot (before the server is ready to serve requests), and `pip check`
+succeeds after — with no reinstall, no network call, no interruption to any other
+boot step.
+
+### 5.3 Result
+
+**Box:** the repo owner's Windows dev box, NVIDIA profile, sidecar venv at
+`server/tts-sidecar/.venv`, `onnxruntime-gpu 1.27.0` installed.
+
+**BEFORE** — `python -m pip check` exit 1:
+
+```
+faster-whisper 1.2.1 requires onnxruntime, which is not installed.
+kokoro-onnx 0.5.0 requires onnxruntime, which is not installed.
+qwen-tts 0.1.1 requires onnxruntime, which is not installed.
+```
+
+**BOOT** — server started, logged, **before** `[server] listening`:
+
+```
+2026-08-07 18:41:23.909 [ort-marker] recorded onnxruntime 1.27.0 as provided by onnxruntime-gpu.
+```
+
+**AFTER** — `python -m pip check` exit 0: `No broken requirements found.`
+
+**Marker on disk:** `onnxruntime-1.27.0.dist-info/` with `INSTALLER` =
+`castwright-ort-marker` and `RECORD` = **0 bytes**.
+
+**Run by:** the repo owner's session (controller-executed, not a subagent).
+**Date:** 2026-08-07.
+
+**Disposition:** DISCHARGED. Not filed as a register row. See
+`docs/features/282-ort-pip-consistency-marker.md`'s Ship notes once the plan ships.
+
+---
+
+## 6. Criterion 4 — Pinokio update path (E9)
+
+The design doc names `update.js` specifically — "the deployment shape that
+reported the bug" — not `install.js`. A fresh install and an update load
+different code (`update.js` iterates the **currently checked-out** release's
+`run[]`, per the Pinokio installer's own documented one-update-lag behaviour), so
+a fresh-install pass does not stand in for this one. `install.js` is worth
+exercising in the **same session**, as a second shape, but is not a separate row.
+
+### 6.1 Procedure
+
+1. On a machine with Pinokio and an **existing** (pre-fix) Castwright install, run
+   Update — this is `pinokio-scripts/update.js`, invoking `bootstrap-venv.mjs`
+   directly with no server process involved.
+2. Immediately after Update completes (before ever starting the server), run
+   `pip check` inside the resulting venv.
+3. Start the app and, from the UI, install Qwen3 — the original #2192 repro.
+4. **In the same session, also exercise `install.js`** (a fresh install on a clean
+   machine or a wiped Pinokio env) and confirm the same result — this is a second
+   shape of the same criterion, not a separate row.
+
+### 6.2 Expected result
+
+`pip check` is clean immediately after Update, with no server ever having run —
+proving `bootstrap-venv.mjs`'s own marker application (not the server-boot
+self-heal, which never fires here) is what did it. Installing Qwen3 afterward
+completes with no `WinError 5`. The `install.js` pass (§6.1 step 4) shows the same
+outcome.
+
+### 6.3 Result
+
+**`pip check` immediately post-Update:** _(fill in)_
+**Qwen3 install result (WinError 5 present/absent):** _(fill in)_
+**`install.js` pass (fresh install) outcome:** _(fill in)_
+**Run by:** _(fill in)_ **Date:** _(fill in)_ **Platform:** _(fill in)_
+
+---
+
+## 7. Criterion 5 — AMD box (Blocked, not owed)
+
+No AMD/ROCm hardware exists on this box — see the register's Blocked section.
+`planOrtSwap('amd', …).marker.action === 'delete'` is unit-tested; the AMD-specific
+ordering (delete-at-entry protecting the ROCm-failure→CPU fallback's own
+`onnxruntime` install) has never run against real hardware. This section stays
+templated so a future AMD box has a ready-to-run recipe rather than needing one
+authored from scratch.
+
+### 7.1 Procedure (for when AMD/ROCm hardware exists)
+
+1. Force the AMD→ROCm-failure→CPU fallback inside `installForProfile` (e.g. by
+   pointing the ROCm wheel index at an unreachable URL).
+2. Confirm the marker is deleted **before** the fallback's `pip install -r
+   <cpu overlay>` runs — inspect for the marker's absence, or a log/timestamp
+   ordering check.
+3. Confirm the fallback's explicit `onnxruntime` line from `cpu.txt` actually
+   installs (not silently skipped because a stale marker made pip think it was
+   already satisfied).
+4. Confirm no marker is ever written on this profile — the design doc's own
+   framing for this criterion.
+
+### 7.2 Result
+
+_(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
+
+---
+
+## 8. Criterion 6 — clobbered box (A40)
+
+### 8.1 Procedure
+
+1. On a disposable copy of the sidecar venv (or with intent to run the repair
+   command afterward — this is destructive), with the sidecar stopped, run
+   `pip install --force-reinstall onnxruntime` (plain, no `-gpu` suffix) into a
+   venv that already has `onnxruntime-gpu` installed.
+2. Confirm both `onnxruntime_gpu-<version>.dist-info` and a **real**
+   `onnxruntime-<version>.dist-info` (INSTALLER `pip`, non-empty RECORD) exist, and
+   that `site-packages/onnxruntime/` holds the CPU build's files.
+3. Boot the server and watch the log.
+4. Run the named remedy command:
+   `CASTWRIGHT_ACCELERATOR_PROFILE=nvidia node server/tts-sidecar/scripts/install-ort.mjs <venv-python>`.
+5. Re-check `pip check` and Kokoro's reported execution provider.
+
+### 8.2 Expected result
+
+`ensureOrtMarker` returns `'clobbered'`, logs the condition and the exact remedy
+command, and writes **no** marker over the real distribution — `pip check` stays
+broken (not silently "fixed" at the wrong version). Running the remedy command
+repairs the box: `pip check` clean afterward, Kokoro reports `CUDAExecutionProvider`.
+
+### 8.3 Result
+
+**Log line observed (clobbered):** _(fill in)_
+**`pip check` after boot (should still be broken):** _(fill in)_
+**Repair command output:** _(fill in)_
+**`pip check` after repair:** _(fill in)_
+**Kokoro execution provider after repair:** _(fill in)_
+**Run by:** _(fill in)_ **Date:** _(fill in)_
+
+---
+
+## 9. Addition — the in-app upgrade path (A41, not one of the spec's six)
+
+**This criterion is not in the design doc's §On-box acceptance table.** It is
+owed anyway: Task 8 wired `upgrade/apply.ts`'s marker handling (with a new
+dependency-injection seam specifically because `pipInstall`'s real body had zero
+prior test coverage), and nothing on real hardware has ever driven it — a
+different consumer of `planOrtSwap`'s output than `bootstrap-venv.mjs`, so
+criterion 1 passing proves nothing about this path.
+
+### 9.1 Procedure
+
+1. Take a real installed Castwright release (packaged `release/` layout, not the
+   dev checkout), on NVIDIA, with a marker already present.
+2. Trigger the in-app upgrade to a release whose sidecar requirements changed
+   enough to re-run `pipInstall`.
+3. Confirm the marker is deleted before the overlay install and rewritten only
+   after the swap steps succeed (inspect `onnxruntime-<version>.dist-info`'s
+   METADATA before/after, or a log/timestamp check if the window is too fast to
+   catch by hand).
+4. Confirm `pip check` is clean afterward.
+5. If practical, force a swap-step failure and confirm the marker is deleted
+   rather than left lying about a runtime that was never reinstalled.
+
+### 9.2 Expected result
+
+The same delete-first/write-last ordering proven by the unit-level injection seam
+(`apply-ort-marker.test.ts`) actually fires against a real `spawn`/`venvDir`/
+release directory. `pip check` clean afterward; a forced failure leaves no marker.
+
+### 9.3 Result
+
+**Marker absent during the overlay install (observed how):** _(fill in)_
+**Marker present + correct version after a successful upgrade:** _(fill in)_
+**`pip check` after upgrade:** _(fill in)_
+**Forced-failure marker state (if run):** _(fill in)_
+**Run by:** _(fill in)_ **Date:** _(fill in)_ **Release version upgraded to:** _(fill in)_
+
+---
+
+## 10. Disposition summary
+
+_(Update as each remaining criterion runs.)_
+
+- Criterion 1 — fresh NVIDIA bootstrap (A38): owed.
+- Criterion 2 — the reported bug, in-app Qwen3 install (A39): owed.
+- Criterion 3 — self-heal: **Discharged 2026-08-07.**
+- Criterion 4 — Pinokio update path (E9): owed.
+- Criterion 5 — AMD box: blocked, no hardware.
+- Criterion 6 — clobbered box (A40): owed.
+- Addition — in-app upgrade path (A41): owed.
+
+Once a criterion is run and its Result filled in, remove the corresponding row
+from `docs/testing/onbox-acceptance-register.md` and mirror the removal in the
+live view, per that register's own "Live view" procedure.
