@@ -41,3 +41,19 @@ describe('planOrtSwap', () => {
     expect(planOrtSwap('cpu', 'win32').action).toBe('skip');
   });
 });
+
+describe('planOrtSwap marker action', () => {
+  it('nvidia → write', () => {
+    expect(planOrtSwap('nvidia', 'win32').marker).toEqual({ action: 'write' });
+  });
+
+  it('cpu, amd and apple → delete (they are NOT GPU-swap profiles)', () => {
+    for (const p of ['cpu', 'amd', 'apple']) {
+      expect(planOrtSwap(p, 'win32').marker).toEqual({ action: 'delete' });
+    }
+  });
+
+  it('the skip variant carries NO ortPackage — a write there would glob undefined', () => {
+    expect(planOrtSwap('cpu', 'win32').ortPackage).toBeUndefined();
+  });
+});

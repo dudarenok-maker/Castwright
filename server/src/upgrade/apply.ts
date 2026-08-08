@@ -25,7 +25,7 @@ import { resolveInstallProfile } from '../../tts-sidecar/scripts/accelerator-pro
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { planTorchPreinstall } from '../../tts-sidecar/scripts/install-torch.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
-import { planOrtSwap } from '../../tts-sidecar/scripts/install-ort.mjs';
+import { planOrtSwap, applyOrtMarkerDelete, applyOrtMarkerWrite } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 export interface ApplyContext {
   installRoot: string;
@@ -213,8 +213,23 @@ function run(cmd: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
+/** Injectable seam for `pipInstall`'s destructive calls, so its body — otherwise
+ *  a real `pip`/marker fs write — can be unit-tested with fakes. Defaults to the
+ *  real `run`/`applyOrtMarkerDelete`/`applyOrtMarkerWrite` when omitted. */
+export interface ApplyStepDeps {
+  run?: (py: string, args: string[], cwd: string) => Promise<void>;
+  markerDel?: (venvDir: string, plan: unknown) => void;
+  markerWrite?: (venvDir: string, plan: unknown) => void;
+}
+
 /** Wire the real destructive steps. `venvDir` is the shared SIDECAR_VENV_DIR. */
-export function createApplySteps(opts: { venvDir: string; log?: (m: string) => void }): ApplySteps {
+export function createApplySteps(
+  opts: { venvDir: string; log?: (m: string) => void },
+  deps: ApplyStepDeps = {},
+): ApplySteps {
+  const runFn = deps.run ?? run;
+  const markerDel = deps.markerDel ?? applyOrtMarkerDelete;
+  const markerWrite = deps.markerWrite ?? applyOrtMarkerWrite;
   const npm = isWin() ? 'npm.cmd' : 'npm';
   const reqHashFile = join(opts.venvDir, '.req-hash');
   const venvPython = isWin()
@@ -254,18 +269,30 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
     pipInstall: async (releaseDir) => {
       const profile = effectiveProfile();
       const sidecar = join(releaseDir, 'server', 'tts-sidecar');
+      const plan = planOrtSwap(profile, process.platform);
+      // Delete FIRST, before the first pip call: a stale marker present when the
+      // overlay lands plain onnxruntime would make a later re-check see it as
+      // already-swapped. Safe to call unconditionally — it's a no-op off ours.
+      markerDel(opts.venvDir, plan);
+
       const torch = planTorchPreinstall(profile, process.platform);
       if (torch.action === 'install') {
-        await run(venvPython, ['-m', 'pip', 'install', '--no-cache-dir', ...torch.wheels], releaseDir);
+        await runFn(venvPython, ['-m', 'pip', 'install', '--no-cache-dir', ...torch.wheels], releaseDir);
       }
-      await run(
+      await runFn(
         venvPython,
         ['-m', 'pip', 'install', '-r', join(sidecar, 'requirements', overlayFileForProfile(profile))],
         releaseDir,
       );
-      const ort = planOrtSwap(profile, process.platform);
-      if (ort.action === 'swap') {
-        for (const step of ort.steps) await run(venvPython, ['-m', 'pip', ...step], releaseDir);
+      if (plan.action === 'swap') {
+        try {
+          for (const step of plan.steps) await runFn(venvPython, ['-m', 'pip', ...step], releaseDir);
+        } catch (err) {
+          markerDel(opts.venvDir, plan);
+          throw err;
+        }
+        // Write LAST, only after every swap step succeeded.
+        markerWrite(opts.venvDir, plan);
       }
     },
     readReqHash: () => {

@@ -24,7 +24,176 @@
 
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { installRecipe } from './accelerator-profile.mjs';
+import {
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  renameSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { installRecipe, PROFILES } from './accelerator-profile.mjs';
+
+/** Distribution names that OWN the onnxruntime namespace on some profile.
+ *  DERIVED from installRecipe, never hand-typed — a hand-typed list is a second
+ *  source of truth for a set installRecipe already determines, and would miss a
+ *  future onnxruntime-directml re-enable. */
+export const SWAP_ORT_PACKAGES = [
+  ...new Set(
+    PROFILES.flatMap((p) =>
+      ['win32', 'linux', 'darwin'].map((plat) => installRecipe(p, plat).ortPackage),
+    ).filter((pkg) => pkg !== 'onnxruntime'),
+  ),
+];
+
+/** PEP 427 escaping: pip writes `onnxruntime-gpu` to disk as `onnxruntime_gpu`.
+ *  Globbing the UNESCAPED name matches zero directories — which, combined with
+ *  the fail-loudly rule, would break every NVIDIA bootstrap. */
+export function escapeDistName(name) {
+  return name.replace(/[-_.]+/g, '_');
+}
+
+/** Resolve site-packages inside a venv dir. Pure fs — no interpreter spawn.
+ *  Returns null when absent or ambiguous; callers treat null as "do nothing". */
+export function sitePackagesDir(venvDir) {
+  const win = join(venvDir, 'Lib', 'site-packages');
+  if (existsSync(win)) return win;
+  const libDir = join(venvDir, 'lib');
+  if (!existsSync(libDir)) return null;
+  const hits = readdirSync(libDir)
+    .filter((d) => d.startsWith('python'))
+    .map((d) => join(libDir, d, 'site-packages'))
+    .filter((p) => existsSync(p));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export const MARKER_INSTALLER = 'castwright-ort-marker';
+
+/** Every `onnxruntime-<version>.dist-info` in site-packages — ours AND real ones.
+ *  The trailing `-\d` is what excludes `onnxruntime_gpu-…` (underscore at index 11). */
+function ortDistInfoDirs(sitePackages) {
+  if (!existsSync(sitePackages)) return [];
+  return readdirSync(sitePackages)
+    .filter((d) => /^onnxruntime-\d.*\.dist-info$/.test(d))
+    .map((d) => join(sitePackages, d));
+}
+
+/** Ours ONLY if the INSTALLER is our sentinel AND the RECORD is empty.
+ *  Name is never sufficient: the real plain distribution's directory name is
+ *  byte-identical to ours. */
+export function isOurMarker(distInfoDir) {
+  try {
+    const installer = readFileSync(join(distInfoDir, 'INSTALLER'), 'utf8').trim();
+    if (installer !== MARKER_INSTALLER) return false;
+    return readFileSync(join(distInfoDir, 'RECORD'), 'utf8').trim() === '';
+  } catch {
+    return false;
+  }
+}
+
+/** Real (non-marker) plain onnxruntime distributions. Tests EVERY match — ours
+ *  and a real one can coexist, so answering from the first is a false negative. */
+export function findPlainOrtDistInfos(sitePackages) {
+  return ortDistInfoDirs(sitePackages).filter((d) => !isOurMarker(d));
+}
+
+/** Who owns site-packages/onnxruntime/ — decided from FILES the wheel ships.
+ *  'swap'  → a swap distribution (onnxruntime-gpu / -directml)
+ *  'plain' → the CPU build
+ *  'none'  → absent or gutted (nothing importable)
+ *  NEVER uses import/get_available_providers(): __version__ is identical across
+ *  builds, and a GPU install with unloadable CUDA DLLs reports CPU providers. */
+export function detectOrtOwner(sitePackages) {
+  const capi = join(sitePackages, 'onnxruntime', 'capi');
+  if (!existsSync(capi)) return 'none';
+  let entries;
+  try {
+    entries = readdirSync(capi);
+  } catch {
+    return 'none';
+  }
+  if (entries.length === 0) return 'none';
+
+  const infoPath = join(capi, 'build_and_package_info.py');
+  if (existsSync(infoPath)) {
+    try {
+      const m = readFileSync(infoPath, 'utf8').match(/package_name\s*=\s*['"]([^'"]+)['"]/);
+      if (m) return SWAP_ORT_PACKAGES.includes(m[1]) ? 'swap' : 'plain';
+    } catch {
+      /* fall through to the DLL signal */
+    }
+  }
+  if (entries.some((e) => /^onnxruntime_providers_(cuda|rocm)\./.test(e))) return 'swap';
+  return 'plain';
+}
+
+/** Name for the in-progress marker build. Deliberately matches neither pip's
+ *  dist-info discovery (no `.dist-info` suffix) nor this file's own
+ *  `^onnxruntime-\d.*\.dist-info$` regex — a kill mid-build must stay
+ *  invisible to both, never surface as a partial `onnxruntime-*.dist-info`. */
+const MARKER_TMP_DIRNAME = '.castwright-ort-marker.tmp';
+
+/** Write (or overwrite) the marker. Removes any stale marker first so the
+ *  version can never lag the installed runtime.
+ *
+ *  Builds the marker in a temp dir and `renameSync`s it into place LAST, so a
+ *  crash/kill between the individual file writes below can never leave a
+ *  partial dist-info under the real `onnxruntime-<version>.dist-info` name —
+ *  `isOurMarker()` rejects a partial one (missing INSTALLER or a non-empty/
+ *  missing RECORD), so `findPlainOrtDistInfos()` would then count it as a
+ *  REAL plain distribution and nothing would ever self-correct that. */
+export function writeOrtMarker(sitePackages, version) {
+  deleteOrtMarkerIfOurs(sitePackages);
+  const dir = join(sitePackages, `onnxruntime-${version}.dist-info`);
+  const tmpDir = join(sitePackages, MARKER_TMP_DIRNAME);
+  rmSync(tmpDir, { recursive: true, force: true }); // clear a stale temp from a prior crash
+  mkdirSync(tmpDir, { recursive: true });
+  writeFileSync(
+    join(tmpDir, 'METADATA'),
+    `Metadata-Version: 2.1\nName: onnxruntime\nVersion: ${version}\n` +
+      `Summary: Provided by ${SWAP_ORT_PACKAGES.join('/')} (same namespace, same API).\n`,
+  );
+  writeFileSync(join(tmpDir, 'INSTALLER'), `${MARKER_INSTALLER}\n`);
+  writeFileSync(join(tmpDir, 'RECORD'), ''); // MUST stay empty — see the spec's Spike 2
+  // renameSync fails if `dir` already exists — clear a stale/partial marker
+  // at the destination first (deleteOrtMarkerIfOurs above only removes a
+  // COMPLETE marker that passes isOurMarker, so a partial one from a prior
+  // crash at this exact version would otherwise survive and block the rename).
+  rmSync(dir, { recursive: true, force: true });
+  renameSync(tmpDir, dir);
+}
+
+/** Delete the marker if (and only if) we wrote it. Returns whether it removed one. */
+export function deleteOrtMarkerIfOurs(sitePackages) {
+  let removed = false;
+  for (const dir of ortDistInfoDirs(sitePackages)) {
+    if (!isOurMarker(dir)) continue;
+    rmSync(dir, { recursive: true, force: true });
+    removed = true;
+  }
+  return removed;
+}
+
+/** Version of the installed swap distribution, read from its dist-info METADATA.
+ *  null when absent OR ambiguous — the caller treats null as fatal for a swap
+ *  (better a loud install failure than a marker whose version is a guess). */
+export function readInstalledOrtVersion(sitePackages, ortPackage) {
+  if (!existsSync(sitePackages)) return null;
+  const prefix = `${escapeDistName(ortPackage)}-`;
+  const hits = readdirSync(sitePackages).filter(
+    (d) => d.startsWith(prefix) && d.endsWith('.dist-info'),
+  );
+  if (hits.length !== 1) return null;
+  try {
+    const meta = readFileSync(join(sitePackages, hits[0], 'METADATA'), 'utf8');
+    const m = meta.match(/^Version:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 // onnxruntime-gpu version constraint (side-28): without one, the runtime a user
 // actually runs Kokoro on is whatever happened to be latest on PyPI on their
@@ -68,16 +237,21 @@ function constrainForInstall(ortPackage) {
  * python. `ortPackage` on the swap variant lets the CLI report which package it
  * actually put in place without re-deriving it (#1844) — a second source of
  * truth there is exactly how the CLI drifted into naming the wrong package.
- * @returns {{action:'skip', reason:string} | {action:'swap', steps:string[][], ortPackage:string}}
+ * @returns {{action:'skip', reason:string, marker:{action:'delete'}} | {action:'swap', steps:string[][], ortPackage:string, marker:{action:'write'}}}
  */
 export function planOrtSwap(profile, platform) {
   const { ortPackage } = installRecipe(profile, platform);
   if (ortPackage === 'onnxruntime') {
-    return { action: 'skip', reason: 'plain onnxruntime from the overlay is correct; no swap' };
+    return {
+      action: 'skip',
+      reason: 'plain onnxruntime from the overlay is correct; no swap',
+      marker: { action: 'delete' },
+    };
   }
   return {
     action: 'swap',
     ortPackage,
+    marker: { action: 'write' },
     steps: [
       // Uninstall BOTH the plain `onnxruntime` the overlay landed AND any cached
       // `ortPackage` first, so the shared `onnxruntime/` namespace directory is
@@ -95,27 +269,122 @@ export function planOrtSwap(profile, platform) {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
-  const plan = planOrtSwap(profile, process.platform);
-  if (plan.action === 'skip') {
-    process.stdout.write(`[install-ort] skip — ${plan.reason}.\n`);
-    process.exit(0);
+/** Delete our marker. Safe on every plan and every venv shape — the failure
+ *  path calls it with a SWAP plan before re-throwing. */
+export function applyOrtMarkerDelete(venvDir, _plan) {
+  const sp = sitePackagesDir(venvDir);
+  if (!sp) return;
+  deleteOrtMarkerIfOurs(sp);
+}
+
+/** Write the marker. NO-OP unless the plan says write — the skip variant has no
+ *  ortPackage, so a write there would glob `undefined-*` and either resolve
+ *  nothing or overwrite the REAL plain distribution. */
+export function applyOrtMarkerWrite(venvDir, plan) {
+  if (plan?.marker?.action !== 'write') return;
+  const sp = sitePackagesDir(venvDir);
+  if (!sp) throw new Error(`ORT marker: no site-packages under ${venvDir}`);
+  const version = readInstalledOrtVersion(sp, plan.ortPackage);
+  if (!version) {
+    throw new Error(
+      `ORT marker: could not read the installed ${plan.ortPackage} version (absent or ambiguous)`,
+    );
   }
+  writeOrtMarker(sp, version);
+}
+
+/** Boot-time self-heal for venvs bootstrapped before the marker existed.
+ *  Pure fs: no pip, no network, no subprocess, no `import onnxruntime`.
+ *  NEVER throws — its caller runs during server startup. */
+export function ensureOrtMarker(venvDir, log = () => {}) {
+  // `log` is caller-supplied (index.ts passes console.log by default, but any
+  // caller can pass anything). Every call site below goes through this wrapper
+  // so a THROWING log can never escape ensureOrtMarker — including from inside
+  // the catch block that exists to guarantee this function never throws.
+  const safeLog = (msg) => {
+    try {
+      log(msg);
+    } catch {
+      /* never let a caller-supplied log defeat the never-throws guarantee */
+    }
+  };
+  try {
+    const sp = sitePackagesDir(venvDir);
+    if (!sp) return 'noop';
+    const owner = detectOrtOwner(sp);
+    const realPlain = findPlainOrtDistInfos(sp);
+
+    if (owner === 'swap' && realPlain.length > 0) {
+      safeLog(
+        '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
+          '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
+          '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
+      );
+      return 'clobbered';
+    }
+    if (owner === 'swap') {
+      const existing = ortMarkerVersion(sp);
+      if (existing !== null) return 'noop';
+      const pkg = SWAP_ORT_PACKAGES.find((p) => readInstalledOrtVersion(sp, p) !== null);
+      const version = pkg ? readInstalledOrtVersion(sp, pkg) : null;
+      if (!version) return 'noop';
+      writeOrtMarker(sp, version);
+      safeLog(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
+      return 'wrote';
+    }
+    // owner is 'plain' or 'none' — any marker of ours is a lie.
+    return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
+  } catch (err) {
+    safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
+    return 'noop';
+  }
+}
+
+/** Version recorded by OUR marker, or null when we have not written one. */
+function ortMarkerVersion(sitePackages) {
+  for (const dir of ortDistInfoDirs(sitePackages)) {
+    if (!isOurMarker(dir)) continue;
+    const m = /onnxruntime-(.+)\.dist-info$/.exec(dir.replace(/\\/g, '/').split('/').pop());
+    if (m) return m[1];
+  }
+  return null;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // Read + validate the venv python path FIRST — both the skip and the swap
+  // branch below need venvDir (derived from it) to maintain the #2192 marker,
+  // so it can no longer wait until after the skip branch has already exited.
   const python = process.argv[2]; // venv python path
   if (!python) {
     process.stderr.write('[install-ort] FAIL: pass the venv python path as the first arg.\n');
     process.exit(1);
   }
+  const venvDir = resolve(join(dirname(python), '..'));
+
+  const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
+  const plan = planOrtSwap(profile, process.platform);
+  if (plan.action === 'skip') {
+    process.stdout.write(`[install-ort] skip — ${plan.reason}.\n`);
+    applyOrtMarkerDelete(venvDir, plan);
+    process.exit(0);
+  }
+  // Delete FIRST, before the first pip call: a stale marker present when the
+  // uninstall step below runs would make pip resolve `onnxruntime` against
+  // TWO same-name dist-infos (ours + the real one) and can no-op the
+  // uninstall, leaving the real plain distribution in place. Mirrors
+  // bootstrap-venv.mjs's installForProfile and apply.ts's pipInstall.
+  applyOrtMarkerDelete(venvDir, plan);
   for (const step of plan.steps) {
     process.stdout.write(`[install-ort] pip ${step.join(' ')}\n`);
     const code =
       spawnSync(python, ['-m', 'pip', ...step], { stdio: 'inherit', windowsHide: true }).status ?? 1;
     if (code !== 0) {
       process.stderr.write(`[install-ort] FAIL: pip ${step.join(' ')} exited ${code}.\n`);
+      applyOrtMarkerDelete(venvDir, plan);
       process.exit(code);
     }
   }
+  applyOrtMarkerWrite(venvDir, plan);
   process.stdout.write(`[install-ort] ${plan.ortPackage} in place.\n`);
   process.exit(0);
 }

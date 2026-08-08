@@ -181,9 +181,9 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">56</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">61</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
-    <div class="stat"><div class="n blk">1</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n blk">2</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
@@ -193,11 +193,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>42</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>3</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>2</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>2</td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>8</td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td>9</td></tr>
       <tr><td><a href="#gf">F</a></td><td>A real Android device, optionally + a head unit</td><td>1</td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td>2</td></tr>
     </tbody>
@@ -209,7 +209,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">42 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -743,6 +743,56 @@
         <p class="src">A fresh install (or a <code>server/.env</code> with the three vars removed), the single 8 GB card, and a way to push committed RAM/reserved VRAM toward the thresholds · <a href="https://github.com/dudarenok-maker/Castwright/issues/2179">#2179</a> · criteria: <code>_mem_restart_threshold_mb</code> / <code>_vram_recycle_soft_threshold_mb</code> / <code>_vram_restart_threshold_mb</code> in <code>server/tts-sidecar/main.py</code> (<code>:8265-8284</code>, <code>:8154-8185</code>); the PR #2210 body and <code>0b0e7694</code>'s commit message record the before/after values · short-to-medium — the VRAM-pressure legs need a way to actually saturate the card</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A39</span><span class="iname">ORT marker — fresh NVIDIA bootstrap</span><span class="risk low">Design doc criterion 1</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>A from-scratch <code>bootstrap-venv.mjs</code> run is unit-tested at the seam, but a real pip venv&#39;s version string, real PEP-427 directory escaping, and a real <code>pip check</code>/Kokoro provider report have never confirmed the write lands correctly on a genuinely fresh box — every other row here starts from an already-bootstrapped or deliberately broken venv.</p>
+        <ul>
+          <li>Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch bootstrap on the nvidia profile.</li>
+          <li>Inspect <code>site-packages</code> for <code>onnxruntime-&lt;version&gt;.dist-info</code> at the installed GPU version.</li>
+          <li>Run <code>pip check</code> — expect exit 0. Load Kokoro and confirm <code>CUDAExecutionProvider</code>.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, willingness to rebuild the venv · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 1</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A40</span><span class="iname">ORT marker — the reported bug: in-app Qwen3 install</span><span class="risk hot">This IS #2192</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 2 — <b>this is #2192 itself</b>, the alpha tester&#39;s exact scenario, with the app running. Every other row proves a mechanism; this one is the acceptance criterion the issue was actually filed against, and it has not been separately re-confirmed since the fix landed.</p>
+        <ul>
+          <li>Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).</li>
+          <li>From the app UI, install Qwen3 (Model Manager → Install) — the exact step the original report describes failing.</li>
+          <li>Confirm the install completes with <b>no</b> <code>WinError 5</code> / <code>Accès refusé</code> on any <code>.dll</code> under <code>onnxruntime/capi/</code>.</li>
+          <li>Load Kokoro afterward and confirm it still reports <code>CUDAExecutionProvider</code>.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, app running · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 2</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A41</span><span class="iname">ORT marker refuses — not repairs — a clobbered venv</span><span class="risk">Largest affected population, per #2192</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 6. <code>ensureOrtMarker</code>&#39;s refuse-and-log branch is fully unit-tested against synthetic fixtures but has never run against a <b>real</b> clobbered venv — a box where the GPU distribution&#39;s dist-info survives (pip uninstalls by name and never knew the two collided) while the actual files on disk are the CPU build. This is the population <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> itself names as largest.</p>
+        <ul>
+          <li>Manufacture the state deliberately (destructive — do this on a copy, or plan to run the repair command after): with the sidecar stopped, <code>pip install --force-reinstall onnxruntime</code> (plain) into a venv that already has <code>onnxruntime-gpu</code>. Confirm both dist-infos exist and the namespace is CPU files.</li>
+          <li>Boot the server. Expect <code>ensureOrtMarker</code> to return <code>'clobbered'</code>: a log line naming the condition and the exact remedy command, and <b>no</b> marker written over the real distribution.</li>
+          <li>Run the named remedy command and confirm it actually repairs the box — swap re-runs, a legitimate marker is written, <code>pip check</code> clean, Kokoro reports <code>CUDAExecutionProvider</code> again.</li>
+        </ul>
+        <p class="src">The existing NVIDIA dev box, no GPU activity required · ~10 minutes incl. repair · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 6</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A42</span><span class="iname">The in-app upgrade path applies the marker on a real installed release</span><span class="risk">Different code path from bootstrap; not one of the spec's six</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><b>Not in the design doc&#39;s six criteria.</b> Filed anyway: <code>upgrade/apply.ts</code>&#39;s <code>pipInstall</code> marker wiring is exercised only through the dependency-injection seam added for this fix — real <code>spawn</code>, a real <code>venvDir</code>, and a real packaged release directory have never driven it. A genuinely different consumer of the same swap plan than <code>bootstrap-venv.mjs</code> (A39), so passing there proves nothing about this one.</p>
+        <ul>
+          <li>Take a real installed release (not the dev checkout), on NVIDIA, with a marker already present.</li>
+          <li>Trigger the in-app upgrade to a release whose sidecar requirements changed enough to re-run <code>pipInstall</code>.</li>
+          <li>Confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed; confirm <code>pip check</code> is clean afterward.</li>
+          <li>If practical, force a swap-step failure and confirm the marker is deleted rather than left lying about a runtime that was never reinstalled.</li>
+        </ul>
+        <p class="src">A real installed release directory + a way to trigger its upgrade path; the existing NVIDIA dev box otherwise · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282</p>
+      </div>
+    </details>
 
 </section>
 
@@ -905,7 +955,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -993,6 +1043,19 @@
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1880">#1880</a> · criteria in <code>docs/features/272-golden-assembly-comparison.md</code> · short</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">E9</span><span class="iname">ORT marker — the Pinokio update path</span><span class="risk">The original reporter's deployment shape</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 4: <code>pinokio-scripts/update.js</code> — named specifically, not <code>install.js</code> — as &ldquo;the deployment shape that reported the bug.&rdquo; Both invoke <code>bootstrap-venv.mjs</code> directly with <b>no server process at all</b>, but they are not interchangeable: <code>update.js</code> loads from the currently checked-out release (see E1&#39;s documented one-update lag), so a fresh-install pass does not stand in for an update pass.</p>
+        <ul>
+          <li>On a Pinokio machine with an <b>existing</b> (pre-fix) install (Windows priority — group with E1), run Update on the nvidia profile.</li>
+          <li>Confirm <code>pip check</code> is clean immediately after Update, with no server ever having started — the marker must come from <code>bootstrap-venv.mjs</code> itself, not the server-boot self-heal.</li>
+          <li>From the app, install Qwen3 (the original bug&#39;s repro) and confirm no <code>WinError 5</code>.</li>
+          <li><b>In the same session, also run a fresh Install</b> and confirm the same outcome — a second shape of this criterion, not a separate row.</li>
+        </ul>
+        <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
+      </div>
+    </details>
   </section>
 
   <!-- F -->
@@ -1051,13 +1114,20 @@
 
   <section class="group is-blocked" id="blocked">
     <header>
-      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">1 row</span></h3>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">2 rows</span></h3>
     </header>
     <details class="item">
       <summary><span class="num">—</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Waves A–G were built and merged <b>dormant</b> — the code path exists but has never run against real ROCm hardware. A dormant capability, not an active bug. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1335">#1335</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">—</span><span class="iname">ORT pip-consistency marker — AMD box</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Design doc criterion 5: &ldquo;no marker is written&rdquo; on AMD. <code>planOrtSwap('amd', …)</code> resolves to plain <code>onnxruntime</code>, so AMD takes the same <code>marker.action === 'delete'</code> branch as cpu and apple — both reachable on this box. What is genuinely AMD-specific and unverified is the ordering that branch protects: the AMD→ROCm-failure→CPU fallback inside <code>installForProfile</code> (<code>cpu.txt</code> carries an <b>explicit</b> <code>onnxruntime</code> line the fallback needs to actually install). That fallback only fires on real AMD hardware attempting a ROCm bootstrap that then fails over to CPU — nothing on a dual-NVIDIA box can reach it. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 5</p>
       </div>
     </details>
   </section>

@@ -964,10 +964,21 @@ function formatSecs(ms) {
 }
 
 // Top-level orchestrator. Returns process exit code.
+
+// Vitest fork-pool worker crash max attempts. Roughly 30% of runs on this dev box
+// (and reported cross-platform) suffer TWO crashes in a single step under
+// resource contention — a single retry (2 total attempts) is exhausted ~50% of
+// the time. Evidence: #2192 implementation branch (4 occurrences in ~13 full
+// server-suite runs). A cap of 3 total attempts (1 initial + 2 retries) lets
+// nearly every run that crashes succeed; 4+ adds no practical value and risks
+// masking a deeper instability. (A genuine test failure is never retried — only
+// a crash signature that matches isVitestPoolCrash does.)
+const MAX_POOL_ATTEMPTS = 3;
+
 /* Vitest fork-pool steps that can suffer a transient WORKER crash (the process
    dies) under resource contention (busy GPU / a parallel session) — distinct
-   from a red test. These warrant ONE automatic retry. See issue #848 +
-   docs/features/archive/45-vitest-pool-tuning.md. */
+   from a red test. These warrant up to MAX_POOL_ATTEMPTS automatic attempts
+   (1 initial + 2 retries). See issue #848 + docs/features/archive/45-vitest-pool-tuning.md. */
 const RETRIABLE_POOL_STEPS = new Set(['test:server', 'test:server-slow']);
 
 /** True iff `stderr` carries a vitest fork-pool PROCESS crash signature (a worker
@@ -981,8 +992,7 @@ export function isVitestPoolCrash(stderr) {
 
 /** Run one pipeline step (`npm run <name>`) and return its exit code. Retriable
     pool steps stream stdout LIVE but CAPTURE stderr so a fork-pool crash can be
-    detected and the step retried exactly once; every other step inherits both
-    streams unchanged. */
+    detected and the step retried; every other step inherits both streams unchanged. */
 function runStepProcess(stepName, { cwd, env }) {
   const runOnce = (capture) => {
     const r = spawnSync('npm', ['run', stepName], {
@@ -998,14 +1008,21 @@ function runStepProcess(stepName, { cwd, env }) {
     return { code: r.status ?? 1, stderr };
   };
   if (!RETRIABLE_POOL_STEPS.has(stepName)) return runOnce(false).code;
-  let res = runOnce(true);
-  if (res.code !== 0 && isVitestPoolCrash(res.stderr)) {
-    console.log(
-      `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running once`,
-    );
-    res = runOnce(true);
+  let lastRes = null;
+  for (let attempt = 1; attempt <= MAX_POOL_ATTEMPTS; attempt += 1) {
+    const res = runOnce(true);
+    lastRes = res;
+    if (res.code === 0 || !isVitestPoolCrash(res.stderr)) {
+      return res.code; // success or a genuine red test (not a crash)
+    }
+    if (attempt < MAX_POOL_ATTEMPTS) {
+      console.log(
+        `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running (attempt ${attempt + 1} of ${MAX_POOL_ATTEMPTS})`,
+      );
+    }
   }
-  return res.code;
+  // Exhausted all MAX_POOL_ATTEMPTS attempts on crashes — return the last exit code
+  return lastRes.code;
 }
 
 export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {

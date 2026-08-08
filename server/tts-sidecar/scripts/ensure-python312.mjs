@@ -46,7 +46,7 @@ function discoverPython312(platform) {
       : [['python3.12', ['--version']], ['python3', ['--version']], ['python', ['--version']]];
   for (const [bin, args] of candidates) {
     try {
-      const r = spawnSync(bin, args, { encoding: 'utf8' });
+      const r = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true });
       const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
       if (r.status === 0 && /Python 3\.12\./.test(out)) {
         // Report the command WITHOUT the trailing --version so callers can reuse it.
@@ -62,7 +62,7 @@ function discoverPython312(platform) {
 /** Whether `winget` is callable. I/O — not unit-tested. */
 function wingetAvailable() {
   try {
-    return spawnSync('winget', ['--version'], { encoding: 'utf8' }).status === 0;
+    return spawnSync('winget', ['--version'], { encoding: 'utf8', windowsHide: true }).status === 0;
   } catch {
     return false;
   }
@@ -85,6 +85,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try {
       execSync('winget install --id Python.Python.3.12 --source winget --accept-source-agreements --accept-package-agreements', {
         stdio: 'inherit',
+        windowsHide: true,
       });
     } catch {
       process.stderr.write(
