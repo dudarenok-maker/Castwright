@@ -2462,14 +2462,24 @@ than taking some code path only the server-mediated call exercises.
 - On a machine with Pinokio and an **existing** (pre-fix) install (Windows, the
   original reporter's platform, is the priority; **group with E1**, which already
   owns the Pinokio box), run Update on the nvidia profile.
-- Confirm `pip check` is clean immediately after Update completes, with no server
-  ever having started — the marker must have been written by
-  `bootstrap-venv.mjs`'s own call to `applyOrtMarkerWrite`, not by the server-boot
-  self-heal (which never ran).
+- **This PR changes no `requirements/*.txt`, so on this release Update takes the
+  `noop` branch**: `bootstrap-venv.mjs`'s `classifyVenvState` sees an unchanged
+  `reqHash`, `main()` returns before ever calling `runInstall`, and no marker is
+  written by Update at all — that is expected, by design, not a failure. Confirm
+  instead that `pip check` is unchanged from its pre-Update state, then that the
+  marker arrives (and `pip check` goes clean) at the **next server boot** via
+  `ensureOrtMarker`'s self-heal — the same mechanism criterion 3 already proved,
+  reached through the Update entry point. A future release that *does* touch
+  `requirements/*.txt` takes the `pip-in-place` branch instead, and on that
+  branch `pip check` should be clean immediately after Update, with no server
+  ever having started — written directly by `bootstrap-venv.mjs`'s own call to
+  `applyOrtMarkerWrite`.
 - From within the app once it does start, install Qwen3 (the original bug's own
   repro) and confirm no `WinError 5`.
 - **In the same session, also run a fresh Install** (`install.js`) and confirm the
-  same outcome — a second shape of this criterion, not a separate row.
+  same outcome — a second shape of this criterion, not a separate row. `install.js`
+  has no prior stamp, so it always takes the `pip-in-place`-shaped path (marker
+  written immediately, no boot needed) regardless of which branch Update took.
 
 *Needs:* a machine with Pinokio installed, an existing pre-fix install, nvidia
 profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc

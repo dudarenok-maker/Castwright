@@ -203,15 +203,43 @@ exercising in the **same session**, as a second shape, but is not a separate row
 
 ### 6.2 Expected result
 
-`pip check` is clean immediately after Update, with no server ever having run —
-proving `bootstrap-venv.mjs`'s own marker application (not the server-boot
-self-heal, which never fires here) is what did it. Installing Qwen3 afterward
-completes with no `WinError 5`. The `install.js` pass (§6.1 step 4) shows the same
-outcome.
+**This expectation is conditional on the requirements hash actually changing.**
+`bootstrap-venv.mjs`'s `classifyVenvState` (lines ~257-260) returns `noop` when
+the stamped `reqHash` already matches what this release requires — `main()`
+returns immediately in that case and never calls `runInstall`/`installForProfile`
+at all, so **no marker is written by Update**. This branch is the one this PR's
+own diff lands into (it changes no `requirements/*.txt`), so *by design* an
+Update run against this PR's release will see `pip check` still reflecting
+whatever state the venv was already in, and the marker (if owed) arrives at the
+next server boot via `ensureOrtMarker` instead — that is the expected, correct
+outcome, not a failure of this criterion.
+
+So the procedure has two distinct expected results depending on which branch
+Update takes:
+
+- **`reqHash` unchanged (`noop`, the shape this PR itself exercises):** `pip
+  check` after Update is unchanged from before Update (Update did nothing). The
+  marker legitimately arrives at first server boot afterward — confirm the
+  `[ort-marker] recorded …` log line appears there instead, then `pip check`
+  clean post-boot. This is NOT a failure — it is criterion 3's self-heal path
+  reached via the Update entry point rather than Update's own marker write.
+- **`reqHash` changed (`pip-in-place`, e.g. a future release that touches
+  `requirements/*.txt`):** `pip check` is clean immediately after Update, with
+  no server ever having run — proving `bootstrap-venv.mjs`'s own marker
+  application (not the server-boot self-heal) is what did it.
+
+Either way, installing Qwen3 afterward completes with no `WinError 5`. The
+`install.js` pass (§6.1 step 4) always takes the `pip-in-place`-shaped fresh-
+install path (there is no prior stamp to be a `noop` against), so it always
+shows the second (immediate, no-boot-needed) outcome.
 
 ### 6.3 Result
 
-**`pip check` immediately post-Update:** _(fill in)_
+**`reqHash` branch taken (`noop` or `pip-in-place`):** _(fill in)_
+**`pip check` immediately post-Update:** _(fill in — if `noop`, record "unchanged,
+by design" rather than treating a still-broken `pip check` as a failure)_
+**If `noop`: marker + clean `pip check` observed at next server boot instead:**
+_(fill in)_
 **Qwen3 install result (WinError 5 present/absent):** _(fill in)_
 **`install.js` pass (fresh install) outcome:** _(fill in)_
 **Run by:** _(fill in)_ **Date:** _(fill in)_ **Platform:** _(fill in)_

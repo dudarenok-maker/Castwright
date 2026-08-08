@@ -104,7 +104,19 @@ const PIP_SPAWN_RE = /-m['"]?\s*,?\s*['"]pip/;
    requires the literal quoted text "pip" adjacent to the quote — a real spawn
    would silently drop out of pipSpawners() coverage. No file currently in
    scope uses that shape; the EXTERNAL_FILES_FLOOR hardcoded list above
-   backstops the known offenders regardless of what pipSpawners() finds. */
+   backstops the known offenders regardless of what pipSpawners() finds.
+
+   Third known blind spot: blankComments does not lex regex literals. A regex
+   containing an unpaired quote character (e.g. a pattern matching /it['"]s/)
+   is read char-by-char like everything else, so that lone quote is mistaken
+   for the start of a string and desyncs the quote-tracking state — everything
+   after it, including a real line or block comment, is then treated as string
+   content and left unblanked rather than blanked. Unlike the two blind spots
+   above, this one is safe by construction: it can only make PIP_SPAWN_RE see
+   MORE raw text (an unblanked comment), never less, so the guard can only get
+   stricter (over-select a file into EXTERNAL_FILES) — it can never miss a real
+   pip spawner because of this gap. No file currently in scope contains such a
+   regex literal. */
 function blankComments(src: string): string {
   const out: string[] = [];
   let i = 0;

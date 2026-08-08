@@ -79,6 +79,24 @@ describe('writeOrtMarker', () => {
     expect(existsSync(join(root, 'onnxruntime-1.27.0.dist-info'))).toBe(true);
     expect(existsSync(join(root, 'onnxruntime-1.26.0.dist-info'))).toBe(false);
   });
+
+  it('heals a PARTIAL marker left by a kill between the METADATA and INSTALLER writes', () => {
+    const root = sp();
+    // Simulate a crash mid-write: only METADATA landed, so isOurMarker()
+    // rejects this dir (no INSTALLER, no RECORD) — findPlainOrtDistInfos()
+    // would otherwise count it as a REAL plain distribution forever.
+    const d = join(root, 'onnxruntime-1.27.0.dist-info');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'METADATA'), 'Metadata-Version: 2.1\nName: onnxruntime\nVersion: 1.27.0\n');
+
+    writeOrtMarker(root, '1.27.0');
+
+    expect(isOurMarker(d)).toBe(true);
+    expect(readFileSync(join(d, 'INSTALLER'), 'utf8').trim()).toBe(MARKER_INSTALLER);
+    expect(readFileSync(join(d, 'RECORD'), 'utf8')).toBe('');
+    // No temp build directory left behind.
+    expect(existsSync(join(root, '.castwright-ort-marker.tmp'))).toBe(false);
+  });
 });
 
 describe('deleteOrtMarkerIfOurs', () => {

@@ -24,8 +24,16 @@
 
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { existsSync, readdirSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  renameSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { installRecipe, PROFILES } from './accelerator-profile.mjs';
 
 /** Distribution names that OWN the onnxruntime namespace on some profile.
@@ -121,19 +129,40 @@ export function detectOrtOwner(sitePackages) {
   return 'plain';
 }
 
+/** Name for the in-progress marker build. Deliberately matches neither pip's
+ *  dist-info discovery (no `.dist-info` suffix) nor this file's own
+ *  `^onnxruntime-\d.*\.dist-info$` regex — a kill mid-build must stay
+ *  invisible to both, never surface as a partial `onnxruntime-*.dist-info`. */
+const MARKER_TMP_DIRNAME = '.castwright-ort-marker.tmp';
+
 /** Write (or overwrite) the marker. Removes any stale marker first so the
- *  version can never lag the installed runtime. */
+ *  version can never lag the installed runtime.
+ *
+ *  Builds the marker in a temp dir and `renameSync`s it into place LAST, so a
+ *  crash/kill between the individual file writes below can never leave a
+ *  partial dist-info under the real `onnxruntime-<version>.dist-info` name —
+ *  `isOurMarker()` rejects a partial one (missing INSTALLER or a non-empty/
+ *  missing RECORD), so `findPlainOrtDistInfos()` would then count it as a
+ *  REAL plain distribution and nothing would ever self-correct that. */
 export function writeOrtMarker(sitePackages, version) {
   deleteOrtMarkerIfOurs(sitePackages);
   const dir = join(sitePackages, `onnxruntime-${version}.dist-info`);
-  mkdirSync(dir, { recursive: true });
+  const tmpDir = join(sitePackages, MARKER_TMP_DIRNAME);
+  rmSync(tmpDir, { recursive: true, force: true }); // clear a stale temp from a prior crash
+  mkdirSync(tmpDir, { recursive: true });
   writeFileSync(
-    join(dir, 'METADATA'),
+    join(tmpDir, 'METADATA'),
     `Metadata-Version: 2.1\nName: onnxruntime\nVersion: ${version}\n` +
       `Summary: Provided by ${SWAP_ORT_PACKAGES.join('/')} (same namespace, same API).\n`,
   );
-  writeFileSync(join(dir, 'INSTALLER'), `${MARKER_INSTALLER}\n`);
-  writeFileSync(join(dir, 'RECORD'), ''); // MUST stay empty — see the spec's Spike 2
+  writeFileSync(join(tmpDir, 'INSTALLER'), `${MARKER_INSTALLER}\n`);
+  writeFileSync(join(tmpDir, 'RECORD'), ''); // MUST stay empty — see the spec's Spike 2
+  // renameSync fails if `dir` already exists — clear a stale/partial marker
+  // at the destination first (deleteOrtMarkerIfOurs above only removes a
+  // COMPLETE marker that passes isOurMarker, so a partial one from a prior
+  // crash at this exact version would otherwise survive and block the rename).
+  rmSync(dir, { recursive: true, force: true });
+  renameSync(tmpDir, dir);
 }
 
 /** Delete the marker if (and only if) we wrote it. Returns whether it removed one. */
@@ -330,7 +359,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.stderr.write('[install-ort] FAIL: pass the venv python path as the first arg.\n');
     process.exit(1);
   }
-  const venvDir = join(dirname(python), '..');
+  const venvDir = resolve(join(dirname(python), '..'));
 
   const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia';
   const plan = planOrtSwap(profile, process.platform);
@@ -339,12 +368,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     applyOrtMarkerDelete(venvDir, plan);
     process.exit(0);
   }
+  // Delete FIRST, before the first pip call: a stale marker present when the
+  // uninstall step below runs would make pip resolve `onnxruntime` against
+  // TWO same-name dist-infos (ours + the real one) and can no-op the
+  // uninstall, leaving the real plain distribution in place. Mirrors
+  // bootstrap-venv.mjs's installForProfile and apply.ts's pipInstall.
+  applyOrtMarkerDelete(venvDir, plan);
   for (const step of plan.steps) {
     process.stdout.write(`[install-ort] pip ${step.join(' ')}\n`);
     const code =
       spawnSync(python, ['-m', 'pip', ...step], { stdio: 'inherit', windowsHide: true }).status ?? 1;
     if (code !== 0) {
       process.stderr.write(`[install-ort] FAIL: pip ${step.join(' ')} exited ${code}.\n`);
+      applyOrtMarkerDelete(venvDir, plan);
       process.exit(code);
     }
   }

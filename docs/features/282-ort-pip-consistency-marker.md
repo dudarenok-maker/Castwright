@@ -126,6 +126,7 @@ Nothing else on disk changes.
 |---|---|---|---|
 | `swap` (GPU build owns it) | no | no | `wrote` |
 | `swap` | no | yes | `noop` (idempotent) |
+| `swap` | no | yes — but **stale** (recorded version ≠ installed version) | `noop` — **known limitation**, see note below |
 | `swap` | **yes** — the clobbered box | either | `clobbered` — refuse, log the remedy |
 | `plain` (CPU build owns it) | — | yes | `deleted` |
 | `none` (interrupted swap — no files at all) | — | yes | `deleted` |
@@ -137,11 +138,31 @@ the presence of `onnxruntime_providers_(cuda|rocm).*` when that file is absent o
 `package_name` regex doesn't match. **Never** from `import onnxruntime` +
 `get_available_providers()` — see invariant list above.
 
+**Known, accepted limitation — the stale-version marker state.** The table above
+distinguishes "our marker present?" as a boolean, but a present marker can still be
+*wrong*: if an operator runs an out-of-band `pip install -U onnxruntime-gpu` (or
+otherwise upgrades the swap distribution outside `install-ort.mjs`/`bootstrap-venv.mjs`)
+after a marker already exists, `detectOrtOwner` still reports `swap` and
+`ortMarkerVersion` still returns non-null, so `ensureOrtMarker` takes the `swap` +
+marker-present branch and returns `noop` **without ever comparing the marker's
+recorded METADATA version against the version actually installed**. The marker
+silently keeps asserting the old version until the next full swap (`planOrtSwap` →
+`writeOrtMarker`, e.g. a reinstall or a profile change) rewrites it — nothing in the
+boot-time self-heal path ever notices or corrects the drift on its own. Consequence:
+`pip check` stays clean (it only checks that *some* `onnxruntime` dist-info satisfies
+the name-based requirement, not that its version matches reality), but anything that
+trusts the marker's recorded version — a diagnostics surface, a support bundle, a
+future version-pinned dependency — would read a stale number. This is accepted as a
+known limitation rather than fixed here: closing it would mean `ensureOrtMarker`
+re-deriving and comparing the installed version on every boot, which is exactly the
+kind of scope this design deliberately keeps out of the pure-fs, no-pip-call
+self-heal path (see the invariant list above).
+
 ## Corrections vs. the design doc's original prose
 
-Two places where the shipped code behaves differently from (and more sensibly than) the
-spec's original description — recorded here so a future reader trusts the code over the
-spec text on these two points.
+Three places where the shipped code behaves differently from (and, in the first two
+cases, more sensibly than) the spec's original description — recorded here so a future
+reader trusts the code over the spec text on these points.
 
 1. **`detectOrtOwner` has a third reachable fallback path the spec didn't name.** The
    spec describes two signals: the `build_and_package_info.py` `package_name` line, and
@@ -163,6 +184,18 @@ spec text on these two points.
    guard-rejection path, and (b) the guard also protects a future plan shape that
    carries a **defined** `ortPackage` alongside `action !== 'write'`, which would reach
    the write and actually do the feared overwrite.
+3. **A null `venvDir` does not make the marker delete silently no-op the way the
+   spec's original prose claims.** The spec describes the marker path as "derived
+   from the venv python the function already holds rather than from `venvDir`, so a
+   null can never make the delete silently no-op." The shipped code does the
+   opposite: `bootstrap-venv.mjs`'s `installForProfile` gates all three marker
+   operations on `if (venvDir) …` (`bootstrap-venv.mjs:168,232,236`), so a null
+   `venvDir` DOES silently no-op the delete-at-entry, the failure-path delete, and
+   the write — exactly the behaviour the spec claims cannot happen. This is a real
+   divergence, not a "more sensible" one like the two above, but its exposure is
+   test-only: `installForProfile`'s one production caller (`runInstall`,
+   `bootstrap-venv.mjs:327`) always passes a real `venvDir`, so a null only ever
+   reaches this code from a test harness deliberately omitting it.
 
 ## Test plan
 
