@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -7,8 +7,19 @@ import {
   // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/install-ort.mjs';
 
+const tmpDirs: string[] = [];
+afterEach(() => {
+  for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+  tmpDirs.length = 0;
+});
+function mkTmp(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  tmpDirs.push(d);
+  return d;
+}
+
 function venv(withGpuDist = false) {
-  const root = mkdtempSync(join(tmpdir(), 'venv-'));
+  const root = mkTmp('venv-');
   const sp = join(root, 'Lib', 'site-packages');
   mkdirSync(sp, { recursive: true });
   if (withGpuDist) {
@@ -36,6 +47,13 @@ describe('applyOrtMarkerWrite', () => {
     const { root } = venv(false);
     expect(() => applyOrtMarkerWrite(root, planOrtSwap('nvidia', 'win32'))).toThrow(/version/i);
   });
+
+  it('THROWS naming the venv dir when there is no site-packages at all', () => {
+    const root = mkTmp('venv-'); // no Lib/site-packages created
+    expect(() => applyOrtMarkerWrite(root, planOrtSwap('nvidia', 'win32'))).toThrow(
+      new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+  });
 });
 
 describe('applyOrtMarkerDelete', () => {
@@ -54,7 +72,7 @@ describe('applyOrtMarkerDelete', () => {
   });
 
   it('never throws on a venv with no site-packages', () => {
-    const root = mkdtempSync(join(tmpdir(), 'venv-'));
+    const root = mkTmp('venv-');
     expect(() => applyOrtMarkerDelete(root, planOrtSwap('cpu', 'win32'))).not.toThrow();
   });
 });

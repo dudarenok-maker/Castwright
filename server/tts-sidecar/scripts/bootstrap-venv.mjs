@@ -159,6 +159,12 @@ export function installForProfile(
   // Delete FIRST: cpu.txt carries an explicit `onnxruntime` line, and the
   // AMD->CPU fallback below installs it. A stale marker present at that moment
   // makes pip skip the real install.
+  // NOTE: on the amd path this `plan` is used only for the marker.del call
+  // above — the amd branch below calls planOrtSwap('amd', platform) again for
+  // its own swap decision, so planOrtSwap runs twice on that path. Safe ONLY
+  // because planOrtSwap is a pure function of (profile, platform) with no I/O;
+  // if it ever gains a side effect or a non-deterministic input, this needs to
+  // be hoisted into a single call instead.
   if (venvDir) marker.del(venvDir, plan);
 
   if (profile === 'amd') {

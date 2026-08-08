@@ -47,9 +47,11 @@ const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
 /* Prod-reachable and test-only spawn sites OUTSIDE server/src that the tree
    scan can't reach: the versioned-dir launcher (launch.mjs), the prod start/stop
-   scripts, the upgrade restarter, the model installer scripts, and test runners
-   — which spawn python/pip/pytest. A hidden parent does NOT stop a grandchild
-   from popping its own console on Windows, so each grandchild needs the flag too.
+   scripts, the upgrade restarter, the model installer scripts (which spawn
+   pip), test runners (which spawn python/pip/pytest), and a python-discovery
+   helper (ensure-python312.mjs, which spawns python/winget — neither pip nor
+   pytest). A hidden parent does NOT stop a grandchild from popping its own
+   console on Windows, so each grandchild needs the flag too.
 
    This floor is a HARDCODED list, not derived from anything — `launch.mjs`
    itself spawns no pip, so it can never be picked up by pipSpawners() below.
@@ -94,7 +96,15 @@ const PIP_SPAWN_RE = /-m['"]?\s*,?\s*['"]pip/;
    -m pip install …` help text from a false-positive match (no quote precedes
    "pip" there), but a prose string that happens to quote the word — e.g.
    `console.log("... -m 'pip' ...")` — would still match with nothing actually
-   spawning pip. */
+   spawning pip.
+
+   Second known blind spot, the opposite (dangerous) direction: a variable
+   holding the pip token. `spawnSync(python, ['-m', PIP_MODULE])` where
+   `PIP_MODULE = 'pip'` does NOT match PIP_SPAWN_RE, because the pattern
+   requires the literal quoted text "pip" adjacent to the quote — a real spawn
+   would silently drop out of pipSpawners() coverage. No file currently in
+   scope uses that shape; the EXTERNAL_FILES_FLOOR hardcoded list above
+   backstops the known offenders regardless of what pipSpawners() finds. */
 function blankComments(src: string): string {
   const out: string[] = [];
   let i = 0;

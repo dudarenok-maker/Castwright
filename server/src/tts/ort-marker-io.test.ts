@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -7,7 +7,16 @@ import {
   // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/install-ort.mjs';
 
-function sp() { return mkdtempSync(join(tmpdir(), 'sp-')); }
+const tmpDirs: string[] = [];
+afterEach(() => {
+  for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+  tmpDirs.length = 0;
+});
+function sp() {
+  const d = mkdtempSync(join(tmpdir(), 'sp-'));
+  tmpDirs.push(d);
+  return d;
+}
 
 /** A REAL plain onnxruntime distribution — byte-identical directory name to ours. */
 function realPlainDist(root: string, version = '1.28.0') {

@@ -1,12 +1,23 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { detectOrtOwner } from '../../tts-sidecar/scripts/install-ort.mjs';
 
+const tmpDirs: string[] = [];
+afterEach(() => {
+  for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+  tmpDirs.length = 0;
+});
+function mkTmp(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  tmpDirs.push(d);
+  return d;
+}
+
 function venvWith(info: string | null, extra: string[] = []) {
-  const root = mkdtempSync(join(tmpdir(), 'sp-'));
+  const root = mkTmp('sp-');
   const capi = join(root, 'onnxruntime', 'capi');
   mkdirSync(capi, { recursive: true });
   if (info !== null) writeFileSync(join(capi, 'build_and_package_info.py'), info);
@@ -36,12 +47,12 @@ describe('detectOrtOwner', () => {
   });
 
   it('reports none for an ABSENT namespace — the interrupted-swap state', () => {
-    const root = mkdtempSync(join(tmpdir(), 'sp-'));
+    const root = mkTmp('sp-');
     expect(detectOrtOwner(root)).toBe('none');
   });
 
   it('reports none for a gutted namespace (dir exists, capi empty)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'sp-'));
+    const root = mkTmp('sp-');
     mkdirSync(join(root, 'onnxruntime', 'capi'), { recursive: true });
     expect(detectOrtOwner(root)).toBe('none');
   });

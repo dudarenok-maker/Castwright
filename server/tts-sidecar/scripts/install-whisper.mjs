@@ -46,6 +46,17 @@ export function whisperPipInstallArgs(constraintsPath) {
   return ['-m', 'pip', 'install', 'faster-whisper', '-c', constraintsPath];
 }
 
+/** Write the sanitized constraints file and pip-install faster-whisper against
+ *  it. `deps` is injectable so a test can assert the EXACT args `run` receives
+ *  without spawning a real interpreter — `run`/`writeConstraints` default to
+ *  the real implementations. Returns the exit status `run` returns (0 = ok);
+ *  the caller (main) decides what a non-zero status means, unchanged from
+ *  before this extraction (still process.exit(1) on failure). */
+export function installFasterWhisper(python, env, deps = { run, writeConstraints: writeSanitizedConstraintsFile }) {
+  const constraints = deps.writeConstraints(join(SIDECAR_DIR, 'requirements', 'base.txt'));
+  return deps.run(python, whisperPipInstallArgs(constraints), env);
+}
+
 const args = process.argv.slice(2);
 function flag(name) {
   const i = args.indexOf(name);
@@ -102,8 +113,7 @@ function main() {
   const env = { HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
 
   step('Installing faster-whisper (pinned via base.txt)...');
-  const constraints = writeSanitizedConstraintsFile(join(SIDECAR_DIR, 'requirements', 'base.txt'));
-  if (run(python, whisperPipInstallArgs(constraints), env) !== 0) {
+  if (installFasterWhisper(python, env) !== 0) {
     step('FAIL: pip install faster-whisper failed. Check network + sidecar venv.');
     process.exit(1);
   }

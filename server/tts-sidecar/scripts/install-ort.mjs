@@ -208,7 +208,7 @@ function constrainForInstall(ortPackage) {
  * python. `ortPackage` on the swap variant lets the CLI report which package it
  * actually put in place without re-deriving it (#1844) — a second source of
  * truth there is exactly how the CLI drifted into naming the wrong package.
- * @returns {{action:'skip', reason:string, marker:{action:string}} | {action:'swap', steps:string[][], ortPackage:string, marker:{action:string}}}
+ * @returns {{action:'skip', reason:string, marker:{action:'delete'}} | {action:'swap', steps:string[][], ortPackage:string, marker:{action:'write'}}}
  */
 export function planOrtSwap(profile, platform) {
   const { ortPackage } = installRecipe(profile, platform);
@@ -268,6 +268,17 @@ export function applyOrtMarkerWrite(venvDir, plan) {
  *  Pure fs: no pip, no network, no subprocess, no `import onnxruntime`.
  *  NEVER throws — its caller runs during server startup. */
 export function ensureOrtMarker(venvDir, log = () => {}) {
+  // `log` is caller-supplied (index.ts passes console.log by default, but any
+  // caller can pass anything). Every call site below goes through this wrapper
+  // so a THROWING log can never escape ensureOrtMarker — including from inside
+  // the catch block that exists to guarantee this function never throws.
+  const safeLog = (msg) => {
+    try {
+      log(msg);
+    } catch {
+      /* never let a caller-supplied log defeat the never-throws guarantee */
+    }
+  };
   try {
     const sp = sitePackagesDir(venvDir);
     if (!sp) return 'noop';
@@ -275,7 +286,7 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
     const realPlain = findPlainOrtDistInfos(sp);
 
     if (owner === 'swap' && realPlain.length > 0) {
-      log(
+      safeLog(
         '[ort-marker] This venv has a real plain onnxruntime installed over the GPU runtime ' +
           '(GPU Kokoro is disabled). Refusing to write a marker over it. Repair with:\n' +
           '  CASTWRIGHT_ACCELERATOR_PROFILE=<profile> node server/tts-sidecar/scripts/install-ort.mjs <venv-python>',
@@ -289,13 +300,13 @@ export function ensureOrtMarker(venvDir, log = () => {}) {
       const version = pkg ? readInstalledOrtVersion(sp, pkg) : null;
       if (!version) return 'noop';
       writeOrtMarker(sp, version);
-      log(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
+      safeLog(`[ort-marker] recorded onnxruntime ${version} as provided by ${pkg}.`);
       return 'wrote';
     }
     // owner is 'plain' or 'none' — any marker of ours is a lie.
     return deleteOrtMarkerIfOurs(sp) ? 'deleted' : 'noop';
   } catch (err) {
-    log(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
+    safeLog(`[ort-marker] skipped: ${err instanceof Error ? err.message : String(err)}`);
     return 'noop';
   }
 }

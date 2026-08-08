@@ -1,12 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 import { ensureOrtMarker, writeOrtMarker } from '../../tts-sidecar/scripts/install-ort.mjs';
 
+const tmpDirs: string[] = [];
+afterEach(() => {
+  for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+  tmpDirs.length = 0;
+});
+function mkTmp(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  tmpDirs.push(d);
+  return d;
+}
+
 function venv({ owner, realDist }: { owner: 'swap' | 'plain' | 'none'; realDist?: boolean }) {
-  const root = mkdtempSync(join(tmpdir(), 'venv-'));
+  const root = mkTmp('venv-');
   const sp = join(root, 'Lib', 'site-packages');
   mkdirSync(sp, { recursive: true });
   if (owner !== 'none') {
@@ -73,13 +84,13 @@ describe('ensureOrtMarker', () => {
   });
 
   it('never creates a site-packages tree on a half-built venv', () => {
-    const root = mkdtempSync(join(tmpdir(), 'venv-'));
+    const root = mkTmp('venv-');
     ensureOrtMarker(root);
     expect(existsSync(join(root, 'Lib', 'site-packages'))).toBe(false);
   });
 
   it('never throws on a corrupted venv whose site-packages is a file, not a directory', () => {
-    const root = mkdtempSync(join(tmpdir(), 'venv-'));
+    const root = mkTmp('venv-');
     mkdirSync(join(root, 'Lib'), { recursive: true });
     writeFileSync(join(root, 'Lib', 'site-packages'), 'not a directory');
     const lines: string[] = [];
@@ -91,5 +102,18 @@ describe('ensureOrtMarker', () => {
   it('returns noop when no runtime exists and no marker is present (row 6)', () => {
     const { root } = venv({ owner: 'none' });
     expect(ensureOrtMarker(root)).toBe('noop');
+  });
+
+  it('never throws even when the caller-supplied log itself throws', () => {
+    // Clobbered-venv shape: reaches the log() call inside ensureOrtMarker's
+    // try block. A throwing log must not defeat the "never throws" guarantee
+    // that ensureOrtMarker's callers (server startup) depend on.
+    const { root, sp } = venv({ owner: 'swap', realDist: true });
+    const throwingLog = () => {
+      throw new Error('log sink is down');
+    };
+    expect(() => ensureOrtMarker(root, throwingLog)).not.toThrow();
+    expect(ensureOrtMarker(root, throwingLog)).toBe('clobbered');
+    expect(existsSync(join(sp, 'onnxruntime-1.28.0.dist-info'))).toBe(true);
   });
 });
