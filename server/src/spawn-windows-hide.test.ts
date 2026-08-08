@@ -45,21 +45,119 @@ const CALL_RE = new RegExp(String.raw`(?<![.\w])(${SPAWN_NAMES.join('|')})\s*\(`
    any `spawnFn(` (bare OR member, e.g. `this.spawnFn(`) and demand the flag. */
 const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
-/* Prod-reachable spawn sites OUTSIDE server/src that the tree scan can't reach:
-   the versioned-dir launcher (launch.mjs), the prod start/stop scripts, the
-   upgrade restarter, and the model installer scripts — which spawn python/pip,
-   and a hidden parent does NOT stop a grandchild from popping its own console
-   on Windows, so each grandchild needs the flag too. */
+/* Prod-reachable and test-only spawn sites OUTSIDE server/src that the tree
+   scan can't reach: the versioned-dir launcher (launch.mjs), the prod start/stop
+   scripts, the upgrade restarter, the model installer scripts, and test runners
+   — which spawn python/pip/pytest. A hidden parent does NOT stop a grandchild
+   from popping its own console on Windows, so each grandchild needs the flag too.
+
+   This floor is a HARDCODED list, not derived from anything — `launch.mjs`
+   itself spawns no pip, so it can never be picked up by pipSpawners() below.
+   Replacing the floor with a glob would silently drop it and the guard would
+   get WEAKER while appearing to get stronger. Keep it as-is; only ADD to it. */
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
-const EXTERNAL_FILES = [
+const EXTERNAL_FILES_FLOOR = [
   'launch.mjs',
   'scripts/start-app-prod.mjs',
   'scripts/restart-after-upgrade.mjs',
   'scripts/stop-app.mjs',
+  'scripts/run-sidecar-tests.mjs',
   'server/tts-sidecar/scripts/install-whisper.mjs',
   'server/tts-sidecar/scripts/install-qwen3.mjs',
   'server/tts-sidecar/scripts/install-coqui.mjs',
+  'server/tts-sidecar/scripts/ensure-python312.mjs',
 ].map((rel) => join(REPO_ROOT, rel));
+
+/* install-ort.mjs (#2192) made the ONNX-runtime swap load-bearing on the boot,
+   bootstrap AND upgrade paths, but it's just one file — the next pip-spawning
+   script dropped into either scripts dir would be just as prod-reachable and
+   just as invisible to a hardcoded list. Glob both dirs instead of hand-adding
+   one more filename, and keep ONLY the files that actually invoke pip via
+   `-m pip` — a plain `.mjs` glob with no content filter would also sweep in
+   files with no spawn call at all (pip-constraints.mjs, accelerator-profile.mjs)
+   and files whose spawns have nothing to do with pip (ensure-python312.mjs). */
+const PIP_SPAWN_RE = /-m['"]?\s*,?\s*['"]pip/;
+
+/* Blank line comments and block comments only — NOT string/template content.
+   This is deliberately weaker than blankCommentsAndStrings above: PIP_SPAWN_RE
+   has to see the actual quoted '-m'/'pip' argv tokens, which live INSIDE string
+   literals, so blanking string content the way the windowsHide scan does would
+   erase the very thing being detected and pipSpawners() would select nothing.
+   String/template boundaries are still tracked (so a comment-opening sequence
+   embedded in a string is never mistaken for a real comment start) but their
+   content passes through untouched.
+
+   Known blind spot: a plain string or template literal that merely MENTIONS
+   "-m pip" as prose (a log/help line, not a real spawn argv) is not fully ruled
+   out — PIP_SPAWN_RE requires a quote directly before "pip" (no `?` on that
+   group), which is what saves scripts/run-sidecar-tests.mjs's `.venv/bin/python
+   -m pip install …` help text from a false-positive match (no quote precedes
+   "pip" there), but a prose string that happens to quote the word — e.g.
+   `console.log("... -m 'pip' ...")` — would still match with nothing actually
+   spawning pip. */
+function blankComments(src: string): string {
+  const out: string[] = [];
+  let i = 0;
+  const keepWhitespace = (ch: string) => (ch === '\n' ? '\n' : ' ');
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < src.length && src[i] !== '\n') out.push(keepWhitespace(src[i++]));
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      out.push('  ');
+      i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) out.push(keepWhitespace(src[i++]));
+      if (i < src.length) {
+        out.push('  ');
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      out.push(ch);
+      i += 1;
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === '\\') {
+          out.push(src[i], src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        out.push(src[i++]);
+      }
+      if (i < src.length) {
+        out.push(src[i]);
+        i += 1;
+      }
+      continue;
+    }
+    out.push(ch);
+    i += 1;
+  }
+  return out.join('');
+}
+
+/* Non-recursive on purpose — both dirs are flat script drops, not trees. */
+function pipSpawners(): string[] {
+  const dirs = [
+    join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts'),
+    join(REPO_ROOT, 'scripts'),
+  ];
+  const out: string[] = [];
+  for (const dir of dirs) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.mjs')) continue;
+      const full = join(dir, entry.name);
+      if (PIP_SPAWN_RE.test(blankComments(readFileSync(full, 'utf8')))) out.push(full);
+    }
+  }
+  return out;
+}
+
+const EXTERNAL_FILES = [...new Set([...EXTERNAL_FILES_FLOOR, ...pipSpawners()])];
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];

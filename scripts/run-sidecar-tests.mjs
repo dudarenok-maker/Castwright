@@ -51,7 +51,7 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   // but requirements-dev.txt was never installed. Without this, that box goes
   // from green-skip to RED on `npm run verify` and pre-push — a regression
   // dressed up as "local behaviour is unchanged".
-  const probe = spawnSync(python, ['-m', 'pytest', '--version'], { encoding: 'utf8' });
+  const probe = spawnSync(python, ['-m', 'pytest', '--version'], { encoding: 'utf8', windowsHide: true });
   if ((probe.status ?? 1) !== 0) {
     const msg = 'sidecar pytest -- venv present but pytest is not installed';
     if (requireVenv) {
@@ -70,7 +70,7 @@ export function main(argv = process.argv.slice(2), sidecarDir = SIDECAR_DIR) {
   const result = spawnSync(
     python,
     ['-m', 'pytest', '-m', 'not golden', '--tb=short', '-q', 'tests', ...passthrough],
-    { cwd: sidecarDir, stdio: 'inherit' },
+    { cwd: sidecarDir, stdio: 'inherit', windowsHide: true },
   );
   if (result.error) {
     process.stderr.write(`run-sidecar-tests: failed to spawn python: ${result.error.message}\n`);
