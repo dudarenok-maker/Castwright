@@ -220,15 +220,24 @@ owner: null
    93/161 before), and *Unlocked* alone still carries 34 orphaned segments
    under `unknown-male`; see the on-box register's A33 row) or a re-render
    to recover.
-10. **A reject's two writes are created together and must be destroyed
-    together** (#2133). `POST /reject-orphan-match` writes BOTH a
-    `rejectedPairs` entry on `cast-id-history.json` and a one-sided
-    `notLinkedTo` edge on `cast.json` — see this same doc's invariant 2 and
-    `rejectedPairs`'s own doc comment on `CastIdHistory`
-    (`server/src/store/cast-id-history.ts`) for why both are needed. Anything
-    that removes one must remove the other, or the survivor becomes a
-    decision about a pairing that no longer exists, applied forever,
-    invisibly:
+10. **Invariant 10 — a reject's two writes are created together and destroyed
+    together.** The `rejectedPairs` entry is written first and removed last;
+    the `notLinkedTo` edge is created after it and destroyed before it, so
+    both verbs fail into the *visible* state (chip renders, Undo works, retry
+    completes). `reject-edge-reconcile.ts` heals a half-written reject at the
+    next authoritative persist, and `notLinkedTo` is server-owned on the cast
+    PUT so a stale client cannot undo that. Shipped by #2166 / plan 281.
+    **Open residual:** a multi-pair DELETE can half-complete and become
+    unretryable — see #2198.
+    - **#2200 fix (2026-08-07):** plan 281's add rule additionally suppressed
+      every add for a `from` whenever a RELOCATED edge existed for it (an edge
+      `merge-analysis-cast.ts` copied by name onto a row that is not any
+      pair's `to`) — reachable with no failure required, and it under-healed
+      a second, genuinely edgeless pair for that same `from` alongside the
+      relocated one. `reject-edge-reconcile.ts` now adds strictly per-pair on
+      `p.to`, unconditional on relocation; the relocated edge itself is left
+      in place either way (removal is untouched) and stays this invariant's
+      pre-existing residual, not a new one.
     - **`retireCharacterId` dropping a self-loop `rejectedPairs` entry**
       (`RetireCharacterIdResult.droppedSelfLoopRejections`,
       `cast-id-history.ts`) — when the id a pair was rejected `to` retires

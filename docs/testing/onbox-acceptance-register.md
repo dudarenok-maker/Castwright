@@ -97,19 +97,74 @@ comparison, see the edge list above). The merge step that closes this, run
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
-2. Run `npm run check:onbox-register -- --against-published <saved-file>`.
-   Unlike `check:onbox-register`'s no-flag run, this comparison is
-   deliberately ONE-DIRECTIONAL: your register having rows the live page
-   doesn't have yet is the normal reason you're publishing, not a defect, so
-   it is never reported here. It fails ONLY when the live page has a row (or
-   group) your register does not — the signature of another lane having
-   already published ahead of you.
-3. **If it fails**, do NOT publish — your register is BEHIND what is already
-   live. Pull the latest `main` (the row that's already live should already
-   be merged there via its own PR), confirm `npm run check:onbox-register`
-   (no flag) is green, and re-run step 2 against the SAME saved copy from
-   step 1 to confirm it now passes. It should — main pulling in the missing
-   row is what resolves this, not another fetch of the live page.
+2. Run
+   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
+   `check:onbox-register`'s no-flag run, this comparison is deliberately
+   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
+   is the normal reason you're publishing, not a defect, so it is never
+   reported here. A row (or group) the live page has that your register
+   lacks is reported ONLY when `origin/main`'s own copy of this register
+   still has it too — the signature of another lane having already
+   published ahead of you. When `origin/main` also lacks it, the row was a
+   deliberate discharge (by this change or an already-merged one), not a
+   race, and is not reported: discharging a row (and, since rows renumber
+   contiguously, often renumbering the survivors) always makes the
+   still-live page look "ahead" of your working copy in this exact shape,
+   and that is expected. **The command fetches `origin/main` itself, fresh,
+   every run — you do not need to `git fetch` by hand first.** It then reads
+   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
+   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
+   updates `refs/remotes/origin/main` depends on this checkout's
+   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
+   narrowed refspec can skip while the fetch still exits 0, leaving
+   `origin/main` silently stale even though the fetch just "succeeded". If
+   you ever need to reproduce this baseline by hand for debugging, run
+   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
+   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
+   configured clone, entirely unresolvable) content even immediately after a
+   successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote
+   URL anyway, so an operator who can't reach the network here can't
+   complete step 4 either.
+3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+   named in the error text:
+   - **A row/group named as already live and BEHIND** — your register is
+     genuinely behind. Pull the latest `main` (the row that's already live
+     should already be merged there via its own PR), confirm
+     `npm run check:onbox-register` (no flag) is green, and re-run step 2
+     against the SAME saved copy from step 1 to confirm it now passes. It
+     should — main pulling in the missing row is what resolves this, not
+     another fetch of the live page.
+   - **"Cannot verify"** — the check refuses to guess whether an extra row
+     is a discharge or a race, and fails closed instead. This is NOT the
+     same as the register being behind: pulling `main` on your own machine
+     doesn't fix it, in either of the two shapes below.
+     - **A git call failed** — the command's own `git fetch origin main`, or
+       the `git show FETCH_HEAD:<path>` that reads what it just fetched,
+       failed (network unreachable, no credentials, `origin` misconfigured
+       or unresolvable, a timeout). The error names which one
+       (`fetch` or `show`) — run that command by hand to see the underlying
+       error, fix whatever it reports (network, auth, the remote), then
+       re-run step 2.
+     - **No git call failed, but the baseline is malformed** — `origin/main`'s
+       OWN copy of this register is internally inconsistent (a count
+       mismatch, a contiguity gap, a duplicate group letter, a sub-lettered
+       row heading, a glance-table row with no matching body section, ...),
+       so the fetch and the read both succeeded but the content they got
+       back can't be trusted. The error names no `fetch`/`show` failure in
+       this shape — that absence is itself the signal. Run
+       `npm run check:onbox-register` against a checkout of `main` (not your
+       branch) to see which specific check fails, then fix THAT on `main`
+       first (its own PR) before retrying step 2 here — this can't be fixed
+       from your branch, only from `main`.
+
+   **Known limitation:** a row that's live and still genuinely owed but was
+   never actually merged into `main` at all (e.g. published straight from a
+   branch that never merged, or from a PR later reverted) is not
+   distinguishable from a deliberate discharge — it silently reads as
+   discharged rather than being flagged. Accepted trade-off, not an
+   oversight; see `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 4. Only once step 2 passes, publish the tracked `.html`, with the canonical
    URL above as `url`.
 
@@ -122,8 +177,21 @@ eyeballed diff — it does not, and cannot, make the four steps happen on
 their own. An early version of this check compared both directions
 symmetrically, which inverted the diagnosis (failed on every ordinary
 publish and told the operator to delete the rows they were about to ship) —
-fixed before this landed; see the `checkLiveView` function's own header
-comment in `scripts/check-onbox-register.mjs` for the reasoning.
+fixed before this landed. A later version still fired on every legitimate
+row discharge, because removing a row is invisible in that same direction
+too: the still-live page always looks "ahead" of a register that just
+discharged a row from it. It now disambiguates the two by checking whether
+`origin/main`'s own copy of the register also lacks the row before reporting
+it (#2199); see the `checkLiveView` function's own header comment in
+`scripts/check-onbox-register.mjs` for the reasoning. The `origin/main` copy
+that comparison reads is fetched fresh by the command itself immediately
+before reading it, not taken from whatever the local `origin/main` ref
+already happened to point at — an operator whose local ref predated a merge
+would otherwise see that merge's row as absent from both their own register
+and their stale baseline, which reads identically to a deliberate discharge
+and would have let the exact #1931 race straight back through. See
+`resolveBaselineText`'s own header comment in
+`scripts/check-onbox-register.mjs` for that half of the reasoning.
 
 The governing rule lives in [`CLAUDE.md`](../../CLAUDE.md) under "Testing
 discipline" and as Before-shipping checklist step 3. In short:
@@ -160,9 +228,9 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 41 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 42 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
-| **C** | One *Ночной дозор* re-analysis session | 1 |
+| **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 2 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **F** | A real Android device, optionally + a head unit | 1 |
@@ -170,7 +238,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 2 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**59 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
+**61 owed.** Oldest: **2026-06-01** (plans 160, 161, 165).
 
 ---
 
@@ -367,6 +435,18 @@ asserts which voice reached the provider.
 `ASR_DEVICE` and `ASR_COMPUTE_TYPE` in `server/.env` must agree — flipping the
 device to `cpu` while `ASR_COMPUTE_TYPE=int8_float16` remains pinned makes every
 `/transcribe` 500. `_compute_type()` is correct; nothing enforces the pairing.
+**Fixed for the Advanced Configuration path by [#2180](https://github.com/dudarenok-maker/Castwright/issues/2180):**
+`PUT /api/config` rejects a `qa.asr.device` / `qa.asr.computeType` save that
+would leave this pair mismatched, checked against the resulting effective
+config (not just the incoming patch); `POST /api/config/reset` (every
+Advanced Settings row's per-key Revert, plus a group/`qa-gates` or `all`
+reset) checks the same resulting-effective-config rule before clearing
+anything, so a Revert click can't reopen the pair either (independent review
+of PR #2205, finding F1 — the reset path was still an open bypass when #2180
+first shipped). So the UI can no longer produce this state. A hand-edited
+`server/.env` still bypasses save-time validation by design and can still
+reach this combination — that residue is explicitly out of scope for #2180
+(belongs with #2131's sidecar-side surfacing work instead).
 (2) `npm start` appears to launch two sidecars but does not — the venv
 `python.exe` is a launcher that re-execs the base interpreter as a child. Only
 one holds :9000. Separately, `npm run stop` repeatedly reported
@@ -2002,9 +2082,57 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
+### A38 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
+
+`.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
+/ `SIDECAR_VRAM_RESTART_MB=0` as literal, active env assignments — and each of the
+three threshold functions in `main.py` treats a **present** `0` (or any parseable
+value) as an explicit override, not as "unset." Since #2179 comments the generated
+`.env.example` block out instead of emitting it active, a fresh install now leaves
+all three **absent**, so the sidecar self-computes 70% of total physical RAM (hard
+restart), 90% of the resident card's total VRAM (soft recycle), and 98% of the
+card's total VRAM (hard restart) — three lifecycle behaviours that were silently
+disabled on every install that copied `.env.example` verbatim (Pinokio, and the
+documented manual/`INSTALL.md` path) until this fix, and are now live. None of this
+is exercised by any pytest/vitest suite — the three threshold functions are unit-
+tested for their env-present/absent MATH, not for whether a real sidecar process
+ever crosses a live threshold and actually exits/recycles.
+
+- Confirm a fresh install (a `server/.env` written from the current
+  `.env.example` — i.e. all three of `SIDECAR_RESTART_MB` /
+  `SIDECAR_VRAM_RECYCLE_SOFT_MB` / `SIDECAR_VRAM_RESTART_MB` absent from the
+  environment) computes and uses the auto thresholds at sidecar startup (70%
+  of total RAM; 90%/98% of the resident card's total VRAM) rather than
+  treating them as disabled.
+- Drive committed RAM up toward the ~70% ceiling (a long multi-chapter run,
+  or a synthetic host-memory hog alongside the sidecar) and confirm the
+  sidecar self-exits with code 43 for the supervisor to respawn, rather than
+  never recycling.
+- Drive reserved VRAM up toward the 90% soft threshold and confirm `/health`
+  sets `recycle_pending` and a clean chapter-boundary recycle fires (not a
+  mid-chapter hard exit); then, on a card where the soft recycle didn't
+  already relieve the pressure, continue up toward the 98% hard threshold
+  and confirm the hard self-exit fires instead of an uncontrolled OOM.
+- Watch for thrash: across an ordinary render, the auto thresholds must not
+  fire routinely — a card sitting in the high-80s/90s% reserved as a normal
+  batch peak (see the `_TORCH_ACTIVE_RESERVED_MB` torch-managed-card
+  carve-out in `main.py`) should not trip a recycle storm now that the
+  ceiling is live where it was previously inert.
+
+*Needs:* a fresh install (or a `server/.env` with the three vars removed) so
+the auto path is actually reached; the single 8 GB card is enough; a way to
+push committed RAM/reserved VRAM toward the thresholds (a long render, or a
+synthetic memory/VRAM hog run alongside it). *Criteria:*
+`_mem_restart_threshold_mb` / `_vram_recycle_soft_threshold_mb` /
+`_vram_restart_threshold_mb` in `server/tts-sidecar/main.py` (`:8265-8284`,
+`:8154-8185`); the #2210 PR body and `0b0e7694`'s commit message record the
+before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
+way to actually saturate the card, which may need a synthetic hog rather
+than a real render.
+
 ---
 
-### A38 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A39 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 1. A from-scratch `bootstrap-venv.mjs`
 run on the nvidia profile is unit-tested at the seam
@@ -2026,7 +2154,7 @@ exercises `installForProfile`'s write branch on a first-ever install.
 scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-### A39 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A40 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
 tester's exact scenario, with the app running. Every other row for this feature
@@ -2046,7 +2174,7 @@ filed against, and it has not been separately re-confirmed since the fix landed
 §On-box acceptance item 2; run sheet §4 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-### A40 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
+### A41 · ORT marker refuses — not repairs — a clobbered venv ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 6. `ensureOrtMarker`'s refuse-and-log
 branch (the clobbered-box row of the design doc's five-state table) is fully
@@ -2081,7 +2209,7 @@ five-state table and "the clobbered box takes the loud path" in
 `docs/features/282-ort-pip-consistency-marker.md`; run sheet §8 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
 
-### A41 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
+### A42 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
 `upgrade/apply.ts`'s `pipInstall` marker handling (delete before the first
@@ -2091,7 +2219,7 @@ the real body had zero prior test coverage
 (`server/src/upgrade/apply-ort-marker.test.ts`) — but real `spawn`, a real
 `venvDir`, and a real packaged release directory have never driven it. A
 genuinely different consumer of the same `planOrtSwap` output than
-`bootstrap-venv.mjs` (A38), so that row passing proves nothing about this one.
+`bootstrap-venv.mjs` (A39), so that row passing proves nothing about this one.
 
 - Take a real installed Castwright release (not the dev checkout — the packaged
   `release/` layout `upgrade/apply.ts` targets), on NVIDIA, with a marker already
@@ -2161,7 +2289,7 @@ Wave 1 (A32 above, in Group A) resolves drift that already exists, at render tim
 
 ## Group C — one *Ночной дозор* re-analysis session
 
-**One row left.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
+**Two rows.** The **local pass ran 2026-08-06** by Claude Code on the dual-GPU
 box — 9 chapters, **15,069 sentences**, `qwen36-cw-iq4-32k` via local Ollama,
 structure engine on, `analyzer.structure.escalation = 'local'`, no mock mode —
 and discharged **C1** (plan 261, scene separators) and **C2** (plan 247, srv-59
@@ -2175,6 +2303,12 @@ mechanically gone). **C2's targets were missed** (flagged 6,568 vs ≤~500) beca
 chapters 5–8 fell below the hardcoded 80% alignment floor and degraded to
 flag-only; chapter 9, which aligned at 95%, ran the full engine and landed
 flagged=**488, under target**. The aligner — not the engine — is the bottleneck.
+
+Since then the #2187 aligner fix has landed, adding a **new C2** — one more local
+re-analysis to confirm plan 247's flagged-count target end to end. Alignment
+itself is already proven and is **not** what that row asks for. (The ID is
+reused: the C2 discharged above was the srv-59 attribution row. Row IDs are
+positional and renumber on discharge.)
 
 The cloud row remains (renumbered **C1** now that the other two are discharged;
 it was C3 before 2026-08-06 and is referenced under that ID in
@@ -2214,6 +2348,35 @@ is keyed by `manuscriptId` only (`server/src/store/analysis-cache.ts` header), s
 re-analyzing the existing entry would overwrite the qwen36 sentences, `cast.json`
 and `state.json` that the 2026-08-06 pass produced and that the owner is keeping
 for cast + generation.
+
+### C2 · srv-59 flagged-count target, end to end after the #2187 aligner fix ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187), plan [247](../features/247-dialogue-structure-attribution.md))
+
+**What is already proven, and does NOT need re-running:** alignment. The #2187 fix
+was measured offline against this exact corpus — the 15,069 cached stage-2
+sentences replayed through the production EPUB parser and the production aligner
+— taking chapters 5–8 from 3.7/1.7/66.4/73.5% to 94.6/92.7/92.0/95.7%, book-level
+67.7% → 96.0%, with the pre-fix column reproducing the on-box report to within
+rounding. Every chapter now clears the 80% floor. The aligner is pure, so no
+hardware was needed and none is needed again.
+
+**What is still owed:** plan 247's **target 1 — flagged ≤ ~500 per chapter**. That
+is a property of the cross-examiner running over a *real* stage-2 model output,
+not of alignment alone, so it cannot be replayed from cache. Observe, per chapter,
+the `[analysis:structure]` line's `flagged` count and confirm it lands near
+chapter 9's already-measured 488 rather than the 1,200–1,700 the below-floor
+chapters produced. Also confirm `escalation` actually runs now (it was skipped
+chapter-wide before) and record the escalated/accepted counts, plus wall-clock —
+target 5 (+2–5 h at `'local'`) was never measurable while escalation was being
+skipped.
+
+Same setup as the 2026-08-06 pass: local Ollama, `qwen36-cw-iq4-32k`, structure
+engine on, `analyzer.structure.escalation = 'local'`, no TTS. Force `fresh: true`
+— a resumed run serves cached chapters and measures nothing (see the Group C
+history above, and the chapters 1–4 caveat in plan 247).
+
+**Run it against a throwaway re-import, not the library book** — same reason as
+C1 above: the cache is keyed by `manuscriptId` only, so re-analyzing the library
+entry would overwrite the qwen36 cast the owner is keeping.
 
 ---
 

@@ -15,6 +15,7 @@ import {
 import { OllamaAnalyzer } from '../ollama.js';
 import { GeminiAnalyzer } from '../gemini.js';
 import type { Analyzer } from '../index.js';
+import { configValue } from '../../config/resolver.js';
 
 const DEFAULT_CORPUS = fileURLToPath(new URL('./corpus/', import.meta.url));
 const COMMITTED = fileURLToPath(new URL('./__fixtures__/', import.meta.url));
@@ -26,7 +27,7 @@ const FIXTURE_RE = /^(.+)-ch(\d+)\.([a-z]{2})(\.silver)?\.labelled\.json$/;
 
 export function slotLabel(engine: 'qwen' | 'gemma'): string {
   if (engine === 'qwen') return `qwen:${process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b'}`;
-  return `gemma:${process.env.GEMINI_MODEL ?? 'gemma-4-31b-it'}`;
+  return `gemma:${configValue<string>('analyzer.gemini.model')}`;
 }
 
 /** Pure — no filesystem access. Parses a fixture filename into its slug/
@@ -89,7 +90,7 @@ async function buildAnalyzer(engine: 'qwen' | 'gemma'): Promise<Analyzer | null>
   }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
-  return new GeminiAnalyzer({ apiKey, model: process.env.GEMINI_MODEL ?? 'gemma-4-31b-it' });
+  return new GeminiAnalyzer({ apiKey, model: configValue<string>('analyzer.gemini.model') });
 }
 
 /** A FixtureAgg tagged with its corpus tier, for the CLI's gold/silver

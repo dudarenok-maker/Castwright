@@ -1,5 +1,5 @@
 ---
-status: draft
+status: stable
 ---
 
 # Reject-edge atomicity (#2166) Implementation Plan
@@ -106,6 +106,15 @@ on a row that is some pair's own `to`. If a relocated edge for `from` exists, ev
 `from` is skipped — identical to the spec's blanket behaviour. If none exists, every surviving edge
 for that `from` already sits on a `to` of that `from`, so a per-pair add can never duplicate. The
 rule heals strictly more and risks strictly no more.
+
+> **Superseded by #2200 (2026-08-07).** The "if a relocated edge for `from` exists, skip every add
+> for that `from`" clause above was itself found to under-heal: a book can carry a relocated edge
+> for `from` *and* a second, genuinely edgeless pair for that same `from` at once (reachable without
+> any failure — see `docs/features/278-cast-character-identity.md` invariant 10 and
+> `docs/superpowers/specs/2026-08-07-reject-edge-per-pair-heal-design.md` §1), and the clause silently suppressed the second pair's add forever. The relocation guard was
+> removed from the add pass entirely; addition is now purely per-pair on `p.to`, gated only by the
+> `existing.some(...)` dedupe. Removal (the other half of this section) is unchanged. See
+> `server/src/store/reject-edge-reconcile.ts`'s module doc for the current rule.
 
 ---
 
@@ -1912,4 +1921,24 @@ git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
 
 ## Ship notes
 
-_(filled at merge: date + SHA)_
+- 2026-08-07 (`796281e9`, PR #2202): shipped as designed — POST writes the `rejectedPairs`
+  entry before the `notLinkedTo` edge with both halves fatal, `reject-edge-reconcile.ts` heals
+  stranded books at `analysis.ts`'s two authoritative persists, and `notLinkedTo` became
+  server-owned on the whole-roster cast PUT. DELETE was deliberately left unreordered.
+- **Two Criticals were found by review, not by tests, and both were data-loss bugs in the
+  reconciliation's own read.** `loadCastIdHistory` collapses *absent*, *unreadable* and
+  *malformed* into one empty return, so the reconciliation would have read an unreadable
+  history as proof that every same-book edge was stranded and deleted them all. Fixed by
+  `loadCastIdHistoryWithStatus` (`ok`/`absent`/`degraded`). The first fix was then found to be
+  **defeated before it ran**: `dropSupersededIdsReclaimedByLiveCast` writes unconditionally
+  through the same collapsing loader earlier in the same persist block, laundering the damaged
+  file into a valid empty one. The verdict is now captured once, *before* those steps, and
+  carried into the reconciliation on both the main and subset paths.
+- Follow-ups filed rather than fixed: [#2198](https://github.com/dudarenok-maker/Castwright/issues/2198)
+  (multi-pair DELETE unretryable), [#2200](https://github.com/dudarenok-maker/Castwright/issues/2200)
+  (per-`from` relocation under-heal), [#2201](https://github.com/dudarenok-maker/Castwright/issues/2201)
+  (degraded id-history invisible in the run log),
+  [#2214](https://github.com/dudarenok-maker/Castwright/issues/2214) (the always-writing helpers
+  that launder a degraded read — the root cause behind the second Critical),
+  [#2215](https://github.com/dudarenok-maker/Castwright/issues/2215) (pre-existing `#1981 race`
+  flake, confirmed on `main`).

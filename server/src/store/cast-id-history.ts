@@ -135,14 +135,67 @@ export function castIdHistoryPath(bookDir: string): string {
  *  `buildCastResolver` at render time, srv-86) silently loses history-based
  *  protection when this happens, which must not read as "no protection
  *  needed". That case logs one `console.warn` naming the path and cause, so
- *  the degraded-protection state is operator-visible instead of silent. */
+ *  the degraded-protection state is operator-visible instead of silent.
+ *
+ *  This function deliberately COLLAPSES "absent" and "degraded" onto the same
+ *  empty value, which is correct for every caller whose worst case is losing
+ *  protection for one run. A caller that would DESTROY data on an empty
+ *  history must use `loadCastIdHistoryWithStatus` below and refuse to act on
+ *  `degraded` — see its doc comment (#2166 final review, Critical). */
 export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory> {
+  return (await loadCastIdHistoryWithStatus(bookDir)).history;
+}
+
+/** How a `loadCastIdHistoryWithStatus` read went (#2166 final review, Critical).
+ *
+ *  - `ok` — the file was read and passed the shape check. `history` is it.
+ *  - `absent` — no file on disk. `history` is the empty default, and that
+ *    emptiness is EVIDENCE: nothing has ever been retired for this book.
+ *  - `degraded` — the file exists but could not be read or did not pass the
+ *    shape check. `history` is the same empty default, but it is NOT evidence
+ *    of anything: it is "could not be determined". */
+export type CastIdHistoryStatus = 'ok' | 'absent' | 'degraded';
+
+export interface CastIdHistoryReadResult {
+  status: CastIdHistoryStatus;
+  history: CastIdHistory;
+}
+
+/** The discriminated sibling of `loadCastIdHistory` — same read, same
+ *  warnings, same returned history, but it also says WHICH of the three
+ *  states produced that history (#2166 final review, Critical).
+ *
+ *  `loadCastIdHistory` collapses `absent` and `degraded` onto the identical
+ *  `{ schema: 1, supersededBy: {} }` value, which is exactly right for every
+ *  consumer whose worst case is "loses history-based protection this run"
+ *  (`buildCastResolver`, `clearNotLinkedEdgesForDroppedRejections`): a
+ *  degraded read costs them protection, never data.
+ *
+ *  `reconcileRejectEdgesOnDisk` is the first consumer for which that collapse
+ *  is destructive rather than merely unprotective. It treats an empty history
+ *  as proof that every same-book `notLinkedTo` edge is stranded, and DELETES
+ *  them — so a transient EPERM/EBUSY from an AV scanner, a cloud-sync client
+ *  or the OS indexer (readJson has no retry, so it propagates straight
+ *  through) would wipe every reject the user ever made on that book, and log
+ *  that it had cleared stranded links while doing it. Recovery on a later good
+ *  run is only partial: the add pass rebuilds solely from `rejectedPairs`, so
+ *  an edge backed only by the LEGACY id-wide `rejected` list never comes back.
+ *
+ *  Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel (#2185): a
+ *  transient read blip must never be mistaken for evidence.
+ *
+ *  Never throws, exactly like `loadCastIdHistory` — a lookup side-table must
+ *  not be able to break a book's render. See `loadCastIdHistory`'s own doc
+ *  comment above for the field-by-field validation rationale. */
+export async function loadCastIdHistoryWithStatus(
+  bookDir: string,
+): Promise<CastIdHistoryReadResult> {
   const path = castIdHistoryPath(bookDir);
   try {
     const raw = await readJson<CastIdHistory>(path);
     if (raw === null) {
       // No file on disk — nothing has ever been retired for this book.
-      return { schema: 1, supersededBy: {} };
+      return { status: 'absent', history: { schema: 1, supersededBy: {} } };
     }
     if (
       typeof raw === 'object' &&
@@ -158,7 +211,7 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       (raw.rejected === undefined || Array.isArray(raw.rejected)) &&
       (raw.rejectedPairs === undefined || Array.isArray(raw.rejectedPairs))
     ) {
-      return raw;
+      return { status: 'ok', history: raw };
     }
     console.warn(
       `[cast-id-history] ${path} exists but has an unexpected shape — id-history protection disabled until it is fixed or removed.`,
@@ -168,7 +221,56 @@ export async function loadCastIdHistory(bookDir: string): Promise<CastIdHistory>
       `[cast-id-history] ${path} is unreadable (${(err as Error)?.message ?? err}) — id-history protection disabled until it is fixed or removed.`,
     );
   }
-  return { schema: 1, supersededBy: {} };
+  return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
+}
+
+/** Thrown by every mutating helper below when the read that would decide
+ *  what to preserve came back `degraded` (#2214) — the file exists but is
+ *  unreadable or the wrong shape. Every helper here used to read through the
+ *  COLLAPSING `loadCastIdHistory` and write back unconditionally, which
+ *  REPLACED the damaged file with a valid, empty one — silently destroying
+ *  every retirement, displacement and rejection ever recorded for the book,
+ *  with every later read then reporting `ok`. Throwing here instead, before
+ *  any inspection or mutation, is the fix: a caller cannot tell a
+ *  degraded-read no-op from a genuinely needed write (e.g.
+ *  `restoreSupersededId`'s `existing === target` early return, or
+ *  `rejectOrphanedPair`'s idempotent-pair return), so nothing below may run
+ *  at all once the verdict is `degraded`.
+ *
+ *  `absent` and `ok` are unaffected — a missing file is the common, expected
+ *  case (most books never retire an id) and stays silently writable, exactly
+ *  as before. Callers already tolerate a throw from these helpers (the write
+ *  itself could always fail — EPERM/ENOSPC — see `loadCastIdHistory`'s own
+ *  doc comment above); this is the same contract extended to a degraded
+ *  READ. Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel
+ *  (#2185): a transient read blip must never be mistaken for evidence. */
+export class CastIdHistoryUnreadableError extends Error {
+  readonly bookDir: string;
+  readonly path: string;
+
+  constructor(bookDir: string) {
+    const path = castIdHistoryPath(bookDir);
+    super(
+      `[cast-id-history] refusing to write ${path} — it exists but could not be read or did not ` +
+        `pass the shape check (see the [cast-id-history] warning just above for the cause). Writing ` +
+        `through this read would replace it with a valid, empty history, silently losing every ` +
+        `recorded retirement, displacement and rejection for this book. Fix or remove the file, then retry.`,
+    );
+    this.name = 'CastIdHistoryUnreadableError';
+    this.bookDir = bookDir;
+    this.path = path;
+  }
+}
+
+/** Read the history for a mutating helper below, refusing to proceed on a
+ *  `degraded` verdict (#2214) — see `CastIdHistoryUnreadableError`'s own doc
+ *  comment for why. `absent` and `ok` return their history unchanged. */
+async function loadHistoryOrThrow(bookDir: string): Promise<CastIdHistory> {
+  const { status, history } = await loadCastIdHistoryWithStatus(bookDir);
+  if (status === 'degraded') {
+    throw new CastIdHistoryUnreadableError(bookDir);
+  }
+  return history;
 }
 
 /** Record that characterId `from` has been retired and replaced by `to`.
@@ -281,7 +383,9 @@ export async function retireCharacterId(
   // Serialize writes per-book
   const bookId = bookDir; // Use bookDir as the lock key
   return withKeyLock(`cast-id-history:${bookId}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
 
     /* Direct reversal (#2040 Task 8 fix round 1, item 3): `to` is itself
        recorded as having been retired in favour of `from` — an earlier call
@@ -419,7 +523,9 @@ export async function dropSupersededIdsReclaimedByLiveCast(
 ): Promise<DisplacedHistoryEntry[]> {
   const live = new Set(liveIds);
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (live.has(key)) {
@@ -509,7 +615,9 @@ export async function dropSupersededTargetsNoLongerLive(
 ): Promise<DisplacedHistoryEntry[]> {
   const live = new Set(liveIds);
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const dropped: DisplacedHistoryEntry[] = [];
     for (const [key, target] of Object.entries(history.supersededBy)) {
       if (!live.has(target)) {
@@ -571,7 +679,9 @@ export async function forgetSupersededId(
   expectedTarget?: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const removed = history.supersededBy[id];
     if (removed === undefined) return undefined;
     if (expectedTarget !== undefined && removed !== expectedTarget) {
@@ -623,24 +733,52 @@ export async function forgetSupersededId(
  *  DELETE after a prior successful restore), no write happens and
  *  `restored: true` is still returned — the desired end state already
  *  holds. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
 export async function restoreSupersededId(
   bookDir: string,
   id: string,
   target: string,
 ): Promise<{ restored: boolean; supersededByOther?: string }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
-    const existing = history.supersededBy[id];
-    if (existing === target) {
-      return { restored: true };
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const { result, changed } = applyRestoreSupersededId(history, id, target);
+    if (changed) {
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     }
-    if (existing !== undefined) {
-      return { restored: false, supersededByOther: existing };
-    }
-    history.supersededBy[id] = target;
-    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-    return { restored: true };
+    return result;
   });
+}
+
+/** In-memory-only applier shared by `restoreSupersededId` and the batched
+ *  `undoRejectedPairs` below (#2198) — mutates `history` and reports the same
+ *  `{ restored, supersededByOther }` shape `restoreSupersededId` returns,
+ *  plus whether a mutation actually happened, so a caller batching several of
+ *  these under one write knows whether it needs to write at all. Never reads,
+ *  never locks, never writes — see this module's `undoRejectedPairs` doc
+ *  comment for why sharing the LOCKED wrapper instead would deadlock. */
+function applyRestoreSupersededId(
+  history: CastIdHistory,
+  id: string,
+  target: string,
+): { result: { restored: boolean; supersededByOther?: string }; changed: boolean } {
+  const existing = history.supersededBy[id];
+  if (existing === target) {
+    return { result: { restored: true }, changed: false };
+  }
+  if (existing !== undefined) {
+    return { result: { restored: false, supersededByOther: existing }, changed: false };
+  }
+  history.supersededBy[id] = target;
+  return { result: { restored: true }, changed: true };
 }
 
 /** LEGACY (#2040 Task 17) — id-wide reject. Superseded by `rejectOrphanedPair`
@@ -662,7 +800,9 @@ export async function restoreSupersededId(
  *  `supersededBy` itself. */
 export async function rejectOrphanedId(bookDir: string, id: string): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const rejected = history.rejected ?? [];
     if (rejected.includes(id)) return;
     history.rejected = [...rejected, id];
@@ -698,7 +838,9 @@ export async function rejectOrphanedPair(
   forgotSupersededTo?: string,
 ): Promise<void> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
     const pairs = history.rejectedPairs ?? [];
     if (pairs.some((p) => p.from === from && p.to === to)) return;
     const entry: RejectedPair =
@@ -720,19 +862,127 @@ export async function rejectOrphanedPair(
  *  No-op (and no write) when the pair isn't present, mirroring this module's
  *  idempotent-write discipline — a repeat undo of an already-undone pair is
  *  safe. */
+/** NOTE (#2198): this single-pair primitive has no production caller — the
+ *  reject Undo batches through `undoRejectedPairs` instead. It is kept
+ *  (exported and tested) as the primitive the batch's applier is shared with.
+ *  **Do not reach for it to undo several pairs in a loop**: that is precisely
+ *  the split-write shape #2198 removed — each call takes its own lock, read and
+ *  write, so a mid-loop failure leaves a half-completed state that blinds the
+ *  retry. Batch callers use `undoRejectedPairs`.
+ */
 export async function unrejectOrphanedPair(
   bookDir: string,
   from: string,
   to: string,
 ): Promise<string | undefined> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
-    const history = await loadCastIdHistory(bookDir);
-    const pairs = history.rejectedPairs ?? [];
-    const idx = pairs.findIndex((p) => p.from === from && p.to === to);
-    if (idx < 0) return undefined;
-    const removed = pairs[idx];
-    history.rejectedPairs = [...pairs.slice(0, idx), ...pairs.slice(idx + 1)];
-    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-    return removed.forgotSupersededTo;
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const { removed, changed } = applyUnrejectOrphanedPair(history, from, to);
+    if (changed) {
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    }
+    return removed?.forgotSupersededTo;
+  });
+}
+
+/** In-memory-only applier shared by `unrejectOrphanedPair` and the batched
+ *  `undoRejectedPairs` below (#2198) — same split as `applyRestoreSupersededId`
+ *  above: mutates `history`, reports the removed pair (if any) and whether a
+ *  mutation happened, never reads/locks/writes itself. */
+function applyUnrejectOrphanedPair(
+  history: CastIdHistory,
+  from: string,
+  to: string,
+): { removed: RejectedPair | undefined; changed: boolean } {
+  const pairs = history.rejectedPairs ?? [];
+  const idx = pairs.findIndex((p) => p.from === from && p.to === to);
+  if (idx < 0) return { removed: undefined, changed: false };
+  const removed = pairs[idx];
+  history.rejectedPairs = [...pairs.slice(0, idx), ...pairs.slice(idx + 1)];
+  return { removed, changed: true };
+}
+
+/** Undo a whole BATCH of `rejectOrphanedPair` entries atomically (#2198) —
+ *  the transactional replacement for a caller looping `restoreSupersededId`
+ *  + `unrejectOrphanedPair` per pair. One `withKeyLock`, one read, one
+ *  `writeJsonAtomic` for the WHOLE batch: `writeJsonAtomic` is a
+ *  temp-file-plus-rename, so a single write is all-or-nothing for free, and a
+ *  batch that fails partway through leaves the file byte-identical to before
+ *  the call — no half-restored alias, no half-removed pair.
+ *
+ *  This closes #2198: the pre-fix DELETE handler ran two SEPARATE loops over
+ *  a governing-pairs batch, each primitive taking its own lock/read/write.
+ *  Pair 1 fully completing already moves `supersededBy[pair1.from]`, which is
+ *  exactly what makes `rejectedPairsGoverning`'s resolution SEE fewer
+ *  governing pairs on a retry after pair 2's loop throws — the retry goes
+ *  blind to work it hasn't done yet. Per-pair atomicity doesn't fix this
+ *  (pair 1 alone still moves `supersededBy`); only batch-scope atomicity
+ *  does, which is why this shares appliers with, rather than calls, the two
+ *  single-pair primitives above.
+ *
+ *  MUST NOT call `restoreSupersededId`/`unrejectOrphanedPair` — both take
+ *  `withKeyLock('cast-id-history:' + bookDir)` themselves, and this function
+ *  already holds that same lock for the whole batch. Re-entering it would
+ *  hang forever, with no timeout and no diagnostic. `applyRestoreSupersededId`
+ *  / `applyUnrejectOrphanedPair` are the shared, lock-free appliers this
+ *  function and the two single-pair primitives both mutate `history` through.
+ *
+ *  Order within `pairs` does not affect the result: each pair's restore (if
+ *  any) and pair-removal are applied to the in-memory `history` in the order
+ *  given, but every pair's restore reads/writes only its OWN `from` key, and
+ *  every pair's removal only removes its OWN `(from, to)` entry, so two
+ *  pairs can never observe or clobber each other's effect.
+ *
+ *  A pair with `forgotSupersededTo === undefined` contributes no alias
+ *  restore (mirrors the pre-#2198 loop's `continue`) — only its
+ *  `rejectedPairs` removal happens. `restored` on that pair's result is
+ *  `true` (nothing blocked it): the field's only `false` case is a NEWER
+ *  alias occupying `supersededBy[from]`, which cannot happen when no restore
+ *  was attempted at all.
+ *
+ *  If nothing in the batch changes anything (every pair already absent, no
+ *  alias needed restoring), no write happens at all — same idempotent-write
+ *  discipline as every other primitive in this module. */
+export interface UndoRejectedPairResult {
+  from: string;
+  to: string;
+  /** false only when a NEWER alias already occupies supersededBy[from]. */
+  restored: boolean;
+  supersededByOther?: string;
+}
+
+export async function undoRejectedPairs(
+  bookDir: string,
+  pairs: ReadonlyArray<{ from: string; to: string; forgotSupersededTo?: string }>,
+): Promise<UndoRejectedPairResult[]> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
+    // launder a damaged file into a valid, empty one.
+    const history = await loadHistoryOrThrow(bookDir);
+    const results: UndoRejectedPairResult[] = [];
+    let changed = false;
+    for (const pair of pairs) {
+      let restored = true;
+      let supersededByOther: string | undefined;
+      if (pair.forgotSupersededTo !== undefined) {
+        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo);
+        restored = applied.result.restored;
+        supersededByOther = applied.result.supersededByOther;
+        if (applied.changed) changed = true;
+      }
+      const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
+      if (unrejectChanged) changed = true;
+      results.push(
+        supersededByOther === undefined
+          ? { from: pair.from, to: pair.to, restored }
+          : { from: pair.from, to: pair.to, restored, supersededByOther },
+      );
+    }
+    if (changed) {
+      await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    }
+    return results;
   });
 }

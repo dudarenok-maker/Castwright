@@ -14,6 +14,7 @@ import {
   _resetMockConfig,
 } from './api';
 import { knobsInGroup, GROUPS } from '../../server/src/config/registry';
+import { PAIR_RULES } from '../../server/src/config/pair-rules';
 
 beforeEach(() => {
   _resetMockConfig();
@@ -69,6 +70,99 @@ describe('mockPutConfig round-trip', () => {
   });
 });
 
+describe('mockPutConfig — qa.asr.device pattern validation (#2209)', () => {
+  /* Mirrors the real PUT /api/config route's per-key pattern validation
+     (server/src/config/registry.ts's qa.asr.device pattern, applied by
+     resolver.ts's coerceAndValidate) — #2180's own "cuda1 typo" example,
+     on the exact knob it names. Exercises the chain end-to-end: a rejected
+     mock-mode save must be shaped exactly like realPutConfig's thrown
+     Error so describeConfigSaveError (override-row.tsx) parses either one
+     identically. */
+  it('rejects an invalid device string with a 400-shaped error', async () => {
+    await expect(mockPutConfig({ 'qa.asr.device': 'cuda1' })).rejects.toThrow(
+      /^Config update failed \(400\): \{"error":"qa\.asr\.device: does not match the required shape/,
+    );
+  });
+
+  it('does not persist the rejected value', async () => {
+    await expect(mockPutConfig({ 'qa.asr.device': 'cuda1' })).rejects.toThrow();
+    const { values } = await mockGetConfig();
+    expect(values['qa.asr.device'].effective).toBe('cpu');
+    expect(values['qa.asr.device'].overridden).toBe(false);
+  });
+
+  it.each(['cpu', 'auto', 'cuda', 'cuda:0', 'cuda:12', 'CUDA:1'])(
+    'accepts %s',
+    async (good) => {
+      const result = await mockPutConfig({ 'qa.asr.device': good });
+      expect(result.ok).toBe(true);
+      expect(result.values['qa.asr.device'].effective).toBe(good);
+    },
+  );
+
+  /* #2209 review — the pattern is checked against the TRIMMED value, but
+     mockPutConfig used to persist the untrimmed original regardless, so a
+     padded '  cuda:1  ' would validate and then round-trip its whitespace
+     into the mock store. The real path (resolver.ts's coerceAndValidate)
+     explicitly avoids this: `const s = knob.pattern ? raw_s.trim() : raw_s`
+     persists the trimmed form. Same fidelity here now. */
+  it('persists the TRIMMED form of a padded value, matching the real path', async () => {
+    const result = await mockPutConfig({ 'qa.asr.device': '  cuda:1  ' });
+    expect(result.ok).toBe(true);
+    expect(result.values['qa.asr.device'].effective).toBe('cuda:1');
+
+    const { values } = await mockGetConfig();
+    expect(values['qa.asr.device'].effective).toBe('cuda:1');
+  });
+});
+
+/* #2209 review B4 — mockAsrPairError (api.ts) mirrors the real
+   ASR_DEVICE_COMPUTE_TYPE_RULE (server/src/config/pair-rules.ts). Every
+   test below asserts the mock's thrown message is BYTE-IDENTICAL to
+   calling the REAL rule directly — imported, not re-typed — so the mock
+   can't quietly drift from the real wording the way the wrapper verb
+   already had (B1). */
+describe('mockPutConfig — cross-field pair rule (#2209 review B4)', () => {
+  const realCheck = PAIR_RULES[0].check;
+
+  it('rejects an unsupported device+computeType pair with the REAL rule message', async () => {
+    const expected = realCheck({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'int16' });
+    expect(expected).not.toBeNull();
+    await expect(
+      mockPutConfig({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'int16' }),
+    ).rejects.toThrow(`Config update failed (400): ${JSON.stringify({ error: expected })}`);
+  });
+
+  it('rejects when only computeType is patched and the CURRENT device makes the pair invalid', async () => {
+    // qa.asr.device defaults to 'cpu'; int16 isn't supported on cpu either
+    // — the patch only touches computeType, but the route (and the mock)
+    // must validate against the RESULTING effective pair, not the patch
+    // in isolation.
+    const expected = realCheck({ 'qa.asr.device': 'cpu', 'qa.asr.computeType': 'int16' });
+    expect(expected).not.toBeNull();
+    await expect(mockPutConfig({ 'qa.asr.computeType': 'int16' })).rejects.toThrow(
+      `Config update failed (400): ${JSON.stringify({ error: expected })}`,
+    );
+  });
+
+  it('accepts a supported pair', async () => {
+    expect(realCheck({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' })).toBeNull();
+    const result = await mockPutConfig({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'float16' });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a sentinel computeType regardless of device', async () => {
+    expect(realCheck({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'auto' })).toBeNull();
+    const result = await mockPutConfig({ 'qa.asr.device': 'cuda', 'qa.asr.computeType': 'auto' });
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not run the pair check when the patch touches neither key', async () => {
+    const result = await mockPutConfig({ KOKORO_SAMPLE_RATE: 16000 });
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('mockResetConfig round-trip', () => {
   it('resets a specific key back to its default', async () => {
     await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000 });
@@ -98,6 +192,62 @@ describe('mockResetConfig round-trip', () => {
     expect(resetResult.values.ANALYZER_STAGE1_PROMPT.effective).toBe(
       'Attribute each sentence to its speaker.',
     );
+  });
+});
+
+/* #2209 review B1/B4 — a reset never revalidates a per-key pattern (it
+   always restores a key's own, trivially-valid default), so the
+   cross-field pair rule is the ONLY way either the real or the mock reset
+   route can fail at all. This is #2180's own regression shape, on the
+   reset path specifically: PUT enforces the pair rule, but POST /reset
+   shipped without it, so the Revert button could re-create the exact bad
+   pair the save path had just refused, in two clicks (Refs #2180 on-box
+   register: "the UI can no longer produce this state" — it still could,
+   through Revert). */
+describe('mockResetConfig — cross-field pair rule (#2209 review B4)', () => {
+  const realCheck = PAIR_RULES[0].check;
+
+  it('rejects a Revert that would re-create the exact bad pair the save path just refused', async () => {
+    // A valid pair, set via two saves — mirrors a real user's two clicks.
+    await mockPutConfig({ 'qa.asr.device': 'cuda' });
+    await mockPutConfig({ 'qa.asr.computeType': 'float16' });
+
+    // Reverting qa.asr.device alone clears it back to its default (cpu),
+    // while qa.asr.computeType stays pinned at float16 — cpu+float16 is
+    // exactly the bad pair PUT would have refused outright.
+    const expected = realCheck({ 'qa.asr.device': 'cpu', 'qa.asr.computeType': 'float16' });
+    expect(expected).not.toBeNull();
+    await expect(mockResetConfig({ keys: ['qa.asr.device'] })).rejects.toThrow(
+      `Config reset failed (400): ${JSON.stringify({ error: expected })}`,
+    );
+  });
+
+  it('does not clear anything when the reset is rejected', async () => {
+    await mockPutConfig({ 'qa.asr.device': 'cuda' });
+    await mockPutConfig({ 'qa.asr.computeType': 'float16' });
+
+    await expect(mockResetConfig({ keys: ['qa.asr.device'] })).rejects.toThrow();
+
+    const { values } = await mockGetConfig();
+    expect(values['qa.asr.device'].effective).toBe('cuda');
+    expect(values['qa.asr.device'].overridden).toBe(true);
+  });
+
+  it('allows resetting BOTH pair-rule keys together — both defaults are a valid (sentinel) pair', async () => {
+    await mockPutConfig({ 'qa.asr.device': 'cuda' });
+    await mockPutConfig({ 'qa.asr.computeType': 'float16' });
+
+    expect(realCheck({ 'qa.asr.device': 'cpu', 'qa.asr.computeType': 'sidecar-default' })).toBeNull();
+    const result = await mockResetConfig({ keys: ['qa.asr.device', 'qa.asr.computeType'] });
+    expect(result.ok).toBe(true);
+    expect(result.values['qa.asr.device'].effective).toBe('cpu');
+    expect(result.values['qa.asr.computeType'].effective).toBe('sidecar-default');
+  });
+
+  it('does not run the pair check when the reset touches neither key', async () => {
+    await mockPutConfig({ KOKORO_SAMPLE_RATE: 8000 });
+    const result = await mockResetConfig({ keys: ['KOKORO_SAMPLE_RATE'] });
+    expect(result.ok).toBe(true);
   });
 });
 

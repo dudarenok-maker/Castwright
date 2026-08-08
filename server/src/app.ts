@@ -4,8 +4,8 @@
    app.listen(). All middleware order is identical to the original index.ts. */
 
 import express from 'express';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { dirname, posix as posixPath, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mountFrontendStatic } from './frontend-static.js';
 import { manuscriptsRouter } from './routes/manuscripts.js';
@@ -123,6 +123,123 @@ app.use(['/api', '/workspace'], requireLanToken);
 /* CSRF guard — only triggers on cookie-bearing state-changing requests (Task 6).
    Mounted after the LAN token guard so it only applies to authenticated sessions. */
 app.use(['/api', '/workspace'], requireSameOrigin);
+/* #2223 — the /workspace static mount runs on an ALLOWLIST, not a denylist.
+   Two rounds of denylist name-matching were tried and both failed against a
+   real request over a real socket: an exact-name-plus-suffix-pattern check
+   missed an NTFS alternate-data-stream form (`device-tokens.json::$DATA`,
+   empirically confirmed to return 200 with the full file body); widening
+   that to a bare prefix match still missed case-folding
+   (`DEVICE-TOKENS.JSON`) and a deterministic, guessable 8.3 short-name
+   alias (`DEVICE~1.JSO`, live on this box's `C:` volume) — both still 200,
+   and the 8.3 form has no leading dot, so it also bypassed the dot-segment
+   rule below AND `send`'s own `dotfiles:'ignore'` default, which is what
+   made `.upgrade-backups` (a plaintext `geminiApiKey` copy, see
+   `upgrade-coordinator.ts`'s `backupSeamFiles`) reachable via its 8.3 form
+   even though its long form was correctly blocked. A denylist has to name
+   every alias a case-insensitive, 8.3-generating filesystem can produce for
+   the SAME bytes; an allowlist doesn't need to, because it asks a different
+   question — not "does this name look like something to block" but "does
+   this resolve to a real path under a directory I've decided to serve."
+
+   Serve ONLY `books/**`, `voices.json`, `voices/**`, `voice-library/**` —
+   the content this mount exists for — and 404 everything else. Notably,
+   `device-tokens.json` itself needs no name-matching rule anymore: it isn't
+   under any of those roots, in any of its aliased forms, so it's denied
+   the same way anything else outside the allowlist is.
+
+   The decision is made on the REQUESTED path's REAL, on-disk form
+   (`resolveWorkspaceStaticCandidate`, below) — `realpathSync` when the
+   target exists, which canonicalises case, 8.3 short names, and ADS
+   suffixes down to whatever the OS considers the one real path; a plain
+   syntactic resolve when it doesn't, since there's nothing on disk to
+   canonicalise and `express.static` 404s a genuinely-missing path on its
+   own regardless. `isUnderAllowedWorkspaceRoot` then checks that resolved
+   path is CONTAINED in one of the allowed roots — themselves resolved the
+   exact same way, every request, so a case/symlink quirk on the allowed
+   root can't desync the comparison — via a prefix match against the real
+   path PLUS a trailing separator (so a sibling like `voices-secret` can't
+   pass as being "under" `voices`), or an exact match for the one allowed
+   FILE, `voices.json`. A `realpathSync` failure on a path that DOES exist
+   (permissions, a broken reparse point, ...) DENIES; it does not fall
+   through to the raw candidate. Malformed percent-encoding denies outright
+   for the same reason — an allowlist defaults closed.
+
+   The dot-segment check below (any path whose first segment under
+   /workspace starts with `.`) is kept as a cheap PRE-FILTER — it
+   short-circuits the obviously-internal paths (`.upgrade-backups`,
+   `.backups`, `.telemetry`, `.queue.json`) without touching the filesystem
+   at all — but it is NOT the security boundary anymore. Delete it entirely
+   and the allowlist below still denies every one of those paths on its
+   own, because none of them resolve under an allowed root. */
+
+/** Resolve `candidate` to its real, on-disk form when it exists (see the
+ *  #2223 comment above for why that specifically defeats case/8.3/ADS
+ *  aliasing), or to its syntactically-resolved form when it doesn't.
+ *  Returns `null` on a `realpathSync` failure for a path that DOES exist —
+ *  callers must treat that as deny, never as "fall back to the raw path". */
+function resolveWorkspaceStaticCandidate(candidate: string): string | null {
+  if (!existsSync(candidate)) return candidate;
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+
+/** Directory containment: `resolvedPath` must equal `root` or sit strictly
+ *  underneath it (a real path separator immediately after `root`), never a
+ *  bare string-prefix match — otherwise a sibling directory sharing `root`
+ *  as a text prefix (e.g. `voices-secret` against `voices`) would pass. */
+function isContainedIn(resolvedPath: string, root: string): boolean {
+  return resolvedPath === root || resolvedPath.startsWith(root + sep);
+}
+
+/** The only content /workspace serves (#2223). Resolved fresh on every call
+ *  rather than cached at module load, so an allowed root that doesn't exist
+ *  yet at boot (a fresh install with no books, no designed voices) still
+ *  gets the same realpath-canonicalised comparison once it's created
+ *  mid-process, instead of staying pinned to a boot-time syntactic-only
+ *  resolution for the rest of the process's life. */
+function isUnderAllowedWorkspaceRoot(decodedRequestPath: string): boolean {
+  // The '.' prefix keeps a leading '/' from resetting path.resolve to the
+  // filesystem root instead of joining onto WORKSPACE_ROOT.
+  const rawCandidate = resolve(WORKSPACE_ROOT, '.' + decodedRequestPath);
+  const candidate = resolveWorkspaceStaticCandidate(rawCandidate);
+  if (candidate === null) return false;
+
+  const allowedDirs = ['books', 'voices', 'voice-library']
+    .map((name) => resolveWorkspaceStaticCandidate(resolve(WORKSPACE_ROOT, name)))
+    .filter((p): p is string => p !== null);
+  const allowedFiles = [resolveWorkspaceStaticCandidate(resolve(WORKSPACE_ROOT, 'voices.json'))].filter(
+    (p): p is string => p !== null,
+  );
+
+  return allowedDirs.some((root) => isContainedIn(candidate, root)) || allowedFiles.includes(candidate);
+}
+
+app.use('/workspace', (req, res, next) => {
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(req.path);
+  } catch {
+    res.status(404).end(); // malformed percent-encoding — an allowlist defaults closed
+    return;
+  }
+
+  // Cheap pre-filter only — see the block comment above. Not load-bearing.
+  const normalisedForDotCheck = posixPath.normalize(decodedPath);
+  const firstSegment = normalisedForDotCheck.split('/').find((s) => s.length > 0 && s !== '.');
+  if (firstSegment !== undefined && firstSegment.startsWith('.')) {
+    res.status(404).end();
+    return;
+  }
+
+  if (!isUnderAllowedWorkspaceRoot(decodedPath)) {
+    res.status(404).end();
+    return;
+  }
+  next();
+});
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {

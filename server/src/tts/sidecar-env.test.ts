@@ -226,6 +226,188 @@ describe('buildSidecarEnv hands the sidecar a UUID device pin verbatim (#1857)',
   });
 });
 
+/* #2207 — an ambient env var that FAILS the resolver's validation (e.g.
+   ASR_DEVICE=cuda1 against qa.asr.device's pattern) must not survive the
+   `...process.env` spread verbatim: the server resolved something else
+   (override or registry default) for that knob, and the sidecar must agree,
+   not silently diverge onto whatever the rejected value happened to mean to
+   main.py's own (more permissive) parser. */
+describe('buildSidecarEnv deletes a rejected ambient env value (#2207)', () => {
+  const prevAsrDevice = process.env.ASR_DEVICE;
+
+  beforeEach(() => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
+  });
+
+  afterEach(() => {
+    if (prevAsrDevice === undefined) delete process.env.ASR_DEVICE;
+    else process.env.ASR_DEVICE = prevAsrDevice;
+  });
+
+  it('a rejected ASR_DEVICE (fails qa.asr.device\'s pattern) is deleted from the child env', () => {
+    process.env.ASR_DEVICE = 'cuda1'; // no colon — fails /^(cpu|auto|cuda|cuda:\d+)$/i
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect('ASR_DEVICE' in env).toBe(false);
+  });
+
+  // Positive control (mandatory): a guard that can't distinguish its bug
+  // from its fix refuses its own success case. NOTE: for THIS knob, an
+  // unconditional delete (dropping isEnvValueRejected entirely) also passes
+  // this test — Layer 2 re-derives and re-sets ASR_DEVICE regardless, because
+  // its resolved source is 'env', not 'default'. This test still pins the
+  // required contract (a valid value must survive), it just isn't the test
+  // that catches an over-broad delete on this particular knob — see
+  // 'the guard condition is load-bearing' below for the one that is.
+  it('a VALID ASR_DEVICE reaches the child unchanged (positive control)', () => {
+    process.env.ASR_DEVICE = 'cuda:1';
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.ASR_DEVICE).toBe('cuda:1');
+  });
+
+  it('a rejected ASR_DEVICE plus a UI override for the same knob: the child receives the override, proving the delete runs before the injection loop', () => {
+    process.env.ASR_DEVICE = 'cuda1'; // still rejected
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'qa.asr.device': 'cuda:2',
+    });
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.ASR_DEVICE).toBe('cuda:2');
+  });
+
+  it('a knob at its registry default with no env value is still injected nowhere', () => {
+    delete process.env.ASR_DEVICE;
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.ASR_DEVICE).toBeUndefined();
+  });
+
+  /* This test exists SPECIFICALLY to prove the `isEnvValueRejected(knob)`
+     guard on the Layer-1.5 delete loop is load-bearing, not vestigial.
+     Every other test in this describe block — including the positive
+     control above — still passes if that guard is dropped and the loop
+     unconditionally deletes every restart-sidecar knob's env key: Layer 2
+     re-derives and re-sets any knob whose resolved source isn't 'default'
+     (env or override), so an over-broad delete on ASR_DEVICE is invisible
+     through THIS file alone. tts.preload.coqui is the one restart-sidecar
+     knob that breaks that symmetry — its env var (PRELOAD_COQUI) is also
+     set synthetically from `modelKey` in buildSidecarEnv's BASE env block
+     (before Layer 1.5 runs), and when the knob sits at its registry
+     default (no override, no ambient PRELOAD_COQUI) Layer 2 skips it
+     entirely (`source === 'default'` → `continue`) — nothing restores what
+     Layer 1.5 deletes. An unconditional delete here wipes the modelKey-
+     derived value with nothing to put it back. This exact case IS covered
+     today, but only in a different file (spawn-sidecar.test.ts's
+     'spawns with PRELOAD_COQUI=1 when default model is coqui-xtts-v2') —
+     nothing in either file records that dependency, so tidying one file in
+     isolation could silently break the chain. This test pins it locally. */
+  it('the guard condition is load-bearing: PRELOAD_COQUI (modelKey-derived, no override) survives Layer 1.5 only because the delete is conditional', () => {
+    delete process.env.PRELOAD_COQUI;
+    const env = buildSidecarEnv({ modelKey: 'coqui-xtts-v2', repoRoot: process.cwd() });
+    expect(env.PRELOAD_COQUI).toBe('1');
+  });
+
+  /* Independent review of PR #2219, finding F1 (BLOCKER). PRELOAD_COQUI is
+     the ONE restart-sidecar env name the base env block also writes
+     (line ~468, derived from `modelKey`) — so by the time Layer 1.5 runs,
+     `env.PRELOAD_COQUI` is no longer the ambient value the resolver
+     rejected, it's already the correct modelKey-derived one. The prior
+     Layer-1.5 loop deleted on `isEnvValueRejected(knob)` alone, so a
+     REJECTED ambient PRELOAD_COQUI (e.g. `PRELOAD_COQUI=y` in
+     server/.env, outside 1/true/yes/on/0/false/no/off) deleted that
+     freshly-computed correct value on the strength of a stale, already-
+     neutralised one — the exact inverse of this change's intent. The
+     other #2207 tests above never catch this: they all target ASR_DEVICE,
+     which has no base-block synthetic value to clobber. This test sets an
+     ambient PRELOAD_COQUI to a rejected value (not deleted — the F1 repro
+     needs it PRESENT and invalid) with modelKey: 'coqui-xtts-v2', and
+     asserts the child still gets '1'. */
+  it('F1 — a rejected ambient PRELOAD_COQUI does not clobber the base-block modelKey-derived value', () => {
+    const prev = process.env.PRELOAD_COQUI;
+    process.env.PRELOAD_COQUI = 'y'; // rejected: not in 1/true/yes/on/0/false/no/off
+    try {
+      const env = buildSidecarEnv({ modelKey: 'coqui-xtts-v2', repoRoot: process.cwd() });
+      expect(env.PRELOAD_COQUI).toBe('1');
+    } finally {
+      if (prev === undefined) delete process.env.PRELOAD_COQUI;
+      else process.env.PRELOAD_COQUI = prev;
+    }
+  });
+
+  /* Independent review of PR #2219, finding F2 — every #2207 assertion above
+     targets ASR_DEVICE alone, so the Layer-1.5 `for` loop was never proven
+     to actually iterate past its first match; `if (isEnvValueRejected(knob))
+     { delete env[knob.env]; break; }` would also pass every test above.
+     Two independently rejected knobs, asserted deleted together. */
+  it('F2 — the delete loop is a loop: two independently rejected restart-sidecar knobs are BOTH deleted', () => {
+    const prevAttn = process.env.QWEN_ATTN_IMPL;
+    process.env.ASR_DEVICE = 'cuda1'; // rejected — fails qa.asr.device's pattern
+    process.env.QWEN_ATTN_IMPL = 'flash'; // rejected — not 'sdpa' | 'flash_attention_2'
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect('ASR_DEVICE' in env).toBe(false);
+      expect('QWEN_ATTN_IMPL' in env).toBe(false);
+    } finally {
+      if (prevAttn === undefined) delete process.env.QWEN_ATTN_IMPL;
+      else process.env.QWEN_ATTN_IMPL = prevAttn;
+    }
+  });
+
+  /* Independent review of PR #2219, finding F3 — resolveKnobInner already
+     treats a blank/whitespace-only ambient value identically to "no env var
+     at all" (falls through to override/default, no validation, no warning).
+     Verified in THIS repo (not merely reported by the review): GPU_RESERVE_MB
+     reaches an unguarded `int(os.environ.get("GPU_RESERVE_MB", 500))` at
+     three capacity-admission call sites in main.py (:3946, :4097, :4294) —
+     `int("")` raises ValueError, so a half-restored `GPU_RESERVE_MB=` line in
+     server/.env would crash admission, not merely apply a stale value. A
+     blank ambient value is therefore deleted the same as a validation-
+     rejected one (isEnvValueRejected now returns true for it — see
+     resolver.ts and resolver.test.ts's dedicated F6 coverage). */
+  it('F3 — a blank ambient value for a restart-sidecar knob is deleted from the child env (a half-restored GPU_RESERVE_MB=)', () => {
+    const prev = process.env.GPU_RESERVE_MB;
+    process.env.GPU_RESERVE_MB = '';
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect('GPU_RESERVE_MB' in env).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.GPU_RESERVE_MB;
+      else process.env.GPU_RESERVE_MB = prev;
+    }
+  });
+
+  /* #2224 — qa.speaker.device (SPK_DEVICE) is the ASR twin's counterpart:
+     same restart-sidecar shape, same "does the child env agree with what the
+     server resolved" thesis. It now HAS a pattern (matching qa.asr.device's
+     cpu|auto|cuda|cuda:<n> grammar exactly — see registry.ts and
+     resolver.test.ts's dedicated grammar suite for the derivation, including
+     why "mps"/"rocm" are deliberately NOT in it). A blank ambient value is
+     rejected too, via a SEPARATE code path (F3's blank-is-absent semantics,
+     independent of any pattern) — this test exercises that path
+     specifically; the pattern-driven "cuda1"-shaped rejection is covered by
+     the test right after it. */
+  it('F3/#2224 — a blank ambient SPK_DEVICE is deleted from the child env the same way GPU_RESERVE_MB is', () => {
+    const prev = process.env.SPK_DEVICE;
+    process.env.SPK_DEVICE = '   ';
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect('SPK_DEVICE' in env).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.SPK_DEVICE;
+      else process.env.SPK_DEVICE = prev;
+    }
+  });
+
+  it('#2224 — a rejected (pattern-mismatched) ambient SPK_DEVICE is deleted from the child env, same as ASR_DEVICE', () => {
+    const prev = process.env.SPK_DEVICE;
+    process.env.SPK_DEVICE = 'cuda1'; // no colon — fails the same pattern qa.asr.device has
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect('SPK_DEVICE' in env).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.SPK_DEVICE;
+      else process.env.SPK_DEVICE = prev;
+    }
+  });
+});
+
 /* #1890 — spawn-sidecar.ts's voice-dir env vars must be sourced from
    paths.ts's qwenVoicesDir()/xttsVoicesDir(), the same single source of
    truth purgeCloneArtifacts and the resolver read. A literal `join()` that

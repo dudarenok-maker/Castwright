@@ -2413,9 +2413,13 @@ export interface paths {
          *     recomputed AFTER these writes land (`null` on the ordinary "still
          *     doesn't resolve" outcome). Idempotent — a repeat call for the same
          *     pair is a no-op on cast.json, though the rejection is still
-         *     (re-)recorded. The `rejectedPairs` write failing surfaces as a 500
-         *     (it is the only mechanism enforcing the reject for a normalised-tier
-         *     match); a stale `supersededBy`-entry cleanup failure does not. Use
+         *     (re-)recorded. The `rejectedPairs` entry is written FIRST and the
+         *     `notLinkedTo` edge second (#2166), so a half-failure always leaves the
+         *     visible half — the chip renders and Undo works. BOTH writes failing
+         *     surface as a 500, with distinct meanings: a `rejectedPairs` failure
+         *     means nothing was written; a cast.json failure means the rejection is
+         *     durably recorded but the character link is not. Retry is safe after
+         *     either. A stale `supersededBy`-entry cleanup failure is non-fatal. Use
          *     the DELETE on this same path to undo.
          */
         post: operations["rejectOrphanMatch"];
@@ -9829,7 +9833,10 @@ export interface operations {
              * @description Refused (nothing was written). Either the write would have replaced
              *     a character's consented cloned voice, or it would have overwritten an
              *     analysed manuscript with an empty sentence list, or the new
-             *     Author/Series/Title path is already taken.
+             *     Author/Series/Title path is already taken, or an analysis is
+             *     currently running for this book and the patch would move its folder
+             *     (renaming mid-analysis would split the book's state across two
+             *     directories — retry once the run finishes).
              */
             409: {
                 headers: {
@@ -9981,7 +9988,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Failed to durably record the rejection in cast-id-history.json — retry */
+            /** @description Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way */
             500: {
                 headers: {
                     [name: string]: unknown;

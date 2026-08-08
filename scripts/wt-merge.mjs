@@ -37,6 +37,7 @@
 // tests can stub them without ESM mock acrobatics.
 
 import { spawnSync } from 'node:child_process';
+import { scrubGitEnv } from './git-env.mjs';
 
 // ---- Argument parsing -------------------------------------------------------
 
@@ -79,7 +80,7 @@ function usage(extra) {
 export function makeDefaultRunners() {
   return {
     git(args, opts = {}) {
-      const result = spawnSync('git', args, { encoding: 'utf8', ...opts });
+      const result = spawnSync('git', args, { encoding: 'utf8', ...opts, env: scrubGitEnv(opts.env) });
       return {
         status: result.status,
         stdout: result.stdout ?? '',

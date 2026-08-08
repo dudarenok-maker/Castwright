@@ -78,6 +78,12 @@ interface CheckboxProps {
   accent?: CheckboxAccent;
   'data-testid'?: string;
   'aria-label'?: string;
+  /** Associates the input with an external error/status message that
+      isn't this component's own `description` (#2209) — merged with the
+      internal `description` id, if both are present, rather than one
+      silently winning. */
+  'aria-describedby'?: string;
+  'aria-invalid'?: boolean;
 }
 /* On-brand replacement for a native <input type="checkbox">, which renders
    with the OS/browser's default accent color (usually blue) since this repo
@@ -101,10 +107,13 @@ export function Checkbox({
   accent = 'magenta',
   'data-testid': testId,
   'aria-label': ariaLabel,
+  'aria-describedby': externalDescribedBy,
+  'aria-invalid': invalid,
 }: CheckboxProps) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const descId = description ? `${inputId}-description` : undefined;
+  const describedBy = [descId, externalDescribedBy].filter(Boolean).join(' ') || undefined;
   const accentClasses = CHECKBOX_ACCENT_CLASSES[accent];
 
   const box = (
@@ -116,7 +125,8 @@ export function Checkbox({
         disabled={disabled}
         onChange={(e) => !disabled && onChange(e.target.checked)}
         aria-label={ariaLabel}
-        aria-describedby={descId}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         data-testid={testId}
         className="peer absolute inset-0 h-5 w-5 cursor-pointer opacity-0 disabled:cursor-not-allowed"
       />

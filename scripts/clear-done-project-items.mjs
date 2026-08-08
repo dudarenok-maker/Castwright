@@ -10,10 +10,10 @@
 //   node scripts/clear-done-project-items.mjs           (dry-run — lists Done items)
 //   node scripts/clear-done-project-items.mjs --apply   (archives them)
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { gh, ghSpawn } from './gh.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -31,9 +31,8 @@ function writeStepSummary(lines) {
   if (!summaryPath) return;
   appendFileSync(summaryPath, `${lines.join('\n')}\n`);
 }
-function gh(args) { return execFileSync('gh', args, { cwd: repoRoot, encoding: 'utf8' }); }
 function ghAvailable() {
-  const r = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const r = ghSpawn(['--version'], { stdio: 'ignore' });
   return !r.error && r.status === 0;
 }
 

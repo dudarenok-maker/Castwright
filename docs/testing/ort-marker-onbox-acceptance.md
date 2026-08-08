@@ -16,7 +16,7 @@
 > Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](282-ort-pip-consistency-marker.md)
 > Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
 > ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
-> Register rows: [A38–A41](onbox-acceptance-register.md#group-a--the-gpu-box),
+> Register rows: [A39–A42](onbox-acceptance-register.md#group-a--the-gpu-box),
 > [E9](onbox-acceptance-register.md#group-e--not-the-gpu-box),
 > [Blocked — AMD/ROCm](onbox-acceptance-register.md#blocked--hardware-not-available)
 > Issue: [#2192](https://github.com/dudarenok-maker/Castwright/issues/2192)
@@ -42,13 +42,13 @@ acceptance criterion.
 
 | # | Criterion (design doc's own wording) | Register row | Status |
 |---|---|---|---|
-| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A38 | Owed |
-| 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A39 | Owed — this is #2192 itself |
+| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A39 | Owed |
+| 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A40 | Owed — this is #2192 itself |
 | 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
 | 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E9 | Owed |
 | 5 | AMD box — no marker is written; the live case is the AMD→ROCm-failure→CPU-fallback ordering | Blocked (AMD/ROCm) | Blocked — no hardware |
-| 6 | Clobbered box — both dist-infos present, CPU files in the namespace; boot takes the loud path | A40 | Owed |
-| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A41 | Owed |
+| 6 | Clobbered box — both dist-infos present, CPU files in the namespace; boot takes the loud path | A41 | Owed |
+| — | *Addition, not one of the spec's six:* the in-app upgrade path (`upgrade/apply.ts` → `pipInstall`) | A42 | Owed |
 
 ## 2. Preconditions (common to all criteria)
 
@@ -65,7 +65,7 @@ acceptance criterion.
 
 ---
 
-## 3. Criterion 1 — fresh NVIDIA bootstrap (A38)
+## 3. Criterion 1 — fresh NVIDIA bootstrap (A39)
 
 ### 3.1 Procedure
 
@@ -94,7 +94,7 @@ which never needs to fire on a venv that was correct from the first pip call.
 
 ---
 
-## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A39)
+## 4. Criterion 2 — the reported bug: in-app Qwen3 install (A40)
 
 This is **#2192 itself** — the alpha tester's exact scenario, with the app running.
 Every other row in this sheet is a mechanism check; this one is the actual
@@ -274,7 +274,7 @@ _(N/A — no AMD/ROCm hardware. Filed as a Blocked entry, not an owed row.)_
 
 ---
 
-## 8. Criterion 6 — clobbered box (A40)
+## 8. Criterion 6 — clobbered box (A41)
 
 ### 8.1 Procedure
 
@@ -308,7 +308,7 @@ repairs the box: `pip check` clean afterward, Kokoro reports `CUDAExecutionProvi
 
 ---
 
-## 9. Addition — the in-app upgrade path (A41, not one of the spec's six)
+## 9. Addition — the in-app upgrade path (A42, not one of the spec's six)
 
 **This criterion is not in the design doc's §On-box acceptance table.** It is
 owed anyway: Task 8 wired `upgrade/apply.ts`'s marker handling (with a new
@@ -351,13 +351,13 @@ release directory. `pip check` clean afterward; a forced failure leaves no marke
 
 _(Update as each remaining criterion runs.)_
 
-- Criterion 1 — fresh NVIDIA bootstrap (A38): owed.
-- Criterion 2 — the reported bug, in-app Qwen3 install (A39): owed.
+- Criterion 1 — fresh NVIDIA bootstrap (A39): owed.
+- Criterion 2 — the reported bug, in-app Qwen3 install (A40): owed.
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
 - Criterion 4 — Pinokio update path (E9): owed.
 - Criterion 5 — AMD box: blocked, no hardware.
-- Criterion 6 — clobbered box (A40): owed.
-- Addition — in-app upgrade path (A41): owed.
+- Criterion 6 — clobbered box (A41): owed.
+- Addition — in-app upgrade path (A42): owed.
 
 Once a criterion is run and its Result filled in, remove the corresponding row
 from `docs/testing/onbox-acceptance-register.md` and mirror the removal in the

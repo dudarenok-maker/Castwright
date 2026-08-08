@@ -94,20 +94,28 @@
    has to exist for the chip, so Undo is a sibling button in the same pixel
    — strictly less new code than a modal, for strictly more value.
 
-   cast.json (the notLinkedTo edge) is written first, UNCONDITIONALLY, on
-   BOTH verbs — it's the authoritative record (spec §4.1) and the write
-   cast-merge.ts's own precedent orders first. It is OUTSIDE the
-   "transaction" the id-history reasoning below describes, and is never
-   rolled back on a later id-history failure: `appendNotLinked`/
-   `removeNotLinked` are each idempotent (a repeat write is a no-op), so
-   writing it first and leaving it written is safe on retry regardless of
-   what happens next — the worst case is a same-book id-history 500 AFTER
-   cast.json already changed, which a retry simply repeats as a no-op. This
-   is why every 500 message below says the character-link write already
-   landed (fix round 1, I5 — an earlier DELETE message claimed "nothing
-   else was changed", which was false: the notLinkedTo removal, being
-   unconditional and first, had already landed by the time any id-history
-   step could fail).
+   #2166 — the two writes are ordered by which half is RECOVERABLE, not by
+   which file is authoritative. The `rejectedPairs` entry drives
+   `rejectedAgainst` -> the chip -> Undo; the `notLinkedTo` edge is invisible
+   on its own, with no UI path to remove it. So: the pair is written FIRST and
+   removed LAST; the edge is created after it and destroyed before it. POST
+   therefore writes pair-then-edge, DELETE writes edge-then-pair, and BOTH
+   fail into the same visible state (pair present, edge absent) which the chip
+   exposes, a retry completes, and reject-edge-reconcile.ts heals at the next
+   authoritative persist. This REPLACES the earlier "cast.json first,
+   unconditionally, on BOTH verbs" rule: that symmetry is exactly what
+   produced the asymmetric outcome, because the two verbs move in opposite
+   directions. Do not re-symmetrise them.
+
+   Both of POST's writes are fatal. Their 500 messages differ deliberately: a
+   pair-write failure means NOTHING was written; a cast-write failure means the
+   rejection is durable and only the link is missing. Retry is safe after
+   either — `rejectOrphanedPair` returns early on an existing pair and
+   `appendNotLinked`/`removeNotLinked` are idempotent.
+
+   I5 (fix round 1) still applies to DELETE: its notLinkedTo removal is
+   unconditional and first, so its 500 messages must not claim "nothing else
+   was changed".
 
    POST's id-history writes (fix round 2 review; REORDERED again, fix
    round 1 I1): `rejectOrphanedPair` runs FIRST, `forgetSupersededId`
@@ -143,34 +151,41 @@
    never gets past the fatal step re-reads the stash fresh from disk every
    time, since nothing has been forgotten yet on that attempt.
 
-   DELETE's write order mirrors POST's: restore (fatal) runs before pair
-   removal (fatal), same ordering rationale as before — but the restore
-   itself no longer reuses `retireCharacterId` (C1, fix round 1): see
-   `restoreSupersededId`'s own doc comment in `cast-id-history.ts` for why
-   `retireCharacterId`'s unconditional-write-plus-repoint semantics can
+   DELETE's id-history side is now (#2198) a SINGLE batched write via
+   `undoRejectedPairs` — restore-then-pair-removal is applied to every
+   governing pair against one in-memory `history`, then written once. This
+   replaces the pre-#2198 shape of two separate loops, each primitive taking
+   its own lock/read/write: pair 1's restore fully landing already moved
+   `supersededBy[pair1.from]`, and a LATER pair's write throwing then left
+   that move in place while `rejectedPairs` still held every pair — a retry's
+   own `rejectedPairsGoverning` computed against the now-moved `supersededBy`
+   could stop seeing pairs it had not gotten to yet, going permanently blind
+   to work still owed (the bug #2198 fixes). A single `writeJsonAtomic` makes
+   the whole batch all-or-nothing instead: a mid-batch failure leaves
+   cast-id-history.json byte-identical to before this call, so a retry sees
+   exactly the same governing pairs it saw the first time.
+
+   The restore itself still doesn't reuse `retireCharacterId` (C1, fix round
+   1): see `restoreSupersededId`'s own doc comment in `cast-id-history.ts` for
+   why `retireCharacterId`'s unconditional-write-plus-repoint semantics can
    themselves reproduce #2040's own failure mode when a LATER, unrelated
    re-analysis has since recorded the CORRECT alias for `orphanedId` —
-   exactly the overwrite-and-repoint `restoreSupersededId` refuses to
-   perform. When the restore is skipped for that reason, the pair is still
-   removed (the user asked to undo the REJECTION, which succeeds
+   exactly the overwrite-and-repoint `restoreSupersededId` (and
+   `undoRejectedPairs`, sharing its applier) refuses to perform. When a
+   restore is skipped for that reason, the pair is still removed within the
+   same batched write (the user asked to undo the REJECTION, which succeeds
    regardless — the alias restore is a best-effort bonus on top, not the
    primary consequence of Undo) and the response says so via
    `supersededByOther`, so the client can tell the user the alias moved on
-   rather than silently doing nothing. The two id-history writes stay BOTH
-   fatal on a genuine I/O failure (unlike POST's non-fatal forget): losing
-   EITHER one breaks the #2089 lossless-undo bar (`resolve(orphanedId)`
-   after DELETE must equal what it returned before the original POST,
-   MODULO a since-superseded alias, which is the one case DELETE is no
-   longer trying to reproduce exactly — see C1). Skipping the restore
-   attempt entirely would leave the alias tier unresolvable even though the
-   reject that blocked it is gone; skipping the pair removal leaves the
-   reject blocking resolution even though the caller asked to undo it. The
-   restore attempt runs BEFORE the pair removal specifically so a mid-way
-   500 stays retry-safe: the pair (and its `forgotSupersededTo`) is only
-   actually consumed by `unrejectOrphanedPair` once the restore attempt has
-   already run — a restore-then-fail retry just re-reads the still-present
-   pair; a remove-then-fail-restore retry would have nothing left to read
-   `forgotSupersededTo` from.
+   rather than silently doing nothing. The batched write stays fatal on a
+   genuine I/O failure (unlike POST's non-fatal forget): losing it breaks the
+   #2089 lossless-undo bar (`resolve(orphanedId)` after DELETE must equal what
+   it returned before the original POST, MODULO a since-superseded alias,
+   which is the one case DELETE is no longer trying to reproduce exactly —
+   see C1). The cast.json edge removal above it is unconditional and already
+   landed by the time this write is attempted (I5, below), so a failure here
+   is retry-safe: the pair (and its `forgotSupersededTo`) is untouched on
+   disk, and a retry re-reads it fresh.
 
    Important 1/2 (review round 2): DELETE used to find "the" pair by a raw
    `p.from === orphanedId && p.to === characterId` match. Round 1 made the
@@ -203,8 +218,7 @@ import { withCastLock } from '../workspace/cast-lock.js';
 import {
   forgetSupersededId,
   rejectOrphanedPair,
-  unrejectOrphanedPair,
-  restoreSupersededId,
+  undoRejectedPairs,
   loadCastIdHistory,
 } from '../store/cast-id-history.js';
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
@@ -336,35 +350,16 @@ castRejectOrphanRouter.post(
         return res.status(404).json({ error: `Character "${characterId}" not found.` });
       }
 
-      const changed = appendNotLinked(character, bookId, orphanedId);
-      if (changed) {
-        await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
-      }
-
-      /* I1 (fix round 1) — REORDERED from the original forget-then-reject:
-         compute `forgotSupersededTo` by a pure READ first, write the FATAL
-         `rejectOrphanedPair` with the stash already baked in, and only THEN
-         attempt the non-fatal forget. See the module doc's I1 paragraph for
-         the full account of why the original order silently lost the stash
-         on a retry after a partial failure. Pair-scope guard (#2092/#2089
-         D1) unchanged: only treat `supersededBy[orphanedId]` as something to
-         forget when it targets THIS `characterId` — an entry pointing at
-         some OTHER, unrejected character is a live, still-valid alias (D1's
-         whole point is that a different target for the same `from` stays
-         resolvable), so stashing/forgetting it here would be wrong. */
+      /* #2166 — the pair is written FIRST and the edge second. Rationale in
+         the module doc; the short version is that the `rejectedPairs` entry
+         is what renders the chip and powers Undo, so a half-failure must
+         leave THAT half, never the invisible one. */
       const historyBeforeReject = await loadCastIdHistory(bookDir);
       const forgotSupersededTo =
         historyBeforeReject.supersededBy[orphanedId] === characterId
           ? historyBeforeReject.supersededBy[orphanedId]
           : undefined;
 
-      /* FATAL (fix round 2 review, upgraded from non-fatal; unchanged by the
-         pair-scope change): for the two normalised tiers — where all 188
-         currently-real orphaned segments live — `rejectedPairs` is the ONLY
-         mechanism that enforces this reject. A swallowed failure here would
-         report 200/success to the user while the reject stayed purely
-         cosmetic at render time. Runs BEFORE the forget below (I1) so the
-         stash can never be computed-then-lost on a retry. */
       try {
         await rejectOrphanedPair(bookDir, orphanedId, characterId, forgotSupersededTo);
       } catch (rejectErr) {
@@ -374,8 +369,30 @@ castRejectOrphanRouter.post(
         );
         return res.status(500).json({
           error:
-            'Failed to durably record the rejection. Retry — the character link update, if any, was already saved.',
+            'Failed to durably record the rejection. Retry — nothing was written, so a retry starts clean.',
         });
+      }
+
+      /* #2166 — FATAL, where it used to be an unguarded throw into
+         errorHandler. The pair above has landed, so the rejection IS durably
+         recorded and the chip will render; only the name-match suppression is
+         missing, and the next analysis reconciles it (reject-edge-reconcile.ts).
+         Retry is safe: `appendNotLinked` is idempotent by construction and
+         `rejectOrphanedPair` returns early on an existing pair. */
+      const changed = appendNotLinked(character, bookId, orphanedId);
+      if (changed) {
+        try {
+          await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
+        } catch (castErr) {
+          console.error(
+            '[cast-reject-orphan] failed to write the notLinkedTo edge to cast.json — surfacing as a failure',
+            castErr,
+          );
+          return res.status(500).json({
+            error:
+              'The rejection was recorded, but saving the character link failed. Retry — the rejection is already durable.',
+          });
+        }
       }
 
       /* Non-fatal, and now runs AFTER the durable write above (I1) — see the
@@ -539,65 +556,63 @@ castRejectOrphanRouter.delete(
         await writeJsonAtomic(castJsonPath(bookDir), { characters: cast.characters });
       }
 
-      /* C1 (fix round 1, Critical) — restoreSupersededId, NOT
-         retireCharacterId. retireCharacterId writes supersededBy[from]
-         UNCONDITIONALLY and repoints every entry whose VALUE is `from` — both
-         sound only when `from` is genuinely dead, which an Undo cannot
-         assume: a re-analysis may have recorded a DIFFERENT, correct alias
-         for `orphanedId` since the original reject. Using retireCharacterId
-         here would silently overwrite that correct alias back to the stale
-         rejected one and repoint anything targeting `orphanedId` — #2040's
-         own failure mode, produced by the button labelled "Undo". See
-         `restoreSupersededId`'s own doc comment in `cast-id-history.ts`.
-         Looped over `matchingPairs` (ordinarily just one) rather than a
-         single pair, for the same reason the notLinkedTo removal above is:
-         whichever pair(s) the shared helper says govern this row. Round 3
-         (M-7) — accumulates into an ARRAY rather than overwriting a single
-         local: round 1 only ever kept the LAST skipped restore's target, so a
-         row governing two pairs that both skipped silently dropped the first
-         one from the response, the log, and the toast. */
-      const supersededByOthers: string[] = [];
-      for (const pair of matchingPairs) {
-        if (pair.forgotSupersededTo === undefined) continue;
-        try {
-          const restoreResult = await restoreSupersededId(bookDir, pair.from, pair.forgotSupersededTo);
-          if (!restoreResult.restored && restoreResult.supersededByOther !== undefined) {
-            supersededByOthers.push(restoreResult.supersededByOther);
-            console.log(
-              `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
-                `"${pair.forgotSupersededTo}" — a newer alias to "${restoreResult.supersededByOther}" already exists`,
-            );
-          }
-        } catch (restoreErr) {
-          console.error(
-            '[cast-reject-orphan] failed to restore the forgotten supersededBy entry during undo — surfacing as a failure',
-            restoreErr,
-          );
-          return res.status(500).json({
-            /* I5 (fix round 1) — the notLinkedTo removal above is
-               UNCONDITIONAL and already landed by this point (see the module
-               doc's cast.json paragraph); this message used to claim
-               "nothing else was changed", which was false. */
-            error:
-              'Failed to restore the forgotten alias entry. Retry — the character link removal, if any, was already saved.',
-          });
-        }
+      /* #2198 — a single BATCHED call, not two separate loops each taking
+         their own lock/read/write. The pre-fix shape (loop 1: restore every
+         pair's alias; loop 2: remove every pair) was four-plus independent
+         writes with no transaction across them: pair 1's restore fully
+         landing already moves `supersededBy[pair1.from]`, and a LATER pair's
+         write throwing left that move in place while `rejectedPairs` still
+         held every pair — so a retry's own `rejectedPairsGoverning` computed
+         against the now-moved `supersededBy` could stop seeing pairs it had
+         not gotten to yet, going permanently blind to work still owed. A
+         single `writeJsonAtomic` (temp-file-plus-rename) makes the whole
+         batch all-or-nothing, so a mid-batch failure leaves the file
+         byte-identical to before this call and a retry sees exactly what it
+         saw the first time. See `undoRejectedPairs`'s own doc comment in
+         `cast-id-history.ts`.
+
+         C1 (fix round 1, Critical), preserved exactly: the batched restore
+         is `restoreSupersededId`'s semantics, never `retireCharacterId`'s —
+         it does NOT overwrite a NEWER alias a later re-analysis recorded
+         since the original reject. When a restore is skipped for that
+         reason, the pair's removal still happens (the user asked to undo the
+         REJECTION, which succeeds regardless) and the result says so via
+         `supersededByOther`.
+
+         Round 3 (M-7), preserved exactly: accumulated into an ARRAY — a row
+         governing two pairs that both skip reports BOTH skipped targets, not
+         just the last one. */
+      let undoResults;
+      try {
+        undoResults = await undoRejectedPairs(bookDir, matchingPairs);
+      } catch (undoErr) {
+        console.error(
+          '[cast-reject-orphan] failed to undo the rejection in cast-id-history.json — surfacing as a failure',
+          undoErr,
+        );
+        return res.status(500).json({
+          /* Collapses the two prior 500 branches (restore-fatal,
+             pair-removal-fatal) into one — both described a partial write
+             that the batched primitive can no longer produce. Accurate for
+             the new behaviour: nothing in cast-id-history.json changed (the
+             batch is all-or-nothing), and the cast.json edge removal above
+             it already landed (I5, unconditional and first). */
+          error:
+            'Failed to durably undo the rejection. Nothing in cast-id-history.json changed — retry. The character link removal, if any, was already saved.',
+        });
       }
 
-      for (const pair of matchingPairs) {
-        try {
-          await unrejectOrphanedPair(bookDir, pair.from, pair.to);
-        } catch (unrejectErr) {
-          console.error(
-            '[cast-reject-orphan] failed to remove the rejected pair from cast-id-history.json — surfacing as a failure',
-            unrejectErr,
+      const supersededByOthers: string[] = [];
+      matchingPairs.forEach((pair, i) => {
+        const result = undoResults[i];
+        if (!result.restored && result.supersededByOther !== undefined) {
+          supersededByOthers.push(result.supersededByOther);
+          console.log(
+            `[cast-reject-orphan] (undo) book=${bookId} skipped restoring "${pair.from}" -> ` +
+              `"${pair.forgotSupersededTo}" — a newer alias to "${result.supersededByOther}" already exists`,
           );
-          return res.status(500).json({
-            error:
-              'Failed to durably remove the rejection. Retry — the character link update and alias restore, if any, were already saved.',
-          });
         }
-      }
+      });
 
       const resolution = await resolveOrphanedId(bookDir, cast.characters, orphanedId);
 

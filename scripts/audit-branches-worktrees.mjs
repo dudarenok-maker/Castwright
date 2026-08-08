@@ -8,11 +8,16 @@
 // Usage: node scripts/audit-branches-worktrees.mjs
 
 import { execFileSync } from 'node:child_process';
+import { gh } from './gh.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 
 function listWorktrees() {
-  const raw = execFileSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+  const raw = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+    encoding: 'utf8',
+    env: scrubGitEnv(),
+  });
   const entries = [];
   let cur = {};
   for (const line of raw.split('\n')) {
@@ -28,7 +33,10 @@ function listWorktrees() {
 }
 
 function listLocalBranches() {
-  const raw = execFileSync('git', ['for-each-ref', '--format=%(refname:short) %(upstream:track)', 'refs/heads/'], { encoding: 'utf8' });
+  const raw = execFileSync('git', ['for-each-ref', '--format=%(refname:short) %(upstream:track)', 'refs/heads/'], {
+    encoding: 'utf8',
+    env: scrubGitEnv(),
+  });
   return raw.trim().split('\n').filter(Boolean).map((line) => {
     const [branch, ...rest] = line.split(' ');
     return { branch, gone: rest.join(' ').includes('[gone]') };
@@ -37,7 +45,7 @@ function listLocalBranches() {
 
 function isMergedToMain(branch) {
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'main']);
+    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'main'], { env: scrubGitEnv() });
     return true;
   } catch {
     return false;
@@ -45,7 +53,7 @@ function isMergedToMain(branch) {
 }
 
 function openIssueTitles() {
-  const raw = execFileSync('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title'], { encoding: 'utf8' });
+  const raw = gh(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title']);
   return JSON.parse(raw);
 }
 

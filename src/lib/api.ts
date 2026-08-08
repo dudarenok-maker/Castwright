@@ -2341,10 +2341,23 @@ async function realPutBookState(bookId: string, req: PutStateRequest): Promise<v
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   });
-  if (!res.ok)
-    throw new Error(
-      `Book state PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) {
+    /* #2165 — every deliberate refusal this route sends (an analysis is
+       running, an Author/Series/Title collision, a cloned-voice consent
+       refusal) is a 409 carrying `{ error: '…' }`, and that sentence reaches
+       the user verbatim through BooksRoute's showError. Surface the sentence,
+       not the envelope. Non-JSON bodies (a proxy's 502 page, an empty 500)
+       fall through to the raw text exactly as before. */
+    const body = await res.text();
+    let detail = body || res.statusText;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
+    } catch {
+      /* not JSON — keep the raw body */
+    }
+    throw new Error(`Book state PUT failed (${res.status}): ${detail}`);
+  }
 }
 
 /* Plan 47 — per-book resume bookmark.
@@ -8639,6 +8652,25 @@ const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
     default: 'cpu',
   },
   {
+    // #2209 review B4 — mirrors the real registry's `qa.asr.computeType`
+    // (server/src/config/registry.ts:395) exactly. Paired with
+    // qa.asr.device above via mockAsrPairError, below, so mock mode can
+    // reject a Reset the same real cross-field way PUT already can — the
+    // ONLY way POST /api/config/reset can fail at all (it never
+    // revalidates a per-key pattern; a reset always restores a key's own,
+    // trivially-valid default).
+    key: 'qa.asr.computeType',
+    group: 'qa-gates',
+    label: 'Content-QA (Whisper) compute type',
+    help: 'CTranslate2 compute type for the Whisper model. ASR_DEVICE and this must agree, or a cpu device with a cuda-only type 500s every /transcribe.',
+    type: 'enum',
+    options: ['sidecar-default', 'auto', 'default', 'int8', 'int8_float32', 'int8_float16', 'int8_bfloat16', 'int16', 'float16', 'bfloat16', 'float32'],
+    apply: 'restart-sidecar',
+    risk: 'medium',
+    isPrompt: false,
+    default: 'sidecar-default',
+  },
+  {
     key: 'qa.speaker.autoRepair',
     group: 'qa-gates',
     label: 'Auto-fix voice mismatches',
@@ -9561,16 +9593,118 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
   };
 }
 
+/* #2209 — mirrors the real PUT /api/config route's per-key pattern
+   validation (server/src/config/registry.ts's `qa.asr.device` pattern,
+   applied by resolver.ts's coerceAndValidate) so mock mode can exercise a
+   genuine save rejection without inventing a fixture unrelated to real
+   server behaviour — this is #2180's own "cuda1 typo" example, on the
+   exact knob it names. Every other mock knob stays permissive. */
+const MOCK_ASR_DEVICE_PATTERN = /^(cpu|auto|cuda|cuda:\d+)$/i;
+
+/* #2209 review B4 — mirrors server/src/config/pair-rules.ts's
+   ASR_DEVICE_COMPUTE_TYPE_RULE (CT2_SUPPORTED_COMPUTE_TYPES /
+   ASR_COMPUTE_TYPE_SENTINELS / asrDeviceFamily / the check() message) so
+   mock mode's Reset path can reject too — a reset never revalidates a
+   per-key pattern (it always restores a key's own, trivially-valid
+   default), so this cross-field rule is the ONLY way either the real or
+   the mock reset route can fail at all. `api.config.test.ts` asserts this
+   message is byte-identical to importing the real rule and calling it
+   directly, not just similar. */
+const MOCK_CT2_SUPPORTED_COMPUTE_TYPES: Record<'cpu' | 'cuda', readonly string[]> = {
+  cpu: ['float32', 'int8', 'int8_float32'],
+  cuda: ['bfloat16', 'float16', 'float32', 'int8', 'int8_bfloat16', 'int8_float16', 'int8_float32'],
+};
+const MOCK_ASR_COMPUTE_TYPE_SENTINELS = ['sidecar-default', 'auto', 'default'];
+
+function mockAsrDeviceFamily(device: string): 'cpu' | 'cuda' {
+  return device.trim().toLowerCase().startsWith('cuda') ? 'cuda' : 'cpu';
+}
+
+/** The RESULTING effective qa.asr.device/qa.asr.computeType pair — `overrides`
+    supplies whichever of the two a patch/reset touches, the current mock
+    store supplies the other — mirrors the real route's "patch value where
+    touched, else already-in-effect value" pass 2 (config.ts:121-129). Returns
+    the pair-rule's error string when unsupported, else null. Only called
+    when the caller has already checked at least one of the two keys is
+    actually touched (mirrors config.ts:120/180's own guard). */
+function mockAsrPairError(
+  overrides: Partial<Record<'qa.asr.device' | 'qa.asr.computeType', number | boolean | string>>,
+): string | null {
+  const device = String(
+    'qa.asr.device' in overrides
+      ? overrides['qa.asr.device']
+      : MOCK_CONFIG_VALUES['qa.asr.device']?.effective,
+  );
+  const computeType = String(
+    'qa.asr.computeType' in overrides
+      ? overrides['qa.asr.computeType']
+      : MOCK_CONFIG_VALUES['qa.asr.computeType']?.effective,
+  );
+  if (MOCK_ASR_COMPUTE_TYPE_SENTINELS.includes(computeType)) return null;
+  const family = mockAsrDeviceFamily(device);
+  const supported = MOCK_CT2_SUPPORTED_COMPUTE_TYPES[family];
+  if (supported.includes(computeType)) return null;
+  return (
+    `qa.asr.device=${device} + qa.asr.computeType=${computeType} is an unsupported pair — `
+    + `${computeType} is not available on ${family === 'cuda' ? 'a cuda' : 'a cpu (or auto)'} device. `
+    + `Supported compute types here: ${supported.join(', ')} `
+    + `(or the sentinels: ${MOCK_ASR_COMPUTE_TYPE_SENTINELS.join(', ')}).`
+  );
+}
+
+/* #2209 review B1 — matches realPutConfig/realResetConfig's shared
+   thrown shape exactly (`Config ${action} failed (${status}): ${bodyText}`,
+   built by configApiErrorMessage further below in this file), where
+   bodyText is the server's `{ error }` JSON body verbatim — so
+   describeConfigSaveError (components/settings/override-row.tsx) parses a
+   mock-mode rejection identically to a real one, on EITHER verb. Before
+   this review round, the mock (and the real PUT throw site) only ever
+   said "update", so a rejected Reset's wrapper text never matched
+   describeConfigSaveError's regex and rendered raw. */
+function mockConfigErrorMessage(action: string, status: number, error: string): string {
+  return `Config ${action} failed (${status}): ${JSON.stringify({ error })}`;
+}
+
 export async function mockPutConfig(
   patch: Record<string, number | boolean | string>,
 ): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
   await wait(30);
+  // Pass 1 (mirrors the real route): validate the whole patch before
+  // writing anything, so a rejected key can't leave an earlier key in the
+  // same patch already applied.
+  const asrDevice = patch['qa.asr.device'];
+  if (typeof asrDevice === 'string' && !MOCK_ASR_DEVICE_PATTERN.test(asrDevice.trim())) {
+    throw new Error(
+      mockConfigErrorMessage(
+        'update',
+        400,
+        `qa.asr.device: does not match the required shape (${MOCK_ASR_DEVICE_PATTERN.source})`,
+      ),
+    );
+  }
+  // Pass 2 (mirrors the real route's cross-field pass): only runs when the
+  // patch actually touches one of the pair-rule's keys.
+  if ('qa.asr.device' in patch || 'qa.asr.computeType' in patch) {
+    const pairError = mockAsrPairError(patch);
+    if (pairError) throw new Error(mockConfigErrorMessage('update', 400, pairError));
+  }
   const applied: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (key in MOCK_CONFIG_VALUES) {
+      // #2209 review — mirrors resolver.ts's coerceAndValidate: a
+      // pattern-validated knob persists the TRIMMED form, not the raw
+      // input (a match is checked against `s.trim()` above, but this
+      // loop used to write back the untrimmed `value` regardless, so a
+      // padded '  cuda:1  ' would validate and then round-trip its
+      // whitespace into the mock store — a real divergence from the real
+      // server, which explicitly avoids exactly that, per its own
+      // comment citing independent-review finding F4 on PR #2205).
+      // qa.asr.device is the only mock knob with a pattern; every other
+      // key is persisted byte-for-byte as sent, same as before.
+      const persisted = key === 'qa.asr.device' && typeof value === 'string' ? value.trim() : value;
       MOCK_CONFIG_VALUES[key] = {
         ...MOCK_CONFIG_VALUES[key],
-        effective: value,
+        effective: persisted,
         source: 'override',
         overridden: true,
       };
@@ -9593,6 +9727,22 @@ export async function mockResetConfig(body: {
       : body.group
         ? MOCK_CONFIG_DESCRIPTORS.filter((d) => d.group === body.group).map((d) => d.key)
         : [];
+  // #2209 review B4 — mirrors the real reset route's own cross-field pass
+  // (config.ts:178-192): a clearing key resolves to its DEFAULT (not its
+  // current effective value), the other pair-rule key keeps whatever's
+  // already in effect. Runs before anything is actually cleared below.
+  const clearing = new Set(keysToReset);
+  if (clearing.has('qa.asr.device') || clearing.has('qa.asr.computeType')) {
+    const resetOverrides: Partial<Record<'qa.asr.device' | 'qa.asr.computeType', number | boolean | string>> = {};
+    for (const k of ['qa.asr.device', 'qa.asr.computeType'] as const) {
+      if (clearing.has(k)) {
+        const d = MOCK_CONFIG_DESCRIPTORS.find((x) => x.key === k);
+        if (d) resetOverrides[k] = d.default;
+      }
+    }
+    const pairError = mockAsrPairError(resetOverrides);
+    if (pairError) throw new Error(mockConfigErrorMessage('reset', 400, pairError));
+  }
   for (const key of keysToReset) {
     const descriptor = MOCK_CONFIG_DESCRIPTORS.find((d) => d.key === key);
     if (descriptor && key in MOCK_CONFIG_VALUES) {
@@ -9669,14 +9819,33 @@ async function realGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
 }
 
 /* Real implementations for /api/config and /api/config/prompts. */
-async function realGetConfig(): Promise<ConfigResponse> {
+
+/* #2209 review B1 — ONE shared wrapper-string constructor for every
+   /api/config throw site below, so the wording structurally cannot
+   diverge per-verb the way it already had: realPutConfig independently
+   hand-wrote "Config update failed" and realResetConfig hand-wrote
+   "Config reset failed", and describeConfigSaveError
+   (components/settings/override-row.tsx) only ever matched the first —
+   so every rejected Revert/Reset (resetKnob/resetGroup/resetAllConfig,
+   all routed through api.resetConfig) rendered this raw wrapper text
+   instead of the server's own message. `action` is a single word
+   ('fetch'/'update'/'reset') describing which verb failed; the mock
+   implementations above build the identical shape via
+   mockConfigErrorMessage so a mock-mode rejection parses the same way a
+   real one does. Exported so tests can drive a real throw site against a
+   mocked `fetch` and assert against the Error it ACTUALLY throws, rather
+   than hand-writing the wire string the parser is supposed to match. */
+export async function configApiErrorMessage(action: string, res: Response): Promise<string> {
+  return `Config ${action} failed (${res.status}): ${(await res.text()) || res.statusText}`;
+}
+
+export async function realGetConfig(): Promise<ConfigResponse> {
   const res = await fetch('/api/config');
-  if (!res.ok)
-    throw new Error(`Config fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok) throw new Error(await configApiErrorMessage('fetch', res));
   return res.json();
 }
 
-async function realPutConfig(
+export async function realPutConfig(
   patch: Record<string, number | boolean | string>,
 ): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
   const res = await fetch('/api/config', {
@@ -9684,14 +9853,11 @@ async function realPutConfig(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!res.ok)
-    throw new Error(
-      `Config update failed (${res.status}): ${(await res.text()) || res.statusText}`,
-    );
+  if (!res.ok) throw new Error(await configApiErrorMessage('update', res));
   return res.json();
 }
 
-async function realResetConfig(body: {
+export async function realResetConfig(body: {
   keys?: string[];
   group?: string;
   all?: boolean;
@@ -9701,8 +9867,7 @@ async function realResetConfig(body: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok)
-    throw new Error(`Config reset failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  if (!res.ok) throw new Error(await configApiErrorMessage('reset', res));
   return res.json();
 }
 

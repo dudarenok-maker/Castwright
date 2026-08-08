@@ -1,18 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   loadCastIdHistory,
+  loadCastIdHistoryWithStatus,
   retireCharacterId,
   castIdHistoryPath,
   dropSupersededIdsReclaimedByLiveCast,
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   forgetSupersededId,
+  restoreSupersededId,
   rejectOrphanedId,
   rejectOrphanedPair,
   unrejectOrphanedPair,
+  undoRejectedPairs,
+  CastIdHistoryUnreadableError,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -214,6 +218,245 @@ describe('cast id history', () => {
       } finally {
         warnSpy.mockRestore();
       }
+    });
+  });
+
+  describe('loadCastIdHistoryWithStatus (#2166 final review — Critical)', () => {
+    /* `loadCastIdHistory` collapses three states onto one value. That is fine
+       for a caller whose worst case is losing protection for a run, and
+       actively destructive for `reconcileRejectEdgesOnDisk`, which reads an
+       empty history as proof that every notLinkedTo edge is stranded. These
+       pin that the sibling loader keeps the three apart. */
+    it('reports `absent` when the file does not exist', async () => {
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('absent');
+      expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+    });
+
+    it('reports `ok` and the real history when the file reads and validates', async () => {
+      await retireCharacterId(dir, 'mayrin', 'mairin');
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('ok');
+      expect(result.history.supersededBy).toEqual({ mayrin: 'mairin' });
+    });
+
+    it('reports `degraded`, not `absent`, when the file exists but will not parse', async () => {
+      writeTestHistoryFile('{invalid json');
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistoryWithStatus(dir);
+        expect(result.status).toBe('degraded');
+        expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('reports `degraded`, not `absent`, when the file parses but fails the shape check', async () => {
+      writeTestHistoryFile(JSON.stringify({ schema: 2, supersededBy: {} }));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const result = await loadCastIdHistoryWithStatus(dir);
+        expect(result.status).toBe('degraded');
+        expect(result.history).toEqual({ schema: 1, supersededBy: {} });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('a well-formed file that keeps its optional fields still reads `ok`', async () => {
+      // The shape check tolerates displaced/rejected/rejectedPairs; none of
+      // them may be mistaken for a degraded read.
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'mairin' },
+          displaced: { old: 'new' },
+          rejected: ['m2'],
+          rejectedPairs: [{ from: 'm2', to: 'mairin' }],
+        }),
+      );
+      const result = await loadCastIdHistoryWithStatus(dir);
+      expect(result.status).toBe('ok');
+      expect(result.history.rejectedPairs).toEqual([{ from: 'm2', to: 'mairin' }]);
+    });
+
+    it('loadCastIdHistory still collapses all three onto the same value', async () => {
+      // The additive-refactor guarantee: existing callers see no change.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
+        writeTestHistoryFile('{invalid json');
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
+        writeTestHistoryFile(JSON.stringify({ schema: 2, supersededBy: {} }));
+        expect(await loadCastIdHistory(dir)).toEqual({ schema: 1, supersededBy: {} });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  /* #2214 — every mutating helper in this module used to read through the
+     COLLAPSING `loadCastIdHistory` and write back unconditionally, so a
+     `degraded` file (exists but unreadable or the wrong shape) was silently
+     REPLACED with a valid, empty one — losing every retirement, displacement
+     and rejection ever recorded for the book. Each helper now reads through
+     `loadCastIdHistoryWithStatus` and throws `CastIdHistoryUnreadableError`
+     before inspecting or mutating anything on a `degraded` verdict — even on
+     a path that would otherwise have been a no-op, since a degraded read
+     can't be told apart from a needed write. These pin that guarantee
+     per-helper: the call throws, AND the file on disk is byte-identical
+     afterward (proof the write never happened, not just that something threw). */
+  describe('a degraded read refuses to write, for every mutating helper (#2214)', () => {
+    const DEGRADED_FIXTURES = [
+      ['unparseable', '{invalid json'],
+      ['wrong shape', JSON.stringify({ schema: 2, supersededBy: {} })],
+    ] as const;
+
+    for (const [label, historyText] of DEGRADED_FIXTURES) {
+      describe(`file is ${label}`, () => {
+        it('retireCharacterId throws and leaves the file byte-identical', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(retireCharacterId(dir, 'mayrin', 'mairin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('dropSupersededIdsReclaimedByLiveCast throws and leaves the file byte-identical', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(
+              dropSupersededIdsReclaimedByLiveCast(dir, ['mairin']),
+            ).rejects.toThrow(CastIdHistoryUnreadableError);
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('dropSupersededTargetsNoLongerLive throws and leaves the file byte-identical', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(
+              dropSupersededTargetsNoLongerLive(dir, ['mairin']),
+            ).rejects.toThrow(CastIdHistoryUnreadableError);
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('forgetSupersededId throws and leaves the file byte-identical', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(forgetSupersededId(dir, 'mayrin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('restoreSupersededId throws and leaves the file byte-identical — even on what would have been a no-op', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            // 'mayrin' -> 'mairin' would be idempotent (`existing === target`)
+            // if the real supersededBy already held it — a degraded read can't
+            // tell that from a needed write, so it must throw regardless.
+            await expect(restoreSupersededId(dir, 'mayrin', 'mairin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('rejectOrphanedId throws and leaves the file byte-identical', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(rejectOrphanedId(dir, 'mayrin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('rejectOrphanedPair throws and leaves the file byte-identical — even on what would have been an idempotent no-op', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(rejectOrphanedPair(dir, 'mayrin', 'mairin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('unrejectOrphanedPair throws and leaves the file byte-identical — even on what would have been a no-op', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(unrejectOrphanedPair(dir, 'mayrin', 'mairin')).rejects.toThrow(
+              CastIdHistoryUnreadableError,
+            );
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+
+        it('undoRejectedPairs throws and leaves the file byte-identical — even on what would have been a no-op (#2198)', async () => {
+          writeTestHistoryFile(historyText);
+          const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+          try {
+            await expect(
+              undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }]),
+            ).rejects.toThrow(CastIdHistoryUnreadableError);
+            expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(historyText);
+          } finally {
+            warnSpy.mockRestore();
+          }
+        });
+      });
+    }
+
+    describe('absent stays unchanged — silently writable, exactly as before', () => {
+      it('retireCharacterId still writes normally on an absent file', async () => {
+        expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+        await retireCharacterId(dir, 'mayrin', 'mairin');
+        expect((await loadCastIdHistory(dir)).supersededBy).toEqual({ mayrin: 'mairin' });
+      });
+
+      it('rejectOrphanedPair still writes normally on an absent file', async () => {
+        expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+        await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+        expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
+          { from: 'mayrin', to: 'mairin' },
+        ]);
+      });
+
+      it('rejectOrphanedId still writes normally on an absent file', async () => {
+        expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+        await rejectOrphanedId(dir, 'mayrin');
+        expect((await loadCastIdHistory(dir)).rejected).toEqual(['mayrin']);
+      });
     });
   });
 
@@ -644,6 +887,99 @@ describe('cast id history', () => {
       expect((await loadCastIdHistory(dir)).rejectedPairs).toEqual([
         { from: 'mayrin', to: 'wren' },
       ]);
+    });
+  });
+
+  /* #2198 — the transactional batch primitive the DELETE undo route now
+     calls instead of looping `restoreSupersededId` + `unrejectOrphanedPair`
+     per pair. These pin the primitive's own contract directly, independent
+     of the route: restore semantics identical to `restoreSupersededId`'s
+     (never overwrite a newer alias), removal always happens regardless of
+     whether the restore ran or was skipped, and the whole batch writes
+     ONCE (or not at all, when nothing changes). */
+  describe('undoRejectedPairs (#2198 — batched multi-pair undo)', () => {
+    it('restores the alias and removes the pair in one call', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'wren');
+      const results = await undoRejectedPairs(dir, [
+        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
+      ]);
+      expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ mayrin: 'wren' });
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('does NOT overwrite a NEWER alias — restored: false + supersededByOther, original entry untouched, but the pair is still removed', async () => {
+      // A later, unrelated re-analysis recorded the CORRECT alias since the
+      // original reject stashed 'wren' — seeded directly, mirroring C1's own
+      // scenario (`restoreSupersededId`'s doc comment).
+      writeTestHistoryFile(
+        JSON.stringify({
+          schema: 1,
+          supersededBy: { mayrin: 'newer-target' },
+          rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' }],
+        }),
+      );
+
+      const results = await undoRejectedPairs(dir, [
+        { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'wren' },
+      ]);
+      expect(results).toEqual([
+        { from: 'mayrin', to: 'mairin', restored: false, supersededByOther: 'newer-target' },
+      ]);
+      const history = await loadCastIdHistory(dir);
+      // The newer alias survives untouched — the failure mode C1 exists to prevent.
+      expect(history.supersededBy.mayrin).toBe('newer-target');
+      // The rejection is still undone regardless — Undo's primary consequence.
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('a pair with no forgotSupersededTo contributes no alias restore, only pair removal', async () => {
+      await rejectOrphanedPair(dir, 'mayrin', 'mairin');
+      const results = await undoRejectedPairs(dir, [{ from: 'mayrin', to: 'mairin' }]);
+      expect(results).toEqual([{ from: 'mayrin', to: 'mairin', restored: true }]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({});
+      expect(history.rejectedPairs).toEqual([]);
+    });
+
+    it('an absent pair is a no-op for that entry, and a batch that changes nothing writes no file at all', async () => {
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+      const results = await undoRejectedPairs(dir, [{ from: 'ghost', to: 'nobody' }]);
+      expect(results).toEqual([{ from: 'ghost', to: 'nobody', restored: true }]);
+      expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+    });
+
+    /* NOTE (PR #2236 review, M1): this case does NOT prove "no write happened".
+       `writeJsonAtomic` reproduces byte-identical output for an unmutated
+       object, so it stays green even with the `if (changed)` guard forced to
+       always-write — verified. What actually pins the guard is its sibling
+       above, which asserts an ABSENT file is not created. Kept because
+       byte-identity on an existing file is still worth asserting; the title no
+       longer claims it detects a redundant rewrite. */
+    it('a batch that changes nothing leaves an EXISTING file byte-identical', async () => {
+      await rejectOrphanedPair(dir, 'unrelated-from', 'unrelated-to');
+      const before = readFileSync(castIdHistoryPath(dir), 'utf8');
+      // Neither pair below matches anything present, and neither carries a
+      // forgotSupersededTo — nothing for the batch to change.
+      await undoRejectedPairs(dir, [{ from: 'ghost-1', to: 'nobody-1' }, { from: 'ghost-2', to: 'nobody-2' }]);
+      expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe(before);
+    });
+
+    it('two pairs in one batch: both restored and both removed, independent of each other', async () => {
+      await rejectOrphanedPair(dir, 'a', 'target', 'alias-a');
+      await rejectOrphanedPair(dir, 'b', 'target', 'alias-b');
+      const results = await undoRejectedPairs(dir, [
+        { from: 'a', to: 'target', forgotSupersededTo: 'alias-a' },
+        { from: 'b', to: 'target', forgotSupersededTo: 'alias-b' },
+      ]);
+      expect(results).toEqual([
+        { from: 'a', to: 'target', restored: true },
+        { from: 'b', to: 'target', restored: true },
+      ]);
+      const history = await loadCastIdHistory(dir);
+      expect(history.supersededBy).toEqual({ a: 'alias-a', b: 'alias-b' });
+      expect(history.rejectedPairs).toEqual([]);
     });
   });
 

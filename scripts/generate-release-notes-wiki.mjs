@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runCommand } from './lib/run-command.mjs';
+import { gh } from './gh.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const WIKI_DIR = path.join(REPO_ROOT, 'docs', 'wiki');
@@ -195,10 +195,6 @@ export function upsertSidebarSection(sidebarText, heading, bodyLines) {
   return joined.endsWith('\n') ? joined : `${joined}\n`;
 }
 
-function run(cmd, args) {
-  return runCommand('generate-release-notes-wiki', cmd, args);
-}
-
 // Newest-first; equal timestamps sort as equal (ties keep gh's own
 // already-newest-first list order, since Array#sort is stable) rather than
 // arbitrarily flipping depending on comparator-call order.
@@ -208,7 +204,7 @@ export function compareReleasesNewestFirst(a, b) {
 }
 
 function fetchReleases() {
-  const out = run('gh', [
+  const out = gh([
     'release',
     'list',
     '--repo',
@@ -224,7 +220,7 @@ function fetchReleases() {
 }
 
 function fetchReleaseBody(tagName) {
-  const out = run('gh', ['release', 'view', tagName, '--repo', REPO_SLUG, '--json', 'body']);
+  const out = gh(['release', 'view', tagName, '--repo', REPO_SLUG, '--json', 'body']);
   return JSON.parse(out).body;
 }
 

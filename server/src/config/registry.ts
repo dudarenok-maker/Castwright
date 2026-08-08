@@ -360,6 +360,13 @@ export const KNOBS: ConfigKnob[] = [
         + 'same device and is likely slower than cpu. Changing the device '
         + 'restarts the sidecar.',
     type: 'string',
+    // #2224 — SPK_DEVICE routes through the same `_parse_device` sidecar
+    // helper qa.asr.device does, so it gets the identical validated grammar
+    // — see the pattern comment on qa.asr.device below for the full
+    // derivation, INCLUDING why "mps"/"rocm" are NOT in it despite an
+    // earlier pass in this same review round briefly widening to include
+    // them (reverted — see that comment).
+    pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar',
     risk: 'medium',
@@ -371,6 +378,53 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Content-QA (Whisper) device',
     help: '"cpu" (default) uses zero VRAM. "cuda" runs Whisper on the GPU; pin a card with "cuda:1". Changing the device restarts the sidecar.',
     type: 'string',
+    // #2180 correction 1 — this was free-form `type: 'string'` with no
+    // closed option set, so "cuda", "cuda:1", and a typo like "cuda1" were
+    // all equally "valid" at the coercion layer. An enum doesn't fit (the
+    // card index in "cuda:<n>" is unbounded), so a validated pattern
+    // constrains it instead — see the new `pattern` capability in
+    // resolver.ts's coerceAndValidate.
+    //
+    // #2224 — a pass in this same review round widened this to
+    // /^(cpu|auto|mps|rocm|cuda|cuda:\d+)$/i, reasoning that main.py treats
+    // "mps"/"rocm" as first-class INPUT device families. That was wrong and
+    // was reverted — checked directly against main.py, not merely asserted:
+    //   - "rocm" is a DERIVED REPORTING label, never a valid input. On AMD,
+    //     HIP aliases the CUDA API, so the runtime device string an operator
+    //     must set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip` (:9100-9103)
+    //     and `_normalize_device_family` (:9124-9134) exist specifically to
+    //     re-label an already-"cuda" value as "rocm" for HONEST REPORTING
+    //     after the fact (`scripts/accelerator-profile.mjs`'s runtimeBackend
+    //     doc comment says the same: "we REPORT 'rocm' for honesty; the
+    //     sidecar still uses device='cuda'"). Nothing upstream of
+    //     `_parse_device` ever PRODUCES family "rocm" from a real input —
+    //     the `fam in ("cuda","rocm")` checks scattered through main.py
+    //     (`_engine_env_pin` :3367, :10712, :10787) are written
+    //     symmetrically as if a user could type "rocm", but no code path
+    //     ever does that translation, so that arm is unreachable dead code.
+    //     Typing "rocm" literally, which the widened pattern let through,
+    //     reaches `_parse_device`'s catch-all as an OPAQUE family string
+    //     "rocm" — not the honest-reporting kind — and gets handed to
+    //     torch/speechbrain verbatim: `SPK_DEVICE=rocm` crashes
+    //     `EncoderClassifier(run_opts={"device":"rocm"})`, and
+    //     `SpeakerEngine.ensure_loaded`'s cuda-load-failure demote path is
+    //     gated on family=="cuda" (:7540), so a "rocm" load failure hits
+    //     `else: raise` with NO cpu fallback — every `/embed` 500s.
+    //     `ASR_DEVICE=rocm` crashes `WhisperModel(device="rocm")` the same
+    //     way; CTranslate2 has no "rocm" device at all.
+    //   - "mps" IS a real torch device (Apple Silicon), but ONLY for
+    //     PyTorch-backed engines (Coqui/Qwen). CTranslate2 (Whisper's
+    //     backend) has no Metal/MPS backend, so `ASR_DEVICE=mps` would
+    //     crash `WhisperModel(device="mps")` outright — a NET REGRESSION
+    //     versus the unwidened pattern, which rejected "mps" and fell back
+    //     to a working cpu default. Not added to qa.speaker.device either
+    //     (torch/speechbrain genuinely accept "mps" there) — that is a
+    //     separate, deliberately out-of-scope decision: `pair-rules.ts`'s
+    //     `asrDeviceFamily` maps anything not starting with "cuda" to
+    //     'cpu', so accepting "mps" there needs that helper (and its
+    //     compute-type pairing), the help text, and `.env.example` updated
+    //     together — a design surface of its own, not a delta-sized fix.
+    pattern: /^(cpu|auto|cuda|cuda:\d+)$/i,
     default: 'cpu',
     apply: 'restart-sidecar', risk: 'medium',
   },
@@ -411,25 +465,6 @@ export const KNOBS: ConfigKnob[] = [
                                  // default" (#2014). "auto" is CT2's OWN member —
                                  // outside this sentinel — and passes through
                                  // (PR #2176 review finding 1).
-    apply: 'restart-sidecar', risk: 'medium',
-  },
-  {
-    key: 'qa.asr.concurrency',
-    env: 'ASR_CONCURRENCY',
-    group: 'qa-gates',
-    label: 'Content-QA (Whisper) transcribe concurrency',
-    help: 'Documented sidecar transcribe thread-pool width. NOTE (#2014): repo-wide '
-        + 'search found NO code anywhere — sidecar or server — that reads '
-        + 'ASR_CONCURRENCY; it has been .env.example-only documentation since it '
-        + 'was first written, so changing it currently has no observable effect. '
-        + 'Registered per the ticket owner\'s explicit call (an already-documented '
-        + 'operator-facing var falls under CLAUDE.md\'s "new env var MUST be a '
-        + 'knob" rule) so it is at least reachable/consistent with .env.example, '
-        + 'not to imply it is wired up. See #2177 for whether it gets wired up '
-        + 'or deleted. Changing this restarts the sidecar.',
-    type: 'integer', min: 1,
-    default: 2, // ← .env.example's own documented default; there is no sidecar
-                // code fallback to match — none exists (see help above, #2014)
     apply: 'restart-sidecar', risk: 'medium',
   },
   {
@@ -1076,8 +1111,16 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Gemini analyzer model',
     help: 'Gemini model used directly (engine=gemini) or as the Ollama-unreachable fallback (engine=local). Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
     type: 'string',
-    // Shipped default; the code-level last-resort fallback in analyzer/index.ts
-    // + routes/analysis.ts intentionally stays gemma-4-31b-it (RECITATION-safe).
+    // #2179 — analyzer/index.ts, routes/analysis.ts, and run-eval-cli.ts used
+    // to read process.env.GEMINI_MODEL directly with a hardcoded
+    // `?? 'gemma-4-31b-it'` last-resort fallback, deliberately different from
+    // this default (RECITATION-safe). That divergence depended on
+    // server/.env.example always shipping this line ACTIVE so the two values
+    // matched in practice; once the emitter started shipping the generated
+    // block commented out (#2179), the divergence would have silently become
+    // real for every fresh install. All three sites were converted to
+    // configValue('analyzer.gemini.model') instead, so this default is now
+    // the only fallback — the gemma-4-31b-it literal is retired.
     default: 'gemini-3.5-flash-lite', // ← GEMINI_MODEL default mirrored in server/.env.example
     apply: 'live', risk: 'medium',
   },

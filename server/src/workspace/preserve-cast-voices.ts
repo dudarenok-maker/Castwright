@@ -74,6 +74,34 @@ export function preserveDesignedVoicesOnCastWrite<T extends { id: string }>(
   });
 }
 
+/* #2166 — `notLinkedTo` is server-owned. Unlike PRESERVED_DESIGN_FIELDS above,
+   which fill only a GAP and let an explicit incoming value win, this field is
+   taken from disk unconditionally: the whole-roster cast PUT
+   (persistence-middleware.ts fires it on nine ordinary cast actions) is never
+   its authoritative writer — the reject-orphan and not-linked-to routes are.
+   Without this, cast-slice.ts's `existing.notLinkedTo ?? inc.notLinkedTo`
+   merge (redux's array beats the server's) lets a stale client re-PUT an edge
+   that analysis.ts's reconciliation just repaired, and the two oscillate.
+
+   Same scope as its siblings: characters that already exist on disk. A row the
+   incoming write is introducing has no on-disk value to be authoritative, so
+   it passes through. */
+export function preserveNotLinkedToOnCastWrite<T extends { id: string }>(
+  existing: ReadonlyArray<{ id: string } & Record<string, unknown>>,
+  incoming: T[],
+): T[] {
+  if (!existing.length) return incoming;
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  return incoming.map((inc) => {
+    const old = byId.get(inc.id);
+    if (!old) return inc;
+    const merged = { ...(inc as Record<string, unknown>) };
+    if (old.notLinkedTo === undefined) delete merged.notLinkedTo;
+    else merged.notLinkedTo = old.notLinkedTo;
+    return merged as T;
+  });
+}
+
 /** [#1899] — reject a client-supplied clone-capable engine slot that would
     redirect rendering to an artifact this exact character didn't already
     own on disk. `voice-mapping.ts`'s `pickVoiceForEngine` resolves the
