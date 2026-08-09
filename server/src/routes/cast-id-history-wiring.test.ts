@@ -234,6 +234,13 @@ describe('#2040 castIdHistory route wiring — generation.ts', () => {
       supersededBy: { 'ghost-generation': 'narrator' },
       rejected: ['rejected-generation'],
       rejectedPairs: [{ from: 'rejected-pair-generation', to: 'narrator' }],
+      // #2128 — every write bumps seq and stamps recordedAtSeq/recordedAtIso;
+      // three writers ran above (retireCharacterId, rejectOrphanedId,
+      // rejectOrphanedPair), so seq lands at 3, with only the supersededBy
+      // key ('ghost-generation') stamped, at the seq its write happened (1).
+      seq: 3,
+      recordedAtSeq: { 'ghost-generation': 1 },
+      recordedAtIso: { 'ghost-generation': expect.any(String) },
     });
   });
 });
@@ -318,6 +325,11 @@ describe('#2040 castIdHistory route wiring — chapter-splice.ts', () => {
     expect(synthesiseCalls[0].castIdHistory).toEqual({
       schema: 1,
       supersededBy: { 'ghost-splice': 'amy' },
+      // #2128 — the sole writer above (retireCharacterId) bumps seq to 1 and
+      // stamps its own key at that seq.
+      seq: 1,
+      recordedAtSeq: { 'ghost-splice': 1 },
+      recordedAtIso: { 'ghost-splice': expect.any(String) },
     });
   });
 });
@@ -420,6 +432,11 @@ describe('#2040 castIdHistory route wiring — chapter-qa-repair.ts', () => {
     expect(synthesiseCalls[0].castIdHistory).toEqual({
       schema: 1,
       supersededBy: { 'ghost-qa-repair': 'castor' },
+      // #2128 — the sole writer above (retireCharacterId) bumps seq to 1 and
+      // stamps its own key at that seq.
+      seq: 1,
+      recordedAtSeq: { 'ghost-qa-repair': 1 },
+      recordedAtIso: { 'ghost-qa-repair': expect.any(String) },
     });
   });
 });

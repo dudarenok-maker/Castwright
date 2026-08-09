@@ -711,6 +711,12 @@ describe('DELETE /api/books/:bookId/cast/:characterId/reject-orphan-match (undo,
       schema: 1,
       supersededBy: {},
       rejectedPairs: [{ from: 'The-Torment', to: 'the-torment', forgotSupersededTo: 'the-torment' }],
+      // #2128 — two writes happened (forgetSupersededId, rejectOrphanedPair),
+      // each bumping seq; neither stamps a supersededBy key (the entry was
+      // deleted, not established), so the marker maps stay empty.
+      seq: 2,
+      recordedAtSeq: {},
+      recordedAtIso: {},
     });
 
     // The UI sends the DELETE using the ROW's own raw id — 'the_torment' —

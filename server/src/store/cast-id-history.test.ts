@@ -17,6 +17,7 @@ import {
   unrejectOrphanedPair,
   undoRejectedPairs,
   CastIdHistoryUnreadableError,
+  stampRecordedAtSeqIfAbsent,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -525,7 +526,15 @@ describe('cast id history', () => {
       // not just that loadCastIdHistory's content looks the same either way.
       expect(existsSync(castIdHistoryPath(dir))).toBe(true);
       const history = await loadCastIdHistory(dir);
-      expect(history).toEqual({ schema: 1, supersededBy: {} });
+      // #2128 — every write bumps seq and reconciles the (empty) marker maps,
+      // even one that drops nothing.
+      expect(history).toEqual({
+        schema: 1,
+        supersededBy: {},
+        seq: 1,
+        recordedAtSeq: {},
+        recordedAtIso: {},
+      });
     });
   });
 
@@ -1146,5 +1155,210 @@ describe('cast id history', () => {
       const r = refuseRetirementsOfLiveIds([{ from: 'mayrin', to: 'mairin' }], ['mairin']);
       expect(r.refused).toEqual([]);
     });
+  });
+});
+
+describe('#2128 — seq and recordedAt markers', () => {
+  it('stamps a marker for every supersededBy key it writes, and bumps seq', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const h = await loadCastIdHistory(dir);
+    expect(h.seq).toBe(1);
+    expect(h.recordedAtSeq).toEqual({ mayrin: 1 });
+    expect(typeof h.recordedAtIso?.mayrin).toBe('string');
+  });
+
+  it('restamps a repointed entry — the merge-repoint regression', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');      // seq 1, mayrin@1
+    await retireCharacterId(dir, 'mairin', 'dame-alina');  // repoints mayrin -> dame-alina
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ mayrin: 'dame-alina', mairin: 'dame-alina' });
+    // BOTH keys were established at seq 2 — `mayrin` now points at a DIFFERENT
+    // cast row than it did at seq 1, so a render made at seq 1 is stale.
+    expect(h.recordedAtSeq).toEqual({ mayrin: 2, mairin: 2 });
+  });
+
+  it('restamps on the direct-reversal branch too', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'антон', 'anton');
+    await retireCharacterId(dir, 'anton', 'антон'); // reversal
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ anton: 'антон' });
+    expect(h.recordedAtSeq).toEqual({ anton: 2 });
+  });
+
+  it('deletes both markers when forgetSupersededId removes a key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    await forgetSupersededId(dir, 'mayrin');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({});
+    expect(h.recordedAtSeq).toEqual({});
+    expect(h.recordedAtIso).toEqual({});
+  });
+
+  it('deletes both markers when dropSupersededIdsReclaimedByLiveCast drops a key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    await dropSupersededIdsReclaimedByLiveCast(dir, ['mayrin', 'mairin']);
+    const h = await loadCastIdHistory(dir);
+    expect(h.recordedAtSeq).toEqual({});
+  });
+
+  // Amended 2026-08-06 — the mirror of the test above, for the ninth write site.
+  // The two drop primitives are mirror images (one prunes an entry whose KEY was
+  // reclaimed, the other one whose TARGET died), so a marker-cleanup test for
+  // only one of them leaves the other's deletion path unproven.
+  it('deletes both markers when dropSupersededTargetsNoLongerLive drops a key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');   // seq 1, supersededBy {mayrin: mairin}
+    const before = (await loadCastIdHistory(dir)).seq!;
+    await dropSupersededTargetsNoLongerLive(dir, []);   // 'mairin' not live — entry drops
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({});
+    expect(h.recordedAtSeq).toEqual({});
+    expect(h.recordedAtIso).toEqual({});
+    expect(h.seq!).toBeGreaterThan(before);             // the write bumps seq like any other
+  });
+
+  it('restoreSupersededId stamps the CURRENT seq, never a replayed one', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');  // seq 1
+    await forgetSupersededId(dir, 'mayrin');           // seq 2
+    await rejectOrphanedPair(dir, 'mayrin', 'mairin'); // seq 3
+    await restoreSupersededId(dir, 'mayrin', 'mairin');
+    const h = await loadCastIdHistory(dir);
+    expect(h.seq).toBe(4);
+    expect(h.recordedAtSeq).toEqual({ mayrin: 4 }); // NOT 1 — see the forget->render->restore hazard
+  });
+
+  it("restoreSupersededId's early returns leave markers untouched", async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const before = await loadCastIdHistory(dir);
+    await restoreSupersededId(dir, 'mayrin', 'mairin'); // already equal — idempotent, no write
+    await restoreSupersededId(dir, 'mayrin', 'someone-else'); // occupied — refuses, no write
+    const after = await loadCastIdHistory(dir);
+    expect(after.seq).toBe(before.seq);
+    expect(after.recordedAtSeq).toEqual(before.recordedAtSeq);
+    expect(after.recordedAtIso).toEqual(before.recordedAtIso);
+  });
+
+  it('bumps seq on the five writes that touch no supersededBy key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await rejectOrphanedId(dir, 'a');                     // 1
+    await rejectOrphanedPair(dir, 'b', 'c');              // 2
+    await unrejectOrphanedPair(dir, 'b', 'c');            // 3
+    await dropSupersededIdsReclaimedByLiveCast(dir, []);  // 4 — writes unconditionally
+    await dropSupersededTargetsNoLongerLive(dir, []);     // 5 — likewise (amended 2026-08-06)
+    expect((await loadCastIdHistory(dir)).seq).toBe(5);
+  });
+
+  it('holds keys(recordedAtSeq) === keys(supersededBy) bidirectionally', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    const script: Array<() => Promise<unknown>> = [
+      () => retireCharacterId(dir, 'a', 'b'),
+      () => retireCharacterId(dir, 'b', 'c'),
+      () => rejectOrphanedPair(dir, 'x', 'c'),
+      () => forgetSupersededId(dir, 'a'),
+      () => restoreSupersededId(dir, 'a', 'c'),
+      () => dropSupersededIdsReclaimedByLiveCast(dir, ['b']),
+      () => retireCharacterId(dir, 'd', 'c'),
+      // Amended 2026-08-06 — the ninth write site. Both arms, because they fail
+      // differently: the first writes while dropping NOTHING (proving seq bumps
+      // on an empty drop, the shape that makes "strictly increasing" testable),
+      // the second drops every surviving entry (proving the markers go with the
+      // keys rather than being left for the next write to self-heal).
+      () => dropSupersededTargetsNoLongerLive(dir, ['c']), // 'c' live — drops nothing, still writes
+      () => dropSupersededTargetsNoLongerLive(dir, []),    // 'c' dead — drops a and d
+    ];
+    let seq = 0;
+    for (const step of script) {
+      await step();
+      const h = await loadCastIdHistory(dir);
+      expect(Object.keys(h.recordedAtSeq ?? {}).sort()).toEqual(Object.keys(h.supersededBy).sort());
+      expect(Object.keys(h.recordedAtIso ?? {}).sort()).toEqual(Object.keys(h.supersededBy).sort());
+      expect(h.seq).toBeGreaterThan(seq); // strictly increasing across EVERY write
+      seq = h.seq!;
+      for (const v of Object.values(h.recordedAtSeq ?? {})) expect(v).toBeLessThanOrEqual(h.seq!);
+    }
+  });
+
+  it('repairs a seq lost while recordedAtSeq survived', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'a', 'b');
+    await retireCharacterId(dir, 'c', 'b'); // seq 2
+    const raw = JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8'));
+    delete raw.seq;
+    writeTestHistoryFile(JSON.stringify(raw));
+    // Without the repair this loads as 0, every later write starts at 1, and
+    // every existing marker stays above it — the book can never clear again.
+    expect((await loadCastIdHistory(dir)).seq).toBe(2);
+  });
+
+  it('collapses the whole file when a new field is malformed (fail-closed)', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'a', 'b');
+    const raw = JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8'));
+    raw.recordedAtSeq = ['not', 'a', 'map'];
+    writeTestHistoryFile(JSON.stringify(raw));
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({}); // no aliases -> every affected id is a genuine miss and IS listed
+  });
+
+  it('a repeat retirement writes nothing and restamps nothing (#2128)', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const before = await loadCastIdHistory(dir);
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    const after = await loadCastIdHistory(dir);
+    expect(after.seq).toBe(before.seq);
+    expect(after.recordedAtSeq).toEqual(before.recordedAtSeq);
+  });
+
+  it('still repoints when a repeat call DOES have work to do', async () => {
+    // Guard the guard: `alreadyRecorded` must not swallow a real repoint.
+    await retireCharacterId(dir, 'a', 'b');
+    await retireCharacterId(dir, 'c', 'b');
+    await retireCharacterId(dir, 'b', 'd'); // repoints a and c onto d
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ a: 'd', c: 'd', b: 'd' });
+  });
+});
+
+describe('#2128 — the one-shot stamp', () => {
+  it('creates the field on a pre-lane file, stamping every existing key', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile(
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin', anton: 'антон' } }),
+    );
+    expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(true);
+    const h = await loadCastIdHistory(dir);
+    expect(h.seq).toBe(1);
+    expect(h.recordedAtSeq).toEqual({ mayrin: 1, anton: 1 });
+  });
+
+  it('is a no-op once the field exists', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    await retireCharacterId(dir, 'a', 'b');
+    const before = await loadCastIdHistory(dir);
+    expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
+    expect((await loadCastIdHistory(dir)).seq).toBe(before.seq);
+  });
+
+  it('never writes when there is no file', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
+    expect(existsSync(castIdHistoryPath(dir))).toBe(false);
+  });
+
+  it('refuses to overwrite a malformed file', async () => {
+    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    writeTestHistoryFile('{ "schema": 2, "supersededBy": {} }');
+    expect(await stampRecordedAtSeqIfAbsent(dir)).toBe(false);
+    // The operator's broken file is still there to fix, not silently replaced
+    // with an empty history that discards whatever supersededBy it held.
+    expect(JSON.parse(readFileSync(castIdHistoryPath(dir), 'utf8')).schema).toBe(2);
   });
 });

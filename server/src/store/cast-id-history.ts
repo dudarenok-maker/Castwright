@@ -91,6 +91,31 @@ export interface CastIdHistory {
    *  still works — it only ever reads `supersededBy`/`rejected`, which are
    *  unaffected. */
   rejectedPairs?: RejectedPair[];
+  /** #2128 — monotonic per-book counter, incremented on EVERY write to this
+   *  file, whether or not a `supersededBy` key changed. The broader rule makes
+   *  "seq strictly increases across every write" a testable invariant rather
+   *  than an ambiguous one. Additive and backwards-compatible: optional, never
+   *  bumps `schema`. `loadCastIdHistory` repairs it upward from
+   *  `recordedAtSeq` (see its own doc comment) — without that repair, a file
+   *  that loses `seq` while keeping its markers can never clear a row again. */
+  seq?: number;
+  /** #2128 — the `seq` at which each key's CURRENT target was established.
+   *  NOT "when the alias was first recorded": `retireCharacterId`'s repoint
+   *  loop can move an alias onto a different cast row, whose voice is whichever
+   *  row won the merge, so a render made against the old target is stale even
+   *  though the KEY never changed. Restamping on repoint is what closes that.
+   *
+   *  The authoritative value `isAudioCurrent` compares. FIELD ABSENT means
+   *  "this file has never been through the lane" and reads `'unknown'`; a KEY
+   *  missing from a PRESENT field means "predates the one-shot stamp" and
+   *  contributes 0. The two are not the same, and conflating them is fail-open
+   *  on the one axis this codebase actually fails. */
+  recordedAtSeq?: Record<string, number>;
+  /** #2128 — human-readable companion for operator diagnostics (an operator
+   *  hand-inspecting this file mid-repair-run can tell WHEN, not merely in what
+   *  order). NEVER compared: the predicate reads `recordedAtSeq` only. The
+   *  names carry the rule — `…Seq` is authoritative, `…Iso` is display. */
+  recordedAtIso?: Record<string, string>;
 }
 
 /** One pair-scoped rejection: `from` (an orphaned id) is NOT the same
@@ -161,6 +186,53 @@ export interface CastIdHistoryReadResult {
   history: CastIdHistory;
 }
 
+/** The whole-file shape check, extracted so `stampRecordedAtSeqIfAbsent` can
+ *  ask the identical question before it writes (a second, hand-rolled copy is
+ *  the duplicate-logic shape this lane exists to stop). All-or-nothing BY
+ *  DESIGN: a malformed field degrades the whole file to the empty default, so
+ *  no id gets alias protection and every affected id is listed as a genuine
+ *  miss. Fail-closed, and required by #2128's acceptance. */
+function isWellFormedHistory(raw: unknown): raw is CastIdHistory {
+  const h = raw as CastIdHistory;
+  return (
+    typeof raw === 'object' &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    h.schema === 1 &&
+    typeof h.supersededBy === 'object' &&
+    !Array.isArray(h.supersededBy) &&
+    h.supersededBy !== null &&
+    (h.displaced === undefined ||
+      (typeof h.displaced === 'object' && !Array.isArray(h.displaced) && h.displaced !== null)) &&
+    (h.rejected === undefined || Array.isArray(h.rejected)) &&
+    (h.rejectedPairs === undefined || Array.isArray(h.rejectedPairs)) &&
+    /* #2128 — validated the same way, and deliberately inside the same
+       all-or-nothing conjunction as everything above it. */
+    (h.seq === undefined || (typeof h.seq === 'number' && Number.isFinite(h.seq))) &&
+    (h.recordedAtSeq === undefined ||
+      (typeof h.recordedAtSeq === 'object' &&
+        !Array.isArray(h.recordedAtSeq) &&
+        h.recordedAtSeq !== null)) &&
+    (h.recordedAtIso === undefined ||
+      (typeof h.recordedAtIso === 'object' &&
+        !Array.isArray(h.recordedAtIso) &&
+        h.recordedAtIso !== null))
+  );
+}
+
+/** #2128 — `seq` repaired upward from the markers on load. A file that loses
+ *  `seq` (hand-edit, merge conflict, truncated write) while keeping
+ *  `recordedAtSeq` would otherwise load as 0, every subsequent write would
+ *  start again from 1, every existing stamp would stay above it, and the
+ *  book's rows could NEVER clear again. Reading the true floor off the markers
+ *  themselves costs nothing and makes that unreachable. */
+function repairSeq(h: CastIdHistory): number {
+  const marks = Object.values(h.recordedAtSeq ?? {}).filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  return Math.max(typeof h.seq === 'number' && Number.isFinite(h.seq) ? h.seq : 0, ...marks, 0);
+}
+
 /** The discriminated sibling of `loadCastIdHistory` — same read, same
  *  warnings, same returned history, but it also says WHICH of the three
  *  states produced that history (#2166 final review, Critical).
@@ -197,21 +269,8 @@ export async function loadCastIdHistoryWithStatus(
       // No file on disk — nothing has ever been retired for this book.
       return { status: 'absent', history: { schema: 1, supersededBy: {} } };
     }
-    if (
-      typeof raw === 'object' &&
-      !Array.isArray(raw) &&
-      raw.schema === 1 &&
-      typeof raw.supersededBy === 'object' &&
-      !Array.isArray(raw.supersededBy) &&
-      raw.supersededBy !== null &&
-      (raw.displaced === undefined ||
-        (typeof raw.displaced === 'object' &&
-          !Array.isArray(raw.displaced) &&
-          raw.displaced !== null)) &&
-      (raw.rejected === undefined || Array.isArray(raw.rejected)) &&
-      (raw.rejectedPairs === undefined || Array.isArray(raw.rejectedPairs))
-    ) {
-      return { status: 'ok', history: raw };
+    if (isWellFormedHistory(raw)) {
+      return { status: 'ok', history: { ...raw, seq: repairSeq(raw) } };
     }
     console.warn(
       `[cast-id-history] ${path} exists but has an unexpected shape — id-history protection disabled until it is fixed or removed.`,
@@ -271,6 +330,46 @@ async function loadHistoryOrThrow(bookDir: string): Promise<CastIdHistory> {
     throw new CastIdHistoryUnreadableError(bookDir);
   }
   return history;
+}
+
+/** #2128 — the ONE place `seq` advances and markers move. Every writer in this
+ *  module calls this immediately BEFORE its `writeJsonAtomic`, whether or not
+ *  it touched a `supersededBy` key.
+ *
+ *  `stampedKeys` are the keys whose TARGET this write established or changed.
+ *  Beyond those, the reconcile loops below hold Global Constraint 6's
+ *  bidirectional invariant unconditionally: a marker whose key is gone is
+ *  destroyed, and a key with no marker (a pre-lane file, a hand-edit that
+ *  dropped the field, a merge conflict) is stamped at the new `seq`. That
+ *  second loop IS the one-shot back-fill: a legacy alias becomes current only
+ *  once a chapter is re-rendered ABOVE this stamp, which is the fail-closed
+ *  direction. */
+function bumpSeqAndStamp(history: CastIdHistory, stampedKeys: readonly string[]): void {
+  const next = (history.seq ?? 0) + 1;
+  const iso = new Date().toISOString();
+  const seqMap: Record<string, number> = { ...(history.recordedAtSeq ?? {}) };
+  const isoMap: Record<string, string> = { ...(history.recordedAtIso ?? {}) };
+
+  for (const k of stampedKeys) {
+    seqMap[k] = next;
+    isoMap[k] = iso;
+  }
+  for (const k of Object.keys(seqMap)) {
+    if (!(k in history.supersededBy)) {
+      delete seqMap[k];
+      delete isoMap[k];
+    }
+  }
+  for (const k of Object.keys(history.supersededBy)) {
+    if (!(k in seqMap)) {
+      seqMap[k] = next;
+      isoMap[k] = iso;
+    }
+  }
+
+  history.seq = next;
+  history.recordedAtSeq = seqMap;
+  history.recordedAtIso = isoMap;
 }
 
 /** Record that characterId `from` has been retired and replaced by `to`.
@@ -402,13 +501,16 @@ export async function retireCharacterId(
        repoint anything that targeted `from` at `to`, and write `from -> to`. */
     if (history.supersededBy[to] === from) {
       delete history.supersededBy[to];
+      const repointed: string[] = [];
       for (const [key, value] of Object.entries(history.supersededBy)) {
         if (value === from) {
           history.supersededBy[key] = to;
+          repointed.push(key);
         }
       }
       history.supersededBy[from] = to;
       const droppedSelfLoopRejections = repointRejectedPairs(history, from, to);
+      bumpSeqAndStamp(history, [from, ...repointed]);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
       return { droppedSelfLoopRejections };
     }
@@ -425,9 +527,30 @@ export async function retireCharacterId(
       return { droppedSelfLoopRejections: [] };
     }
 
+    /* #2128 — a retirement that changes nothing must not write. This mirrors
+       the idempotent-write discipline every other primitive in this module
+       already applies (`rejectOrphanedId`, `rejectOrphanedPair`,
+       `unrejectOrphanedPair`, `restoreSupersededId`); `retireCharacterId` was
+       the one that didn't, which was invisible until `seq` made a redundant
+       write observable. Without it, an analysis re-deriving an
+       already-recorded retirement restamps `from` and invalidates every render
+       made since the original — re-listing a book the operator just cleared.
+
+       The repoint loop below is included in "changes nothing": if no other
+       entry's value is `from`, and `supersededBy[from]` already equals
+       `resolvedTo`, the write is a byte-for-byte no-op. */
+    const alreadyRecorded =
+      history.supersededBy[from] === resolvedTo &&
+      !Object.values(history.supersededBy).includes(from);
+    if (alreadyRecorded && !history.rejectedPairs?.some((p) => p.to === from)) {
+      return { droppedSelfLoopRejections: [] };
+    }
+
     // Find all keys that currently point to 'from' and update them to 'to'
+    const repointed: string[] = [];
     for (const [key, value] of Object.entries(history.supersededBy)) {
       if (value === from) {
+        repointed.push(key);
         history.supersededBy[key] = resolvedTo;
       }
     }
@@ -436,6 +559,7 @@ export async function retireCharacterId(
     history.supersededBy[from] = resolvedTo;
 
     const droppedSelfLoopRejections = repointRejectedPairs(history, from, resolvedTo);
+    bumpSeqAndStamp(history, [from, ...repointed]);
 
     // Write back
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
@@ -540,6 +664,7 @@ export async function dropSupersededIdsReclaimedByLiveCast(
       }
       history.displaced = displaced;
     }
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return dropped;
   });
@@ -632,6 +757,7 @@ export async function dropSupersededTargetsNoLongerLive(
       }
       history.displaced = displaced;
     }
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return dropped;
   });
@@ -699,6 +825,7 @@ export async function forgetSupersededId(
       return undefined;
     }
     delete history.supersededBy[id];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     return removed;
   });
@@ -750,8 +877,9 @@ export async function restoreSupersededId(
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
-    const { result, changed } = applyRestoreSupersededId(history, id, target);
+    const { result, changed, touchedKeys } = applyRestoreSupersededId(history, id, target);
     if (changed) {
+      bumpSeqAndStamp(history, touchedKeys);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     }
     return result;
@@ -764,21 +892,32 @@ export async function restoreSupersededId(
  *  plus whether a mutation actually happened, so a caller batching several of
  *  these under one write knows whether it needs to write at all. Never reads,
  *  never locks, never writes — see this module's `undoRejectedPairs` doc
- *  comment for why sharing the LOCKED wrapper instead would deadlock. */
+ *  comment for why sharing the LOCKED wrapper instead would deadlock.
+ *
+ *  #2128 — also reports `touchedKeys`, the `supersededBy` keys this call
+ *  established or changed (empty on both no-op branches). The owning writer
+ *  (`restoreSupersededId` alone, or `undoRejectedPairs` accumulating across a
+ *  whole batch) folds this into the single `bumpSeqAndStamp` call it makes
+ *  immediately before its one write — derived from what the code actually
+ *  touched, not hand-transcribed into a table a future PR can outgrow. */
 function applyRestoreSupersededId(
   history: CastIdHistory,
   id: string,
   target: string,
-): { result: { restored: boolean; supersededByOther?: string }; changed: boolean } {
+): {
+  result: { restored: boolean; supersededByOther?: string };
+  changed: boolean;
+  touchedKeys: string[];
+} {
   const existing = history.supersededBy[id];
   if (existing === target) {
-    return { result: { restored: true }, changed: false };
+    return { result: { restored: true }, changed: false, touchedKeys: [] };
   }
   if (existing !== undefined) {
-    return { result: { restored: false, supersededByOther: existing }, changed: false };
+    return { result: { restored: false, supersededByOther: existing }, changed: false, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
-  return { result: { restored: true }, changed: true };
+  return { result: { restored: true }, changed: true, touchedKeys: [id] };
 }
 
 /** LEGACY (#2040 Task 17) — id-wide reject. Superseded by `rejectOrphanedPair`
@@ -806,6 +945,7 @@ export async function rejectOrphanedId(bookDir: string, id: string): Promise<voi
     const rejected = history.rejected ?? [];
     if (rejected.includes(id)) return;
     history.rejected = [...rejected, id];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }
@@ -846,6 +986,7 @@ export async function rejectOrphanedPair(
     const entry: RejectedPair =
       forgotSupersededTo === undefined ? { from, to } : { from, to, forgotSupersededTo };
     history.rejectedPairs = [...pairs, entry];
+    bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
 }
@@ -881,6 +1022,7 @@ export async function unrejectOrphanedPair(
     const history = await loadHistoryOrThrow(bookDir);
     const { removed, changed } = applyUnrejectOrphanedPair(history, from, to);
     if (changed) {
+      bumpSeqAndStamp(history, []);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     }
     return removed?.forgotSupersededTo;
@@ -962,6 +1104,13 @@ export async function undoRejectedPairs(
     // launder a damaged file into a valid, empty one.
     const history = await loadHistoryOrThrow(bookDir);
     const results: UndoRejectedPairResult[] = [];
+    /* #2128 — the tenth write site (P1). Each pair's `applyRestoreSupersededId`
+       reports the `supersededBy` keys IT touched; accumulated here and stamped
+       ONCE via `bumpSeqAndStamp` immediately before the single batch write, so
+       one `undoRejectedPairs` call is one `seq` bump no matter how many pairs
+       it restores — the key list is derived from what the loop actually
+       touched, never hand-transcribed. */
+    const touchedKeys: string[] = [];
     let changed = false;
     for (const pair of pairs) {
       let restored = true;
@@ -971,6 +1120,7 @@ export async function undoRejectedPairs(
         restored = applied.result.restored;
         supersededByOther = applied.result.supersededByOther;
         if (applied.changed) changed = true;
+        touchedKeys.push(...applied.touchedKeys);
       }
       const { changed: unrejectChanged } = applyUnrejectOrphanedPair(history, pair.from, pair.to);
       if (unrejectChanged) changed = true;
@@ -981,8 +1131,45 @@ export async function undoRejectedPairs(
       );
     }
     if (changed) {
+      bumpSeqAndStamp(history, touchedKeys);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
     }
     return results;
+  });
+}
+
+/** #2128 — perform the one-shot back-fill stamp on a book whose history file
+ *  has never been through this lane. Called by `repair-cast-id-drift.mjs
+ *  --apply` for EVERY book it scans, not only ones with an alias to record:
+ *  the books carrying pre-lane aliases are exactly the ones the A33 repair
+ *  workflow already visits, and absence of the field reads `'unknown'` until
+ *  it lands.
+ *
+ *  Returns whether it wrote. Three no-write cases, all deliberate: no file
+ *  (nothing to stamp), the field already exists (idempotent), and — the one
+ *  that matters — a file that fails the shape check. Loading a malformed file
+ *  returns the EMPTY default, so stamping that would persist an empty history
+ *  over whatever `supersededBy` the operator still has on disk to repair. */
+export async function stampRecordedAtSeqIfAbsent(bookDir: string): Promise<boolean> {
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    const raw = await readJson<CastIdHistory>(castIdHistoryPath(bookDir)).catch(() => undefined);
+    if (raw === null || raw === undefined) return false;
+    if (!isWellFormedHistory(raw)) {
+      console.warn(
+        `[cast-id-history] ${castIdHistoryPath(bookDir)} has an unexpected shape — skipping the #2128 ` +
+          `one-shot stamp rather than overwriting it with an empty history.`,
+      );
+      return false;
+    }
+    if (raw.recordedAtSeq !== undefined) return false;
+    const history: CastIdHistory = { ...raw, seq: repairSeq(raw) };
+    bumpSeqAndStamp(history, []);
+    /* Written as `writeJsonAtomic(castIdHistoryPath(bookDir), …)`, NOT via a
+       `const path` local. Review round 1 (C2): guard 5 counts write sites by
+       matching that literal text, so hoisting the path into a variable makes
+       the one new write site this lane adds invisible to the guard that exists
+       to see write sites. */
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+    return true;
   });
 }
