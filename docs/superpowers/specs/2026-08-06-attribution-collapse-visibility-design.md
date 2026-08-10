@@ -885,6 +885,27 @@ and add nothing. The book-level share plus `orphanIds` is the whole signal.
 carries books with a **single** orphaned id covering a handful of lines, and
 badging those would train the warning into noise on books nothing is wrong with.
 
+**A separating threshold does exist — that was checked before committing to
+D13**, because a fifth state that cannot be calibrated is worse than the silence
+it replaces. Reconnaissance over the live corpus (2026-08-11, through the real
+`buildCastResolver` with each book's own `cast-id-history.json`) found the orphan
+share **strongly bimodal**: a small group of badly-drifted books, then an order-
+of-magnitude gap, then everything else at or near zero. Any threshold inside that
+gap separates them. The numbers themselves are Wave 1's to print (R-6C3) — the
+claim recorded here is only that the question was asked and the answer was yes.
+
+Two calibration hazards for Wave 1 to check explicitly, both of which a table
+would hide:
+
+- **The two floors exclude different books, and only their conjunction is
+  right.** The share floor is what keeps a long novel with a few dozen stray
+  lines quiet; the count floor is what keeps a *short* book with a couple of
+  stray lines quiet. Either alone badges a book nothing is wrong with.
+- **At least one live book sits exactly on the proposed `MIN_ORPHAN_FOR_VERDICT`
+  of 20.** A floor placed on a corpus value is a coin-flip that will land
+  differently on the next re-analysis, so the constant is set from the gap, not
+  from a book — and Wave 1's output is what shows where the gap is.
+
 The display floor and the trigger floor are deliberately different, and
 conflating them is the easy mistake: a 6-spoken-line chapter is worth showing a
 number for and is not worth flagging a book over.
