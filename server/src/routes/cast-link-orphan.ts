@@ -73,22 +73,32 @@
           (fix round, CRITICAL): linking a bucket id AS SOURCE writes
           `supersededBy['unknown-male'] = characterId` book-wide, routing
           EVERY speaker who ever fell back to that bucket onto one voice in
-          a single click — #2040's original damage class. `narrator`/
-          `char-narrator` (`NARRATOR_CHARACTER_IDS`) are refused here too:
-          the banner's own advisory text (`src/views/cast.tsx`) says an
-          unresolved id "rendered in the narrator's voice instead" — the
-          narrator id is the SAME many-to-one catch-all hazard shape as the
-          two fold buckets (potentially many different mis-attributed
-          speakers land there), not one addressable person, and
-          `scripts/repair-cast-id-drift.mjs`'s own `reservedIds` (built from
-          `NARRATOR_CHARACTER_IDS` + the two bucket ids, its own guard 1)
-          already treats it as reserved on exactly this axis — matching that
-          script's policy here rather than inventing a narrower one.
-          Deliberately NOT added to the TARGET set: aliasing a real orphaned
-          id ONTO the live narrator character is a normal, addressable
-          linking decision (narrator names one specific cast row, not a
-          many-to-one slot), so only the SOURCE direction gets the wider
-          set.
+          a single click — #2040's original damage class. Refused here
+          unconditionally: several unrelated background characters share a
+          bucket, so no target makes aliasing FROM one safe.
+        - `narrator`/`char-narrator` (`NARRATOR_CHARACTER_IDS`) get a
+          NARROWER SOURCE-side refusal (review round, N2), not the
+          fold buckets' unconditional one: refused only when the target is
+          not ITSELF a narrator id. `narrator` <-> `char-narrator` name the
+          SAME character — the analyzer's synthetic id vs. the promoted cast
+          row (`narrator-identity.ts:17-19`) — so that pair is a legitimate
+          one-to-one reconciliation, not the many-to-one hazard the fold
+          buckets are. `narrator` -> an ordinary character stays refused:
+          `applyNarratorDefault` forces every non-spoken line onto
+          `narrator`, so aliasing it to one person would hand them all of
+          it. (An earlier version of this doc justified the narrator
+          refusal via the banner's advisory text — "rendered in the
+          narrator's voice instead" — but that text describes
+          `renderedFallbackCharacterId`, the render-time SUBSTITUTION target
+          (`tts/synthesise-chapter.ts:401-414`), not `s.characterId`, the
+          analyzer ATTRIBUTION this route's `orphanedId` actually is
+          (`audio/segments-io.ts:367-371`) — a misread; see
+          `NORMALISED_NARRATOR_IDS`'s doc comment below for the corrected
+          reasoning.) Deliberately NOT added to the TARGET set either way:
+          aliasing a real orphaned id ONTO the live narrator character is a
+          normal, addressable linking decision (narrator names one specific
+          cast row, not a many-to-one slot), so only the SOURCE direction
+          gets narrator-aware treatment at all.
       Both directions are compared through `normaliseIdKey` (fix round, F4)
       rather than raw `Set.has()` — a case/separator-drifted spelling
       (`Unknown_Male`) must still be caught, exactly the drift class #2040
@@ -153,8 +163,9 @@ interface LinkOrphanMatchBody {
     importing a shared one) except this file DOES import the two ids from
     their single source of truth (`fold-minor-cast.ts`) rather than
     re-typing the literals. `narrator` is deliberately NOT in this set — see
-    `NORMALISED_RESERVED_SOURCE_IDS`'s doc comment below for why the two
-    directions carry different reserved sets. */
+    `NORMALISED_RESERVED_SOURCE_BUCKET_IDS`'s and `NORMALISED_NARRATOR_IDS`'s
+    doc comments below for why the two directions carry different reserved
+    sets, and why narrator gets its own narrower rule on the SOURCE side. */
 const RESERVED_FOLD_BUCKET_IDS = new Set<string>([MALE_BUCKET_ID, FEMALE_BUCKET_ID]);
 
 /** F4 — compared through `normaliseIdKey`, not raw `Set.has()`, so a
@@ -169,14 +180,36 @@ const NORMALISED_RESERVED_TARGET_IDS = new Set([...RESERVED_FOLD_BUCKET_IDS].map
     (the alias SOURCE) — see this file's own header, decision 2, for the full
     hazard writeup: linking a bucket id AS SOURCE routes every speaker who
     ever fell back to that bucket onto one voice, book-wide, in one click.
-    `narrator`/`char-narrator` (`NARRATOR_CHARACTER_IDS`) join the two fold
-    buckets here, on the SOURCE side only — narrator is the same many-to-one
-    catch-all hazard shape, and `repair-cast-id-drift.mjs`'s own `reservedIds`
-    already treats it as reserved on this same axis. Also normalisation-safe
-    (F4), same reasoning as the target set above. */
-const NORMALISED_RESERVED_SOURCE_IDS = new Set(
-  [...RESERVED_FOLD_BUCKET_IDS, ...NARRATOR_CHARACTER_IDS].map(normaliseIdKey),
-);
+    Unlike narrator (below), the two fold buckets are refused as SOURCE
+    unconditionally — several unrelated background characters share a
+    bucket, so there is no target that makes aliasing FROM one a safe,
+    one-to-one reconciliation. Also normalisation-safe (F4), same reasoning
+    as the target set above. */
+const NORMALISED_RESERVED_SOURCE_BUCKET_IDS = new Set([...RESERVED_FOLD_BUCKET_IDS].map(normaliseIdKey));
+
+/** N2 (review round) — `narrator`/`char-narrator` (`NARRATOR_CHARACTER_IDS`)
+    are refused as the alias SOURCE only when the TARGET (`characterId`) is
+    not itself a narrator id. The two narrator ids name ONE character (a
+    documented promotion, `narrator-identity.ts:17-19` — the analyzer's
+    synthetic `narrator` id vs. the promoted `char-narrator` cast row), so
+    `narrator` <-> `char-narrator` is a legitimate one-to-one reconciliation
+    and must stay allowed, in either direction. `narrator` -> an ORDINARY
+    character stays refused: `applyNarratorDefault` forces every non-spoken
+    line onto `narrator`, so aliasing it to a specific person would hand ALL
+    narration to them — the actually catastrophic direction, and the one
+    this refusal exists to block. (An earlier version of this comment cited
+    the banner's advisory text — "rendered in the narrator's voice instead"
+    — as the justification; that text describes
+    `renderedFallbackCharacterId`, the render-time SUBSTITUTION target
+    (`tts/synthesise-chapter.ts:401-414`), not `s.characterId`, the
+    analyzer's ATTRIBUTION this route's `orphanedId` actually is
+    (`audio/segments-io.ts:367-371`) — a misread, now corrected.) Note the
+    cited precedent (`repair-cast-id-drift.mjs:920-936`) actually cuts the
+    other way for narrator: it routes reserved sources to `reportOnly` WITH
+    ranked candidates so a human can decide — this UI is that human, so a
+    blanket refusal here was stricter than the precedent it claimed to
+    follow. Also normalisation-safe (F4). */
+const NORMALISED_NARRATOR_IDS = new Set([...NARRATOR_CHARACTER_IDS].map(normaliseIdKey));
 
 /** Mirrors `cast-reject-orphan.ts`'s own local `ResolutionTier` — see that
     file's doc comment for the tier semantics. Duplicated rather than
@@ -214,10 +247,13 @@ castLinkOrphanRouter.post(
     if (!located) return res.status(404).json({ error: `Book "${bookId}" not found.` });
     const { bookDir } = located;
 
-    /* Decision 3 — plain, unlocked read: this route never writes cast.json,
-       only validates that `characterId` is a live character (404
-       otherwise). See this file's own header for why no withCastLock is
-       owed here. */
+    /* Decision 3 — plain, unlocked read: this read only validates that
+       `characterId` is a live character (404 otherwise) and is never paired
+       with a write in the same request. The route DOES write cast.json
+       elsewhere (via clearNotLinkedEdgesForDroppedRejections, below), but
+       that write takes its own withCastLock and doesn't depend on this
+       read. See this file's own header (decision 3) for the full reasoning
+       for why no withCastLock is owed at THIS read. */
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     if (!cast?.characters?.length) {
       return res.status(409).json({
@@ -244,14 +280,29 @@ castLinkOrphanRouter.post(
           'link the orphaned id to a specific cast member instead.',
       });
     }
-    /* F1 (CRITICAL) — refuse a reserved id as the alias SOURCE. See
-       NORMALISED_RESERVED_SOURCE_IDS's own doc comment above for why this is
-       the actually-dangerous direction. */
-    if (NORMALISED_RESERVED_SOURCE_IDS.has(normaliseIdKey(orphanedId))) {
+    /* F1 (CRITICAL) — refuse a reserved fold-bucket id as the alias SOURCE
+       unconditionally. See NORMALISED_RESERVED_SOURCE_BUCKET_IDS's own doc
+       comment above for why this is the actually-dangerous direction. */
+    if (NORMALISED_RESERVED_SOURCE_BUCKET_IDS.has(normaliseIdKey(orphanedId))) {
       return res.status(400).json({
         error:
-          `"${orphanedId}" is a shared fallback id — a minor-cast fold bucket, or the narrator's own ` +
-          "catch-all — not one addressable character, so it can't be linked as the source of an alias.",
+          `"${orphanedId}" is a shared fallback id — a minor-cast fold bucket — not one addressable ` +
+          "character, so it can't be linked as the source of an alias.",
+      });
+    }
+    /* N2 — refuse a narrator id as the alias SOURCE only when the TARGET is
+       not itself a narrator id. See NORMALISED_NARRATOR_IDS's own doc
+       comment above: narrator <-> char-narrator is a legitimate one-to-one
+       reconciliation; narrator -> anyone else is the catastrophic direction. */
+    if (
+      NORMALISED_NARRATOR_IDS.has(normaliseIdKey(orphanedId)) &&
+      !NORMALISED_NARRATOR_IDS.has(normaliseIdKey(characterId))
+    ) {
+      return res.status(400).json({
+        error:
+          `"${orphanedId}" is the narrator's shared fallback id — every non-dialogue line falls back to ` +
+          `it, so aliasing it onto "${characterId}" would hand all narration to that character. Link it ` +
+          'to the narrator cast row instead.',
       });
     }
 

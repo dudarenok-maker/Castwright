@@ -195,18 +195,26 @@ function OrphanRejectedChips({
   );
 }
 
-/* F1 (fix round, CRITICAL) — mirrors the server's own reserved alias-SOURCE
-   set (`NORMALISED_RESERVED_SOURCE_IDS`,
+/* F1 (fix round, CRITICAL) — mirrors the server's own reserved-bucket
+   alias-SOURCE set (`NORMALISED_RESERVED_SOURCE_BUCKET_IDS`,
    `server/src/routes/cast-link-orphan.ts`) for the client-side disable: a
    needs-decision row's own id (`orphanedId`) is a shared minor-cast fold
-   bucket or the narrator's own many-to-one catch-all, never one addressable
-   character, so "Link to this character" is disabled outright for that ROW
-   — see the server route's doc comment for the full hazard writeup. F4 —
+   bucket, never one addressable character, so "Link to this character" is
+   disabled outright for that ROW regardless of which candidate is picked —
+   see the server route's doc comment for the full hazard writeup. F4 —
    compared through `normaliseIdKey`, not raw `Set.has()`, so a
    case/separator-drifted spelling (`Unknown_Male`) is still caught. */
-const NORMALISED_RESERVED_LINK_SOURCE_IDS = new Set(
-  [...UNKNOWN_BUCKET_IDS, ...NARRATOR_CHARACTER_IDS].map(normaliseIdKey),
-);
+const NORMALISED_RESERVED_SOURCE_BUCKET_IDS = new Set([...UNKNOWN_BUCKET_IDS].map(normaliseIdKey));
+
+/** N2 (review round) — mirrors the server's own `NORMALISED_NARRATOR_IDS`
+    rule: a narrator-id row (`orphanedId` is `narrator`/`char-narrator`) is
+    disabled as the alias SOURCE only when the picked candidate is NOT
+    itself a narrator id — `narrator` <-> `char-narrator` names one
+    character (a documented promotion, see the server route's doc comment),
+    a legitimate one-to-one reconciliation, whereas `narrator` -> an ordinary
+    character would hand ALL narration to that person. See the server
+    route's `NORMALISED_NARRATOR_IDS` doc comment for the full reasoning. */
+const NORMALISED_NARRATOR_IDS = new Set([...NARRATOR_CHARACTER_IDS].map(normaliseIdKey));
 
 /* Canonical order for the status-filter chips — lifecycle labels (engine
    order: Qwen design → preset states), then 'Unset', then the 'Reused'
@@ -1366,12 +1374,25 @@ export function CastView({
                   {needsDecisionOrphans.map(([orphanedId, info]) => {
                     const candidateId = orphanRejectCandidate[orphanedId] ?? '';
                     /* F1 (CRITICAL) — the row's OWN id is the alias SOURCE;
-                       see NORMALISED_RESERVED_LINK_SOURCE_IDS's doc comment
-                       above for the hazard this refuses. Unconditional on
-                       this row, regardless of which candidate is picked. */
-                    const sourceIsReserved = NORMALISED_RESERVED_LINK_SOURCE_IDS.has(
+                       see NORMALISED_RESERVED_SOURCE_BUCKET_IDS's doc
+                       comment above for the hazard this refuses.
+                       Unconditional on this row, regardless of which
+                       candidate is picked. */
+                    const sourceIsReservedBucket = NORMALISED_RESERVED_SOURCE_BUCKET_IDS.has(
                       normaliseIdKey(orphanedId),
                     );
+                    /* N2 — narrator is only reserved as SOURCE when the
+                       picked candidate is NOT itself a narrator id; see
+                       NORMALISED_NARRATOR_IDS's doc comment above. Guarded
+                       on `Boolean(candidateId)` like `targetIsReservedBucket`
+                       below, so "no candidate picked yet" doesn't read as
+                       "candidate is an ordinary character" and disable the
+                       button (and its title) for the wrong reason. */
+                    const sourceIsNarrator = NORMALISED_NARRATOR_IDS.has(normaliseIdKey(orphanedId));
+                    const candidateIsNarrator =
+                      Boolean(candidateId) && NORMALISED_NARRATOR_IDS.has(normaliseIdKey(candidateId));
+                    const sourceIsReserved =
+                      sourceIsReservedBucket || (sourceIsNarrator && !candidateIsNarrator);
                     /* Decision 4 (issue #2238) — the picked candidate is the
                        alias TARGET; a reserved minor-cast fold bucket stands
                        in for MULTIPLE background characters, so aliasing a
@@ -1380,11 +1401,13 @@ export function CastView({
                        server's own check. */
                     const targetIsReservedBucket =
                       Boolean(candidateId) && UNKNOWN_BUCKET_IDS.has(normaliseIdKey(candidateId));
-                    const linkDisabledReason = sourceIsReserved
-                      ? "Can't link this — it's a shared fallback id (a minor-cast fold bucket, or the narrator's own catch-all), not one addressable character."
-                      : targetIsReservedBucket
-                        ? "Can't link to a shared fallback voice for minor characters — pick a specific cast member instead."
-                        : undefined;
+                    const linkDisabledReason = sourceIsReservedBucket
+                      ? "Can't link this — it's a shared fallback id (a minor-cast fold bucket), not one addressable character."
+                      : sourceIsReserved
+                        ? "Can't link the narrator's catch-all id to a specific character — that would hand it all narration. Compare against the narrator cast row instead."
+                        : targetIsReservedBucket
+                          ? "Can't link to a shared fallback voice for minor characters — pick a specific cast member instead."
+                          : undefined;
                     return (
                       <li
                         key={orphanedId}

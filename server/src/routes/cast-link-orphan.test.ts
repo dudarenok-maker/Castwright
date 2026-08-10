@@ -207,7 +207,7 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
     expect(readHistory()).toBeNull();
   });
 
-  it('F1 decision — "narrator" is also refused as the alias SOURCE (same many-to-one catch-all hazard as the fold buckets), but NOT as the alias TARGET', async () => {
+  it('F1/N2 — "narrator" is refused as the alias SOURCE when the target is an ordinary character (same catch-all hazard as the fold buckets), but NOT as the alias TARGET', async () => {
     const res = await callLink(bookId, 'mairin', { orphanedId: 'narrator' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/shared fallback/i);
@@ -218,6 +218,49 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
     const targetRes = await callLink(bookId, 'narrator', { orphanedId: 'some-random-orphan' });
     expect(targetRes.status).toBe(200);
     expect(targetRes.body.resolvedCharacterId).toBe('narrator');
+  });
+
+  /* N2 (review round) — narrator<->char-narrator name ONE character (the
+     analyzer's synthetic id vs. the promoted cast row,
+     narrator-identity.ts:17-19), a legitimate one-to-one reconciliation, so
+     the SOURCE refusal above must NOT fire when the target is itself a
+     narrator id. The realistic shape of this scenario is: the live cast has
+     been promoted to `char-narrator` (not `narrator`) — the analyzer still
+     attributed some lines to the OLD synthetic `narrator` id, which is why
+     it shows up as an orphan at all; `narrator` is deliberately NOT also a
+     live character here, unlike every other test in this file (which uses
+     `initialCast`'s default `narrator` row) — resolving an orphanedId that
+     is ALSO a live id would hit the resolver's `exact` tier first
+     (cast-resolve.ts) and short-circuit the alias entirely, which would
+     assert something other than what this test means to cover. Mutation
+     check: this must fail red if the target-is-narrator carve-out is
+     removed from the route (i.e. narrator is refused as SOURCE
+     unconditionally again) — the call would 400 instead of 200ing.
+     Confirmed red by temporarily reverting the carve-out and re-running
+     this file; see PR/report for the observed failure. */
+  it('N2 — narrator -> char-narrator is allowed (the target is itself a narrator id)', async () => {
+    writeBookOnDisk([
+      { id: 'mairin', name: 'Mairin', role: 'character', color: 'unset' },
+      { id: 'unknown-male', name: 'Unknown (Male)', role: 'character', color: 'unset' },
+      { id: 'unknown-female', name: 'Unknown (Female)', role: 'character', color: 'unset' },
+      { id: 'char-narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+    ]);
+
+    const res = await callLink(bookId, 'char-narrator', { orphanedId: 'narrator' });
+    expect(res.status).toBe(200);
+    expect(res.body.resolvedCharacterId).toBe('char-narrator');
+    expect(readHistory()?.supersededBy).toEqual({ narrator: 'char-narrator' });
+  });
+
+  /* N2 — the reverse direction. Here `narrator` IS the live cast row
+     (`initialCast`'s default), so no special cast setup is needed —
+     `char-narrator` (the orphanedId) is not itself a live id, so the
+     `exact`-tier short-circuit from the test above doesn't apply. */
+  it('N2 — the reverse direction, char-narrator -> narrator, is also allowed', async () => {
+    const res = await callLink(bookId, 'narrator', { orphanedId: 'char-narrator' });
+    expect(res.status).toBe(200);
+    expect(res.body.resolvedCharacterId).toBe('narrator');
+    expect(readHistory()?.supersededBy).toEqual({ 'char-narrator': 'narrator' });
   });
 
   it('F4 — the reserved-id checks are normalisation-safe on BOTH sides, not raw string equality', async () => {
@@ -329,7 +372,15 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
       await callUndoReject(bookId, 'mairin', { orphanedId: 'mayrin' });
       const cleanRes = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
       expect(cleanRes.body.resolution).toBe('history');
-      expect(logSpy).toHaveBeenCalledWith(expect.not.stringMatching(/blocked/i));
+      // N5 — tightened from a bare "some logged line lacks 'blocked'" (which
+      // passed for any unrelated log line in the same span) to the route's
+      // OWN log line specifically, identified by its "[cast-link-orphan]"
+      // prefix.
+      const cleanLogLine = logSpy.mock.calls
+        .map(([line]) => line)
+        .find((line): line is string => typeof line === 'string' && line.startsWith('[cast-link-orphan]'));
+      expect(cleanLogLine).toMatch(/^\[cast-link-orphan\]/);
+      expect(cleanLogLine).not.toMatch(/blocked/i);
     } finally {
       logSpy.mockRestore();
     }

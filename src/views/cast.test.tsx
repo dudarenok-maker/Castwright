@@ -1762,10 +1762,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
         expect(linkButton).toHaveAttribute('title', expect.stringMatching(/shared fallback id/i));
       });
 
-      /* F1 decision — narrator carries the same source-side hazard as the
-         fold buckets (see cast-link-orphan.ts's own doc comment for the
-         reasoning), asserted here purely at the disable-button layer. */
-      it('F1 decision — a needs-decision row named "narrator" also keeps the link action disabled', () => {
+      /* F1/N2 decision — narrator carries the same source-side hazard as the
+         fold buckets when the candidate is an ORDINARY character (see
+         cast-link-orphan.ts's own doc comment for the reasoning), asserted
+         here purely at the disable-button layer. The narrator<->char-narrator
+         carve-out is covered by the enabled-case test below. */
+      it('F1/N2 decision — a needs-decision row named "narrator" keeps the link action disabled against an ordinary candidate', () => {
         const store = configureStore({
           reducer: {
             ui: uiSlice.reducer,
@@ -1792,6 +1794,73 @@ describe('CastView Qwen status pill (plan 117)', () => {
         const linkButton = within(row).getByRole('button', { name: /link to this character/i });
         fireEvent.change(within(row).getByRole('combobox'), { target: { value: 'marrow' } });
         expect(linkButton).toBeDisabled();
+      });
+
+      /* N2 (review round) — the carve-out: narrator IS allowed as the alias
+         SOURCE when the picked candidate is itself a narrator id
+         (char-narrator here) — narrator<->char-narrator name ONE character
+         (see cast-link-orphan.ts's `NORMALISED_NARRATOR_IDS` doc comment),
+         a legitimate one-to-one reconciliation, unlike the ordinary-candidate
+         case above which must stay disabled. Mutation check: this must fail
+         red if the `candidateIsNarrator` carve-out is removed from
+         cast.tsx's `sourceIsReserved` expression (i.e. narrator refused as
+         SOURCE unconditionally again) — the button would stay disabled here.
+         Confirmed red by temporarily reverting the carve-out and re-running
+         this file; see PR/report for the observed failure. */
+      it('N2 — a needs-decision row named "narrator" enables the link action once the candidate is itself a narrator id (char-narrator)', () => {
+        const charNarrator: Character = {
+          id: 'char-narrator',
+          name: 'The Narrator',
+          role: 'narrator',
+          color: 'unset',
+        };
+        const store = configureStore({
+          reducer: {
+            ui: uiSlice.reducer,
+            cast: castSlice.reducer,
+            castDesign: castDesignSlice.reducer,
+            notifications: notificationsSlice.reducer,
+          },
+          preloadedState: {
+            ui: {
+              ...uiSlice.getInitialState(),
+              stage: { kind: 'ready', bookId: 'b_current', view: 'cast' } as never,
+            },
+            cast: {
+              ...castSlice.getInitialState(),
+              characters: [narrator, marrow, charNarrator],
+              orphanedCharacterFallbacks: {
+                narrator: { resolution: 'unresolved' as const, segments: 12 },
+              },
+            },
+          },
+        });
+        render(
+          <Provider store={store}>
+            <CastView
+              characters={[narrator, marrow, charNarrator]}
+              setCharacters={() => {}}
+              library={library}
+              title="The Northern Star"
+              onOpenProfile={() => {}}
+              onShowMatchDetail={() => {}}
+              driftEvents={[]}
+              onShowDrift={() => {}}
+              onContinueToManuscript={() => {}}
+            />
+          </Provider>,
+        );
+        const row = screen.getByTestId('orphaned-row-narrator');
+        const linkButton = within(row).getByRole('button', { name: /link to this character/i });
+        const select = within(row).getByRole('combobox') as HTMLSelectElement;
+
+        // The ordinary candidate still disables it (same case as the test above).
+        fireEvent.change(select, { target: { value: 'marrow' } });
+        expect(linkButton).toBeDisabled();
+
+        // Switching to the narrator-id candidate enables it.
+        fireEvent.change(select, { target: { value: 'char-narrator' } });
+        expect(linkButton).not.toBeDisabled();
       });
 
       /* F4 — the client-side source check is normalisation-safe too: a
