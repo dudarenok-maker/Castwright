@@ -721,6 +721,80 @@ describe('planBookRepairs', () => {
     });
   });
 
+  test('I1 (independent review, round 1, 2026-08-10): the historyResolver fallback threads the WHOLE history object through — not an enumerated subset', () => {
+    // Guard 3 (`cast-history-threading.guard.test.ts`) is a SYNTACTIC scan —
+    // it can only see a literal object AT the call site, and
+    // `historyForResolver` is a variable one line above the call, which is
+    // exactly the blind spot the guard's own header documents. Nothing
+    // syntactic can prove what actually reaches `buildCastResolver` through
+    // that local, and the closest existing pin (the "Round 4, MUST 2"
+    // test above) only asserts one ENUMERATED field (`rejectedPairs`) — the
+    // precise shape that went stale the moment #2092/#2089 landed a field
+    // this fallback's earlier, subset-built version didn't know about. This
+    // test is the behavioural half: capture the real second argument
+    // `buildCastResolver` receives and assert every key `history` carries —
+    // including a field #2128 never named — survives untouched. Mutate the
+    // fallback back to an enumerated subset (e.g. `{ supersededBy: {},
+    // rejected: history.rejected }`) to see this redden.
+    const captures = [];
+    const localDeps = {
+      ...deps,
+      buildCastResolver: (cast, hist) => {
+        captures.push(hist);
+        return { resolve: () => undefined };
+      },
+    };
+    const history = {
+      supersededBy: {},
+      rejected: [],
+      seq: 7,
+      recordedAtSeq: { a: 1 },
+      futureField: 'x',
+    };
+    planBookRepairs(
+      { liveCast, history, cacheNameIndex: new Map(), bakNameIndex: new Map(), orphans: new Map() },
+      localDeps,
+    );
+    // `idOnlyResolver` also calls `buildCastResolver`, with its own
+    // deliberately-empty-history literal — identify the fallback's OWN call
+    // by the one marker no other call site could produce: `futureField`.
+    const captured = captures.find((c) => 'futureField' in c);
+    assert.ok(captured, 'buildCastResolver was never called with the historyResolver fallback\'s object');
+    for (const key of Object.keys(history)) {
+      assert.ok(key in captured, `historyForResolver dropped '${key}'`);
+    }
+  });
+
+  test('M7 (independent review, round 1, 2026-08-10): an explicit `supersededBy: undefined` key does not throw', () => {
+    // A trailing-spread-only fallback (`{ supersededBy: {}, ...history }`) is
+    // defeated by this exact shape: `history` OWNS a `supersededBy` key, so
+    // the spread copies its `undefined` value straight over the leading
+    // default, and the real (undefended) `buildCastResolver` throws on
+    // `Object.entries(undefined)`. Distinct from the "Round 4" test above,
+    // which only exercises `history` OMITTING the key entirely — a spread
+    // does not override on a merely-absent key, so that test could not have
+    // caught this. `buildRealShapedResolver` mirrors the real resolver's
+    // undefended construction line, same as the Round 4 test.
+    const buildRealShapedResolver = (cast, hist) => {
+      const byId = new Map(cast.map((c) => [c.id, c]));
+      for (const [, to] of Object.entries(hist.supersededBy)) void to;
+      return { resolve: (id) => (byId.has(id) ? { character: byId.get(id), via: 'exact' } : undefined) };
+    };
+    const localDeps = { ...deps, buildCastResolver: buildRealShapedResolver };
+    assert.doesNotThrow(() => {
+      planBookRepairs(
+        {
+          liveCast,
+          history: { supersededBy: undefined, rejected: [] },
+          cacheNameIndex: new Map(),
+          bakNameIndex: new Map(),
+          orphans: new Map(),
+        },
+        localDeps,
+      );
+    });
+  });
+
   test('an id whose NORMALISED form matches a supersededBy key — not an exact key — is ALSO skipped as already-recorded, not auto-recorded', () => {
     // #2107's widened fix (only 'exact' skips the orphan bucket) means an id
     // resolving via the resolver's 'normalised-history' tier now reaches

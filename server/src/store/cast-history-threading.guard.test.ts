@@ -20,6 +20,15 @@
    BLIND SPOTS, stated rather than implied:
    - Call-graph blind. A variable built as a literal three lines up and passed
      by name is not caught. Only a literal AT the call site is.
+   - Round-1 review (M6): "a literal AT the call site" is narrower than it
+     reads above — `historyArgIsLiteral` requires the argument slice to
+     START with `{` (a same-line literal behind an operator escapes:
+     `buildCastResolver(cast, history ?? { supersededBy: {} })` and the
+     ternary form `cond ? history : { supersededBy: {} }` both return
+     `false`). Not the dominant shape this codebase has actually produced
+     (all three documented in-tree defects above are a bare literal
+     argument, not one behind an operator), but a real gap, not merely a
+     call-graph one.
    - Scans every non-test .ts file under server/src (recursively) and
      `scripts/repair-cast-id-drift.mjs`. Any other `.mjs` caller is invisible.
    - Comment/string text is stripped before matching, so a call quoted inside a
@@ -223,6 +232,17 @@ describe('guard 3 — the loaded CastIdHistory is threaded whole (#2128)', () =>
       const r = buildCastResolver(cast, { supersededBy: history.supersededBy });
     `;
     expect(findLiteralHistoryCalls(violating)).toHaveLength(1);
+  });
+
+  /* Round-1 review (I2): every OTHER assertion touching `isAudioCurrent`
+     asserts absence (`[]`) — none of them would notice if the `argIndex = 2`
+     mapping above stopped matching the function's real signature. Nothing
+     live would catch that either: `isAudioCurrent` has zero production call
+     sites today (Tasks 7/9 wire the consumers), so a signature change in
+     that work is exactly the foreseeable event this positive case exists to
+     pin, in the catching direction, before that lands. */
+  it('actually detects a violation on isAudioCurrent, not only buildCastResolver', () => {
+    expect(findLiteralHistoryCalls('isAudioCurrent(res, seg, { supersededBy: {} });')).toHaveLength(1);
   });
 
   it('does not fire on the correct shape', () => {

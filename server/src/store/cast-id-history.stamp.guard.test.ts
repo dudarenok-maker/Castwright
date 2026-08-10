@@ -42,7 +42,24 @@
    re-verified every run (an entry whose function no longer has the shape it
    was allowlisted for would still show up as an unstamped mismatch if the
    assignment moved back into a stamping function — see the trailing
-   reconciliation check). */
+   reconciliation check). Bounded to its exact two known callers by a
+   dedicated test (round-1 review, M3), each independently confirmed to
+   stamp.
+
+   A THIRD blind spot (round-1 review, M4): "pairs every writing function
+   with a stamp" compares the FIRST `bumpSeqAndStamp(` match against the
+   FIRST `await writeJsonAtomic(castIdHistoryPath` match in a function's
+   body — it is a first-write-only check, not a per-write one.
+   `retireCharacterId` genuinely has two writes (its early-reversal branch
+   and its main branch, each preceded by its own stamp), and this test
+   would not notice a SECOND write added to an already-stamping function
+   that itself skipped its own stamp — it only ever looks at the first
+   occurrence of each. The exact `toBe(11)` write-count assertion above
+   mitigates this by forcing a human to re-justify the new number whenever
+   a write site is added or removed, but that is a floor on the COUNT, not
+   detection of a specific unpaired write — a function moving from one
+   write to two, with the new one unstamped, changes no count this suite
+   checks. */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -104,13 +121,24 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
     // rejectOrphanedPair, unrejectOrphanedPair, undoRejectedPairs,
     // stampRecordedAtSeqIfAbsent.
     expect(SRC.match(WRITE_RE)?.length ?? 0).toBe(11);
-    // 9 raw regex matches: 8 real assignments plus one inside
-    // restoreSupersededId's own doc comment ("CORRECT alias
-    // `supersededBy['mayrin'] = 'mr-marrow'`") — deliberately not stripped
-    // (this guard, unlike Guard 3, does not blank comments/strings; see the
-    // "MATCHES INDEXED ASSIGNMENT ONLY" note above for why it stays a raw
-    // text scan), and harmless here since that line lands inside a function
-    // that already stamps for its own, real reasons.
+    // 9 raw regex matches, verified line-by-line (round-1 review, M5 —
+    // corrects an earlier version of this comment that miscounted the
+    // split): 5 REAL assignments, all inside retireCharacterId or
+    // applyRestoreSupersededId (cast-id-history.ts:515, :519, :562, :567,
+    // :938), plus 4 doc-comment matches (this guard, unlike Guard 3, does
+    // not blank comments/strings before matching — see the "MATCHES INDEXED
+    // ASSIGNMENT ONLY" note above for why it stays a raw text scan):
+    // `:842`/`:854` sit inside restoreSupersededId's own doc comment
+    // ("CORRECT alias `supersededBy['mayrin'] = 'mr-marrow'`") and land
+    // inside forgetSupersededId's body slice per `topLevelFunctions`'
+    // boundary-splitting — harmless, since that function already stamps for
+    // its own, real reasons; `:78`/`:79` sit in this file's very top,
+    // module-level doc comment on the `supersededBy` field, BEFORE the
+    // first top-level function declaration — `topLevelFunctions` only
+    // slices from the first function's start index onward, so these two
+    // are dropped from every function's body entirely and are invisible to
+    // both the "pairs" and "leaves no ... unstamped" tests below, not
+    // merely harmless inside one.
     expect(SRC.match(ASSIGN_RE)?.length ?? 0).toBe(9);
   });
 
@@ -143,6 +171,32 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
         allowed.name,
       );
     }
+  });
+
+  /* Round-1 review (M3): the split-applier exemption above has no caller-count
+     analog to Guard 3's file+count keying, leaving one real residual — a
+     future THIRD caller of `applyRestoreSupersededId` that doesn't itself
+     stamp would be invisible to both the exemption (which only asks "does
+     the mutator stamp", never "do all its callers") and to the "pairs every
+     writing function with a stamp" test (which only checks functions that
+     themselves WRITE, not every function that merely calls the applier).
+     Bounds the exemption to its two known-sound callers, both proven correct
+     above: `restoreSupersededId` (stamps once, before its own write) and
+     `undoRejectedPairs` (stamps once for a whole batch). */
+  it('bounds the applyRestoreSupersededId exemption to its exact known callers, each of which stamps', () => {
+    const CALLS_APPLY_RE = /applyRestoreSupersededId\(/g;
+    const callers = fns
+      .filter((f) => f.name !== 'applyRestoreSupersededId')
+      .filter((f) => new RegExp(CALLS_APPLY_RE.source).test(f.body))
+      .map((f) => f.name);
+    for (const name of callers) {
+      const fn = fns.find((f) => f.name === name)!;
+      expect(
+        new RegExp(STAMP_RE.source).test(fn.body),
+        `${name} calls applyRestoreSupersededId but never stamps`,
+      ).toBe(true);
+    }
+    expect([...callers].sort()).toEqual(['restoreSupersededId', 'undoRejectedPairs']);
   });
 
   it('matches an indexed ASSIGNMENT', () => {

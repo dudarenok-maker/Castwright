@@ -837,16 +837,27 @@ export function planBookRepairs(input, deps) {
   // .rejected ?? []` is already defended a few lines up), and the real
   // `buildCastResolver` does `Object.entries(history.supersededBy)` with no
   // internal defence — a `TypeError` on `undefined`. `historyForResolver`
-  // below spreads the WHOLE `history` object over a single default
-  // (`supersededBy: {}`) so every field `history` carries — present or
-  // future — passes through untouched, while the one field
-  // `buildCastResolver` reads unconditionally still has a safe fallback.
-  // `rejected`/`rejectedPairs` need no equivalent default here:
+  // below spreads the WHOLE `history` object FIRST, then overrides only the
+  // one field `buildCastResolver` reads unconditionally with a safe
+  // fallback — every field `history` carries, present or future, passes
+  // through untouched, while `supersededBy` is guaranteed defined whether
+  // `history` omits the key entirely OR carries it as an explicit
+  // `undefined` (round-1 review, M7: a trailing `...history` spread, the
+  // first version of this fix, is defeated by the latter shape — an
+  // explicit `supersededBy: undefined` copies straight over a leading
+  // default and reopens the exact `TypeError` this line exists to
+  // prevent). `rejected`/`rejectedPairs` need no equivalent override here:
   // `buildCastResolver` itself already does `history.rejected ?? []` /
   // `history.rejectedPairs ?? []` internally (cast-resolve.ts) — defending
   // them again here would be exactly the hand-picked-subset shape this fix
-  // exists to remove, just with more fields enumerated.
-  const historyForResolver = { supersededBy: {}, ...history };
+  // exists to remove, just with more fields enumerated. Guarded against
+  // silently narrowing back to a subset by
+  // `cast-history-threading.guard.test.ts`'s Guard 3 (syntactic: no literal
+  // at the call site) AND `repair-cast-id-drift.test.mjs`'s dedicated
+  // "threads every field, not just the ones it defends" behavioural test
+  // (round-1 review, I1 — Guard 3 cannot see this local at all, so nothing
+  // previously pinned what this line actually threads through).
+  const historyForResolver = { ...history, supersededBy: history.supersededBy ?? {} };
   const historyResolver = input.historyResolver ?? buildCastResolver(liveCast, historyForResolver);
 
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
