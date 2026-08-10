@@ -420,9 +420,33 @@ describe('matchedHistoryKeys (#2128)', () => {
   });
 
   it('is absent on the two tiers that have no history entry', () => {
-    expect(buildCastResolver(cast, { supersededBy: {} }).resolve('the-torment')?.matchedHistoryKeys)
-      .toBeUndefined();
-    expect(buildCastResolver(cast, { supersededBy: {} }).resolve('The_Torment')?.matchedHistoryKeys)
-      .toBeUndefined();
+    // Fix round 1, M4: a bare `matchedHistoryKeys === undefined` check is
+    // equally true when `resolve()` misses entirely — asserting `via`
+    // alongside it pins that each query actually landed on the named tier,
+    // not on a fixture that never resolved at all (the exact defect shape
+    // this task already found and fixed in the brief's own test 3).
+    const exactHit = buildCastResolver(cast, { supersededBy: {} }).resolve('the-torment');
+    expect(exactHit?.via).toBe('exact');
+    expect(exactHit?.matchedHistoryKeys).toBeUndefined();
+
+    const normIdHit = buildCastResolver(cast, { supersededBy: {} }).resolve('The_Torment');
+    expect(normIdHit?.via).toBe('normalised-id');
+    expect(normIdHit?.matchedHistoryKeys).toBeUndefined();
+  });
+
+  it('fix round 1, I1: two resolutions hitting the same normalised-history slot get independent array instances', () => {
+    // `normHistoryKeys.get(key)` returns the resolver's own internal array by
+    // reference. Without a copy at the return site, two callers resolving
+    // different raw spellings that both land on this slot would receive the
+    // SAME array instance — a consumer that sorts/pushes/dedupes one
+    // corrupts the other's view (and every later `resolve()` on this same
+    // built resolver) silently.
+    const resolver = buildCastResolver(cast, {
+      supersededBy: { Mairin_Two: 'mairin', 'mairin-two': 'mairin' },
+    });
+    const a = resolver.resolve('Mairin Two')?.matchedHistoryKeys;
+    const b = resolver.resolve('mairin_two')?.matchedHistoryKeys;
+    expect(a).toEqual(b);
+    expect(a).not.toBe(b);
   });
 });

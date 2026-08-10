@@ -116,8 +116,8 @@ export function buildCastResolver<T extends CastRecord>(
   const byHistory = new Map<string, T>();
   const byNormHistory = new Map<string, T | null>();
   /* #2128 — the raw `from` keys behind each normalised history slot, which
-     `byNormHistory` itself discards. Collected here (inside the liveness
-     `continue` above) so a key whose target is dead never contributes a
+     `byNormHistory` itself discards. Collected below the liveness `continue`
+     in the same loop, so a key whose target is dead never contributes a
      marker, matching exactly what the tier itself will resolve. */
   const normHistoryKeys = new Map<string, string[]>();
   for (const [from, to] of Object.entries(history.supersededBy)) {
@@ -219,7 +219,7 @@ export function buildCastResolver<T extends CastRecord>(
           character: normHist,
           viaAlias: characterId,
           via: 'normalised-history',
-          matchedHistoryKeys: normHistoryKeys.get(key) ?? [],
+          matchedHistoryKeys: [...(normHistoryKeys.get(key) ?? [])],
         };
       }
 
