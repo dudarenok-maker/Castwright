@@ -617,6 +617,34 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (#2128 castHistorySe
     expect(after.synthesizedAt).not.toBe(priorSynthesizedAt);
   });
 
+  /* Round-1 review M2 — the `3` above is truthy, so a `segFile.castHistorySeq
+     || undefined` coercion at the call site would pass that test too. A
+     SEPARATE prior value of `0` is the only fixture that can catch it
+     (Constraint 5: `0` is a valid castHistorySeq, not an absent one) —
+     folding this into the `3` test above would also blunt Step 7's mutation
+     pass, which relies on `3` staying distinguishable from the `castIdHistory
+     .seq ?? 0` mutant's own `0` output. */
+  it('carries forward a prior castHistorySeq of 0 without truthiness-collapsing it (#2128)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id, chapterSlug, audioRoot: thisAudioRoot } = await scaffoldSeqBook('Seq Zero Story', 0);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    const after = JSON.parse(readFileSync(join(thisAudioRoot, `${chapterSlug}.segments.json`), 'utf8'));
+    expect(after).toHaveProperty('castHistorySeq', 0);
+  });
+
   it('omits castHistorySeq when the prior file had none (#2128)', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({
@@ -624,10 +652,12 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (#2128 castHistorySe
       sampleRate: SR,
     }));
 
-    const { bookId: id, chapterSlug, audioRoot: thisAudioRoot } = await scaffoldSeqBook(
-      'Seq Omit Story',
-      undefined,
-    );
+    const {
+      bookId: id,
+      chapterSlug,
+      audioRoot: thisAudioRoot,
+      priorSynthesizedAt,
+    } = await scaffoldSeqBook('Seq Omit Story', undefined);
 
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
@@ -639,6 +669,10 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (#2128 castHistorySe
 
     const after = JSON.parse(readFileSync(join(thisAudioRoot, `${chapterSlug}.segments.json`), 'utf8'));
     expect(after).not.toHaveProperty('castHistorySeq');
+    // Round-1 review M3 — without this, a route that never rewrote the file
+    // at all would satisfy the assertion above just as well. Proves a real
+    // re-render happened, exactly like the carry-forward test's sibling check.
+    expect(after.synthesizedAt).not.toBe(priorSynthesizedAt);
   });
 });
 

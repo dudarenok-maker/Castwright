@@ -843,8 +843,31 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix) — #2128 castHistory
     expect(after.synthesizedAt).not.toBe(prior.synthesizedAt);
   });
 
+  /* Round-1 review M2 — the `3` above is truthy, so a `segFile.castHistorySeq
+     || undefined` coercion at the call site would pass that test too. A
+     SEPARATE prior value of `0` is the only fixture that can catch it
+     (Constraint 5: `0` is a valid castHistorySeq, not an absent one) —
+     folding this into the `3` test above would also blunt Step 7's mutation
+     pass, which relies on `3` staying distinguishable from the `castIdHistory
+     .seq ?? 0` mutant's own `0` output. */
+  it('carries forward a prior castHistorySeq of 0 without truthiness-collapsing it (#2128)', async () => {
+    writeSeqSegments(0);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(seqBookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'amy', gainDb: 6 });
+    const events = parseSse(res.text);
+    expect(
+      events.some((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res.text}`,
+    ).toBe(true);
+
+    const after = JSON.parse(readFileSync(join(seqAudioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(after).toHaveProperty('castHistorySeq', 0);
+  });
+
   it('omits castHistorySeq when the prior file had none (#2128)', async () => {
-    writeSeqSegments(undefined);
+    const prior = writeSeqSegments(undefined);
 
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(seqBookId)}/chapters/1/splice`)
@@ -857,5 +880,9 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix) — #2128 castHistory
 
     const after = JSON.parse(readFileSync(join(seqAudioRoot, `${SLUG}.segments.json`), 'utf8'));
     expect(after).not.toHaveProperty('castHistorySeq');
+    // Round-1 review M3 — without this, a route that never rewrote the file
+    // at all would satisfy the assertion above just as well. Proves a real
+    // re-render happened, exactly like the carry-forward test's sibling check.
+    expect(after.synthesizedAt).not.toBe(prior.synthesizedAt);
   });
 });
