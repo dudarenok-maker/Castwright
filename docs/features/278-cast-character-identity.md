@@ -9,11 +9,55 @@ owner: null
 > Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A32, B3, A33)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
-> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-create.ts`,
+> `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-link-orphan.ts`,
+> `server/src/routes/cast-create.ts`,
 > `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
 > URL surface: `#/books/<id>/cast` (the orphaned-id advisory banner)
 > OpenAPI ops: `GET /api/books/{id}` (`orphanedCharacterFallbacks` field),
-> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`
+> `POST` and `DELETE /api/books/{bookId}/cast/{characterId}/reject-orphan-match`,
+> `POST /api/books/{bookId}/cast/{characterId}/link-orphan-match`
+
+## Amendment 2026-08-10 — the banner can now ACCEPT a match (#2238)
+
+Wave 3 shipped the "needs your decision" section with a candidate picker and a
+single action, **"Not the same character"**. There was no way to record the
+positive answer, so the repair script's report-only bucket — **107 ids / 93
+segments** on the real workspace, including *Exile*'s `silveny` (17 segments
+across 4 chapters) — was stranded by construction: `retireCharacterId` does
+exactly the right thing but its only callers were the analyzer path and
+`performCastMerge`, neither reachable for an id that is not a cast row.
+
+`POST .../link-orphan-match` (#2238) mirrors the reject route at every layer.
+Four constraints, all of which have tests:
+
+1. **A reserved id is refused as the alias SOURCE**, not only as the target —
+   `unknown-male`/`unknown-female` are shared fold buckets and `narrator` is the
+   catch-all, so aliasing one book-wide routes several speakers onto one voice.
+   The first implementation guarded only the target; the review gate caught it
+   as a Critical with a live repro (*Unlocked*, `unknown-male`, 34 segments).
+   `narrator` is refused as a source but remains a legal target.
+2. **Both reserved checks compare through `normaliseIdKey`**, not raw string
+   equality — the same drift class (`Unknown_Male`) the repair script's guards 1
+   and 4 already normalise for.
+3. **A prior rejection is cleared through the existing undo path**, awaited, and
+   the link is **aborted** if that undo fails — otherwise the alias fights a
+   `rejectedPairs` entry still on disk and `rejectedPairsGoverning` blocks it.
+4. **`resolution: null` is surfaced, not swallowed** — it means the alias landed
+   but is still blocked, which is a different outcome from a clean link.
+
+No `withCastLock` is owed on this route: it reads `cast.json` to validate the
+target and otherwise writes only history, and the one path that does touch
+`cast.json` (`clearNotLinkedEdgesForDroppedRejections`, cleaning up
+`droppedSelfLoopRejections`) takes its own lock. That helper's home is a filed
+follow-up — it currently lives in `analysis.ts` and now has a cross-module
+caller ([#2239](https://github.com/dudarenok-maker/Castwright/issues/2239)).
+
+**Undo is a round trip, not a mirror** — a linked row moves into the
+auto-reconciled section, whose existing "Not the same character" forgets the
+alias and records a pair-scoped rejection. This is a deliberate deviation from
+#2238's acceptance criterion 3 ("symmetric"): the alias is recoverable
+(`forgetSupersededId` stashes it as `forgotSupersededTo`, restorable by that
+pair's own Undo), so the round trip is lossless even though it is not symmetric.
 
 ## Benefit / Rationale
 
