@@ -294,7 +294,7 @@ export async function recordRetirements(
    id-history write in this file — the side-table is never authoritative for
    identity, and a surviving stale edge merely re-suppresses one future
    §4.4 name-match rather than corrupting anything already on disk. */
-async function clearNotLinkedEdgesForDroppedRejections(
+export async function clearNotLinkedEdgesForDroppedRejections(
   bookDir: string,
   bookId: string,
   dropped: ReadonlyArray<{ from: string; to: string }>,

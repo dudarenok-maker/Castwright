@@ -76,16 +76,12 @@
       its own `cast-id-history:<bookDir>` lock (`withKeyLock`,
       `store/cast-id-history.ts`), entirely independent of cast.json's lock.
 
-   Not handled: `retireCharacterId`'s `droppedSelfLoopRejections` return
-   (repointing a `rejectedPairs` entry into a self-loop, then dropping it,
-   which its two other callers clean up on cast.json) needs `characterId`
-   itself to have separately been the `from` of some OTHER, unrelated
-   rejected pair — only reachable via id reuse across a character's
-   lifecycle. Genuinely rare and out of this issue's scope; a stale
-   `notLinkedTo` edge left behind in that case merely re-suppresses one
-   future §4.4 name-match, the same "degrades, does not corrupt" fallback
-   every other best-effort id-history cleanup in this codebase already
-   accepts. */
+   `retireCharacterId`'s `droppedSelfLoopRejections` return is handled: when
+   a self-loop rejection is dropped (repointing a `rejectedPairs` entry into
+   a self-loop, then dropping it), the matching one-sided `notLinkedTo` edge
+   on cast.json is cleared via `clearNotLinkedEdgesForDroppedRejections`,
+   mirroring the cleanup in `analysis.ts` and `cast-merge.ts`. This prevents
+   a stale edge from re-suppressing future §4.4 name-matches. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -94,6 +90,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { retireCharacterId, loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
+import { clearNotLinkedEdgesForDroppedRejections } from './analysis.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -178,7 +175,10 @@ castLinkOrphanRouter.post(
     }
 
     try {
-      await retireCharacterId(bookDir, orphanedId, characterId);
+      const result = await retireCharacterId(bookDir, orphanedId, characterId);
+      if (result.droppedSelfLoopRejections.length) {
+        await clearNotLinkedEdgesForDroppedRejections(bookDir, bookId, result.droppedSelfLoopRejections);
+      }
     } catch (retireErr) {
       console.error(
         '[cast-link-orphan] failed to record the alias in cast-id-history.json — surfacing as a failure',

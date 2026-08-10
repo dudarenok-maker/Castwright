@@ -248,4 +248,54 @@ describe('POST /api/books/:bookId/cast/:characterId/link-orphan-match', () => {
     const resolved = await resolveOrphanedId('mayrin');
     expect(resolved?.character.id).toBe('mairin');
   });
+
+  it('cleans up notLinkedTo edges when retireCharacterId drops a self-loop rejection', async () => {
+    // Scenario: we need a rejection where `from` is the target character (mairin).
+    // When retiring the orphaned ID (mayrin) to that character, the pair's `to`
+    // field gets repointed, creating a self-loop {from: mairin, to: mairin}.
+    //
+    // Setup: rejection {from: mairin, to: mayrin} + notLinkedTo edge on mairin
+    // naming mayrin. The route code can't create this through the public API
+    // (reject endpoint creates {from: orphanedId, to: characterId}), but it
+    // can occur through id reuse and lifecycle changes — this test verifies
+    // the cleanup works when it does.
+    const historyPath = join(bookDir, '.audiobook', 'cast-id-history.json');
+    writeFileSync(
+      historyPath,
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mairin', to: 'mayrin' }],
+      }),
+    );
+
+    // Write the notLinkedTo edge. The cleanup function looks for edges where
+    // characterId matches the `from` of the dropped rejection. Since the dropped
+    // rejection is {from: mairin, to: mairin}, we need an edge naming mairin.
+    // This edge would normally be on a different character (e.g., narrator or
+    // another character that had mairin rejected against them at some point).
+    const castBefore = readCast();
+    const narratorBefore = castBefore.characters.find((c) => c.id === 'narrator');
+    if (narratorBefore) {
+      narratorBefore.notLinkedTo = [{ bookId, characterId: 'mairin' }];
+      writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(castBefore));
+    }
+
+    // Link `mayrin` (orphaned id) to `mairin` (live character).
+    // This retires mayrin to mairin, which causes retireCharacterId to:
+    // 1. Repoint the pair's `to` from mayrin to mairin (since pair.to === from)
+    // 2. Detect the self-loop {from: mairin, to: mairin}
+    // 3. Drop it, returning it in droppedSelfLoopRejections
+    // The link handler should clean up the notLinkedTo edge via
+    // clearNotLinkedEdgesForDroppedRejections.
+    const linkRes = await callLink(bookId, 'mairin', { orphanedId: 'mayrin' });
+    expect(linkRes.status).toBe(200);
+    expect(linkRes.body.resolution).toBe('history');
+    expect(linkRes.body.resolvedCharacterId).toBe('mairin');
+
+    // Verify the notLinkedTo edge was removed from narrator (where it was set up).
+    const castAfterLink = readCast();
+    const narratorAfter = castAfterLink.characters.find((c) => c.id === 'narrator');
+    expect(narratorAfter?.notLinkedTo).toEqual([]);
+  });
 });
