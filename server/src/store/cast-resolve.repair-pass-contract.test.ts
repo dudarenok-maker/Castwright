@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildCastResolver } from './cast-resolve.js';
+import { isAudioCurrent } from './cast-audio-currency.js';
 // @ts-expect-error — scripts/repair-cast-id-drift.mjs is a plain, untyped
 // ESM script (no server/dist build, no .d.ts) — see this file's own header
 // comment for why importing it from here, rather than from the script's own
@@ -67,7 +68,8 @@ import { buildOrphansFromSegments, resolveTierBId } from '../../../scripts/repai
 describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', () => {
   it("a live id resolves via the REAL resolver's 'exact' tier and is NOT an orphan; a genuine miss still is", () => {
     const liveCast = [{ id: 'live-id', name: 'Live' }];
-    const resolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+    const history = { schema: 1 as const, supersededBy: {}, rejected: [] };
+    const resolver = buildCastResolver(liveCast, history);
     const segs = [
       {
         chapterId: 1,
@@ -75,24 +77,42 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
         segments: [{ characterId: 'live-id' }, { characterId: 'live-id' }, { characterId: 'ghost' }],
       },
     ];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    // #2128 — buildOrphansFromSegments now calls the REAL isAudioCurrent
+    // (the same comparator the Cast banner calls, Global Constraint 3)
+    // rather than checking `resolution.via === 'exact'` itself. Neither
+    // fixture segments-file below carries a `castHistorySeq` stamp, so
+    // 'exact' is still unconditionally current (no stamp needed) and a
+    // genuine miss ('ghost') is still `false` — this test's outcome is
+    // unchanged by the widening, it now just proves it through the real
+    // predicate instead of the old inline check.
+    const { orphans } = buildOrphansFromSegments(segs, resolver, history, isAudioCurrent);
     expect(orphans.has('live-id')).toBe(false);
     expect(orphans.get('ghost')?.segments).toBe(1);
   });
 
   it("a case/separator-drifted id resolves via the REAL resolver's 'normalised-id' tier and IS an orphan (#2107's widening)", () => {
     const liveCast = [{ id: 'the_torment', name: 'The Torment' }];
-    const resolver = buildCastResolver(liveCast, { supersededBy: {}, rejected: [] });
+    const history = { schema: 1 as const, supersededBy: {}, rejected: [] };
+    const resolver = buildCastResolver(liveCast, history);
     const segs = [{ chapterId: 19, chapterTitle: 'Nineteen', segments: [{ characterId: 'the-torment' }] }];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    // #2128 — no `castHistorySeq` on this segments-file fixture, so
+    // isAudioCurrent reads 'unknown' for this normalised-id match (it can't
+    // even reach the tier-specific branch without a stamp) — 'unknown' is
+    // damage exactly like `false`, so the id is still listed either way.
+    const { orphans } = buildOrphansFromSegments(segs, resolver, history, isAudioCurrent);
     expect(orphans.get('the-torment')?.segments).toBe(1);
   });
 
   it("a history alias resolves via the REAL resolver's 'history' tier and is STILL an orphan (audio predates the alias)", () => {
     const liveCast = [{ id: 'mairin', name: 'Мэйрин' }];
-    const resolver = buildCastResolver(liveCast, { supersededBy: { mayrin: 'mairin' }, rejected: [] });
+    const history = { schema: 1 as const, supersededBy: { mayrin: 'mairin' }, rejected: [] };
+    const resolver = buildCastResolver(liveCast, history);
     const segs = [{ chapterId: 2, chapterTitle: 'Two', segments: [{ characterId: 'mayrin' }, { characterId: 'mayrin' }] }];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    // #2128 — no `castHistorySeq` stamp on this fixture either, so
+    // isAudioCurrent reads 'unknown' for the 'history' match — damage, same
+    // as this test's pre-#2128 assertion (the alias resolving live says
+    // nothing about whether the RENDERED bytes predate it).
+    const { orphans } = buildOrphansFromSegments(segs, resolver, history, isAudioCurrent);
     expect(orphans.get('mayrin')?.segments).toBe(2);
   });
 });

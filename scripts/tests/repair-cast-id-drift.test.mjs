@@ -49,6 +49,7 @@ import {
   collectBooks,
   collectBakNameEntries,
   shouldRefuseApplyForUnreadableBooks,
+  stampScannedBooks,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -131,6 +132,68 @@ function makeHistoryAwareFakeResolver(idKeyFn) {
         return undefined;
       },
     };
+  };
+}
+
+/** #2128 — test-local stand-in for the real `isAudioCurrent`
+ *  (`server/src/store/cast-audio-currency.ts`), which this file cannot
+ *  import directly: the module doc comment at the top of this file commits
+ *  to importing ONLY this script's own exports, never `server/dist`, so
+ *  `npm run test:hooks` never needs a server build — the exact same reason
+ *  every resolver fake above is hand-rolled rather than the real
+ *  `buildCastResolver`. This reimplements the SAME seven fail-closed rules
+ *  the real predicate's own doc comment enumerates, so the fixtures below
+ *  (which encode real seq/stamp/marker values) exercise the actual decision
+ *  shape rather than a hard-coded stand-in. The cross-check against the
+ *  REAL production `isAudioCurrent` lives in
+ *  `server/src/store/cast-resolve.repair-pass-contract.test.ts` (#2130's
+ *  same split, extended to this predicate by #2128) — this fake exists to
+ *  drive `buildOrphansFromSegments`'s OWN wiring (call it, gate on `===
+ *  true`, track `currentNonExact`, subtract at the end), not to re-prove
+ *  the predicate's own correctness, which is Task 4's own suite
+ *  (`cast-audio-currency.test.ts`). */
+function fakeIsAudioCurrent(resolution, segmentsFile, history) {
+  if (!resolution) return false;
+  if (resolution.via === 'exact') return true;
+  const finite = (n) => typeof n === 'number' && Number.isFinite(n);
+  const stamp = segmentsFile?.castHistorySeq;
+  if (!finite(stamp)) return 'unknown';
+  if (resolution.via === 'normalised-id') return true;
+  const markers = history.recordedAtSeq;
+  if (markers === undefined) return 'unknown';
+  if (!finite(history.seq) || history.seq < stamp) return 'unknown';
+  if (!resolution.matchedHistoryKeys?.length) return 'unknown';
+  let highest = 0;
+  for (const key of resolution.matchedHistoryKeys) {
+    const marker = markers[key];
+    if (marker === undefined || !finite(marker)) return 'unknown';
+    if (marker > highest) highest = marker;
+  }
+  return stamp >= highest;
+}
+
+/** #2128 — fake resolver for the `buildOrphansFromSegments`/`isAudioCurrent`
+ *  wiring tests below. Reports the two fields `isAudioCurrent` actually
+ *  reads (`via`, `matchedHistoryKeys`) — none of the resolver fakes above
+ *  do, because `isAudioCurrent` didn't exist when they were written. NOT a
+ *  byte-for-byte reimplementation of the real four-tier resolver (the same
+ *  "two independent matchers" hazard every other fake in this file already
+ *  avoids) — implements only what these tests need: a direct
+ *  `history.supersededBy` lookup (the `'history'` tier) and an id-shape
+ *  match against any extra live cast rows passed in (the `'normalised-id'`
+ *  tier). */
+function resolverFor(history, extraLiveCast = []) {
+  const supersededBy = history.supersededBy ?? {};
+  const byNormId = new Map(extraLiveCast.map((c) => [idKey(c.id), c]));
+  return {
+    resolve(id) {
+      if (id in supersededBy) {
+        return { character: { id: supersededBy[id] }, via: 'history', matchedHistoryKeys: [id] };
+      }
+      const norm = byNormId.get(idKey(id));
+      if (norm) return { character: norm, via: 'normalised-id' };
+      return undefined;
+    },
   };
 }
 
@@ -1575,6 +1638,39 @@ describe('planBookRepairs', () => {
     assert.equal(plan.reportOnly[0].id, 'silveny');
     assert.match(plan.reportOnly[0].reason, /no display name found/);
   });
+
+  test('#2128: distinguishes a current non-exact id from a never-rendered one, and auto-records neither', () => {
+    // No `candidateIds` field on `input` — the ids come from the name
+    // indexes, so both 'The_Torment' and 'never-spoke' are seeded into
+    // cacheNameIndex, matching every other auto-record test in this
+    // describe block. Both individually name "Timkin" unambiguously (this
+    // guard only checks per-id ambiguity, not cross-id collisions), so both
+    // Tier-A-match onto the live 'timkin' and reach the zero-segment branch
+    // (neither appears in `orphans`).
+    const cacheNameIndex = buildNameIndex(
+      [
+        { id: 'The_Torment', name: 'Timkin' },
+        { id: 'never-spoke', name: 'Timkin' },
+      ],
+      lc,
+    );
+    const plan = planBookRepairs(
+      {
+        liveCast,
+        history: {},
+        cacheNameIndex,
+        bakNameIndex: new Map(),
+        orphans: new Map(),
+        cacheAvailable: true,
+        bakAvailable: true,
+        currentNonExact: new Set(['The_Torment']),
+      },
+      deps,
+    );
+    assert.deepEqual(plan.autoRecord, []);
+    assert.match(plan.reportOnly.find((r) => r.id === 'The_Torment').reason, /is already current/);
+    assert.match(plan.reportOnly.find((r) => r.id === 'never-spoke').reason, /zero rendered segments/);
+  });
 });
 
 describe('buildRerenderRows', () => {
@@ -2660,7 +2756,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
         { ghost: { gender: 'male' } },
       ),
     ];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     const entry = orphans.get('ghost');
     assert.equal(entry.segments, 2);
     assert.equal(entry.chapters.length, 1);
@@ -2677,7 +2773,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
       },
     };
     const segs = [seg(1, 'One', [{ characterId: 'live-id' }])];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     assert.equal(orphans.size, 0);
   });
 
@@ -2693,14 +2789,14 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     // repair tool, so ONLY 'exact' counts as "audio is fine" now.
     const resolver = { resolve: (id) => (id === 'drifted' ? { character: { id: 'live' }, via: 'normalised-id' } : undefined) };
     const segs = [seg(1, 'One', [{ characterId: 'drifted' }, { characterId: 'drifted' }])];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     assert.equal(orphans.get('drifted')?.segments, 2);
   });
 
   test("an id resolving via 'normalised-history' is an orphan (unchanged from the #2107 fix's first round)", () => {
     const resolver = { resolve: (id) => (id === 'old-alias' ? { character: { id: 'live' }, via: 'normalised-history' } : undefined) };
     const segs = [seg(1, 'One', [{ characterId: 'old-alias' }, { characterId: 'old-alias' }, { characterId: 'old-alias' }])];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     assert.equal(orphans.get('old-alias')?.segments, 3);
   });
 
@@ -2720,7 +2816,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
       },
     };
     const segs = [seg(2, 'Two', [{ characterId: 'aliased', startSec: 0, endSec: 4 }, { characterId: 'aliased', startSec: 4, endSec: 6 }])];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     const entry = orphans.get('aliased');
     assert.equal(entry.segments, 2);
     assert.equal(entry.chapters[0].chapterId, 2);
@@ -2769,7 +2865,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     // Run 1: no alias recorded yet (a genuine miss) — becomes an orphan,
     // and the re-render list names it.
     const run1Resolver = { resolve: () => undefined };
-    const run1 = buildOrphansFromSegments(mayrinSegs, run1Resolver);
+    const run1 = buildOrphansFromSegments(mayrinSegs, run1Resolver, {}, fakeIsAudioCurrent);
     assert.equal(run1.orphans.get('mayrin')?.segments, 8);
     const run1Rows = buildRerenderRows('Coalfall', run1.orphans);
     assert.equal(run1Rows.length, 1);
@@ -2783,7 +2879,7 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     const run2Resolver = {
       resolve: (id) => (id === 'mayrin' ? { character: { id: 'mairin' }, viaAlias: 'mayrin', via: 'history' } : undefined),
     };
-    const run2 = buildOrphansFromSegments(mayrinSegs, run2Resolver);
+    const run2 = buildOrphansFromSegments(mayrinSegs, run2Resolver, {}, fakeIsAudioCurrent);
     assert.equal(
       run2.orphans.get('mayrin')?.segments,
       8,
@@ -2798,8 +2894,116 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
   test('non-string characterIds are ignored', () => {
     const resolver = { resolve: () => undefined };
     const segs = [seg(1, 'One', [{ characterId: 42 }, { characterId: null }, { characterId: undefined }])];
-    const { orphans } = buildOrphansFromSegments(segs, resolver);
+    const { orphans } = buildOrphansFromSegments(segs, resolver, {}, fakeIsAudioCurrent);
     assert.equal(orphans.size, 0);
+  });
+});
+
+describe('#2128 — a re-rendered chapter drops off the repair list', () => {
+  test('drops an alias id whose every chapter was re-rendered above its marker', () => {
+    // The issue's own acceptance criterion, post-dating half: a render whose
+    // castHistorySeq stamp is AT/ABOVE the marker recordedAtSeq set for the
+    // alias it resolves through reads current and clears the row.
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 5, recordedAtSeq: { mayrin: 3 } };
+    const segs = [{ chapterId: 1, castHistorySeq: 5, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, fakeIsAudioCurrent);
+    assert.equal(orphans.has('mayrin'), false);
+  });
+
+  test('KEEPS an id whose chapter was not re-rendered', () => {
+    // The acceptance criterion's pre-dating half: a render stamp BELOW the
+    // marker is stale and stays listed.
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 5, recordedAtSeq: { mayrin: 3 } };
+    const segs = [{ chapterId: 1, castHistorySeq: 1, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, fakeIsAudioCurrent);
+    assert.equal(orphans.get('mayrin').segments, 1);
+  });
+
+  test("KEEPS every id in a book whose history has no recordedAtSeq field", () => {
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 99 };
+    const segs = [{ chapterId: 1, castHistorySeq: 99, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, fakeIsAudioCurrent);
+    assert.equal(orphans.has('mayrin'), true); // 'unknown' LISTS
+  });
+
+  test("KEEPS an id when the file counter is below a render's stamp", () => {
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, seq: 2, recordedAtSeq: { mayrin: 1 } };
+    const segs = [{ chapterId: 1, castHistorySeq: 99, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, fakeIsAudioCurrent);
+    assert.equal(orphans.has('mayrin'), true);
+  });
+
+  test('KEEPS an id when the history object has recordedAtSeq but no seq', () => {
+    // Round 1 (C1) — the fail-open shape, pinned on the consumer side too.
+    const history = { schema: 1, supersededBy: { mayrin: 'mairin' }, recordedAtSeq: { mayrin: 1 } };
+    const segs = [{ chapterId: 1, castHistorySeq: 9, segments: [{ characterId: 'mayrin' }] }];
+    const { orphans } = buildOrphansFromSegments(segs, resolverFor(history), history, fakeIsAudioCurrent);
+    assert.equal(orphans.has('mayrin'), true);
+  });
+
+  test('reports a current non-exact id as such, not as never-rendered', () => {
+    // A 'normalised-id'-tier id, re-rendered: skips `orphans`, but it DID render.
+    const history = { schema: 1, supersededBy: {}, seq: 1, recordedAtSeq: {} };
+    const segs = [{ chapterId: 1, castHistorySeq: 1, segments: [{ characterId: 'The_Torment' }] }];
+    const { orphans, currentNonExact } = buildOrphansFromSegments(
+      segs, resolverFor(history, [{ id: 'the-torment' }]), history, fakeIsAudioCurrent,
+    );
+    assert.equal(orphans.has('The_Torment'), false);
+    assert.equal(currentNonExact.has('The_Torment'), true);
+  });
+
+  test('orphans membership WINS over currentNonExact across chapters', () => {
+    // Current in ch1, stale in ch2 (no castHistorySeq at all on that
+    // chapter's segments file -> isAudioCurrent reads 'unknown' before it
+    // even looks at `via`). Without the subtraction at the end of
+    // buildOrphansFromSegments the id lands in BOTH, and planBookRepairs
+    // then reads the wrong one — the "any-current => clean" direction that
+    // re-opens #2107.
+    const history = { schema: 1, supersededBy: {}, seq: 4, recordedAtSeq: {} };
+    const segs = [
+      { chapterId: 1, castHistorySeq: 4, segments: [{ characterId: 'The_Torment' }] },
+      { chapterId: 2, segments: [{ characterId: 'The_Torment' }] }, // no stamp -> 'unknown'
+    ];
+    const { orphans, currentNonExact } = buildOrphansFromSegments(
+      segs, resolverFor(history, [{ id: 'the-torment' }]), history, fakeIsAudioCurrent,
+    );
+    assert.equal(orphans.has('The_Torment'), true);
+    assert.equal(currentNonExact.has('The_Torment'), false);
+  });
+});
+
+describe('stampScannedBooks (#2128 — the --apply one-shot recordedAtSeq back-fill main() calls for every scanned book)', () => {
+  // Deliberately does NOT invoke main()/`--apply` itself: this file's test
+  // architecture (see the module doc comment and the "Ie" note further
+  // down, near probePortRangeRefused) already establishes that main()'s own
+  // wiring is exercised only by the live dry run against the real
+  // workspace, never by a subprocess in this suite — this repair pass is
+  // under an explicit instruction to never invoke --apply from its own
+  // test file, and this CI job (test:hooks) never builds server/dist, which
+  // main() needs. stampScannedBooks is pulled out of main() specifically so
+  // the one-shot-stamp WIRING (call it for every scanned dir, count how many
+  // actually wrote) has direct coverage without either constraint — the
+  // same pattern every other main()-adjacent decision in this file already
+  // uses (shouldRefuseApplyForEmptyScan, planApplyRefusal, etc.).
+  test('calls stampRecordedAtSeqIfAbsent for every scanned book dir and counts how many actually wrote', async () => {
+    const calls = [];
+    const stampFn = async (bookDir) => {
+      calls.push(bookDir);
+      return bookDir !== '/book-2'; // pretend book-2's history already had the field
+    };
+    const stamped = await stampScannedBooks(['/book-1', '/book-2', '/book-3'], stampFn);
+    assert.deepEqual(calls, ['/book-1', '/book-2', '/book-3']);
+    assert.equal(stamped, 2);
+  });
+
+  test('an empty scan stamps nothing and calls nothing', async () => {
+    let calls = 0;
+    const stamped = await stampScannedBooks([], async () => {
+      calls += 1;
+      return true;
+    });
+    assert.equal(stamped, 0);
+    assert.equal(calls, 0);
   });
 });
 
@@ -2866,6 +3070,12 @@ describe('collectSegmentOrphans (#2092/#2089 Task 9 — threads the loaded histo
       async loadSegmentsFiles() {
         return [{ chapterId: 1, chapterTitle: 'One', segments: [{ characterId: 'mayrin', startSec: 0, endSec: 1 }] }];
       },
+      // #2128 — collectSegmentOrphans now threads mods.isAudioCurrent
+      // through to buildOrphansFromSegments; this fake mirrors the
+      // pre-#2128 "only 'exact' is fine" contract this test exists to pin
+      // (see fakeIsAudioCurrent's own doc comment above for why this file
+      // hand-rolls a stand-in rather than importing the real predicate).
+      isAudioCurrent: fakeIsAudioCurrent,
     };
     const history = { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] };
     const { orphans } = await collectSegmentOrphans('/book', [], { characters: [] }, history, mods);

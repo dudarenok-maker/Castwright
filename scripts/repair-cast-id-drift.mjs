@@ -721,7 +721,21 @@ export function rankSnapshotCandidates(snapshot, liveCast, reservedIds, topN = 3
  *  test that omits `bakAvailable` while asserting an auto-record must pass
  *  it explicitly (`bakAvailable: true`), the same as `cacheAvailable`. */
 export function planBookRepairs(input, deps) {
-  const { liveCast, history, cacheNameIndex, bakNameIndex, orphans, cacheAvailable = false, bakAvailable = false } = input;
+  const {
+    liveCast,
+    history,
+    cacheNameIndex,
+    bakNameIndex,
+    orphans,
+    cacheAvailable = false,
+    bakAvailable = false,
+    // #2128 — ids buildOrphansFromSegments found affirmatively current via a
+    // non-'exact' tier. Defaults to an empty Set so every existing caller
+    // that predates this field (including this file's own pre-#2128 tests)
+    // keeps its prior behaviour: no id is ever treated as "current" unless
+    // the caller says so.
+    currentNonExact = new Set(),
+  } = input;
   const { normaliseForMatch, buildCastResolver, reservedIds, normaliseIdKey } = deps;
 
   const liveIds = new Set(liveCast.map((c) => c.id));
@@ -1155,21 +1169,33 @@ export function planBookRepairs(input, deps) {
       // justify it and no reviewer in the loop (spec §4.7 scopes this
       // pass to REPAIR, not pre-emptive cache-only aliasing).
       //
-      // #2107, widened by owner decision (2026-08-05): this used to also
-      // need to special-case an id that HAD real rendered segments but
-      // wasn't in `orphans` because it "already auto-reconciled" through
-      // the resolver's normalised-id tier — that bucket (`autoReconciled`)
-      // no longer exists. Only `'exact'` skips `orphans` now (see
-      // `buildOrphansFromSegments`'s doc comment), so `orphan.segments ===
-      // 0` here can only mean one thing: this id genuinely has zero
-      // rendered segments anywhere in the book.
+      // #2107, widened by owner decision (2026-08-05), then narrowed again
+      // by #2128: the skip is "affirmatively current" (`isAudioCurrent ===
+      // true`), not "resolves via 'exact'". So `orphan.segments === 0` no
+      // longer means one thing — it means EITHER this id genuinely has zero
+      // rendered segments anywhere in the book, OR it rendered and every one
+      // of those renders is current. `currentNonExact` (buildOrphansFromSegments)
+      // is what tells them apart; giving both the same "zero rendered
+      // segments" reason would emit a demonstrably false statement about a
+      // book with real rendered segments carrying this id, and is one level
+      // down from the `autoReconciled` bucket 511c5382 fixed and 30456c71
+      // deleted.
+      //
+      // NEITHER is auto-recorded, for the same unchanged reason: there is no
+      // wrong audio on disk to justify a durable, unreviewed alias, and no
+      // reviewer in the loop (spec §4.7 scopes this pass to REPAIR).
       if (orphan.segments === 0) {
+        const current = currentNonExact.has(id);
         reportOnly.push({
           id,
           segments: 0,
           chapters: [],
-          reason: `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
-            `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
+          reason: current
+            ? `name/id-matched "${matchedId}" (${evidence}) but every rendered segment carrying this id is ` +
+              `already current (rendered against the cast-id-history state that established its target) — no ` +
+              `damage to repair`
+            : `name/id-matched "${matchedId}" (${evidence}) but this id has zero rendered segments — no ` +
+              `damage to repair, so this pass does not pre-emptively alias a never-rendered id`,
           candidates: [],
         });
         continue;
@@ -2042,6 +2068,7 @@ async function loadServerModules() {
     'server/dist/audio/segments-io.js',
     'server/dist/analyzer/narrator-identity.js',
     'server/dist/analyzer/fold-minor-cast.js',
+    'server/dist/store/cast-audio-currency.js',
   ];
   for (const rel of need) {
     if (!fs.existsSync(path.join(REPO_ROOT, rel))) {
@@ -2063,7 +2090,7 @@ async function loadServerModules() {
   // a second matcher with a divergent tie rule). Reusing the same normaliser
   // for a plain Set-membership check is not that hazard — there is no tie
   // rule to diverge on.
-  const [castResolve, castIdHistory, textMatch, characterId, segmentsIo, narratorIdentity, foldMinorCast] = await Promise.all([
+  const [castResolve, castIdHistory, textMatch, characterId, segmentsIo, narratorIdentity, foldMinorCast, castAudioCurrency] = await Promise.all([
     import('../server/dist/store/cast-resolve.js'),
     import('../server/dist/store/cast-id-history.js'),
     import('../server/dist/util/text-match.js'),
@@ -2071,6 +2098,7 @@ async function loadServerModules() {
     import('../server/dist/audio/segments-io.js'),
     import('../server/dist/analyzer/narrator-identity.js'),
     import('../server/dist/analyzer/fold-minor-cast.js'),
+    import('../server/dist/store/cast-audio-currency.js'),
   ]);
   return {
     buildCastResolver: castResolve.buildCastResolver,
@@ -2078,6 +2106,12 @@ async function loadServerModules() {
     retireCharacterId: castIdHistory.retireCharacterId,
     castIdHistoryPath: castIdHistory.castIdHistoryPath,
     CastIdHistoryUnreadableError: castIdHistory.CastIdHistoryUnreadableError,
+    // #2128 — the one-shot back-fill (Task 2) main()'s --apply tail calls
+    // for EVERY scanned book, and the shared currency comparator (Task 4)
+    // buildOrphansFromSegments/collectSegmentOrphans now call instead of
+    // re-deriving their own seq/stamp comparison (Global Constraint 3).
+    stampRecordedAtSeqIfAbsent: castIdHistory.stampRecordedAtSeqIfAbsent,
+    isAudioCurrent: castAudioCurrency.isAudioCurrent,
     normaliseForMatch: textMatch.normaliseForMatch,
     normaliseIdKey: characterId.normaliseIdKey,
     loadSegmentsFiles: segmentsIo.loadSegmentsFiles,
@@ -2138,11 +2172,32 @@ async function loadServerModules() {
  *  when it might not be.
  *
  *  Empty-result note (the defect shape this wave keeps hitting): `orphans`
- *  being empty for an id must mean "resolves via `'exact'`", never merely
- *  "resolver.resolve() returned something" — that laxer reading is the bug
- *  this comment exists to prevent from coming back. */
-export function buildOrphansFromSegments(segs, resolver) {
+ *  being empty for an id must mean "resolves via `'exact'`, OR its rendered
+ *  audio is affirmatively CURRENT (`isAudioCurrent === true`)" — never
+ *  merely "resolver.resolve() returned something". That laxer reading is
+ *  the bug this comment exists to prevent from coming back.
+ *
+ *  #2128 — `isAudioCurrent` (Task 4, `server/src/store/cast-audio-currency.ts`)
+ *  is now the skip test, not `resolution.via === 'exact'` alone. It is the
+ *  SAME comparator the Cast banner calls (plan 278's invariant 7, extended
+ *  from candidate ranking to currency) — this function must call it, never
+ *  re-derive "is this id fine?" with its own `castHistorySeq`/`recordedAtSeq`
+ *  comparison (Global Constraint 3, one comparator two callers). `'exact'`
+ *  is still unconditionally fine (that branch of `isAudioCurrent` returns
+ *  `true` with no stamp needed), so this is a strict widening of the old
+ *  skip, not a replacement of it. */
+export function buildOrphansFromSegments(segs, resolver, history, isAudioCurrent) {
   const orphans = new Map(); // id -> { segments, chapters: [{chapterId,chapterTitle,segments,durationSec}], snapshots: [] }
+  /* #2128 — ids that skipped `orphans` because their audio is affirmatively
+     CURRENT, though they do not resolve via `'exact'`. `planBookRepairs`'s
+     zero-segment branch needs to tell these apart from an id that genuinely
+     never rendered a line: both now arrive with `segments === 0`, and giving
+     them the same reason string would state a demonstrably false thing about
+     a book with real rendered segments for that id — one level down from the
+     `autoReconciled`-bucket defect `511c5382` fixed and `30456c71` deleted.
+     Reported as fact here; the policy (what to DO about a current id) lives
+     in the caller, `planBookRepairs`. */
+  const currentNonExact = new Set();
   for (const seg of segs) {
     const perChapterCount = new Map(); // id -> count
     const perChapterDuration = new Map(); // id -> seconds
@@ -2150,10 +2205,20 @@ export function buildOrphansFromSegments(segs, resolver) {
       const id = s.characterId;
       if (typeof id !== 'string') continue;
       const resolution = resolver.resolve(id);
-      if (resolution?.via === 'exact') continue; // fine — literally the live cast id today, not orphaned
-      // Everything else — a genuine miss, or a match via 'normalised-id' /
-      // 'history' / 'normalised-history' — is listed (see the doc comment
-      // above for why only 'exact' is exempt).
+      /* #2128 — the skip is now "affirmatively current", not "resolves via
+         'exact'". Anything other than a literal `true` is listed: `false`
+         is a genuine miss or a stale render, and `'unknown'` means the
+         comparison could not be made at all — reading THAT as clean is
+         exactly what #2107 exists to prevent (Global Constraint 4: only an
+         affirmative comparison clears a row). */
+      if (isAudioCurrent(resolution, seg, history) === true) {
+        if (resolution?.via !== 'exact') currentNonExact.add(id);
+        continue;
+      }
+      // Everything else — a genuine miss, or a non-current match via
+      // 'normalised-id' / 'history' / 'normalised-history' — is listed (see
+      // the doc comment above for why only an affirmatively current
+      // resolution is exempt).
       perChapterCount.set(id, (perChapterCount.get(id) ?? 0) + 1);
       if (typeof s.startSec === 'number' && typeof s.endSec === 'number') {
         perChapterDuration.set(id, (perChapterDuration.get(id) ?? 0) + Math.max(0, s.endSec - s.startSec));
@@ -2173,7 +2238,18 @@ export function buildOrphansFromSegments(segs, resolver) {
       if (snapshot) entry.snapshots.push(snapshot);
     }
   }
-  return { orphans };
+  // #2128 — `orphans` membership wins: an id current in one chapter but
+  // stale in another (the file-level `isAudioCurrent` call is per-segments-
+  // file, and this loop is already per-file) must not read as clean. Without
+  // this subtraction the id would land in BOTH sets, and planBookRepairs's
+  // zero-segment branch reads `currentNonExact` only when `orphans.segments
+  // === 0` — an id with real orphaned segments elsewhere never reaches that
+  // branch at all, so the wrong signal would simply be dropped silently
+  // there; a FUTURE caller reading `currentNonExact` on its own would not be
+  // so lucky. This is the "any-current => clean" direction that re-opens
+  // #2107.
+  for (const id of orphans.keys()) currentNonExact.delete(id);
+  return { orphans, currentNonExact };
 }
 
 // Exported (previously module-private) SOLELY so Task 9's fix — passing
@@ -2204,8 +2280,8 @@ export async function collectSegmentOrphans(bookDir, chapters, cast, history, mo
   // (`Pick<CastIdHistory, 'supersededBy' | 'rejected' | 'rejectedPairs'>`).
   const resolver = mods.buildCastResolver(cast.characters, history);
   const segs = await mods.loadSegmentsFiles(bookDir, chapters);
-  const { orphans } = buildOrphansFromSegments(segs, resolver);
-  return { orphans, resolver };
+  const { orphans, currentNonExact } = buildOrphansFromSegments(segs, resolver, history, mods.isAudioCurrent);
+  return { orphans, currentNonExact, resolver };
 }
 
 function backupCastIdHistory(historyPath) {
@@ -2214,6 +2290,34 @@ function backupCastIdHistory(historyPath) {
   const backupPath = `${historyPath}.bak.id-drift-${stamp}`;
   fs.copyFileSync(historyPath, backupPath);
   return backupPath;
+}
+
+/** #2128 — the one-shot `recordedAtSeq` back-fill, for EVERY book `main()`
+ *  scanned this run, not only ones with an alias to record: absence of the
+ *  field reads `'unknown'` and lists the whole book forever (see
+ *  `isAudioCurrent`'s own doc comment, source 2), and the books carrying
+ *  pre-lane aliases are exactly the ones this A33 repair workflow already
+ *  visits.
+ *
+ *  Exported and pulled out of `main()` (mirroring `buildRerenderRows`,
+ *  every `shouldRefuseApplyFor*` guard, and `planApplyRefusal` above) so
+ *  this wiring has a direct unit test with a fake `stampRecordedAtSeqIfAbsent`
+ *  — this file's tests never invoke `main()`/`--apply` itself (see the
+ *  module doc comment's Tests section and `collectSegmentOrphans`'s own
+ *  describe block for why: no server build in the `test:hooks` CI job,
+ *  and this repair pass is under an explicit instruction to never invoke
+ *  `--apply` from its own suite).
+ *
+ *  Caller order matters: `main()` calls this AFTER the alias-writing
+ *  (`pendingWrites`) loop — a book that just received an alias already has
+ *  the field from `bumpSeqAndStamp`, so the stamp is a no-op there, and
+ *  doing it first would be equally correct but harder to reason about. */
+export async function stampScannedBooks(scannedBookDirs, stampRecordedAtSeqIfAbsent) {
+  let stamped = 0;
+  for (const bookDir of scannedBookDirs) {
+    if (await stampRecordedAtSeqIfAbsent(bookDir)) stamped += 1;
+  }
+  return stamped;
 }
 
 async function main() {
@@ -2365,12 +2469,16 @@ async function main() {
   const bookWithholds = []; // { label, withheldForMissingCache, withheldForMissingBak }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
+  // #2128 — every book this run actually scanned, whether or not it had an
+  // alias to record; fed to the one-shot recordedAtSeq back-fill below.
+  const scannedBookDirs = [];
 
   for (const book of books) {
+    scannedBookDirs.push(book.bookDir);
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
-    const { orphans: segmentOrphans, resolver: historyResolver } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
+    const { orphans: segmentOrphans, currentNonExact, resolver: historyResolver } = await collectSegmentOrphans(book.bookDir, chapters, book.cast, history, mods);
     // attach chapterTitle from state.chapters (segments.json's own chapterTitle
     // can be stale/absent on older renders)
     const titleById = new Map(chapters.map((c) => [c.id, c.title]));
@@ -2423,6 +2531,7 @@ async function main() {
         cacheAvailable,
         bakAvailable,
         historyResolver,
+        currentNonExact,
       },
       {
         normaliseForMatch: mods.normaliseForMatch,
@@ -2673,6 +2782,21 @@ async function main() {
         throw err;
       }
     }
+  }
+
+  if (apply) {
+    /* #2128 — the one-shot back-fill stamp, for EVERY book scanned, not only
+       ones with an alias to record. Absence of `recordedAtSeq` reads
+       'unknown' and lists the whole book forever; the books carrying
+       pre-lane aliases are exactly the ones this A33 workflow already
+       visits, so this is where they get their field. No-op on a book that
+       already has one, on a book with no history file, and on a malformed
+       file (which is left alone to be fixed, never overwritten) — see
+       `stampRecordedAtSeqIfAbsent`'s own doc comment for the full four-case
+       account. Ordered after the alias writes above (see
+       `stampScannedBooks`'s own doc comment for why). */
+    const stamped = await stampScannedBooks(scannedBookDirs, mods.stampRecordedAtSeqIfAbsent);
+    if (stamped) console.log(`\nstamped cast-id-history recordedAtSeq on ${stamped} book(s) (#2128 one-shot)`);
   }
 }
 
