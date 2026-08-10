@@ -13,13 +13,14 @@
 //      code-review directly.
 //   3. CLAUDE.md's before-shipping step 10 references pr-review-gate too,
 //      so the checklist entry point agrees with the routing spec.
-//   4. pr-review-gate/SKILL.md's frontmatter `name:` is literally
-//      `pr-review-gate` — `Skill(skill: "…")` resolves against `name:`, not
-//      the file path, so assertion 1 above (which only checks the path
-//      exists and reads its frontmatter for disable-model-invocation) stays
-//      green even if `name:` drifts to something else, silently breaking
-//      every `Skill(skill: "pr-review-gate")` call both governing docs now
-//      mandate. This assertion is the one that actually catches that.
+//   4. pr-review-gate/SKILL.md's frontmatter `name:` matches its directory
+//      basename (`pr-review-gate`) — the convention is that the directory is
+//      the skill's identifier and `name:` must agree with it. Assertion 1
+//      above only checks the path exists and reads its frontmatter for
+//      disable-model-invocation, so it stays green even if `name:` drifts to
+//      something else; assertion 1 catches half of the "stays resolvable"
+//      invariant (the path), this assertion catches the other half (the
+//      frontmatter agreeing with it).
 //
 // Run via `npm run test:hooks` (node --test). All three source files are
 // `extraFiles` on the `test:hooks` step in scripts/verify-cache.mjs — none
@@ -33,7 +34,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -55,23 +56,28 @@ test('pr-review-gate/SKILL.md exists and does not disable model invocation', () 
   );
 });
 
-test("pr-review-gate/SKILL.md's frontmatter name: is pr-review-gate", () => {
-  // The path existing (assertion 1 above) is not sufficient: Skill(skill:
-  // "…") resolves against frontmatter `name:`, not the file's path. A
-  // rename of `name:` to anything else would leave the file at the same
-  // path, still without disable-model-invocation, still readable by every
-  // other assertion here — and still completely unreachable via
-  // `Skill(skill: "pr-review-gate")`, the call both governing docs mandate.
+test("pr-review-gate/SKILL.md's frontmatter name: matches its directory", () => {
+  // The path existing (assertion 1 above) is not sufficient on its own: the
+  // convention is that the skill's directory basename IS its identifier, and
+  // frontmatter `name:` must agree with it. A rename of `name:` to anything
+  // else would leave the file at the same path, still without
+  // disable-model-invocation, still readable by every other assertion here —
+  // and still mismatched with the directory that names it. Assertion 1
+  // covers the path half of that invariant; this assertion covers the
+  // frontmatter half, deriving the expected value from the directory itself
+  // rather than a hardcoded literal.
+  const expectedName = basename(dirname(GATE_SKILL_PATH));
   const src = readFileSync(GATE_SKILL_PATH, 'utf8');
   const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
   assert.ok(frontmatterMatch, 'pr-review-gate/SKILL.md has no --- frontmatter block');
   const frontmatter = frontmatterMatch[1];
+  const nameRegex = new RegExp(`^name:\\s*${expectedName}\\s*$`, 'm');
   assert.match(
     frontmatter,
-    /^name:\s*pr-review-gate\s*$/m,
-    'pr-review-gate/SKILL.md\'s frontmatter name: is not exactly ' +
-      '"pr-review-gate" — Skill(skill: "pr-review-gate") would no longer ' +
-      'resolve to this file',
+    nameRegex,
+    `pr-review-gate/SKILL.md's frontmatter name: is not exactly ` +
+      `"${expectedName}" (its own directory basename) — Skill(skill: ` +
+      `"${expectedName}") would no longer resolve to this file`,
   );
 });
 

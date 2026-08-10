@@ -1,6 +1,6 @@
 ---
 name: pr-review-gate
-description: Use when a PR is fully staged and ready for its mandatory independent review, or when running CLAUDE.md's before-shipping "Independent PR review" step. Dispatches a non-fork, Premium-tier subagent carrying an adversarial reviewer brief — a findings report only, never auto-applied.
+description: Use when a PR is fully staged and ready for its mandatory independent review, or when running CLAUDE.md's before-shipping "Independent PR review" step. This is the skill to invoke to actually dispatch the reviewer — for choosing the tier/effort level or the rest of the review-gate mechanics, consult `model-routing` instead. Dispatches a non-fork, Premium-tier subagent carrying an adversarial reviewer brief — a findings report only, never auto-applied.
 ---
 
 # PR review gate
@@ -21,7 +21,8 @@ just one; don't delete the duplication in a future cleanup pass.)
 A PR is fully staged: implementation finalized, `verify:fast:branch` green,
 every applicable before-shipping checklist item addressed (or explicitly
 marked not-applicable), and everything pushed. Not on an earlier, incomplete
-push.
+push. Except a docs-only PR, which is exempt entirely — see
+`model-routing`'s *Exemption* for the file-set test.
 
 ## Dispatch
 

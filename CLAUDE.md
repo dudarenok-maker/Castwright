@@ -125,8 +125,8 @@ implementation-brief comment as the sole source of requirements. Runs
 `superpowers:subagent-driven-development` as the **primary** mode: cut the
 worktree + branch (per Branching workflow), then dispatch a fresh implementer
 subagent per task, a task-review subagent (spec + quality) after each, and a
-broad whole-branch review via the `pr-review-gate` skill at the end —
-models chosen per the Model-routing table. The controlling thread
+broad whole-branch review at the end — the mandatory gate is phase 3's, not
+this one — models chosen per the Model-routing table. The controlling thread
 coordinates and curates context; it does **not** hand-write task code a
 subagent could do. Keep the progress ledger
 (`.superpowers/sdd/progress.md`) so the run survives compaction —
