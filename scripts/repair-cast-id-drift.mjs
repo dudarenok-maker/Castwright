@@ -823,23 +823,31 @@ export function planBookRepairs(input, deps) {
   // actually proves this (one that mirrors the real, undefended
   // construction line).
   //
-  // Round 4, MUST 2 (independent review, 2026-08-05): `rejectedPairs` was
-  // missing from this defended object — correct on `main` (where the field
-  // didn't exist yet) and wrong the moment #2092/#2089 merged, since
-  // `buildCastResolver` now also reads it. A resolver missing
-  // `rejectedPairs` resolves an id whose pair-reject blocks its target, so
-  // the already-recorded skip just below (`aliasHit.via === 'history' |
-  // 'normalised-history'`) fires and the id vanishes from BOTH `autoRecord`
-  // and `reportOnly` — a false skip, the exact under-report class the
-  // #2107 widening exists to prevent, reintroduced one guard over. Added
-  // alongside the other two defended fields.
-  const historyResolver =
-    input.historyResolver ??
-    buildCastResolver(liveCast, {
-      supersededBy: history.supersededBy ?? {},
-      rejected: history.rejected ?? [],
-      rejectedPairs: history.rejectedPairs ?? [],
-    });
+  // #2128, guard 3 (spine rule 2): the WHOLE loaded `CastIdHistory` goes in,
+  // never a hand-built subset. Round 4's defended `{supersededBy, rejected,
+  // rejectedPairs}` object above (removed by this change) was correct on the
+  // day it was written and would have gone stale again the moment a new
+  // optional field landed — which is exactly what #2128's `recordedAtSeq` is.
+  // A subset that silently drops it makes every alias in the book read
+  // 'unknown' forever.
+  //
+  // Still not a bare `buildCastResolver(liveCast, history)` pass-through:
+  // `planBookRepairs` treats a PARTIAL history as a supported input shape
+  // (`history: {}` appears throughout this file's own test suite; `history
+  // .rejected ?? []` is already defended a few lines up), and the real
+  // `buildCastResolver` does `Object.entries(history.supersededBy)` with no
+  // internal defence — a `TypeError` on `undefined`. `historyForResolver`
+  // below spreads the WHOLE `history` object over a single default
+  // (`supersededBy: {}`) so every field `history` carries — present or
+  // future — passes through untouched, while the one field
+  // `buildCastResolver` reads unconditionally still has a safe fallback.
+  // `rejected`/`rejectedPairs` need no equivalent default here:
+  // `buildCastResolver` itself already does `history.rejected ?? []` /
+  // `history.rejectedPairs ?? []` internally (cast-resolve.ts) — defending
+  // them again here would be exactly the hand-picked-subset shape this fix
+  // exists to remove, just with more fields enumerated.
+  const historyForResolver = { supersededBy: {}, ...history };
+  const historyResolver = input.historyResolver ?? buildCastResolver(liveCast, historyForResolver);
 
   // Round-2 review, guard 1 (MINOR): the reserved-id check below must catch a
   // case/separator-drifted spelling of a reserved bucket id — `unknown_male`,
