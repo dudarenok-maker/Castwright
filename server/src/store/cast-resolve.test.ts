@@ -367,3 +367,62 @@ describe('rejectedPairsGoverning (#2092/#2089 review round 3, M-4)', () => {
     expect(rejectedPairsGoverning('foo-bar', c, history)).toEqual([{ from: 'foo_bar', to: 'x' }]);
   });
 });
+
+describe('matchedHistoryKeys (#2128)', () => {
+  const cast = [{ id: 'the-torment' }, { id: 'mairin' }];
+
+  it('reports the raw key on a tier-2 history hit', () => {
+    const r = buildCastResolver(cast, { supersededBy: { mayrin: 'mairin' } }).resolve('mayrin');
+    expect(r?.via).toBe('history');
+    expect(r?.matchedHistoryKeys).toEqual(['mayrin']);
+  });
+
+  it('reports EVERY colliding raw key on a tier-4 normalised-history hit', () => {
+    // Deviation from the brief's literal fixture, recorded: the brief queried
+    // `resolve('The-Torment')` against a cast that already has a LIVE
+    // `the-torment` id. `normaliseIdKey` only collapses `-`/`_`/whitespace
+    // (confirmed against `server/src/util/character-id.ts` — it does NOT
+    // touch `.`), so `The-Torment` normalises to `the-torment`, which matches
+    // the live cast id at tier 3 (`normalised-id`) BEFORE tier 4 is ever
+    // consulted — the brief's own test could never reach the tier it names,
+    // regardless of this task's implementation. Same bug independently sinks
+    // its `the.torment` raw key: that normalises to `the.torment` (period
+    // preserved), not `the-torment`, so it was never going to collide with
+    // `The_Torment` (which normalises to `the-torment`) either.
+    //
+    // Fixed by picking a normalised key that collides between two DIFFERENTLY
+    // -punctuated raw `supersededBy` keys, targets a live id, but does not
+    // itself equal any live cast id's own normalised key (so tier 3 stays
+    // out of the way and tier 4 actually gets exercised) — same intent as
+    // the brief, corrected fixture.
+    const r = buildCastResolver(cast, {
+      supersededBy: { Mairin_Two: 'mairin', 'mairin-two': 'mairin' },
+    }).resolve('Mairin Two');
+    expect(r?.via).toBe('normalised-history');
+    expect([...(r?.matchedHistoryKeys ?? [])].sort()).toEqual(['Mairin_Two', 'mairin-two']);
+    // NOT the queried id — that is what `viaAlias` is, and it has no marker.
+    expect(r?.matchedHistoryKeys).not.toContain('Mairin Two');
+  });
+
+  it('omits keys whose target is not a live cast id', () => {
+    // Same deviation as above, same reason: `The_Torment`/`the-torment-x`
+    // don't normalise to the same key as each other, so the brief's fixture
+    // never actually tested the liveness filter (a colliding pair with one
+    // live and one dead target). Corrected to a normalised key
+    // (`ghost-id`) that two raw spellings share, one live-targeted and one
+    // dead-targeted, and that itself matches no live cast id (so tier 3
+    // doesn't preempt tier 4).
+    const r = buildCastResolver(cast, {
+      supersededBy: { Ghost_Id: 'mairin', 'GHOST-ID': 'deleted-row' },
+    }).resolve('Ghost Id');
+    expect(r?.via).toBe('normalised-history');
+    expect(r?.matchedHistoryKeys).toEqual(['Ghost_Id']);
+  });
+
+  it('is absent on the two tiers that have no history entry', () => {
+    expect(buildCastResolver(cast, { supersededBy: {} }).resolve('the-torment')?.matchedHistoryKeys)
+      .toBeUndefined();
+    expect(buildCastResolver(cast, { supersededBy: {} }).resolve('The_Torment')?.matchedHistoryKeys)
+      .toBeUndefined();
+  });
+});
