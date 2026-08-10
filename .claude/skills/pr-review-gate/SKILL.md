@@ -1,6 +1,6 @@
 ---
 name: pr-review-gate
-description: Use when a PR is fully staged and ready for its mandatory independent review, or when running CLAUDE.md's before-shipping "Independent PR review" step. Dispatches a non-fork, Premium-tier subagent carrying an adversarial reviewer brief — a findings report only, never --fix.
+description: Use when a PR is fully staged and ready for its mandatory independent review, or when running CLAUDE.md's before-shipping "Independent PR review" step. Dispatches a non-fork, Premium-tier subagent carrying an adversarial reviewer brief — a findings report only, never auto-applied.
 ---
 
 # PR review gate
@@ -33,8 +33,9 @@ push.
   `model-routing`'s ladder (`ultra` is opt-in only, never auto-selected).
   State the level explicitly in the dispatch prompt so the subagent
   calibrates depth instead of guessing.
-- **No `--fix`.** The subagent edits nothing. It returns a findings report,
-  triaged by hand per `model-routing`'s "Findings handling".
+- **Never auto-apply.** The subagent edits nothing. It returns a findings
+  report, triaged by hand per `model-routing`'s "Findings handling". (If the
+  user runs `/code-review` themselves instead, the same bar holds: no `--fix`.)
 
 ## The brief to carry into the subagent prompt
 

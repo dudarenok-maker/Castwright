@@ -111,11 +111,12 @@ for subagent dispatch above.
 - **Mechanism**: invoke the `pr-review-gate` skill, which dispatches a
   **non-fork** subagent at this table's **Premium** tier carrying the
   adversarial gate brief, at the effort level determined above, once fully
-  staged, **without** `--fix` — a findings report only, triaged by hand.
-  (`--fix` applies whatever the pass surfaced wholesale; there's no
-  per-finding confidence filter to gate it on, so triage happens by hand
-  instead — see Findings handling.) This is a working/branch-diff review —
-  not the separate `/review` PR-comment slash command, and not the
+  staged — a findings report only, triaged by hand; the subagent edits nothing.
+  The same bar applies when the user runs `/code-review` themselves: no `--fix`.
+  It applies whatever the pass surfaced wholesale, and there's no per-finding
+  confidence filter to gate it on, so triage happens by hand instead — see
+  Findings handling. This is a working/branch-diff review — not the separate
+  `/review` PR-comment slash command, and not the
   `code-review@claude-plugins-official` plugin command either: that plugin
   reviews a GitHub PR, discards every finding below 80% confidence, and
   posts a public comment on the PR instead of returning a report to triage.

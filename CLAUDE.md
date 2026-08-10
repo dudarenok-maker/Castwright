@@ -125,14 +125,14 @@ implementation-brief comment as the sole source of requirements. Runs
 `superpowers:subagent-driven-development` as the **primary** mode: cut the
 worktree + branch (per Branching workflow), then dispatch a fresh implementer
 subagent per task, a task-review subagent (spec + quality) after each, and a
-broad whole-branch review via the `pr-review-gate` gate at the end —
+broad whole-branch review via the `pr-review-gate` skill at the end —
 models chosen per the Model-routing table. The controlling thread
 coordinates and curates context; it does **not** hand-write task code a
 subagent could do. Keep the progress ledger
 (`.superpowers/sdd/progress.md`) so the run survives compaction —
 including every incidental finding and its disposition, per below.
 
-**3. Ship.** PR with `Closes #NN`, the mandatory `pr-review-gate` gate,
+**3. Ship.** PR with `Closes #NN`, the mandatory `pr-review-gate` pass,
 merge — per the Before-shipping checklist and Branching workflow.
 
 **Why the split:** design and implementation have different context needs; one
@@ -155,7 +155,7 @@ A change is trivial when **nothing can break and nothing needs review**:
 - no regression test is owed, because there is no behaviour to regress.
 
 In practice that is a typo, a dead comment, a single-line doc tweak, and very
-little else. **If you would want a `code-review` pass on it, it is not
+little else. **If you would want a review pass on it, it is not
 trivial.** If a reviewer could reasonably ask "why this way?", it is not
 trivial. **When in doubt, it is not trivial** — an unnecessary branch costs
 thirty seconds; an unreviewed change on `main` costs whatever it costs.
@@ -236,7 +236,7 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 **Mandatory review gates**, both using this table's Premium tier:
 - Every non-trivial spec (`brainstorming`) or plan (`writing-plans`) gets a
   real `assumption-checker` pass before the user is asked to approve it.
-- Every PR gets a `pr-review-gate` pass (no `--fix`) once fully staged, before
+- Every PR gets a `pr-review-gate` pass (findings only, never auto-applied) once fully staged, before
   merge — except a docs-only PR (same file-set test as CONTRIBUTING.md's
   doc-only CI fast-path), which is exempt entirely. Otherwise effort scales
   with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
@@ -865,7 +865,7 @@ junction and its target rather than trusting an exit code.
 
 **Trivial changes may skip the worktree** — same [trivial
 bar](#the-trivial-bar) as the Execution model's, no separate definition. Nothing
-can break, nothing needs review, and you would not want a `code-review` pass on
+can break, nothing needs review, and you would not want a review pass on
 it. Commit on a branch in the primary checkout, PR it, merge. **Announce the
 shortcut in the end-of-turn summary** so the user can redirect if they disagree.
 This should be rare; when in doubt, take the worktree.
