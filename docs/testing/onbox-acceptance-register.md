@@ -2255,11 +2255,16 @@ the script's report-only bucket currently stands at **107 ids / 93 segments**.
 ***Exile*** `silveny` (17 segments across ch50/ch51/ch56/ch65) or ***Everblaze***
 `lady-alina` (6 across ch55/ch61) are the clearest. Then, in order:
 
-1. With the server **stopped**, run `WORKSPACE_DIR="C:/AudiobookWorkspace" node
+1. With the server **stopped**, run
+   `WORKSPACE_DIR="C:/AudiobookWorkspace" CACHE_DIR="<the checkout that ran this
+   workspace's analysis>/server/handoff/cache" node
    scripts/repair-cast-id-drift.mjs` and record `reported for human decision`.
-   (The script defaults `WORKSPACE_DIR` to a path that does not exist on this box
-   and will scan **0 books** while printing a full summary of zeros — check the
-   `books scanned:` line before trusting anything.)
+   **Both env vars matter.** `WORKSPACE_DIR` defaults to a path that does not
+   exist on this box — the run scans **0 books** and prints a full summary of
+   clean zeros, so check the `books scanned:` line before trusting anything.
+   `CACHE_DIR` defaults to the *current* checkout, and a worktree's cache
+   silently sees nothing for a book analysed elsewhere, which moves the counts
+   this row is comparing.
 2. Start the server, open `#/books/<id>/cast`, pick the right character in that
    row's `Compare against…`, press **Link to this character**.
 3. Confirm the row leaves "needs your decision" and appears under
@@ -2268,11 +2273,18 @@ the script's report-only bucket currently stands at **107 ids / 93 segments**.
 4. Stop the server, re-run the dry pass, and confirm the reported count dropped
    by that id — and that `re-render candidates` dropped by its segment count.
 5. **The negative case, which is the Critical this PR's review gate caught:**
-   open ***Unlocked***, whose `unknown-male` row carries 34 segments across
-   ch63/ch67. The link action must be **disabled** on that row, with a visible
+   open ***Exile***, whose `unknown-male` row carries 21 segments across 3
+   chapters. The link action must be **disabled** on that row, with a visible
    reason, and a direct `POST .../link-orphan-match` with `orphanedId:
-   "unknown-male"` must 400. Linking it would route three different speakers onto
-   one voice — #2040's original damage class.
+   "unknown-male"` must 400. *Exile* is the right book for this: the repair
+   script reports that its analysis cache **"actually names it 5 different
+   things (timkin, brant, dwarf, rex, lord cassius)"**, so linking that id
+   book-wide would route five speakers onto one voice — #2040's original damage
+   class. ***Unlocked*** (`unknown-male`, 34 segments across ch63/ch67) is worth
+   checking as a second row, but note its evidence is weaker, not stronger: its
+   backup names **one** occurrence ("Lord Cassius") and its analysis cache names
+   **zero** characters, so it is the cache-blind case rather than the
+   many-speaker one.
 
 *Hardware:* none. A real workspace with drifted books, and the server stopped for
 steps 1 and 4 (the script refuses `--apply` against a live server, and a dry run
