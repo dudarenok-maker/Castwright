@@ -239,11 +239,11 @@ so a drift gets an explicit sentence naming it and asking whether to switch.
 - Every PR gets a `pr-review-gate` pass (findings only, never auto-applied)
   once fully staged, before merge — except a docs-only PR (same file-set
   test as CONTRIBUTING.md's doc-only CI fast-path), which is exempt
-  entirely. Otherwise effort scales
-  with the PR's commit type/scope (CONTRIBUTING.md's commit-convention
-  vocabulary): `low` for a single-scope `chore`/`test`/`build`/`ci`, `medium`
-  for a single-scope `feat`/`fix`, `high` for `refactor`/`perf` or any
-  multi-scope PR — see the model-routing skill for the full split.
+  entirely. Otherwise effort scales with the PR's commit type/scope
+  (CONTRIBUTING.md's commit-convention vocabulary): `low` for a single-scope
+  `chore`/`test`/`build`/`ci`, `medium` for a single-scope `feat`/`fix`,
+  `high` for `refactor`/`perf` or any multi-scope PR — see the model-routing
+  skill for the full split.
 
 Full escalation logic, the "fails"/"drifted" definitions, the review-gate
 mechanics (in-session vs. subagent dispatch, re-review loop caps, the

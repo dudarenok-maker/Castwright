@@ -11,7 +11,10 @@ The mandated mechanism for [CLAUDE.md's before-shipping step
 (PRs)"](../model-routing/SKILL.md#mandatory-independent-review-prs) — that
 file owns the effort ladder, the exemption, the re-review trigger, and the
 loop cap; this file is the reviewer brief itself, not a restatement of the
-mechanics. Read it there, not here.
+mechanics. Read it there, not here. (Three safety-critical rules — never
+report a gate that didn't run, `/code-review` supersedes this pass, no
+auto-apply — are deliberately repeated in both files rather than owned by
+just one; don't delete the duplication in a future cleanup pass.)
 
 ## When this fires
 

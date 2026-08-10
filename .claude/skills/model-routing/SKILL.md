@@ -91,7 +91,7 @@ for subagent dispatch above.
 - **Exemption**: a docs-only PR — changed-file set entirely under `docs/**`,
   root-level `*.md`, or `.github/*.md` (the same file-set test
   CONTRIBUTING.md's "Doc-only PR fast-path" already uses for the `verify.yml`
-  `paths-ignore` skip) — is exempt from this gate entirely; no code-review
+  `paths-ignore` skip) — is exempt from this gate entirely; no review
   pass runs.
 - **Effort level**: for every other PR, scales with the PR's commit
   type/scope, reusing CONTRIBUTING.md's existing commit-convention
@@ -113,7 +113,7 @@ for subagent dispatch above.
   adversarial gate brief, at the effort level determined above, once fully
   staged — a findings report only, triaged by hand; the subagent edits nothing.
   The same bar applies when the user runs `/code-review` themselves: no `--fix`.
-  It applies whatever the pass surfaced wholesale, and there's no per-finding
+  `--fix` applies whatever the pass surfaced wholesale, and there's no per-finding
   confidence filter to gate it on, so triage happens by hand instead — see
   Findings handling. This is a working/branch-diff review — not the separate
   `/review` PR-comment slash command, and not the

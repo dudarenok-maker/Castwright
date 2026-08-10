@@ -5,7 +5,7 @@
 // user-invocable only — `disable-model-invocation`), and nothing catches the
 // wiring rotting apart from prose review.
 //
-// Three assertions, each independently falsifiable:
+// Four assertions, each independently falsifiable:
 //   1. .claude/skills/pr-review-gate/SKILL.md exists and does NOT disable
 //      model invocation (the entire point of routing the gate through it).
 //   2. model-routing/SKILL.md's Mechanism bullet actually references
@@ -13,6 +13,13 @@
 //      code-review directly.
 //   3. CLAUDE.md's before-shipping step 10 references pr-review-gate too,
 //      so the checklist entry point agrees with the routing spec.
+//   4. pr-review-gate/SKILL.md's frontmatter `name:` is literally
+//      `pr-review-gate` — `Skill(skill: "…")` resolves against `name:`, not
+//      the file path, so assertion 1 above (which only checks the path
+//      exists and reads its frontmatter for disable-model-invocation) stays
+//      green even if `name:` drifts to something else, silently breaking
+//      every `Skill(skill: "pr-review-gate")` call both governing docs now
+//      mandate. This assertion is the one that actually catches that.
 //
 // Run via `npm run test:hooks` (node --test). All three source files are
 // `extraFiles` on the `test:hooks` step in scripts/verify-cache.mjs — none
@@ -45,6 +52,26 @@ test('pr-review-gate/SKILL.md exists and does not disable model invocation', () 
     /disable-model-invocation:\s*true/,
     'pr-review-gate/SKILL.md sets disable-model-invocation: true — a dispatched ' +
       'subagent could no longer invoke it, defeating the whole point of ops-55',
+  );
+});
+
+test("pr-review-gate/SKILL.md's frontmatter name: is pr-review-gate", () => {
+  // The path existing (assertion 1 above) is not sufficient: Skill(skill:
+  // "…") resolves against frontmatter `name:`, not the file's path. A
+  // rename of `name:` to anything else would leave the file at the same
+  // path, still without disable-model-invocation, still readable by every
+  // other assertion here — and still completely unreachable via
+  // `Skill(skill: "pr-review-gate")`, the call both governing docs mandate.
+  const src = readFileSync(GATE_SKILL_PATH, 'utf8');
+  const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(src);
+  assert.ok(frontmatterMatch, 'pr-review-gate/SKILL.md has no --- frontmatter block');
+  const frontmatter = frontmatterMatch[1];
+  assert.match(
+    frontmatter,
+    /^name:\s*pr-review-gate\s*$/m,
+    'pr-review-gate/SKILL.md\'s frontmatter name: is not exactly ' +
+      '"pr-review-gate" — Skill(skill: "pr-review-gate") would no longer ' +
+      'resolve to this file',
   );
 });
 
