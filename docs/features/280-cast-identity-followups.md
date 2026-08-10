@@ -3259,7 +3259,7 @@ Per CLAUDE.md's Before-shipping checklist:
 7. `npm run verify:fast:branch` locally; cloud `verify.yml` is the authoritative gate.
 8. Ship notes + `git mv` to `docs/features/archive/` when `status: stable`.
 9. Surface the user-visible delta in the end-of-turn summary.
-10. **Mandatory `code-review` pass** at Premium tier, `high` effort — this is a
+10. **Mandatory `pr-review-gate` pass** at Premium tier, `high` effort — this is a
     multi-scope PR (server + frontend + scripts + docs).
 
 ## Ship notes
