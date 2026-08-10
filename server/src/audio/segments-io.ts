@@ -52,6 +52,10 @@ export interface SegmentsFile {
   chapterId: number;
   chapterTitle?: string;
   synthesizedAt?: string;
+  /** #2128 — the `cast-id-history.json` `seq` this render resolved against.
+      Mirrors `finalize-chapter-write.ts`'s `ChapterSegmentsFile` (the write
+      view). Absent on every render that predates the stamp; `0` is valid. */
+  castHistorySeq?: number;
   characterSnapshots?: Record<string, CharacterSnapshot>;
   /** Per-character speaking segments captured at render time. Each segment
       records which sentence ids that character spoke, so the render-time

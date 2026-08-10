@@ -757,3 +757,105 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribut
     expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
   });
 });
+
+describe('POST /:bookId/chapters/:chapterId/splice (remix) — #2128 castHistorySeq carry-forward', () => {
+  let seqBookId: string;
+  let seqAudioRoot: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Seq Splice Author';
+    const series = 'Standalones';
+    const title = 'Seq Splice Story';
+    seqBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    seqAudioRoot = join(bookDir, 'audio');
+    mkdirSync(seqAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: seqBookId,
+        manuscriptId: 'm_seq_splice_test',
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:01' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'amy', name: 'Amy', gender: 'female', attributes: [] }] }),
+    );
+
+    const chapterPcm = tone(1.0, 12000);
+    const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(seqAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+  });
+
+  /** Overwrites the live segments file directly (bypassing the route) so each
+      test controls the exact prior `castHistorySeq` state a remix carries
+      forward from. Returns the written object so a test can assert against
+      its own `synthesizedAt` rather than a magic string. */
+  function writeSeqSegments(castHistorySeq: number | undefined): Record<string, unknown> {
+    const base = {
+      bookId: seqBookId,
+      chapterId: 1,
+      chapterTitle: 'Chapter 1',
+      durationSec: 1.0,
+      sampleRate: SR,
+      modelKey: 'kokoro-v1',
+      synthesizedAt: new Date(0).toISOString(),
+      segments: [{ groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+      ...(castHistorySeq === undefined ? {} : { castHistorySeq }),
+    };
+    writeFileSync(join(seqAudioRoot, `${SLUG}.segments.json`), JSON.stringify(base));
+    return base;
+  }
+
+  it('carries the prior castHistorySeq forward and never refreshes it (#2128)', async () => {
+    const prior = writeSeqSegments(3);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(seqBookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'amy', gainDb: 6 });
+    const events = parseSse(res.text);
+    expect(
+      events.some((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res.text}`,
+    ).toBe(true);
+
+    const after = JSON.parse(readFileSync(join(seqAudioRoot, `${SLUG}.segments.json`), 'utf8'));
+    // A partial rewrite must NOT launder a stale row into looking current.
+    expect(after.castHistorySeq).toBe(3);
+    // `synthesizedAt` still refreshes — that is its existing, unchanged meaning.
+    expect(after.synthesizedAt).not.toBe(prior.synthesizedAt);
+  });
+
+  it('omits castHistorySeq when the prior file had none (#2128)', async () => {
+    writeSeqSegments(undefined);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(seqBookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'amy', gainDb: 6 });
+    const events = parseSse(res.text);
+    expect(
+      events.some((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res.text}`,
+    ).toBe(true);
+
+    const after = JSON.parse(readFileSync(join(seqAudioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(after).not.toHaveProperty('castHistorySeq');
+  });
+});

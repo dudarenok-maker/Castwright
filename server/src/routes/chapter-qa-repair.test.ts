@@ -493,6 +493,155 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
   });
 });
 
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (#2128 castHistorySeq carry-forward)', () => {
+  /* Same dynamic-import rationale as the "fs-51 verdict persistence" describe
+     above (WORKSPACE_ROOT is resolved at module-load time). */
+  let makeBookId: (author: string, series: string, title: string) => string;
+  let audioDirFn: (bookDir: string) => string;
+  let encodePcmToAudio: (pcm: Buffer, sr: number, opts: { format: 'mp3'; quality: number }) => Promise<Buffer>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let synthesiseChapterMock: any;
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    const mp3 = await import('../tts/mp3.js');
+    const synth = await import('../tts/synthesise-chapter.js');
+    makeBookId = paths.makeBookId;
+    audioDirFn = paths.audioDir;
+    encodePcmToAudio = mp3.encodePcmToAudio;
+    synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+  });
+
+  /** Scaffolds a fresh book (own directory) with segment 0 healthy ('amy') and
+      segment 1 dead-silent ('castor') — the silent one is what the signal
+      scan flags and the repair loop re-records, exactly like
+      `scaffoldVerdictBook` above, plus a controllable prior `castHistorySeq`
+      on the segments file. */
+  async function scaffoldSeqBook(
+    bookTitle: string,
+    castHistorySeq: number | undefined,
+  ): Promise<{ bookId: string; chapterSlug: string; audioRoot: string; priorSynthesizedAt: string }> {
+    const author = 'Seq QA Author';
+    const series = 'Standalones';
+    const slug = 'chapter-one';
+    const id = makeBookId(author, series, bookTitle);
+
+    const bookDir = join(workspaceRoot, 'books', author, series, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorSilent = Buffer.alloc(SR * 2); // 1s of dead silence — flagged by the signal scan
+    const chapterPcm = Buffer.concat([amy, castorSilent]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${slug}.mp3`), mp3Bytes);
+    const priorSynthesizedAt = new Date(0).toISOString();
+    writeFileSync(
+      join(thisAudioRoot, `${slug}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: priorSynthesizedAt,
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        ...(castHistorySeq === undefined ? {} : { castHistorySeq }),
+      }),
+    );
+
+    return { bookId: id, chapterSlug: slug, audioRoot: thisAudioRoot, priorSynthesizedAt };
+  }
+
+  it('carries the prior castHistorySeq forward and never refreshes it (#2128)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const {
+      bookId: id,
+      chapterSlug,
+      audioRoot: thisAudioRoot,
+      priorSynthesizedAt,
+    } = await scaffoldSeqBook('Seq Carry Story', 3);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const after = JSON.parse(readFileSync(join(thisAudioRoot, `${chapterSlug}.segments.json`), 'utf8'));
+    // A partial rewrite must NOT launder a stale row into looking current.
+    expect(after.castHistorySeq).toBe(3);
+    // `synthesizedAt` still refreshes — that is its existing, unchanged meaning.
+    expect(after.synthesizedAt).not.toBe(priorSynthesizedAt);
+  });
+
+  it('omits castHistorySeq when the prior file had none (#2128)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+    }));
+
+    const { bookId: id, chapterSlug, audioRoot: thisAudioRoot } = await scaffoldSeqBook(
+      'Seq Omit Story',
+      undefined,
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    const after = JSON.parse(readFileSync(join(thisAudioRoot, `${chapterSlug}.segments.json`), 'utf8'));
+    expect(after).not.toHaveProperty('castHistorySeq');
+  });
+});
+
 describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejection does not mislabel suspect)', () => {
   /* Same dynamic-import rationale as the "fs-51 verdict persistence" describe
      above (WORKSPACE_ROOT is resolved at module-load time). */
