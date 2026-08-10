@@ -33,6 +33,20 @@ the effect."_
 > makes the denominator language-aware, fixes `isSpokenLine` at the source, and
 > reports the gap between the two definitions as a standing regression signal.
 > §Review findings round 3 records it.
+>
+> **Revision 5 (2026-08-10).** Revision 4 went through the adversarial gate and
+> **did not survive it.** Its central empirical error: the reconnaissance behind
+> it measured `server/handoff/cache/*.json`, **not the library.** Nine of the 31
+> caches are orphans with no book in the workspace, and three of them were the
+> headline rows of revision 4's acceptance table — including both "collapsed"
+> CJK books. Those books are deleted. The two CJK books that actually exist
+> measure **2.9%** and **1.6%** and are healthy. Revision 4 also closed the CJK
+> *instance* of its own Critical while leaving the *class* open behind a
+> provably unreachable escape hatch, and shipped a mutation control that its own
+> other change disarmed. Revision 5 restates every empirical claim from the
+> workspace, threads a real "language unknown" through the resolution chain so
+> `unmeasurable` becomes reachable, and fixes the placebo. §Review findings
+> round 4 records all twelve findings.
 
 ## Problem
 
@@ -138,13 +152,20 @@ books that do not exercise the failure mode. Order of work: re-analyse →
 run the script → set the threshold.
 
 > **Discharged 2026-08-06 — this prerequisite is met.** The owner re-analysed the
-> book; its cache is now 3.7 MB, 9 chapters, **15,069 sentences** and a
-> **58-member cast**. It is no longer an instance of `missing`. It measures
-> **4,921 spoken lines, 1,389 of them narrator = 28.2%** — the third-highest
-> share in the corpus and a real collapse, which is what R-O2 wanted it for. The
-> two denominators agree exactly (Δ 0.0) on this book, so D12 does not disturb
-> the calibration it unblocked. The `missing`-state discussion below is retained
-> as the reasoning behind D11, not as a description of the book's current state.
+> book; its cache is now 3.7 MB, 9 chapters and **15,069 sentences**, with
+> **27 non-narrator cast members** in `cast.json`. It is no longer an instance of
+> `missing`. It measures **4,921 dialogue lines, 1,389 of them narrator =
+> 28.2%** — the second-highest share among live books and a real collapse, which
+> is what R-O2 wanted it for. The two denominators agree exactly (Δ 0.0) here, so
+> D12 does not disturb the calibration it unblocked. The `missing`-state
+> discussion below is retained as the reasoning behind D11, not as a description
+> of the book's current state.
+>
+> **Revision 4 said "58-member cast"** (R-5Mi3). That figure came from
+> `stage1.characters` in the **analysis cache**, not from `cast.json`. They are
+> different things and `cast.json` is the identity of record per CLAUDE.md, so
+> `castCount` — which the `missing` rule turns on — must be read from it. The
+> other book revision 4 called "cast 20" (_Юный дрессировщик_) holds **7**.
 
 **Second consequence — a real-world confirmation of D6.** Night Watch's ledger
 holds 308 drops across 18 batches with 7 in the last. Today's panel would read
@@ -186,33 +207,80 @@ a detector that shares its subject's definition of dialogue can only ever report
 collapse its subject is capable of seeing. Where the analyzer's view is wrong,
 the metric must be able to say so — that is the whole thesis of #1984.
 
-Measured over all 31 real caches, the two denominators agree to within **±0.2
-points on every large book** and **exactly (Δ 0.0) on every Russian book**,
-including _Ночной дозор_. They diverge in two places, both of them the point:
+Measured over the 20 live books, the two denominators agree **exactly (Δ 0.0) on
+every Russian, Spanish, French and German book**, and to within a fraction of a
+point on most English ones. They diverge in two places, both of them the point:
 CJK, where `isSpokenLine` counts nothing at all; and English, where
 `isSpokenLine` counts any leading dash as dialogue but `en.dialogueOpen` is
-`null` (−2.5 and −1.0 points on two books). Threshold calibration therefore
-loses nothing by the change.
+`null`.
+
+**Revision 4 claimed "±0.2 points on every large book"; that was too strong**
+(R-5Mi2). _Unlocked_ — 10,198 sentences, one of the largest — moves **13.6% →
+14.6%**, driven by the 58 dash-only lines the spec itself names, and it is the
+live book nearest a plausible threshold band. The honest statement is that the
+change **moves no book across an obvious boundary in today's distribution**, not
+that it moves nothing; the threshold is set from the D12 column and must be, as
+the two columns are not interchangeable at the margin.
 
 **Language resolution.** The denominator now depends on knowing the language, so
 resolution is its own tested function with an explicit fallback chain:
 
-1. `state.json`'s `language` field, when present;
+1. `state.json`'s `language` field **read raw**, when present;
 2. otherwise `detectManuscriptLanguage(sample)`
    (`server/src/tts/detect-language.ts:25` — pure, synchronous, script pre-pass
    for Cyrillic/CJK plus `franc` for the Latin set) over the cached sentence
    text, sampling its own `SAMPLE_CHARS` (20,000);
-3. `conventionsFor()` returning `null` ⇒ state `unmeasurable`, never `missing`.
+3. detection **surrendering rather than matching** ⇒ `unmeasurable`;
+4. `conventionsFor()` returning `null` ⇒ `unmeasurable`.
 
-**Step 2 is load-bearing, not a nicety.** 7 of the 22 books in the live
-workspace have no `language` field — the entire Keeper of the Lost Cities
-series, analysed before the field existed — and they are among the **largest**
-books in the corpus (7k–13.5k sentences each). Without detection they would all
-resolve `unmeasurable`, which is the "feature turning itself off wholesale"
-failure this spec already names in §Failure modes.
+**Step 1 must read `state.language` raw, and this is a trap** (R-5M3). The
+in-tree accessor is `bookStateLanguage` (`server/src/workspace/scan.ts:314`),
+whose own header tells callers never to read `state.language` directly — but it
+delegates to `normaliseBookLanguage` (`server/src/tts/language.ts:23`), which
+returns `DEFAULT_LANGUAGE` for an absent value. An implementer following the
+documented convention gets `'en'` for every book with no language, and **step 2
+never runs at all.** Everywhere else in the codebase wants a usable default;
+this module is the one place that needs the difference between "declared
+English" and "nothing declared", so it reads the field raw and says why.
 
-The measurement carries `languageSource: 'declared' | 'detected'` so a detected
-label is never silently indistinguishable from a declared one.
+**Step 2 is load-bearing, not a nicety.** 7 of the 20 live books have no
+`language` field — the entire Keeper of the Lost Cities series, analysed before
+the field existed — and they are among the **largest** books in the corpus
+(7.1k–13.6k sentences each). Without detection they would all resolve
+`unmeasurable`, which is the "feature turning itself off wholesale" failure this
+spec already names in §Failure modes.
+
+**Step 3 closes the class, and needs one additive analyzer change** (R-5C3).
+`detectManuscriptLanguage` ends
+`return match ? result(match.code) : result('en')` (`detect-language.ts:60`) —
+an unmatched manuscript is answered `'en'`, and because English *is* a supported
+registry language the existing `supported` flag is `true` on that path.
+**`supported` cannot distinguish a decision from a surrender**, so simply
+threading it through — revision 5's first instinct — would not have worked.
+`DetectionResult` gains a third field:
+
+```ts
+interface DetectionResult {
+  language: string;
+  supported: boolean;
+  fallback: boolean;   // true ONLY on the `: result('en')` surrender branch
+}
+```
+
+Additive; no behaviour change for any existing caller. The metric maps
+`fallback === true` ⇒ `unmeasurable`. Without it, an Italian, Portuguese or
+Polish manuscript resolves to `en`, is measured against `en` conventions
+(`dialogueOpen: null`; pairs `“”` / `""` / `‘’`), scores a near-zero denominator
+on its `«…»` or em-dash dialogue, and — with a real cast and a completed run's
+deleted snapshot — satisfies all three `missing` clauses. **That is R-4C1 again
+in a different alphabet**, and `unmeasurable` cannot catch it because the
+language *did* resolve to a table.
+
+The measurement carries `languageSource: 'declared' | 'detected' | 'unknown'`.
+`'unknown'` is a real value with a real producer — step 3 — which is what makes
+`unmeasurable` reachable at all. Revision 4's `| null` arm had no producer and
+was dead type: the tell that its design had no representation for "I don't
+know".
 
 **Numerator (D9).** Of those, sentences whose speaker renders in the narrator's
 voice. That is three cases, not one:
@@ -220,7 +288,7 @@ voice. That is three cases, not one:
 | Case | Why it counts |
 |---|---|
 | Resolved id ∈ `NARRATOR_CHARACTER_IDS` | `server/src/analyzer/narrator-identity.ts:26` — `['narrator', 'char-narrator']`. Centralised in #1895 precisely because it had been inline-copied across server modules. |
-| `buildCastResolver.resolve()` returns `undefined` | `server/src/store/cast-resolve.ts:105` — an unresolvable id. At render time `server/src/tts/synthesise-chapter.ts:1553` substitutes the narrator for any group whose `characterId` isn't in `cast`. Audibly narrator, so it counts. |
+| `buildCastResolver.resolve()` returns `undefined` | `server/src/store/cast-resolve.ts:147` — an unresolvable id. At render time `server/src/tts/synthesise-chapter.ts:2315-2326` substitutes the narrator for any group whose `characterId` isn't in `cast` — _"falling back to the narrator voice for this line"_. Audibly narrator, so it counts. |
 | — | Everything else does not count. |
 
 Resolution goes through `buildCastResolver` per the CLAUDE.md rule that an
@@ -274,9 +342,12 @@ and literal dashes, then `[«„"“‘']`, then embedded `«»` / `„“` / `"
 Chinese or Japanese dialogue line — `「别管。」`, `「放っておけ」と、…` — returns
 `false`.
 
-Seven CJK books in the live corpus carry 28–125 bracket-quoted dialogue lines
-each. **Every one scores `spokenTotal: 0`.** The branch `feat/server-fs59-cjk-w5`
-does not fix this; its copy of the file is byte-identical to `main`'s.
+Seven CJK **caches** carry 28–125 bracket-quoted dialogue lines each and **every
+one scores `spokenTotal: 0`.** Of those seven, **two have live books** — the
+`ja` and `zh` Coalfall translations, with 104 and 122 dialogue lines and casts of
+10 and 9. The other five are orphan caches whose books have been deleted
+(R-5C1). The branch `feat/server-fs59-cjk-w5` does not fix this; its copy of the
+file is byte-identical to `main`'s.
 
 **Why that breaks revision 3.** A healthy, fully-analysed CJK book satisfies all
 three clauses of `missing`:
@@ -304,8 +375,23 @@ do with the book.
 Part 2 is in scope because the blindness is not only a measurement problem. When
 `conventionsFor(language)` returns `null`, `server/src/routes/analysis.ts:2281`
 runs `applyNarratorDefault`, which demotes every line `isSpokenLine` rejects —
-for a CJK book, all of its dialogue. Two books in the live corpus are sitting at
-**99.2%** and **97.8%** narrator share from exactly this path.
+for a CJK book, all of its dialogue.
+
+**Be precise about the evidence for this, because revision 4 was not** (R-5C1).
+The two books observed at **99.2%** and **97.8%** narrator share are **orphan
+caches whose books no longer exist in the workspace.** The damage was real and
+the mechanism is real, but it is **historical**: both live CJK books went through
+the structure-engine branch and measure 2.9% and 1.6%.
+
+So part 2 is **defence in depth against an undiagnosed trigger**, not a repair of
+present damage — and the spec says so rather than borrowing urgency it no longer
+has. The justification that survives is: `zh`/`ja` have convention tables, so
+that `null` branch should never have been reached for those books, and **nobody
+knows why it was.** Until that is understood the same path can be reached again,
+and when it is, `isSpokenLine` is the last thing standing between a CJK book and
+total attribution loss. The change is small, its blast radius is provably
+CJK-only, and the alternative is leaving a known-blind guard in front of an
+unknown trigger.
 
 **Blast radius is confined to CJK.** `「』` and their partners do not occur in
 Latin or Cyrillic text, so no existing `en`/`ru`/`es`/`fr`/`de` book can change
@@ -328,15 +414,35 @@ would net them into one number that hides each. They are counted separately:
 
 | Field | Meaning | Expected |
 |---|---|---|
-| `blindSpoken` | conventions say dialogue, `isSpokenLine` does not | **0**, after the part-2 fix |
-| `overcountSpoken` | `isSpokenLine` says dialogue, conventions do not | **non-zero and fine** — the dash class |
+| `blindSpoken` | conventions say dialogue, `isSpokenLine` does not | **0 on today's corpus** after part 2 — but not a universal invariant; see the German gap |
+| `overcountSpoken` | `isSpokenLine` says dialogue, conventions do not | **non-zero and fine** — the dash class; 10 of 20 live books, peaking at 58 |
 
-**`blindSpoken` is the regression signal.** It is what CJK produced (121 lines
-on one book, 89 on another, invisible to `isSpokenLine`), and after part 2 it
-should read 0 everywhere. That is what makes it worth carrying permanently
-rather than deleting once CJK is closed: **any non-zero value means the
-analyzer's definition of dialogue has drifted from the language's again**, which
-is the failure class that produced this entire revision.
+**`blindSpoken` is the regression signal.** It is what CJK produced — **104
+lines on the live `ja` book and 122 on the live `zh` book**, invisible to
+`isSpokenLine` — and after part 2 both must read 0, with no other row moving.
+That is what makes it worth carrying permanently rather than deleting once CJK
+is closed: **a newly non-zero value means the analyzer's definition of dialogue
+has drifted from the language's again**, which is the failure class that
+produced this entire revision.
+
+**It is not a universal invariant, and revision 4 wrongly made it one**
+(R-5M2). German `»…«` is dialogue under `de.quotePairs` and invisible to
+`isSpokenLine` even after part 2 — the opener class has no `»`, and the embedded
+rule `«[^»]+»` matches the opposite order. `de.ts`'s own comment calls `»…«` the
+alternate German form. It reads 0 today only because the corpus's one German
+book, _Der Auftrag von Coalfall_, opens every line with `„` at position 0; the
+next German import that uses `»…«` would alarm permanently on a gap this spec
+declines to fix.
+
+(Revision 4's round-3 finding claimed four German forms were affected. Two of
+them — `„…"` and `„…”` — are in fact caught, because `„` is already in the
+opener class. Only `»…«` is missed, in both leading and embedded position.
+Verified by running all four.)
+
+So the criterion is **"0 for the languages `isSpokenLine` covers, and any
+*change* from the recorded per-language baseline is a finding"** — not "0
+everywhere". The `»…«` gap is recorded as a known limitation below rather than
+silently treated as a defect on every run.
 
 **`overcountSpoken` is not a defect and must not be alarmed on.** It is the
 leading-dash rule counting narration as dialogue in languages whose
@@ -396,7 +502,12 @@ pattern.
 7. **`isSpokenLine` recognises `「…」` and `『…』`**, with a paired regression
    asserting `applyNarratorDefault` no longer demotes a CJK dialogue line to
    `narrator`, and a control asserting no `en`/`ru` line changes classification.
-8. **`blindSpoken` is 0 across the corpus** after criterion 7 lands.
+8. **`blindSpoken` drops from 104 and 122 to 0 on the two live CJK books** once
+   criterion 7 lands, **and no other book's value changes.** Not "0 across the
+   corpus" — the German `»…«` gap is a recorded limitation, not a regression.
+9. **`unmeasurable` is reachable**: a book whose detection surrendered resolves
+   there rather than to `missing`, proven by the row-7 fixture and its two
+   mutation controls.
 
 ---
 
@@ -482,7 +593,7 @@ gave it no consumer.
 ### Write sites at analysis completion
 
 `persistDroppedQuotesBatch`'s three call sites in `server/src/routes/analysis.ts`
-— `:3184`, `:3824`, `:5740` — are where the stamp is refreshed too.
+— `:3568`, `:4209`, `:6208` — are where the stamp is refreshed too.
 `analysis-chapters` (`:5740`) is a **subset** re-run and must recompute over the
 **whole book**, not the chapters it just did.
 
@@ -646,7 +757,7 @@ there are **four** states and the library shows all four:
 |---|---|---|---|---|
 | `ok` | — | nothing | nothing | no |
 | `collapsed` | share ≥ threshold, book or chapter | warning badge | full notice | yes |
-| `missing` | `castCount > 0 && spokenTotal === 0 && readAnalysisState() === null` | warning badge | full notice | **yes** |
+| `missing` | `castCount > 0 && spokenTotal === 0 && (await readAnalysisState(dir)) === null` | warning badge | full notice | **yes** |
 | `unmeasurable` | cache absent or corrupt, **or the language has no conventions table** | neutral marker | _"Attribution health couldn't be measured for this book."_ | no |
 
 **The states are evaluated in a fixed order, and the order is the revision-4
@@ -656,15 +767,26 @@ fix:**
 unmeasurable → missing → collapsed → ok
 ```
 
-`unmeasurable` is tested **first**. A book whose language cannot be resolved, or
-resolves to a language with no conventions table, can never reach the `missing`
-test — which is precisely how a healthy CJK book stopped being badged as damaged
-(§The CJK denominator defect). The three clauses of `missing` are unchanged from
-revision 3; only their reachability is.
+`unmeasurable` is tested **first**, so a book whose language could not be
+resolved never reaches the `missing` test. The three clauses of `missing` are
+unchanged from revision 3; only their reachability is.
 
-Stating the precedence is load-bearing rather than cosmetic. Both revision-3
-defects in this state model — R-O1 and R-4C1 — were books falling into the wrong
-state because a rule that should not have applied to them was reached first.
+**Revision 4 claimed this precedence is what stopped a healthy CJK book being
+badged. That was wrong** (R-5M1). `zh` and `ja` both have conventions tables
+(`lang/index.ts:10`), so a CJK book never resolves `unmeasurable` in the first
+place — **D12 alone closes R-4C1**, by giving the book a non-zero denominator.
+Worse, under revision 4 the precedence rule guarded a state nothing could enter:
+import rejects any language outside the seven-code registry
+(`import.ts` `isSupportedLanguage`), all seven have tables, and detection could
+only ever return a registry code or `'en'`. It was a guard over an empty set,
+and its fixture tested an unreachable state.
+
+**The precedence earns its place only because of step 3.** Once detection can
+report a surrender (`fallback`), `unknown` becomes a language state a real book
+can actually be in, `unmeasurable` becomes reachable, and testing it before
+`missing` is what stops an unidentifiable book being called damaged. Order and
+reachability are one mechanism, not two: a precedence rule over a state nothing
+can enter is decoration.
 
 **`missing` is D11, and it is not a rounding case.** Revision 2 gave a book with
 a cast and no attributed sentences `share: null` → `ok`, so _Ночной дозор_ — 47
@@ -699,14 +821,39 @@ requires `readAnalysisState(bookDir) === null` as well. While a snapshot exists
 in any state — `running`, `paused` or `halted` — the book is not badged, because
 the existing AnalysisPill already owns that surface and says something truer.
 
+**`readAnalysisState` is `async`** (`analysis-state.ts:85` —
+`Promise<AnalysisStateFile | null>`), so it must be awaited. Written literally
+as `readAnalysisState() === null` the clause compares a Promise to `null`, is
+never true, and **makes `missing` silently unreachable** while every test that
+does not exercise it still passes (R-5M5).
+
+That also settles module ownership, which revision 4 left unstated: the state
+derivation **does I/O and therefore cannot live in the pure module** Wave 1
+acceptance criterion 1 requires. `attribution-health.ts` stays pure and returns
+`AttributionMeasurement`; a separate Wave 2 caller resolves the snapshot, applies
+the precedence order, and produces the state. The pure module never reads a file.
+
 `readAnalysisState` returns `null` for an absent **or unparseable** file
 (`server/src/store/analysis-state.ts:85-93`), which is what makes the rule work
 on the real case: Night Watch's `analysis-state.json` is 0 bytes, so it reads as
 no rehydratable state and correctly badges. A book with a live or resumable
 snapshot does not.
 
-A book never analysed has neither cast nor sentences, so it is `ok` — not
-`missing`, not `unmeasurable`.
+**A book never analysed is `ok`, and the `unmeasurable` rule is scoped so that
+this is not a contradiction** (R-5M4). Revision 4 said `unmeasurable` covers
+"cache absent", evaluated first, and two paragraphs later that a never-analysed
+book is `ok` — under the stated precedence the first won, so **every freshly
+imported book would have shown the neutral "couldn't be measured" marker until
+analysis finished**, training the reader to ignore the one marker introduced so
+that silence could not read as health. The rule is therefore:
+
+> `unmeasurable` = the book **has been analysed** (`castConfirmed`, or a cache
+> that exists) **and the measurement still could not be made** — cache corrupt,
+> or language unidentifiable.
+
+A book with no analysis has nothing to measure and no claim is made about it: no
+badge, no marker, `ok`. The script reports it as `not analysed`, distinct from
+both a damaged book and an unmeasurable one.
 
 `assertCacheChaptersShape` throws **inside `loadAnalysisCache`**
 (`analysis-cache.ts:124`), not at measure time, so the catch must wrap the
@@ -776,9 +923,19 @@ table yields `unmeasurable` **and never `missing`**, asserted with a `castCount`
 
 **Wave 1 — `isSpokenLine` CJK.** A `「…」` line and a `『…』` line classify as
 spoken; `applyNarratorDefault` leaves a CJK dialogue line's `characterId`
-untouched (**fails before the change, passes after**); and a set of `en`/`ru`
-lines classify identically before and after — the control that proves the blast
-radius claim rather than asserting it.
+untouched (**fails before the change, passes after**).
+
+**The blast-radius control must be the corpus replay, not a fixture** (R-5Mi1).
+Revision 4 specified "a set of `en`/`ru` lines classify identically before and
+after" — but a hand-authored Latin or Cyrillic fixture contains no `「『` by
+construction, so it holds for *any* change to those characters and proves
+nothing. The claim being tested is about the **real corpus**, so the control is:
+run `isSpokenLine` over every sentence of all 20 live books before and after,
+and assert the classification differs on **exactly** the two CJK books and
+**nowhere else**. That is a genuine falsifiable check and the script already
+walks the corpus to make it. (The underlying claim is confirmed on today's data
+— zero `「`/`『` in any non-CJK cache — which is what makes the assertion safe to
+gate on.)
 
 **Wave 2 — trigger.** Book-level at threshold ±1 sentence; a chapter trigger
 firing while the book-level share is far below it; a chapter at 100% with 19
@@ -796,7 +953,8 @@ them into one:
 | Cast built, nothing attributed, run **paused** | 47 | 0 | `state: 'paused'` | `ok` — the pill owns it |
 | No cache at all | — | — | — | `unmeasurable` |
 | **Healthy `ja` book, dialogue in `「」`** (R-4C1) | 13 | **> 0** | absent (run completed) | `ok` |
-| **Book whose language has no conventions table** | 13 | 0 | absent | `unmeasurable` |
+| **Healthy `de` book, dialogue in `»…«`** (R-5C2) | 13 | **> 0** | absent | `ok` |
+| **Book whose language detection surrendered** (`fallback: true`) | 13 | 0 | absent | `unmeasurable` |
 
 Each row disproves a different way of writing the rule too loosely, and a test
 that omits any of them lets that looseness ship:
@@ -808,21 +966,37 @@ that omits any of them lets that looseness ship:
   an absent file leaves the unparseable path unproven.
 - Omit row 5 → a `spokenTotal` built on `isSpokenLine` passes, badging every
   CJK book and blocking its generation.
-- Omit row 6 → dropping the `unmeasurable`-first precedence passes, badging any
-  book in a language the tables do not cover.
+- Omit row 6 → the same defect in every language whose dialogue marks
+  `isSpokenLine` misses; see below for why this row, not row 5, is the one that
+  can prove it.
+- Omit row 7 → dropping the `unmeasurable`-first precedence passes, badging
+  every book whose language could not be identified.
 
-**Mutation controls for the two new rows**, since neither can be trusted to fail
-on its own (a fixture whose dialogue is invisible to both denominators would pass
-row 5 vacuously):
+**Mutation controls. Revision 4's version of this table was itself a placebo**
+(R-5C2), and the way it failed is worth keeping visible: it specified row 5's
+control as "revert the denominator to `isSpokenLine`" — but part 2 of the same
+revision teaches `isSpokenLine` to read `「…」`, so after both changes land the
+reverted denominator still returns `spokenTotal > 0` and **row 5 does not move.**
+One change in the revision disarmed the control of another.
 
-| Mutation | Row 5 must | Row 6 must |
-|---|---|---|
-| Denominator reverted to `isSpokenLine` | flip to `missing` | unchanged |
-| `unmeasurable`-first precedence deleted | unchanged | flip to `missing` |
+| Mutation | Row 5 (`ja`) | Row 6 (`de` `»…«`) | Row 7 (unknown) |
+|---|---|---|---|
+| Denominator reverted to `isSpokenLine` | **unchanged** — part 2 covers `「」` | **flips to `missing`** | unchanged |
+| Denominator reverted **and** part 2 reverted | flips to `missing` | flips to `missing` | unchanged |
+| `unmeasurable`-first precedence deleted | unchanged | unchanged | **flips to `missing`** |
+| `fallback` mapping deleted (step 3) | unchanged | unchanged | **flips to `missing`** |
 
-Row 5's fixture text must therefore contain **real `「」`-quoted dialogue
-attributed to real cast members** — not merely CJK prose — or the first mutation
-does not move it and the test proves nothing.
+**Row 6 is why the German fixture exists.** `»…«` is dialogue under
+`de.quotePairs` (`de.ts`) and invisible to `isSpokenLine` **even after part 2**,
+because the opener class has no `»` and the embedded rule is `«[^»]+»` — the
+opposite order. It is therefore the only fixture in the table that a *single*
+mutation can move, which makes it the real proof that the denominator change is
+load-bearing. Row 5 keeps CJK covered but needs the two-mutation control, and the
+spec says so rather than pretending otherwise.
+
+Row 5's fixture text must still contain **real `「」`-quoted dialogue attributed
+to real cast members** — not merely CJK prose — or even the two-mutation control
+does not move it.
 
 **Storage.** `analysedAt` reads from `cache.updatedAt`, falling back to mtime
 only when the field is absent; the dismiss endpoint resolves `analysedAt`
@@ -869,26 +1043,51 @@ Wave 1's script output **is** an acceptance artifact: it is the first honest
 measurement of the real library. Register row for Wave 1 — run
 `scripts/measure-attribution.mjs` and record the distribution.
 
-**The expected shape is now known**, from the 2026-08-09 reconnaissance that
-produced revision 4, so the acceptance is a comparison rather than an open
-question. Under the D12 denominator the corpus should read roughly:
+**The expected shape is known**, from the 2026-08-10 measurement that produced
+revision 5 — **taken over the workspace, joined to the caches, with `castCount`
+from `cast.json`**. Revision 4's version of this table was drawn from the cache
+directory alone and named three books that do not exist (R-5C1); this is its
+replacement. All 20 live books, D12 denominator:
 
-| Band | Books | Share |
-|---|---|---|
-| Two CJK books collapsed by the `applyNarratorDefault` path | `ja`, `zh` | **99.2%**, **97.8%** |
-| Single-character book — correct, not collapse | cast 1 | 96.2% |
-| Known-damaged | cast 20, ru | 75.6% |
-| _Ночной дозор_ | ru, cast 58 | 28.2% |
-| Mid band | 6 small books | 8–17% |
-| Healthy | 12, incl. every large book | 0.5–3.6% |
+| Book | Lang | Src | Cast | D | Share | blind | over |
+|---|---|---|---|---|---|---|---|
+| Юный дрессировщик | ru | decl | 7 | 262 | **75.6%** | 0 | 0 |
+| Ночной дозор | ru | decl | 27 | 4921 | **28.2%** | 0 | 0 |
+| Unlocked | en | detect | 22 | 1768 | 14.6% | 0 | **58** |
+| Заказ Коалфолла | ru | decl | 12 | 123 | 8.1% | 0 | 0 |
+| Unraveled | en | decl | 11 | 2238 | 3.4% | 0 | 5 |
+| コールフォールの依頼 | ja | decl | 10 | 104 | 2.9% | **104** | 0 |
+| Everblaze · Neverseen · Exile · Keeper · Stellarlune | en | detect | 34–53 | 3659–5954 | 1.9–2.8% | 0 | 1–6 |
+| Bonus Keefe Story | en | detect | 3 | 96 | 2.1% | 0 | 1 |
+| Scepter of the Ancients | en | decl | 22 | 2817 | 1.8% | 0 | 1 |
+| 煤落的委托 | zh | decl | 9 | 122 | 1.6% | **122** | 0 |
+| Playing with Fire | en | decl | 26 | 2346 | 1.2% | 0 | 2 |
+| El Encargo · La Commande de Coalfall | es · fr | decl | 12 | 122–126 | 0.8% | 0 | 0 |
+| The Lost Art of World Domination | en | decl | 3 | 187 | 0.5% | 0 | 0 |
+| Der Auftrag von Coalfall · The Coalfall Commission | de · en | decl | 12 | 127 | **0%** | 0 | 0 |
 
-Two things make this a real check rather than a restatement. **The cast-1 book
-at 96.2% must not read as damaged** — it is the clearest available proof that a
-threshold consulting only the share is wrong. And **the two CJK books must
-appear at all**: under revision 3's denominator they were invisible, so their
-presence in the output is the acceptance for R-4C1 and R-4M2 together.
+Four things make this a real check rather than a restatement:
 
-A `blindSpoken` of 0 on every row is the acceptance for the `isSpokenLine` fix.
+1. **The two CJK books are healthy — 2.9% and 1.6%** — and must read that way.
+   Revision 4 asserted they would appear at 99.2% and 97.8%; those figures
+   belong to two **orphan caches** whose books have been deleted, and stating
+   them as an acceptance made it unsatisfiable.
+2. **`blindSpoken` is non-zero on exactly two rows, both CJK (104 and 122).**
+   That is the pre-fix state and the direct measurement of R-4C1. After the
+   part-2 `isSpokenLine` change both must read 0, and no other row may move.
+3. **`overcountSpoken` is non-zero on 10 of 20 books, peaking at 58** on
+   _Unlocked_. It must not be alarmed on — see §The gap column.
+4. **_Der Auftrag von Coalfall_, the incident book this spec opens with, now
+   measures 0%.** It was re-analysed after #1598 closed. The document's own
+   motivating case is healthy, which is worth knowing before reading a threshold
+   off this distribution.
+
+**No live book has a one-character cast**, so revision 4's "cast-1 book at 96.2%
+must not read as damaged" check is gone with the orphan it referred to. The
+smallest live casts are 3 (_Bonus Keefe Story_ 2.1%, _The Lost Art_ 0.5%), which
+prove nothing about the `castCount` discriminator. **That check has no live
+proof and the D11 fixture row is its only evidence** — one more reason not to
+drop it.
 
 Wave 2 register row — run the backfill, confirm exactly the expected books badge
 and no first-person or dash-heavy book false-positives. Register, run sheet, and
@@ -896,13 +1095,18 @@ live view all move in the shipping PR.
 
 ## Out of scope
 
-- **Any change to the analyzer beyond the one named in §The CJK denominator
-  defect.** Revision 4 adds the CJK bracket pair to `isSpokenLine` and nothing
-  else. In particular: the `conventionsFor(language) === null` path that runs
-  `applyNarratorDefault` in the first place is **not** changed, and the
-  run-dependent trigger behind the two observed 97–99% collapses is **not**
-  diagnosed here — it gets its own issue, with this spec's `blindSpoken` column
-  as its evidence.
+- **Any analyzer change beyond the two named ones.** Revision 5 permits exactly
+  two, both small and both argued in place: the CJK bracket pair on
+  `isSpokenLine` (§The CJK denominator defect), and the additive
+  `DetectionResult.fallback` field (§Language resolution). Nothing else. In
+  particular the `conventionsFor(language) === null` path that runs
+  `applyNarratorDefault` is **not** changed, and the run-dependent trigger behind
+  the two historical 97–99% collapses is **not** diagnosed here — it gets its own
+  issue, with the `blindSpoken` column as its evidence.
+- **The German `»…«` gap in `isSpokenLine`.** Recorded as a known limitation
+  (R-5M2), not fixed. Fixing it means touching the dash/quote rules the analyzer
+  acts on for a language with a live book, which is the wider blast radius this
+  spec has consistently declined.
 - **Automatic re-analysis.** The button is the only trigger.
 - **Threshold configurability.** No registry knob.
 - **Live mid-run collapse warning** — the figure swings wildly over a novel's
@@ -927,8 +1131,9 @@ live view all move in the shipping PR.
    damaged badge, and books Wave 1 measured as healthy do not.
 8. A book with a cast and no attributed sentences badges as `missing` and gates
    generation. **The named case is spent:** _Ночной дозор_ was re-analysed on
-   2026-08-06 and now holds 15,069 sentences across 9 chapters with a 58-member
-   cast, so it is no longer an example of this state — it is a `collapsed`
+   2026-08-06 and now holds 15,069 sentences across 9 chapters with 27
+   non-narrator cast members in `cast.json`, so it is no longer an example of
+   this state — it is a `collapsed`
    candidate at **28.2%**. The state stays reachable on the normal path
    (cancelling an analysis is ordinary use), but it no longer has a live
    instance, so row 2 of the D11 fixture table is the only proof available and
@@ -936,9 +1141,9 @@ live view all move in the shipping PR.
 9. **A Chinese or Japanese book with attributed dialogue is neither badged nor
    gated** (R-4C1). Asserted against a `「」` fixture, with the mutation control
    from the D11 table.
-10. **`blindSpoken` is 0 for every book in the corpus** once the `isSpokenLine`
-    CJK fix has landed. A non-zero value in any Wave 1 run is a finding, not a
-    tolerance.
+10. **`blindSpoken` matches its recorded per-language baseline.** A *change* from
+    that baseline is a finding; a standing non-zero value on a known gap (German
+    `»…«`) is not.
 
 ## Review findings
 
@@ -985,3 +1190,23 @@ then invalidated part of the design it was meant to calibrate:
 | R-4Mi1 | Minor | Acceptance criterion 8 named Night Watch's 2026-08-06 state as the proof case for `missing`; that state no longer exists | Criterion rewritten — the fixture row is now the only proof, and is marked not-droppable |
 | R-4Mi2 | Minor | "This spec changes no analyzer behaviour" and §Out of scope's "any change to the analyzer, including `isSpokenLine`" both became false | Both amended, with the single permitted change named explicitly |
 | R-4Mi3 | Minor | **Found in revision 4's own self-review.** The gap was first specified as a single signed field, `blindSpoken = spokenTotal - pipelineSpoken`. The two definitions diverge in both directions, so an English dash book reads **−58**, making the acceptance criterion "`blindSpoken` is 0 across the corpus" false on healthy books | Split into `blindSpoken` and `overcountSpoken`, with only the former alarmed on |
+
+**Round 4 — Premium adversarial gate on revision 4, 2026-08-10. Verdict: not
+safe to approve.** Twelve findings; every one re-verified against the tree or the
+workspace before folding, and two of the reviewer's own claims corrected in the
+process (noted below).
+
+| ID | Severity | Finding | Disposition |
+|---|---|---|---|
+| R-5C1 | Critical | **Revision 4's empirical basis was the cache directory, not the library.** 9 of 31 caches are orphans with no book in the workspace, and 3 were the headline rows of the on-box table — including both "collapsed" CJK books at 99.2%/97.8%, which are **deleted**. The live CJK books measure 2.9% and 1.6%. The acceptance "the two CJK books must appear at all" was unsatisfiable | §On-box acceptance rebuilt from a workspace-joined measurement of all 20 live books; R-4M2 restated as historical evidence |
+| R-5C2 | Critical | **The new fixture's mutation control was a placebo.** "Revert the denominator to `isSpokenLine`" cannot move row 5, because part 2 of the same revision teaches `isSpokenLine` to read `「…」`. One change disarmed the other's control | Two-mutation control stated honestly for row 5; **German `»…«` row added** as the fixture a *single* mutation can move |
+| R-5C3 | Critical | **The class stayed open behind an unreachable guard.** An unsupported language (it, pt, pl) resolves to `'en'` via `detect-language.ts:60`, is measured against `en` conventions, and lands in `missing` — R-4C1 in another alphabet. `supported` cannot catch it: English *is* supported, so the flag is `true` on the surrender branch | `DetectionResult.fallback` added (additive); `languageSource: 'unknown'`; `fallback` ⇒ `unmeasurable` |
+| R-5M1 | Major | The claim that `unmeasurable`-first precedence is "precisely how a healthy CJK book stopped being badged" is **false** — `zh`/`ja` have tables, so CJK never reaches it. D12 alone closes R-4C1. The guarded state was itself unreachable (import rejects non-registry languages), so its fixture tested nothing | Claim corrected; precedence re-justified as load-bearing **only because** R-5C3 makes `unknown` reachable |
+| R-5M2 | Major | `blindSpoken === 0` was made a universal invariant. German `»…«` is dialogue under `de.quotePairs` and invisible to `isSpokenLine` even after part 2, so the next `»…«` import alarms permanently | Criterion changed to a per-language baseline with the `»…«` gap recorded as a known limitation. **Reviewer said four German forms; two of the four are caught (`„` is already an opener) — verified, only `»…«` is missed** |
+| R-5M3 | Major | The detection fallback would silently never run: the in-tree accessor `bookStateLanguage` (`scan.ts:314`) returns `DEFAULT_LANGUAGE` for an absent language, so an implementer following the documented convention gets `'en'` for all 7 no-language books | Step 1 specified to read `state.language` **raw**, with the reason stated |
+| R-5M4 | Major | Three contradictory behaviours for a never-analysed book: `unmeasurable` (the rule, evaluated first), `ok` (the prose), "skipped" (the script). The rule won, so every freshly imported book would show the neutral marker | `unmeasurable` scoped to "analysed **and** still unmeasurable"; never-analysed is `ok` and reported as `not analysed` |
+| R-5M5 | Major | `readAnalysisState` is `async`; the literal rule `readAnalysisState() === null` is never true and makes `missing` silently unreachable. Also I/O, so the state derivation cannot live in the pure module | Rule awaited; module ownership stated — pure metric vs. impure state derivation |
+| R-5Mi1 | Minor | The blast-radius control could not fail — a Latin/Cyrillic fixture has no `「『` by construction | Replaced with a before/after replay over the real corpus asserting exactly two books change |
+| R-5Mi2 | Minor | "±0.2 points on every large book" contradicted by _Unlocked_ (13.6% → 14.6%) and by the spec's own next sentence | Restated: no book crosses an obvious boundary; the columns are not interchangeable at the margin |
+| R-5Mi3 | Minor | "58-member cast" for _Ночной дозор_ came from `stage1.characters` in the cache, not `cast.json` (**27** non-narrator). "cast 20" for the other book is **7** | Corrected; `castCount` specified to read `cast.json`, the identity of record |
+| R-5Mi4 | Minor | Three `persistDroppedQuotesBatch` line numbers stale (`:3184/:3824/:5740` → `:3568/:4209/:6208`); `cast-resolve.ts:105` → `:147`; `synthesise-chapter.ts:1553` is the abort throw | Corrected. **Reviewer also claimed `phase-card.tsx:252` → `:262`; verified and the spec was right.** The narrator substitution is `:2315-2326`, not the reviewer's `:1531` either |
