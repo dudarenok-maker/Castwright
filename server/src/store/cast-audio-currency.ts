@@ -15,12 +15,29 @@
    the repair script can import it from `server/dist` exactly as `main()`
    already imports `buildCastResolver`.
 
-   THE RULE THAT MATTERS: damage is anything other than `true`. A missing
-   render stamp, a missing `recordedAtSeq` field, a file counter below a render
-   stamp, and a non-finite marker each read `'unknown'`, and `'unknown'` is
-   listed. Only an affirmative comparison clears a row. Inverting this is the
-   most dangerous mistake available here — it silently re-opens #2107, whose
-   whole point was that only the `'exact'` tier means "these bytes are fine". */
+   THE RULE THAT MATTERS: damage is anything other than `true`. Every one of
+   the seven sources below reads `'unknown'`, and `'unknown'` is listed exactly
+   like `false` — only an affirmative comparison clears a row:
+     1. a missing/non-finite render stamp (`segmentsFile.castHistorySeq`);
+     2. a missing `recordedAtSeq` FIELD (the file has never been through the
+        #2128 lane);
+     3. a missing/non-finite `history.seq` (the file's own write counter);
+     4. a file counter below a render's stamp (the counter-reset guard — the
+        render claims to have read a future state of the file);
+     5. an EMPTY `matchedHistoryKeys` on an alias tier (nothing to verify a
+        "current" verdict against — #2128 review round 1 trap 1);
+     6. a `recordedAtSeq` KEY missing for a matched history key that IS present
+        in `supersededBy` (the field being present but a specific key absent —
+        #2128 review round 1 trap 3, I2 owner-ruled) or non-finite;
+     7. an EMPTY list handed to `aggregateAudioCurrency` (no chapter evidence
+        at all — #2128 review round 1, I1 owner-ruled).
+   This list is the canonical statement of the fail-closed policy both
+   consumers read — keep it in sync with the code: a header that enumerates
+   fewer than the real set is exactly how a later reader talks themselves into
+   "simplifying" a guard the header never mentioned. Inverting any of the
+   seven is the most dangerous mistake available here — it silently re-opens
+   #2107, whose whole point was that only the `'exact'` tier means "these
+   bytes are fine". */
 
 import type { CastIdHistory } from './cast-id-history.js';
 import type { CastResolution } from './cast-resolve.js';
@@ -62,7 +79,16 @@ export function isAudioCurrent(
      `castById.get()` and substituted the narrator). Per register row A32 that
      is `the-torment` (67 segments) and `lightning-dave` (1) — 68 of the 188
      known damaged segments. The presence of `castHistorySeq` is itself the
-     proof the resolver ran, which is the only distinction this tier needs. */
+     proof the resolver ran, which is the only distinction this tier needs.
+
+     Deliberately returns BEFORE the counter-reset guard below (`history.seq`
+     is never consulted for this tier): this tier reads no `recordedAtSeq`
+     marker at all, so it has nothing for the file's write counter to be
+     "reset" relative to — stamp presence alone is its complete affirmative
+     evidence. Do not reorder this beneath the guard; that would make a
+     resolution `res('normalised-id')` with a stale-looking `castHistorySeq`
+     read `'unknown'` for a reason this tier's own contract has nothing to do
+     with. */
   if (resolution.via === 'normalised-id') return true;
 
   // 'history' | 'normalised-history'
@@ -127,9 +153,17 @@ export function isAudioCurrent(
  *  `'unknown'` if any is `'unknown'`; else `true`. Getting this wrong in the
  *  "any-current => true" direction re-opens #2107 on the banner side.
  *
- *  An empty list returns `true` vacuously; every caller aggregates over at
- *  least one segment, so that case does not arise in production. */
+ *  #2128 review round 1 (I1, owner-ruled) — an EMPTY list reads `'unknown'`,
+ *  not `true`. The prior version returned `true` vacuously on the reasoning
+ *  that every caller aggregates over at least one segment — an upstream
+ *  invariant that is not part of THIS module's own contract, asserted about
+ *  consumers (Tasks 7/9) that did not exist yet to verify it against. A
+ *  consumer building its list with a `.filter` (e.g. chapters that actually
+ *  have a segments file) can hand this `[]`, and reading that as `true`
+ *  reports an orphaned id current on zero evidence — #2107's shape on the
+ *  banner side. No evidence is not evidence of currency. */
 export function aggregateAudioCurrency(values: readonly AudioCurrency[]): AudioCurrency {
+  if (values.length === 0) return 'unknown';
   if (values.some((v) => v === false)) return false;
   if (values.some((v) => v === 'unknown')) return 'unknown';
   return true;

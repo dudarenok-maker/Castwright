@@ -45,6 +45,18 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
     it('is UNKNOWN on a render that predates the stamp', () => {
       expect(isAudioCurrent(res('normalised-id'), {}, history())).toBe('unknown');
     });
+    it('is current EVEN with a stamp above the file seq — the counter-reset guard does not apply here (M3)', () => {
+      // Deliberate tier ordering: `normalised-id` returns before the
+      // counter-reset guard runs, because this tier reads no `recordedAtSeq`
+      // marker at all — stamp presence alone is its affirmative evidence.
+      // The alias tiers ('history' / 'normalised-history') DO consult that
+      // guard and would read 'unknown' for the identical castHistorySeq/seq
+      // combination (see "counter reset" above, same seq: 5 default vs.
+      // castHistorySeq: 9). Moving this tier's early return below the guard
+      // would silently flip this assertion to 'unknown' with the rest of the
+      // suite still green.
+      expect(isAudioCurrent(res('normalised-id'), { castHistorySeq: 9 }, history())).toBe(true);
+    });
   });
 
   describe('the alias tiers', () => {
@@ -176,15 +188,21 @@ describe('#2128 — the two hazard scenarios', () => {
   });
 
   it('forget -> re-render -> restore: the Undo must NOT clear a narrator render', async () => {
-    /* Revision 3's Critical. seq 3: supersededBy['mayrin']='mairin'. The
-       operator rejects the pairing, so `forgetSupersededId` removes it (seq 4).
-       The chapter is re-rendered with NO alias, so those segments render as the
-       NARRATOR, stamped castHistorySeq 4. The operator clicks Undo.
+    /* Revision 3's Critical. `retireCharacterId` writes seq 1:
+       supersededBy['mayrin']='mairin', marker mayrin@1. The operator rejects
+       the pairing, so `forgetSupersededId` removes the entry (seq 2, no more
+       marker for 'mayrin'). The chapter is re-rendered with NO alias, so
+       those segments render as the NARRATOR, stamped castHistorySeq 2. The
+       operator clicks Undo, and `restoreSupersededId` writes seq 3:
+       supersededBy['mayrin']='mairin' again, marker mayrin@3.
 
-       Revision 3 had `restoreSupersededId` REPLAY the stashed marker (3),
-       making 4 >= 3 true and clearing a row whose audio is the narrator's. It
-       stamps the CURRENT seq instead, so the row correctly stays listed. */
-    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+       Revision 3 had `restoreSupersededId` REPLAY the stashed marker (1,
+       i.e. the marker from BEFORE the forget), making the narrator render's
+       castHistorySeq 2 >= 1 true and clearing a row whose audio is the
+       narrator's, not mayrin's. It stamps the CURRENT seq (3) instead, so
+       2 >= 3 is false and the row correctly stays listed. */
+    // `dir` is declared in this describe block's own `beforeEach` above,
+    // fresh per test — not a module-level fixture.
     await retireCharacterId(dir, 'mayrin', 'mairin'); // seq 1, mayrin@1
     await forgetSupersededId(dir, 'mayrin'); // seq 2
     const renderedWithNoAlias = { castHistorySeq: 2 }; // narrator bytes
@@ -201,7 +219,8 @@ describe('#2128 — the two hazard scenarios', () => {
        whichever row won. A render made while the alias pointed at `sourceId`
        used `sourceId`'s voice, so its bytes are stale even though the KEY never
        changed. This is what "recordedAtSeq tracks the CURRENT target" buys. */
-    // `dir` is the file's own module-level temp dir, fresh per beforeEach.
+    // `dir` is declared in this describe block's own `beforeEach` above,
+    // fresh per test — not a module-level fixture.
     await retireCharacterId(dir, 'mayrin', 'mairin'); // seq 1, mayrin@1
     const renderedAgainstMairin = { castHistorySeq: 1 };
     await retireCharacterId(dir, 'mairin', 'dame-alina'); // seq 2, mayrin repointed@2
@@ -224,5 +243,12 @@ describe('aggregateAudioCurrency — one verdict per orphaned id across chapters
   it('an id current in ch2 and stale in ch5 is NOT current', () => {
     // The "any-current => true" direction re-opens #2107 on the banner side.
     expect(aggregateAudioCurrency([true, false])).toBe(false);
+  });
+  it('an EMPTY list is UNKNOWN, never vacuously true (I1, owner-ruled)', () => {
+    // No evidence is not evidence of currency. A consumer that builds its
+    // per-chapter list with a filter (e.g. chapters that actually have a
+    // segments file) can hand this an empty array; reading that as `true`
+    // is #2107's shape on the banner side, on zero evidence.
+    expect(aggregateAudioCurrency([])).toBe('unknown');
   });
 });
