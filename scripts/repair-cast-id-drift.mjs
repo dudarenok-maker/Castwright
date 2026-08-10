@@ -2308,11 +2308,20 @@ function backupCastIdHistory(historyPath) {
  *  and this repair pass is under an explicit instruction to never invoke
  *  `--apply` from its own suite).
  *
+ *  Takes `apply` as its own first argument, mirroring `shouldRefuseApplyFor*`'s
+ *  own `(apply, ...)` shape, rather than leaving the dry-run/write split as
+ *  an `if (apply)` wrapper at the call site (review round 1, I2): a dry run
+ *  must never write, and folding the gate INTO the tested function — instead
+ *  of around an untested call to it — is what lets a test assert that
+ *  directly (a dry run calls `stampRecordedAtSeqIfAbsent` zero times), not
+ *  merely that the counting logic is right once invoked.
+ *
  *  Caller order matters: `main()` calls this AFTER the alias-writing
  *  (`pendingWrites`) loop — a book that just received an alias already has
  *  the field from `bumpSeqAndStamp`, so the stamp is a no-op there, and
  *  doing it first would be equally correct but harder to reason about. */
-export async function stampScannedBooks(scannedBookDirs, stampRecordedAtSeqIfAbsent) {
+export async function stampScannedBooks(apply, scannedBookDirs, stampRecordedAtSeqIfAbsent) {
+  if (!apply) return 0;
   let stamped = 0;
   for (const bookDir of scannedBookDirs) {
     if (await stampRecordedAtSeqIfAbsent(bookDir)) stamped += 1;
@@ -2469,12 +2478,22 @@ async function main() {
   const bookWithholds = []; // { label, withheldForMissingCache, withheldForMissingBak }
   const allRerenderRows = [];
   const pendingWrites = []; // { bookDir, historyPath, autoRecord }
-  // #2128 — every book this run actually scanned, whether or not it had an
-  // alias to record; fed to the one-shot recordedAtSeq back-fill below.
-  const scannedBookDirs = [];
+  // #2128 (review round 1, I2) — every book this run actually scanned,
+  // whether or not it had an alias to record; fed to the one-shot
+  // recordedAtSeq back-fill below. Deliberately DERIVED from `books`
+  // (already fully populated above by `collectBooks`) rather than an
+  // imperative push inside the loop below: a push is a silent-degrade
+  // hazard — delete the line and `scannedBookDirs` quietly stays `[]`,
+  // `stampScannedBooks` reports 0 stamped, and the one-shot back-fill
+  // becomes a permanent no-op with no error anywhere. A deleted `const`
+  // declaration instead throws a ReferenceError the moment `main()` reaches
+  // it — loud, not silent — since nothing else in this codebase can prove
+  // this specific line survives a future edit (main() itself is outside
+  // this file's own no-server-build test policy; see stampScannedBooks's
+  // doc comment).
+  const scannedBookDirs = books.map((b) => b.bookDir);
 
   for (const book of books) {
-    scannedBookDirs.push(book.bookDir);
     const history = await mods.loadCastIdHistory(book.bookDir);
     const chapters = book.state.chapters.map((c) => ({ id: c.id, slug: c.slug, title: c.title }));
 
@@ -2784,20 +2803,21 @@ async function main() {
     }
   }
 
-  if (apply) {
-    /* #2128 — the one-shot back-fill stamp, for EVERY book scanned, not only
-       ones with an alias to record. Absence of `recordedAtSeq` reads
-       'unknown' and lists the whole book forever; the books carrying
-       pre-lane aliases are exactly the ones this A33 workflow already
-       visits, so this is where they get their field. No-op on a book that
-       already has one, on a book with no history file, and on a malformed
-       file (which is left alone to be fixed, never overwritten) — see
-       `stampRecordedAtSeqIfAbsent`'s own doc comment for the full four-case
-       account. Ordered after the alias writes above (see
-       `stampScannedBooks`'s own doc comment for why). */
-    const stamped = await stampScannedBooks(scannedBookDirs, mods.stampRecordedAtSeqIfAbsent);
-    if (stamped) console.log(`\nstamped cast-id-history recordedAtSeq on ${stamped} book(s) (#2128 one-shot)`);
-  }
+  /* #2128 — the one-shot back-fill stamp, for EVERY book scanned, not only
+     ones with an alias to record. Absence of `recordedAtSeq` reads 'unknown'
+     and lists the whole book forever; the books carrying pre-lane aliases
+     are exactly the ones this A33 workflow already visits, so this is where
+     they get their field. No-op on a book that already has one, on a book
+     with no history file, and on a malformed file (which is left alone to
+     be fixed, never overwritten) — see `stampRecordedAtSeqIfAbsent`'s own
+     doc comment for the full four-case account. Ordered after the alias
+     writes above (see `stampScannedBooks`'s own doc comment for why).
+     Called unconditionally — `apply` is threaded straight through and
+     `stampScannedBooks` itself is the dry-run gate (review round 1, I2): no
+     `if (apply)` wrapper here to accidentally call it under, and nothing to
+     drift out of sync with the function it wraps. */
+  const stamped = await stampScannedBooks(apply, scannedBookDirs, mods.stampRecordedAtSeqIfAbsent);
+  if (stamped) console.log(`\nstamped cast-id-history recordedAtSeq on ${stamped} book(s) (#2128 one-shot)`);
 }
 
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === __filename;

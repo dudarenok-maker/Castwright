@@ -115,6 +115,25 @@ describe('buildOrphansFromSegments against the REAL buildCastResolver (#2130)', 
     const { orphans } = buildOrphansFromSegments(segs, resolver, history, isAudioCurrent);
     expect(orphans.get('mayrin')?.segments).toBe(2);
   });
+
+  it("#2128 (review round 1, I1) — the currency comparison itself, against the REAL resolver AND the REAL isAudioCurrent: a render stamped AT the marker clears, one stamped BELOW it stays", () => {
+    // The three tests above all omit `castHistorySeq`, so every one resolves
+    // at 'exact' -> `true` or `!finite(stamp)` -> `'unknown'` before ever
+    // reaching the marker comparison inside isAudioCurrent — none of them
+    // discriminate on the currency decision itself. This one does: same
+    // 'history'-tier resolution as the test above ('mayrin' -> 'mairin'),
+    // but with a real recordedAtSeq marker and two segments-files whose
+    // castHistorySeq stamp sits on either side of it.
+    const liveCast = [{ id: 'mairin', name: 'Мэйрин' }];
+    const history = { schema: 1 as const, supersededBy: { mayrin: 'mairin' }, seq: 5, recordedAtSeq: { mayrin: 3 } };
+    const resolver = buildCastResolver(liveCast, history);
+    const rerenderedSeg = { chapterId: 3, chapterTitle: 'Three', castHistorySeq: 5, segments: [{ characterId: 'mayrin' }] };
+    const staleSeg = { chapterId: 4, chapterTitle: 'Four', castHistorySeq: 1, segments: [{ characterId: 'mayrin' }] };
+    const { orphans: clearedOrphans } = buildOrphansFromSegments([rerenderedSeg], resolver, history, isAudioCurrent);
+    expect(clearedOrphans.has('mayrin')).toBe(false); // stamp (5) >= marker (3) -> current, clears
+    const { orphans: staleOrphans } = buildOrphansFromSegments([staleSeg], resolver, history, isAudioCurrent);
+    expect(staleOrphans.get('mayrin')?.segments).toBe(1); // stamp (1) < marker (3) -> stale, stays listed
+  });
 });
 
 describe("resolveTierBId against the REAL buildCastResolver (round 4 review, #2130) — a consumer buildOrphansFromSegments's own tests above cannot stand in for, since it branches on the literal string returned by resolution.via ('normalised-id'), not merely on whether SOME tier other than 'exact' matched", () => {

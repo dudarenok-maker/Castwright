@@ -2982,28 +2982,46 @@ describe('stampScannedBooks (#2128 — the --apply one-shot recordedAtSeq back-f
   // test file, and this CI job (test:hooks) never builds server/dist, which
   // main() needs. stampScannedBooks is pulled out of main() specifically so
   // the one-shot-stamp WIRING (call it for every scanned dir, count how many
-  // actually wrote) has direct coverage without either constraint — the
-  // same pattern every other main()-adjacent decision in this file already
-  // uses (shouldRefuseApplyForEmptyScan, planApplyRefusal, etc.).
-  test('calls stampRecordedAtSeqIfAbsent for every scanned book dir and counts how many actually wrote', async () => {
+  // actually wrote, AND never touch disk on a dry run) has direct coverage
+  // without either constraint — the same pattern every other main()-adjacent
+  // decision in this file already uses (shouldRefuseApplyForEmptyScan,
+  // planApplyRefusal, etc.).
+  test('apply=true calls stampRecordedAtSeqIfAbsent for every scanned book dir and counts how many actually wrote', async () => {
     const calls = [];
     const stampFn = async (bookDir) => {
       calls.push(bookDir);
       return bookDir !== '/book-2'; // pretend book-2's history already had the field
     };
-    const stamped = await stampScannedBooks(['/book-1', '/book-2', '/book-3'], stampFn);
+    const stamped = await stampScannedBooks(true, ['/book-1', '/book-2', '/book-3'], stampFn);
     assert.deepEqual(calls, ['/book-1', '/book-2', '/book-3']);
     assert.equal(stamped, 2);
   });
 
-  test('an empty scan stamps nothing and calls nothing', async () => {
+  test('apply=true with an empty scan stamps nothing and calls nothing', async () => {
     let calls = 0;
-    const stamped = await stampScannedBooks([], async () => {
+    const stamped = await stampScannedBooks(true, [], async () => {
       calls += 1;
       return true;
     });
     assert.equal(stamped, 0);
     assert.equal(calls, 0);
+  });
+
+  test('#2128 (review round 1, I2) — apply=false is a genuine dry run: stampRecordedAtSeqIfAbsent is never called, whatever the scan found', async () => {
+    // The safety-critical direction: main()'s prior shape wrapped this call
+    // in an `if (apply)` block that nothing in this suite asserted either
+    // side of. Folding the gate INTO this function (rather than leaving it
+    // as an untested wrapper around the call) means this test can assert
+    // the dry-run half directly — a real book dir list, a stamp function
+    // that would fail the test if invoked at all.
+    let calls = 0;
+    const stampFn = async () => {
+      calls += 1;
+      return true;
+    };
+    const stamped = await stampScannedBooks(false, ['/book-1', '/book-2'], stampFn);
+    assert.equal(calls, 0);
+    assert.equal(stamped, 0);
   });
 });
 
